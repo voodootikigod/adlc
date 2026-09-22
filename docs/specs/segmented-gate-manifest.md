@@ -625,7 +625,7 @@ anchor under the same signature-verifying ceremony rules).
 - **AC9 — scaffold:** `adlc init` on a fresh directory produces the segmented
   layout, the §4.8 gitignore lines, and a first record lands in a segment with
   `anchor: null`. **Verify:** `node --test packages/init/test/scaffold.test.mjs`.
-- **AC10 — docs:** `docs/tools/gate-manifest.md` documents the forest layout,
+- **AC10 — docs:** `packages/gate-manifest/README.md` documents the forest layout,
   ceremony, and per-segment repair; doctor reports orphaned anchors and stale
   lineage tokens read-only. **Verify:**
   `node --test packages/tickets/test/doctor.test.mjs --test-name-pattern='manifest'`

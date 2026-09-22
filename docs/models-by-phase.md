@@ -3,14 +3,14 @@
 > **Snapshot date: 2026-07-14.** Model lineups, prices, and benchmark standings decay
 > fast — this document is a cache, and caches need invalidation
 > ([ADLC Principle 10](../ADLC.md)). Re-verify against provider pricing pages before
-> committing budget, run [`adlc model-ratchet`](./tools/model-ratchet.md) after any
-> model swap, and let your own [`gate-manifest`](./tools/gate-manifest.md) first-pass
+> committing budget, run [`adlc model-ratchet`](../packages/model-ratchet/README.md) after any
+> model swap, and let your own [`gate-manifest`](../packages/gate-manifest/README.md) first-pass
 > ledger override every static prior on this page once you have ≥3 samples per tier.
 
 The [ADLC theory series](https://voodootikigod.com/series/adlc) argues that using the
 most expensive model everywhere is the wrong default: **model tier is a function of
 the cost of detecting an error, not of task prestige** (Principle 7). The toolkit
-makes that mechanical — [`adlc model-router`](./tools/model-router.md) reads rail
+makes that mechanical — [`adlc model-router`](../packages/model-router/README.md) reads rail
 density and DAG float and emits an abstract tier (`cheap` / `mid` / `frontier`) per
 ticket. What neither the theory nor the router resolves is the binding from abstract
 tier to a concrete model. This document is that binding: recommended models per tier,
@@ -34,7 +34,7 @@ Two doctrine points shape everything below:
    need a model smarter than the gate it must pass.
 2. **Measure the stack, not the model.** A 3-pass mid-tier prosecution stack with
    0.85 planted-bug recall *is* the more capable reviewer than a 1-pass frontier
-   model at 0.6 — [`adlc review-calibration`](./tools/review-calibration.md) makes
+   model at 0.6 — [`adlc review-calibration`](../packages/review-calibration/README.md) makes
    that exchange rate a number. Tier labels are cold-start estimates only.
 
 ## Phase → tier map
@@ -42,12 +42,12 @@ Two doctrine points shape everything below:
 | Phase | Tier | Why |
 | --- | --- | --- |
 | **P0 Triage** | cheap | Classification with low escaped-error cost — a mis-triaged ticket is caught by the lifecycle it's routed into. Route-by-risk logic itself is deterministic code. |
-| **P1 Interrogate** | **frontier** | The spec is the least-verified artifact in the system; a subtly wrong requirement poisons everything downstream. *"Do not economize in this phase"* (ADLC.md). [`parallax`](./tools/parallax.md) divergence readings can run on mid — the signal is disagreement between readings, not the brilliance of any one. |
-| **P2 Decompose** | **frontier** for contracts and boundaries; **cheap** as the gate probe | Interface contracts are frontier work for the same reason as specs. The [`coldstart`](./tools/coldstart.md) gate *deliberately* uses a cheap model as the probe: if a cheap model can enumerate what's missing from a ticket, the ticket is underspecified for the mid model that will build it. |
-| **P3 Rail** | mid | Tests, stubs, and contract skeletons authored from spec alone in fresh context. [`hollow-test`](./tools/hollow-test.md) catches weak rails deterministically, so frontier is unnecessary; go frontier only for contract-heavy rails on low-coverage surfaces. |
-| **P4 Build** | router-decided: **ladder cheap→mid** with float, **direct best-tier** on the critical path | This is [`model-router`](./tools/model-router.md)'s home turf. Float > 0 and rail density ≥ 0.5 → start cheap and ladder up on gate failure (escalation is regeneration, never rescue — F8). Float = 0 → skip the ladder, use the tier with the best first-pass rate from your manifest. Rail density below the floor → frontier, and treat it as a P3 finding. |
+| **P1 Interrogate** | **frontier** | The spec is the least-verified artifact in the system; a subtly wrong requirement poisons everything downstream. *"Do not economize in this phase"* (ADLC.md). [`parallax`](../packages/parallax/README.md) divergence readings can run on mid — the signal is disagreement between readings, not the brilliance of any one. |
+| **P2 Decompose** | **frontier** for contracts and boundaries; **cheap** as the gate probe | Interface contracts are frontier work for the same reason as specs. The [`coldstart`](../packages/coldstart/README.md) gate *deliberately* uses a cheap model as the probe: if a cheap model can enumerate what's missing from a ticket, the ticket is underspecified for the mid model that will build it. |
+| **P3 Rail** | mid | Tests, stubs, and contract skeletons authored from spec alone in fresh context. [`hollow-test`](../packages/hollow-test/README.md) catches weak rails deterministically, so frontier is unnecessary; go frontier only for contract-heavy rails on low-coverage surfaces. |
+| **P4 Build** | router-decided: **ladder cheap→mid** with float, **direct best-tier** on the critical path | This is [`model-router`](../packages/model-router/README.md)'s home turf. Float > 0 and rail density ≥ 0.5 → start cheap and ladder up on gate failure (escalation is regeneration, never rescue — F8). Float = 0 → skip the ladder, use the tier with the best first-pass rate from your manifest. Rail density below the floor → frontier, and treat it as a P3 finding. |
 | **P5 Prosecute** | **mid, stacked** — plus a **second provider family** on high blast radius | Search replaces insight (E2): N fresh-context mid passes with loop-until-dry beat one frontier pass, and the cost model favors fanning out cheap readers. For trust-boundary, deny-path, auth, secrets, data-loss, schema, or CI/CD changes, run ≥2 *distinct-family* providers ([ADR-0007](./adr/0007-multimodel-adversarial-review.md)) — different models have different blind spots, and cross-family review has caught deny-path bypasses that same-family prosecution missed. |
-| **P6 Integrate** | none (human gate) | [`behavior-diff`](./tools/behavior-diff.md) and [`gate-manifest`](./tools/gate-manifest.md) are deterministic. The human is the frontier tier here. |
+| **P6 Integrate** | none (human gate) | [`behavior-diff`](../packages/behavior-diff/README.md) and [`gate-manifest`](../packages/gate-manifest/README.md) are deterministic. The human is the frontier tier here. |
 | **P7 Distill** | mid for mining; **rent one frontier pass to mint structure** | Banking replaces presence (E4): lesson mining and rejection mining run fine on mid. Occasionally rent the frontier model to crystallize judgment into artifacts — a skill, a contract template, an interrogation template — then spend mid inside that structure indefinitely. |
 
 The barbell (Principle 9) falls out of this table: heavy spend at P1–P2 and P5, light
@@ -168,8 +168,8 @@ second family.
 - **Your ledger beats this page.** `model-router` prefers empirical per-repo priors
   from `.adlc/manifest.jsonl` (model × ticket-category × first-pass outcome) over any
   static table. This page is the cold-start estimate.
-- **Re-verify on model churn.** New model ships → [`adlc model-ratchet`](./tools/model-ratchet.md)
-  schedules re-prosecution; [`adlc review-calibration`](./tools/review-calibration.md)
+- **Re-verify on model churn.** New model ships → [`adlc model-ratchet`](../packages/model-ratchet/README.md)
+  schedules re-prosecution; [`adlc review-calibration`](../packages/review-calibration/README.md)
   re-measures reviewer recall before you trust a swap.
 - **Benchmark hygiene.** Vendor-reported numbers, promo pricing, and preview models
   were all flagged inline; treat every number here as directional and every price as

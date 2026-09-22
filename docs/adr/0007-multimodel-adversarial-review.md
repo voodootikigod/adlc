@@ -246,7 +246,7 @@ Two decisions follow:
 
 1. **Rotation is a migration.** Re-sign existing history onto the new key (`repair-chain`,
    which requires the original key), or keep the original. Documented in
-   `docs/tools/gate-manifest.md`, where a maintainer doing routine secret hygiene will meet
+   `packages/gate-manifest/README.md`, where a maintainer doing routine secret hygiene will meet
    it — the previous text there declared key rotation "out of scope for this tool", which is
    how the constraint went unrecorded.
 

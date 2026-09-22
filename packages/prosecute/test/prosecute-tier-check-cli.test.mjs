@@ -381,7 +381,7 @@ describe('adlc-prosecute tier-check — chain failure vs missing attestation (#3
   // silently loses this again should fail the build, not just read differently.
   it('documents that rotating the signing key is a migration, in both the tool doc and the ADR', () => {
     const root = new URL('../../../', import.meta.url).pathname;
-    for (const rel of ['docs/tools/gate-manifest.md', 'docs/adr/0007-multimodel-adversarial-review.md']) {
+    for (const rel of ['packages/gate-manifest/README.md', 'docs/adr/0007-multimodel-adversarial-review.md']) {
       const text = readFileSync(join(root, rel), 'utf8');
       assert.match(text, /rotat/i, `${rel} must discuss key rotation`);
       assert.match(text, /migration/i, `${rel} must say rotation is a migration, not a secret update`);
@@ -389,7 +389,7 @@ describe('adlc-prosecute tier-check — chain failure vs missing attestation (#3
         `${rel} must explain that old entries become present-but-invalid, not merely unsigned`);
     }
     // The sentence that caused the gap must not come back.
-    const toolDoc = readFileSync(join(root, 'docs/tools/gate-manifest.md'), 'utf8');
+    const toolDoc = readFileSync(join(root, 'packages/gate-manifest/README.md'), 'utf8');
     assert.doesNotMatch(toolDoc, /rotation[^.]*\bout of scope\b/i,
       'the tool doc must no longer declare key rotation out of scope');
   });

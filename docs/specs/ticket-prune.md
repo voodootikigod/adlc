@@ -11,7 +11,7 @@
 > the archive file are gone). Rails-freezing stale tickets are reported under
 > `needsCeremony` for the protected-base admin ceremony instead of being
 > auto-completed. AC4 and the archive references in the Decision are historical;
-> see `docs/tools/ticket-prune.md` and `packages/ticket-prune/README.md` for the
+> see `packages/ticket-prune/README.md` for the
 > current behavior.
 
 ## Issue

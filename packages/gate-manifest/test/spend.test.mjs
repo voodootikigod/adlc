@@ -4,9 +4,10 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { record } from '../lib/record.mjs';
 import { aggregateSpend, diagnostics, renderSpendReport, loadSpend, PHASE_BY_GATE } from '../lib/spend.mjs';
@@ -235,5 +236,36 @@ describe('loadSpend (integration with the real manifest ledger)', () => {
     } finally {
       cleanTmp(dir);
     }
+  });
+});
+
+describe('spend documentation in packages/gate-manifest/README.md', () => {
+  const PKG = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const readme = readFileSync(join(PKG, 'README.md'), 'utf8');
+
+  it('README carries ## spend heading and ADLC phase context', () => {
+    assert.match(readme, /^## spend/m);
+    assert.match(readme, /reads the C11 evidence ledger/);
+  });
+
+  it('README documents adlc spend CLI invocation and flags', () => {
+    assert.match(readme, /adlc spend \[--ticket id\] \[--dir path\] \[--json\]/);
+    assert.match(readme, /--ticket id/);
+    assert.match(readme, /--dir path/);
+    assert.match(readme, /--json/);
+  });
+
+  it('README documents JSON aggregate contract and fields', () => {
+    for (const field of ['byPhase', 'byGate', 'total', 'entriesWithUsage', 'entriesTotal']) {
+      assert.ok(readme.includes(field), `README should document JSON contract field ${field}`);
+    }
+  });
+
+  it('README documents phase attribution and diagnostics', () => {
+    assert.match(readme, /### Phase attribution/);
+    assert.match(readme, /unphased/);
+    assert.match(readme, /### Diagnostic semantics/);
+    assert.match(readme, /P4 concentration/);
+    assert.match(readme, /P5\/P7 ratio/);
   });
 });

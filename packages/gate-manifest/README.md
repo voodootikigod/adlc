@@ -14,6 +14,10 @@ gate-manifest verify [--json] [--dir path] [--allow-legacy-unsigned]
 gate-manifest show   [--ticket id] [--json] [--dir path]
 gate-manifest attest [--ticket id] [--dir path]
 gate-manifest repair-chain --reason "..." [--write] [--attest-unsigned] [--json] [--dir path]
+gate-manifest enable [--write] [--json] [--dir path] [--allow-keyless]
+gate-manifest migrate --reason "..." [--write] [--attest-unsigned] [--json] [--dir path]
+gate-manifest migrate-branch [--from <ref>] [--write] [--attest-unsigned] [--json] [--dir path]
+gate-manifest adopt  [<segment>] [--write] [--json] [--dir path]
 ```
 
 Prosecution, runner acceptance, rails evidence, and manual gate records use the
@@ -61,7 +65,7 @@ When `ADLC_MANIFEST_KEY` is set, `record` appends a `sig` (the human output prin
 
 ### verify
 
-Walk the raw ledger lines and validate the hash chain. Every entry's `prev` must equal `sha256` of the exact raw bytes of the previous line; sequence numbers must start at 1 and increase strictly by 1 (contiguous from 1).
+Walk the raw ledger lines and validate the hash chain. Every entry's `prev` must equal `sha256` of the exact raw bytes of the previous line; sequence numbers must start at 1 and increase strictly by 1 (contiguous from 1). If an existing ledger has non-contiguous sequence numbers, it can be repaired using `adlc gate-manifest repair-chain`.
 
 ```sh
 gate-manifest verify                            # human-readable
@@ -98,6 +102,274 @@ gate-manifest show --ticket T-42 --json
 | `--ticket id` | Filter to entries with this ticket id |
 | `--json` | Emit `{ entries, skipped }` |
 | `--dir path` | Override ledger directory |
+
+### enable
+
+Switch a repository with **no recorded evidence** into segmented (forest)
+mode by writing the `.adlc/manifest.d/.store.json` activation marker. Both
+storage modes are permanent and supported (spec §1.1) — run this only for
+repositories doing parallel worktree fan-out, where concurrent branches
+conflict on the single file's tail.
+
+```sh
+gate-manifest enable          # dry-run: prints the plan, writes nothing
+gate-manifest enable --write  # writes the marker atomically
+```
+
+Activation without `ADLC_MANIFEST_KEY` refuses unless `--allow-keyless` is
+passed: keyless-minted segments can never be authenticated by a key added
+later, so keyless forest mode is single-checkout only, permanently — a
+deliberate opt-in, never a stumble. Re-running `enable` on an already-enabled
+repository re-checks the gitignore contract as a health check and exits `2`
+if ignore rules have drifted (e.g. `.lineage` became trackable).
+
+Dry-run by default. Exit `0` on a written or already-enabled repo (a
+cutover-tailed root counts as enabled even if its marker was lost). Exit `2`,
+writing nothing, when:
+
+- there is no `.adlc/` workspace (run `adlc init` first — enable never
+  creates one as a side effect);
+- the root `manifest.jsonl` already records evidence — history-preserving
+  migration is the cutover ceremony (T-MANIFEST-FOREST-MIGRATE), not
+  greenfield enable;
+- `manifest.d/` has content but no valid marker (a broken state to repair by
+  hand, not silently adopt);
+- the `.gitignore` contract fails in EITHER direction — the marker or
+  evidence segments would be ignored (they must commit, or every other
+  checkout silently stays in single-file mode), or the checkout-local
+  `.lineage` token and lock files would be trackable (they must stay
+  ignored — a committed token recreates the merge conflict forest mode
+  removes and makes clones treat a segment as self-minted). The error names
+  the full ordered block: `!.adlc/manifest.d/`, `!.adlc/manifest.d/**`,
+  `.adlc/manifest.d/.lineage`, `.adlc/manifest.d/*.lock`.
+
+`--json` emits exactly one JSON document on stdout in every mode.
+
+#### CI does not yet guard segment files
+
+Activation warns with the code `ci-cannot-guard-segments`, and the limitation
+is real: rails-guard's committed-tree reader validates `.adlc/manifest.jsonl`
+only, so the append-only enforcement the root gets does **not** extend to
+`.adlc/manifest.d/*.jsonl`. A pull request that rewrites, truncates, reorders
+or deletes committed segment evidence is not currently detected by CI.
+
+The warning is carried by every outcome that describes a repository actually
+in forest mode — a fresh activation, an already-enabled run, an already-active
+run refused for gitignore drift, and a run refused for a missing
+`ADLC_MANIFEST_KEY`. That last one matters for repositories activated with
+`--allow-keyless`, which meet that refusal on every subsequent run.
+
+On that refusal the mode is detected without reading the whole ledger: the
+activation marker, or the root's final line, each read within a fixed window
+from a single no-follow descriptor. Both halves of the mode signal are covered
+— including a repository cut over by hand, which has a cutover-tailed root and
+no marker — while the refusal stays immune to being turned into an unbounded
+read of a hostile root.
+
+A bounded read has three possible answers, so the command has three possible
+outputs. When the window cannot decide — a final entry larger than it, a
+non-regular file, a trailing run of blank lines longer than the window — the
+refusal carries `segmentation-undetermined` rather than
+`ci-cannot-guard-segments`. The distinction is deliberate: the second asserts
+that the repository IS in forest mode, and an undecidable read has not
+established that. Configuring a signing key gets a definite answer.
+
+This is a missing guard, not a lost one — forest mode never had the coverage,
+and single-file repositories are unaffected. It closes when the forest CI gate
+ships (spec §9.1–9.3), after which the warning goes away. Until then, weigh it
+against the merge-conflict relief forest mode buys you: if your evidence
+ledger is a compliance artifact rather than a working record, stay on
+single-file mode for now.
+
+The gitignore probe is best-effort over the common rule shapes (the
+directory, the marker file, and a representative `*.jsonl` segment name). A
+rule targeting a specific branch-derived slug (e.g. `release-*.jsonl`) can
+still evade it — enforcing committability of each real segment at the moment
+it is minted belongs to the segment writer, deliberately outside `enable`.
+
+### migrate
+
+The history-preserving cutover ceremony (spec §8): switch a repository with a
+**live root** into segmented (forest) mode without rewriting a byte of its
+history. `enable` refuses live roots and names this command.
+
+```sh
+gate-manifest migrate --reason "cutover to forest mode"            # dry-run
+gate-manifest migrate --reason "cutover to forest mode" --write    # apply
+```
+
+Requires `ADLC_MANIFEST_KEY` — the ceremony verifies every existing signature
+and signs what it appends; no keyless form exists. Dry-run prints the full
+plan: every standing approve that will be sealed, the cutover entry's fields,
+the backup path, and the marker path.
+
+The write, in order: a hash-named backup
+(`manifest.jsonl.pre-cutover-<sha16>.bak`), one signed `needs-attention` seal
+per standing approve (§4.6 — a deliberate reset forcing fresh re-approval
+under forest trust semantics, never a grandfathering), the signed
+`manifest-cutover` entry binding `rootSha256` over all prior raw bytes, and
+the `.adlc/manifest.d/.store.json` marker with `auth: "keyed"`. Every append
+extends the existing chain normally.
+
+Refusals (exit 2, nothing written): missing key; invalid chain (run
+`repair-chain` first); unsigned entries without `--attest-unsigned` (with it,
+their count and line numbers are disclosed in the plan and in the cutover
+record); already segmented — by marker **or** cutover tail, so a lost marker
+cannot cause duplicate seals; a `--reason` under 8 characters; a gitignore
+contract that would strand the marker uncommittable.
+
+Crash safety: a partial run is recoverable at every step. Seals appended
+before a crash already revoke their tuples, so a re-run seals only the
+remainder — no duplicates. A cutover appended before the marker keeps the
+repo segmented via the root tail, and a re-run refuses rather than
+double-appending.
+
+Follow-ups the operator owns (printed on apply): commit in a dedicated PR;
+pin the minimum toolkit version in CI; in-flight PRs rebase and re-record
+revision-bound attestations (`migrate-branch` salvages a branch's root-tail
+evidence). **Rollback:** restore the backup over `manifest.jsonl`; then, ONLY
+if `.adlc/manifest.d/` contains nothing but `.store.json`, delete the
+directory — if it holds segment files, a writer already recorded real
+evidence there, and deleting it destroys that evidence. Salvage segments
+first (`migrate-branch` or manual review) before any removal.
+
+After a cutover, set (or verify) the repository's toolkit floor: a toolkit
+that predates the marker contract appends evidence directly to the
+now-frozen root (failing only later at the CI forest gate), and even
+marker-aware releases older than the cutover verbs cannot run `migrate` /
+`migrate-branch` when a branch needs salvage. Pin the minimum version where
+your preflight and CI can read it (in this repository:
+`scripts/toolkit-floor.json`, enforced by `scripts/toolkit-floor-check.mjs`
+in preflight and the rails-guard CI job) so a stale CLI is caught at the
+earliest local gate, with an explicit upgrade instruction, before any bad
+evidence reaches a PR. The floor cannot make an already-installed
+pre-cutover binary refuse to write — that is unfixable retroactively; it
+bounds how far such a write travels.
+
+### migrate-branch
+
+In-flight branch salvage after a cutover. When main migrates while a branch
+still holds root-tail evidence, the rebase's only correct resolution is
+taking main's frozen `manifest.jsonl` wholesale — discarding the branch's
+entries, including any approve that `prosecute --carry-forward` would need.
+This command re-chains those entries into a fresh segment so the evidence
+survives.
+
+```sh
+# after resolving the rebase conflict by taking main's side:
+gate-manifest migrate-branch                 # dry-run (source: ORIG_HEAD)
+gate-manifest migrate-branch --write         # apply
+gate-manifest migrate-branch --from <ref>    # explicit pre-rebase state
+```
+
+Requires `ADLC_MANIFEST_KEY`. Every source entry's signature is verified
+before salvage — a tampered signature always refuses; genuinely unsigned
+entries need `--attest-unsigned` and are disclosed in the salvage record.
+The writes go through the production segment writer, so the minted segment
+carries the branch identity, anchors to the root's cutover line, and passes
+the forest CI gate as any ordinary segment would. A terminal
+`manifest-salvage` entry records the source SHA, entry count, and each
+original line's hash — re-signing is disclosed, never silent.
+
+Refusals (exit 2, nothing written): missing key; a repository that is not
+segmented; an unresolvable source ref; a working root still matching the
+pre-rebase source (take main's side first); a source suffix that does not
+chain from the shared prefix (corruption surfaced, not truncated); a branch
+that already owns a segment (salvage runs once, before new writes).
+
+#### When and how: the full playbook
+
+**The moment you need this:** you run `git rebase main` (or merge main into
+your branch) after main has cut over, and git stops with a conflict in
+`.adlc/manifest.jsonl` — seal/cutover entries on one side, your branch's
+evidence entries on the other. Every in-flight branch hits this exactly once
+per cutover.
+
+**Step 1 — resolve by taking main's side, wholesale.** Do not union the two
+sides and do not hand-edit entries: the frozen root must be byte-identical
+to main's, and CI denies anything else. Mind the rebase inversion — during
+a rebase, `--ours` is MAIN's side, not yours:
+
+```sh
+git checkout --ours -- .adlc/manifest.jsonl     # during REBASE: ours = main
+git checkout --theirs -- .adlc/manifest.jsonl   # during MERGE:  theirs = main
+git add .adlc/manifest.jsonl && git rebase --continue
+```
+
+**Step 2 — salvage, immediately, before any new evidence is recorded:**
+
+```sh
+gate-manifest migrate-branch            # dry-run: shows what would be salvaged
+gate-manifest migrate-branch --write
+```
+
+`ORIG_HEAD` still names your pre-rebase state right after a rebase; if
+anything has moved it (a second rebase, a reset), find the pre-rebase commit
+in `git reflog` and pass it via `--from`.
+
+**Step 3 — restore your attestations.** Salvaged approve entries are
+findable in the forest again, which re-enables the cheap path when your diff
+content did not change:
+
+```sh
+adlc prosecute record-cross-model --ticket <id> --carry-forward <FROM_REVISION>
+```
+
+The old revision string is in the salvaged entry (`gate-manifest show
+--ticket <id>`). If the rebase changed your diff content, carry-forward
+refuses by design — run a fresh distinct-provider review instead.
+
+**When NOT to salvage:** if the branch's root-tail held nothing you need —
+no attestations worth carrying forward, evidence you would re-record anyway
+— just resolve the conflict (step 1) and keep working; the writer mints your
+branch's segment automatically on its next append. Salvage is for
+preserving evidence, not a mandatory ritual. And it must run BEFORE any new
+write on the branch: once fresh evidence mints your segment, salvage
+refuses rather than interleave old entries after new ones.
+
+### adopt
+
+Choose which lineage this checkout continues, when more than one committed
+segment declares the current branch. Two clones of one branch that each write
+before seeing the other produce that state legitimately; every token-less
+write then fails closed rather than guess. `adopt` is the way out.
+
+```sh
+gate-manifest adopt                   # list this branch's candidate lineages
+gate-manifest adopt <segment> --write # bind this checkout to one of them
+```
+
+Listing shows each candidate's entry count, first/last timestamps, and
+whether it authenticates under the available key. Adopting writes only the
+gitignored local `.adlc/manifest.d/.lineage` token — **committed evidence is
+never edited**, and the segments you did not choose stay byte-identical.
+
+Because the token is a trust anchor (readers treat a token match as proof
+this checkout minted the segment and skip re-verification), adopt applies the
+same gates the writer applies to a recovered candidate — both halves:
+
+- **Integrity.** Adopt refuses while `manifest.d/` holds any non-conforming
+  object, or while any segment's first entry is unreadable. Recovery refuses
+  in both states; a token would short-circuit recovery forever afterwards,
+  so adopting there would convert a fail-closed anomaly into permanent
+  silence for that checkout.
+- **Authentication.** With a key: the chain must be intact and the
+  branch-bearing **first entry** must carry a verified v2 signature. In a
+  forest whose marker *explicitly* declares `auth: "keyless"` (activated
+  `--allow-keyless`): chain intactness alone, since a token confers no trust
+  there that the forest does not already grant — keyless readers skip
+  signature verification by design, and refusing would leave keyless forests
+  with no remedy for an outage they can genuinely reach. A forest that
+  declares **no** mode (no marker — e.g. cutover-only) requires a key:
+  "no key supplied" is far more often a forgotten environment variable than
+  a deliberate configuration, and accepting there would launder an unsigned
+  segment into the token-trusted path.
+
+Exit `2`, writing nothing, when: the repo is not segmented, HEAD is detached
+(no branch to bind to), the forest is **keyed-mode** (or declares no mode) but no key is available,
+the store holds a non-conforming object or an unreadable segment, the named
+segment is unknown, it declares a different branch, or it fails the
+authentication gate above.
 
 ### attest
 
@@ -175,7 +447,54 @@ gate-manifest verify --json    # → { ..., "signed": true }
 - **verify** (run with the key) requires every entry to carry a valid sig — comparison is constant-time (`crypto.timingSafeEqual`). A missing sig → `unsigned entry`; a wrong sig → `signature invalid`. Either breaks the chain (exit 2). This defeats the forge-from-scratch attack: without the key, an attacker cannot produce valid signatures.
 - **verify** without a key still checks the hash chain but reports `signed: false`, so callers cannot claim cryptographic provenance.
 
-Zero-dependency: HMAC comes from Node's built-in `node:crypto`. Key management (rotation, distribution) is out of scope for this tool — supply the key via the environment.
+Zero-dependency: HMAC comes from Node's built-in `node:crypto`. Key distribution is out of scope for this tool — supply the key via the environment.
+
+### ⚠️ Rotating `ADLC_MANIFEST_KEY` is a migration, not a secret update
+
+**Once any entry in a ledger is signed, the key that signed it is load-bearing.** HMAC is symmetric, so verification needs the *same* value. Rotate or lose the key and every previously signed entry becomes **present-but-invalid** — not merely unsigned — and `verify` rejects that in *both* modes (`requireSignatures: false` tolerates unsigned history, never a wrong signature).
+
+The consequence is not local to one entry. Consumers that gate on the ledger check the whole chain before examining any individual record, so a single wrongly-signed entry fails them **closed, permanently**:
+
+- `adlc-prosecute tier-check` — every trust-root PR fails, regardless of whether that PR has its own valid attestation.
+- `record-cross-model` — refuses to append onto an unverifiable chain, so you cannot record your way out.
+
+Before rotating, confirm the ledger has no signed entries (`grep -c '"sig"' .adlc/manifest.jsonl`). If it has any, treat rotation as a migration: re-sign the existing history onto the new key with `repair-chain` (which requires the **original** key and verifies every signature before rewriting), or keep the original key.
+
+If a gate is already failing this way, `tier-check` names it explicitly — a message about the chain not verifying, rather than a missing attestation. Do not respond by running a review and recording a new attestation; that cannot clear it.
+
+## spend
+
+**ADLC Phase:** cross-cutting (reads the C11 evidence ledger; not itself a gate)
+
+ADLC §6 defines "cost per merged, verified change" as the lifecycle's unit of account and a barbell spend shape (heavy P1/P5, light P4) as the healthy target. `spend` aggregates whatever token usage other gates have recorded into the C11 manifest, groups it by ADLC phase, and checks it against the §6 diagnostics — turning a claim made in prose into a number you can look at.
+
+### What it is not
+
+`spend` never fails a build and has no gate semantics — there is no "wrong" spend shape a gate should block on. It is a report, read-only over the manifest ledger.
+
+It also does not collect usage itself. Usage is collected at the LLM chokepoint (`@adlc/core`'s `complete()`/`fan()` accept an optional `onUsage` callback) and *reported* by individual gates that choose to thread it into their own `gate-manifest record` call as `data.usage` (`{inputTokens, outputTokens, cachedTokens, provider, model, tier}`). A gate that doesn't do this simply contributes no rows — `spend` shows exactly how much of the ledger it could and couldn't account for (`entriesWithUsage`/`entriesTotal`), rather than silently under-reporting.
+
+### Usage
+
+```sh
+adlc spend [--ticket id] [--dir path] [--json]
+```
+
+- `--ticket id` — restrict to manifest entries recorded against one ticket.
+- `--dir path` — ledger directory (default `.adlc`).
+- `--json` — machine-readable aggregate: `{ byPhase, byGate, total, entriesWithUsage, entriesTotal }`.
+
+Text output renders a per-phase histogram (P0–P7, `maintenance`, `unphased` for gates not yet mapped to a phase) plus any §6 diagnostics that apply — e.g. spend concentrated in P4, or heavy P5 spend with no P7 spend recorded.
+
+### Phase attribution
+
+Gate name → phase is a static table in `packages/gate-manifest/lib/spend.mjs` (`PHASE_BY_GATE`), mirrored from the `/adlc:adlc` skill's canonical phase-routing table. Like any other cache in this toolkit (ADLC Principle 10), it can go stale if a gate's phase assignment changes — an unrecognized gate name surfaces under `unphased` rather than being silently mis-attributed or dropped.
+
+### Diagnostic semantics
+
+`spend` evaluates the aggregate against §6 barbell spend diagnostics:
+- **P4 concentration**: flags when build-phase spend dominates interrogation and prosecution.
+- **P5/P7 ratio**: flags heavy prosecution spend without corresponding distill spend.
 
 ## Sibling tools
 
