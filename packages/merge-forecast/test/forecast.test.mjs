@@ -1172,4 +1172,25 @@ describe('cyclic ticket DAG', () => {
       cleanup(root);
     }
   });
+
+  test('completed tickets are excluded from merge-forecast bin schedule and do not gate dependent tickets', () => {
+    const root = mkTemp();
+    try {
+      gitInit(root);
+      gitCommit(root, { 'src/auth/index.js': '// a' }, 'init');
+      writeTickets(root, [
+        mkTicket('T1', { completed: true, scope: ['src/auth/**'], edges: [{ to: 'T2' }] }),
+        mkTicket('T2', { scope: ['src/auth/**'] }),
+      ]);
+
+      const { status, stdout, stderr } = runBin(root, ['--json']);
+      assert.equal(status, 0, `expected exit 0, got ${status}\n${stdout}${stderr}`);
+      const parsed = JSON.parse(stdout);
+      assert.equal(parsed.waves.length, 1);
+      assert.deepEqual(parsed.waves[0], ['T2']);
+    } finally {
+      cleanup(root);
+    }
+  });
 });
+

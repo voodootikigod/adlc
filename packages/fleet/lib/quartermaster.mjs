@@ -15,11 +15,10 @@
 // inside the repo, which disables loading rather than reading it.
 
 import { existsSync, readFileSync } from 'node:fs';
-import { computeFloat, ADLC_DIR } from '@adlc/core';
+import { computeFloat, ADLC_DIR, activeTickets as routableTickets } from '@adlc/core';
 import { readManifestForest } from '@adlc/gate-manifest/lib/forest.mjs';
 import { assignAll } from '@adlc/model-router/lib/assign.mjs';
 import { buildPriors } from '@adlc/model-router/lib/priors.mjs';
-import { activeTickets as routableTickets } from '@adlc/model-router/lib/active-tickets.mjs';
 import {
   HARNESS_DEFAULT_MODEL,
   REGISTRY_ENV,

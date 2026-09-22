@@ -23,7 +23,7 @@
  */
 
 import { canonicalJson } from './canonical-json.mjs';
-import { opError } from './op-error.mjs';
+import { OpError } from '@adlc/core';
 
 /** Every action class the write path can perform. */
 export const ACTION_CLASSES = Object.freeze(['close', 'relabel', 'duplicate-link', 'comment']);
@@ -46,14 +46,14 @@ export const DEFAULT_AUTONOMY_FLOOR = Object.freeze(['close']);
  */
 export function assertFloor(floor) {
   if (!Array.isArray(floor)) {
-    throw opError(
+    throw new OpError(
       `backlog-groom: autonomyFloor must be an array of action classes — known classes are: ${ACTION_CLASSES.join(', ')}`
     );
   }
   const seen = new Set();
   for (const cls of floor) {
     if (!ACTION_CLASSES.includes(cls)) {
-      throw opError(
+      throw new OpError(
         `backlog-groom: unknown action class ${JSON.stringify(cls)} in autonomyFloor — known classes are: ${ACTION_CLASSES.join(', ')}`
       );
     }
@@ -61,7 +61,7 @@ export function assertFloor(floor) {
     // inattention that writes a class twice writes it wrong once, and that case
     // is not harmless — so both are surfaced rather than tidied away.
     if (seen.has(cls)) {
-      throw opError(`backlog-groom: autonomyFloor lists ${JSON.stringify(cls)} more than once`);
+      throw new OpError(`backlog-groom: autonomyFloor lists ${JSON.stringify(cls)} more than once`);
     }
     seen.add(cls);
   }
@@ -113,13 +113,13 @@ export function assertFloorNotWidened({ base, head } = {}) {
     // "Unreadable" is not "empty". Treating an unknown base as no-floor would
     // make DELETING the profile at the merge base the cheapest possible
     // widening — the check would congratulate the very move it exists to catch.
-    throw opError(
+    throw new OpError(
       'backlog-groom: could not read the autonomy floor at the merge base — refusing to act, because an unknown base floor cannot be shown to be narrower'
     );
   }
   const widened = floorWidening(base, head);
   if (widened.length === 0) return head;
-  throw opError(
+  throw new OpError(
     `backlog-groom: autonomyFloor is WIDER than at the merge base — ${widened.join(', ')} ` +
       'no longer requires a human. Widening the floor is a privileged change and needs explicit trust-root authorization.'
   );
@@ -141,11 +141,11 @@ export function frozenPathsRemoved(base, head) {
 /** Refuse a profile that unfreezes paths relative to the merge base. */
 export function assertFrozenPathsNotNarrowed({ base, head } = {}) {
   if (!Array.isArray(base)) {
-    throw opError('backlog-groom: could not read frozenPaths at the merge base — refusing to act on an unknown baseline');
+    throw new OpError('backlog-groom: could not read frozenPaths at the merge base — refusing to act on an unknown baseline');
   }
   const removed = frozenPathsRemoved(base, head);
   if (removed.length === 0) return head;
-  throw opError(
+  throw new OpError(
     `backlog-groom: frozenPaths no longer covers ${removed.join(', ')} — unfreezing a path is a privileged change and needs explicit trust-root authorization.`
   );
 }
@@ -166,11 +166,11 @@ export const POLICY_KEYS = Object.freeze(['providers', 'labels', 'units']);
  */
 export function assertPolicyUnchanged({ base, head } = {}) {
   if (typeof base !== 'object' || base === null || Array.isArray(base)) {
-    throw opError('backlog-groom: could not read the profile at the merge base — refusing to act on an unknown reviewer and label policy');
+    throw new OpError('backlog-groom: could not read the profile at the merge base — refusing to act on an unknown reviewer and label policy');
   }
   const changed = POLICY_KEYS.filter((key) => canonicalJson(base[key]) !== canonicalJson(head?.[key]));
   if (changed.length === 0) return head;
-  throw opError(
+  throw new OpError(
     `backlog-groom: ${changed.join(', ')} differ from the merge base — the reviewer and the labels a relabel may target are ` +
       'authorization terms, so a change to them must land on the default branch before --apply uses it.'
   );

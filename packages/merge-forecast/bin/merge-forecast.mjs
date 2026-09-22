@@ -13,10 +13,9 @@
  *   2  gate fails (--width > firstWaveWidth, or vetoed pair concurrent)
  */
 
-import { parseArgs, loadTickets, pass, opError, printJson } from '@adlc/core';
+import { parseArgs, loadTickets, pass, opError, printJson, activeTickets } from '@adlc/core';
 import { runForecast } from '../lib/forecast.mjs';
 import { formatForecast } from '../lib/output.mjs';
-import { activeTickets } from '../lib/active-tickets.mjs';
 
 const { values } = parseArgs({
   options: {

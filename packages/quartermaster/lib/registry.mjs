@@ -20,6 +20,7 @@ import {
   isDirectTransport,
 } from './channels.mjs';
 import { isNormalizedProvider, normalizeProviderName } from './provider.mjs';
+import { isPlainObject } from '@adlc/core';
 
 /** The one schema version this build understands. A newer registry fails closed. */
 export const REGISTRY_SCHEMA_VERSION = 3;
@@ -89,10 +90,6 @@ function normalizeCatalog(adapters) {
       },
     ])
   );
-}
-
-function isPlainObject(value) {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /** Walk the whole document for argv-shaped keys (rule 2). */

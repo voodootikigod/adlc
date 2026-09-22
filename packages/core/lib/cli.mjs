@@ -95,3 +95,26 @@ export function promptOnly(prompts) {
   }
   process.exit(0);
 }
+
+/**
+ * Test whether a value is a plain JavaScript object (created with `{}` or `Object.create(null)`).
+ *
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+export function isPlainObject(value) {
+  if (value === null || typeof value !== 'object') return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === null || proto === Object.prototype;
+}
+
+/**
+ * An operational error representing user/environment failures rather than internal defects.
+ */
+export class OpError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'OpError';
+    this.isOpError = true;
+  }
+}

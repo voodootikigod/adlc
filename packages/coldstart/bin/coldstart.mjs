@@ -9,13 +9,13 @@ import {
   promptOnly,
   loadTickets,
   detectProvider,
+  activeTickets,
 } from '@adlc/core';
 
 import { buildPrompt, SYSTEM_PROMPT } from '../lib/prompt.mjs';
 import { checkAll, resolveExpectedModel, checkAllOffline } from '../lib/gate.mjs';
 import { buildRecordPlan } from '../lib/cache.mjs';
 import { renderReport, buildJsonOutput, allPass } from '../lib/report.mjs';
-import { activeTickets } from '../lib/active-tickets.mjs';
 import { USAGE, OPTIONS, parseMaxAgeDays } from '../lib/cli-options.mjs';
 import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 

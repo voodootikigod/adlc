@@ -5,13 +5,11 @@
  * Returns { assignments, p3Findings, error? }
  */
 
-import { loadTickets, computeFloat } from '@adlc/core';
-import { ADLC_DIR } from '@adlc/core';
+import { loadTickets, computeFloat, ADLC_DIR, activeTickets } from '@adlc/core';
 import { readManifestForest } from '@adlc/gate-manifest/lib/forest.mjs';
 import { buildPriors } from './priors.mjs';
 import { assignAll } from './assign.mjs';
 import { FRONTIER_CATEGORIES } from './assign.mjs';
-import { activeTickets } from './active-tickets.mjs';
 import { assertFloor, DEFAULT_FLOOR } from './floor.mjs';
 
 /**

@@ -23,6 +23,7 @@
 import { createHash } from 'node:crypto';
 
 import { sealLedgerEntry, verifyLedgerEntry } from './ledger-sig.mjs';
+import { isPlainObject } from '@adlc/core';
 
 /** `adversarial-review` exit codes (its documented contract). */
 export const REVIEW_APPROVE = 0;
@@ -36,10 +37,6 @@ export const REVIEW_NEEDS_ATTENTION = 2;
  * returns a hollow approve — an exit 0 that reviewed nothing.
  */
 export const MIN_CONFIDENCE = 0.3;
-
-function isPlainObject(v) {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
 
 /**
  * Resolve the decider/reviewer pair, or say why there isn't one.
