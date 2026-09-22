@@ -186,4 +186,12 @@ describe('formatDiagnosticOutput', () => {
     assert.match(formatted, /TAIL_END\n?$/);
     assert.match(formatted, /\[\.\.\. hollow-test: truncated \d+ bytes of output \.\.\.\]/);
   });
+
+  it('splits head and tail equally when truncating', () => {
+    const input = 'A'.repeat(100) + 'B'.repeat(100);
+    const maxBytes = 20;
+    const formatted = formatDiagnosticOutput(input, maxBytes);
+    assert.ok(formatted.startsWith('A'.repeat(10) + '\n[...'));
+    assert.ok(formatted.endsWith('B'.repeat(10) + '\n'));
+  });
 });
