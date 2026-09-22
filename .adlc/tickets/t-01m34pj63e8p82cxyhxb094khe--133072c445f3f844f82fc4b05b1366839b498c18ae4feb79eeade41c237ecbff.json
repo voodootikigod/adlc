@@ -1,0 +1,12 @@
+{
+  "body": "Source: whole-repo bloat review (rev-tests finding 1). `plugins/adlc-opencode/test/rails-checker.test.mjs` contains 75 `try/finally` blocks (the highest count across all plugins) that exist only to delete temporary repo directories. Following the introduction of `@adlc/core/test-kit`, this test file can adopt `tmp(t)` with automatic `t.after` cleanup.\n\nNORMATIVE BEHAVIOUR.\n1. In `plugins/adlc-opencode/test/rails-checker.test.mjs`:\n   - Import `{ tmp }` from `@adlc/core/test-kit`.\n   - Update helper `repo(t, { tickets, current } = {})` to create the fixture root using `tmp(t, 'oc-rails-')`.\n   - Update each test case to take `t` and call `repo(t, ...)` or `tmp(t, 'oc-rails-')`.\n   - Remove all 75 `try { ... } finally { rmSync(dir, ...); }` blocks and unindent the test bodies.\n2. Ensure all opencode tests pass: `node --test plugins/adlc-opencode/test/*.test.mjs`.\n\nACCEPTANCE CRITERIA.\n- AC1 `grep -c 'finally' plugins/adlc-opencode/test/rails-checker.test.mjs` reports 0 (down from 75).\n- AC2 All assertions in `rails-checker.test.mjs` remain functionally identical.\n- AC3 `node --test plugins/adlc-opencode/test/*.test.mjs` exits 0 with all tests passing.\n- AC4 `adlc rails-guard` and `node scripts/mutation-gate.mjs origin/main --max 12` exit 0.",
+  "category": "refactor",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M34PJ63E8P82CXYHXB094KHE",
+  "rails": [],
+  "scope": [
+    "plugins/adlc-opencode/test/rails-checker.test.mjs"
+  ],
+  "title": "refactor(adlc-opencode): adopt @adlc/core/test-kit in rails-checker.test.mjs and eliminate 75 try/finally blocks"
+}

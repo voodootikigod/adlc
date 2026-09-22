@@ -1,0 +1,13 @@
+{
+  "body": "Source: whole-repo bloat review (rev-tests finding 1 & 2). `packages/tickets/test/bypass-audit.test.mjs` and `manifest-segments.test.mjs` contain 116 `try/finally` blocks solely dedicated to tempdir cleanup. Following the introduction of `@adlc/core/test-kit`, both test files can adopt `tmp(t)` and `gitRepo(t)` with automatic `t.after` cleanup.\n\nNORMATIVE BEHAVIOUR.\n1. In `packages/tickets/test/bypass-audit.test.mjs`:\n   - Import `{ tmp }` from `@adlc/core/test-kit`.\n   - Update test cases to take `t` and create fixture directories with `tmp(t, 'bypass-audit-')`.\n   - Remove all 61 `try { ... } finally { rmSync(root, ...); }` blocks, unindenting test bodies.\n2. In `packages/tickets/test/manifest-segments.test.mjs`:\n   - Import `{ tmp, gitRepo }` from `@adlc/core/test-kit`.\n   - Remove local `function gitRepo` and `function clean`.\n   - Update test cases to take `t` and call `gitRepo(t, ...)` or `tmp(t, ...)`.\n   - Remove all 55 `try { ... } finally { clean(root); }` blocks, unindenting test bodies.\n3. Ensure all tickets tests pass: `npm test -w packages/tickets`.\n\nACCEPTANCE CRITERIA.\n- AC1 `grep -c 'finally' packages/tickets/test/bypass-audit.test.mjs packages/tickets/test/manifest-segments.test.mjs` reports 0 for bypass-audit.test.mjs and 0 for manifest-segments.test.mjs (down from 61 and 55).\n- AC2 All assertions in both test files remain functionally identical.\n- AC3 `npm test -w packages/tickets` exits 0 with all tests passing.\n- AC4 `adlc rails-guard` and `node scripts/mutation-gate.mjs origin/main --max 12` exit 0.",
+  "category": "refactor",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M34PJ92YNFWYDNTFG9MYR8FF",
+  "rails": [],
+  "scope": [
+    "packages/tickets/test/bypass-audit.test.mjs",
+    "packages/tickets/test/manifest-segments.test.mjs"
+  ],
+  "title": "refactor(tickets): adopt @adlc/core/test-kit and eliminate 116 try/finally blocks in bypass-audit and manifest-segments tests"
+}
