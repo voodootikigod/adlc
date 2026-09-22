@@ -3,8 +3,59 @@
  * Pure operations around a snapshot map: { [path]: string }.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import {
+  readFileSync,
+  writeFileSync,
+  renameSync,
+  unlinkSync,
+  openSync,
+  closeSync,
+  fchmodSync,
+  lstatSync,
+  statSync,
+  realpathSync,
+} from 'node:fs';
+import { dirname, basename, join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { applyHunks } from './hunks.mjs';
+
+/**
+ * Write file atomically using write-temp-then-rename in the same directory.
+ * Preserves file permissions and resolves symlinks. Cleans up temp file on failure.
+ */
+export function writeFileAtomic(filePath, content) {
+  let realPath = filePath;
+  try {
+    if (lstatSync(filePath).isSymbolicLink()) {
+      realPath = realpathSync(filePath);
+    }
+  } catch {
+    // If path is absent or unreadable, fall through and let openSync report it.
+  }
+
+  let mode = null;
+  try {
+    mode = statSync(realPath).mode & 0o7777;
+  } catch {
+    // New file: use default mode.
+  }
+
+  const dir = dirname(realPath);
+  const tmp = join(dir, `.${basename(realPath)}.${process.pid}.${randomUUID()}.tmp`);
+  const fd = openSync(tmp, 'wx');
+
+  try {
+    writeFileSync(fd, content, 'utf8');
+    if (mode !== null) {
+      fchmodSync(fd, mode);
+    }
+    closeSync(fd);
+    renameSync(tmp, realPath);
+  } finally {
+    try { closeSync(fd); } catch {}
+    try { unlinkSync(tmp); } catch {}
+  }
+}
 
 /**
  * Capture the current content of each path.
@@ -26,7 +77,7 @@ export function restoreSnapshot(snapshot) {
   const errors = [];
   for (const [p, content] of Object.entries(snapshot)) {
     try {
-      writeFileSync(p, content, 'utf8');
+      writeFileAtomic(p, content);
     } catch (err) {
       errors.push(`restore failed for ${p}: ${err.message}`);
     }
@@ -59,7 +110,42 @@ export function applyChanges(changes, snapshot) {
     }
     const result = applyHunks(snapshot[file], hunks);
     if (!result.ok) return { ok: false, error: `${file}: ${result.error}` };
-    writeFileSync(file, result.content, 'utf8');
+    writeFileAtomic(file, result.content);
   }
   return { ok: true };
+}
+
+/**
+ * Apply winning candidate changes transactionally.
+ * Computes all resulting contents first, then writes atomically with rollback
+ * to the snapshot if any write fails.
+ *
+ * @param {Array<{file:string, hunks:Array}>} winnerChanges
+ * @param {{[path]: string}} snapshot
+ */
+export function applyWinner(winnerChanges, snapshot) {
+  const fileWrites = [];
+  for (const { file, hunks } of winnerChanges) {
+    if (!(file in snapshot)) {
+      throw new Error(`candidate referenced file not in snapshot: ${file}`);
+    }
+    const result = applyHunks(snapshot[file], hunks);
+    if (!result.ok) {
+      throw new Error(`failed to apply winning candidate to ${file}: ${result.error}`);
+    }
+    fileWrites.push({ file, content: result.content });
+  }
+
+  try {
+    for (const { file, content } of fileWrites) {
+      writeFileAtomic(file, content);
+    }
+  } catch (err) {
+    try {
+      restoreSnapshot(snapshot);
+    } catch {
+      // Best effort rollback.
+    }
+    throw err;
+  }
 }
