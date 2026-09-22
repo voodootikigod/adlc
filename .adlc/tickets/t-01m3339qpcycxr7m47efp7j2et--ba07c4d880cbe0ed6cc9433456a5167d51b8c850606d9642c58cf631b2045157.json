@@ -1,0 +1,22 @@
+{
+  "acceptanceCriteria": [
+    "In packages/flail-detector/lib/signals.mjs, update PATH_EXTRACT_PATTERNS to match verb tokens (Writing, Editing, Created) when preceded by line start or whitespace (e.g. /(?:^|\\s)(?:Writing|Editing|Created)\\s+([^\\s]+)/i) rather than strictly anchored at ^",
+    "Ensure timestamp-prefixed and indented log lines extract target file paths accurately for scope-violation and edit-churn analysis",
+    "Add tests in packages/flail-detector/test/timestamped-log-paths.test.mjs covering timestamped and indented log extraction",
+    "Existing flail-detector test suite continues to pass",
+    "Update documentation in packages/flail-detector/README.md, docs/tools/flail-detector.md, and apps/docs/content/docs/toolkit/flail-detector.mdx"
+  ],
+  "id": "T-01M3339QPCYCXR7M47EFP7J2ET",
+  "issue": 623,
+  "package": "flail-detector",
+  "rails": [
+    "packages/flail-detector/lib/analyzability.mjs",
+    "packages/flail-detector/lib/analyze.mjs"
+  ],
+  "scope": [
+    "packages/flail-detector/**",
+    "docs/tools/flail-detector.md",
+    "apps/docs/content/docs/toolkit/flail-detector.mdx"
+  ],
+  "title": "flail-detector: plain-text path extraction is anchored to line start — timestamped/indented logs disable scope-violation and edit-churn (#623)"
+}
