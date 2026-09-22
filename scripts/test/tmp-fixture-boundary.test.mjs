@@ -65,8 +65,6 @@ const ALLOWLIST = new Set([
   'packages/preflight/test/integration.test.mjs',
   'packages/preflight/test/unit.test.mjs',
   'packages/quartermaster/test/registry-isolation.test.mjs',
-  'packages/skill-rot/test/frontmatter-preserve.test.mjs',
-  'packages/skill-rot/test/skill-rot.test.mjs',
   'packages/spec-lint/test/readme-exit-codes.test.mjs',
   'packages/spec-lint/test/record.test.mjs',
   'packages/tickets/test/directory.test.mjs',
