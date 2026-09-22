@@ -5,20 +5,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { tmp } from '@adlc/core/test-kit';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
-function makeTmp() {
-  return mkdtempSync(join(tmpdir(), 'model-router-test-'));
-}
-
-function cleanup(dir) {
-  rmSync(dir, { recursive: true, force: true });
-}
 
 function writeTickets(dir, tickets) {
   const adlc = join(dir, '.adlc');
@@ -309,291 +301,239 @@ test('assign: ladder mode budget covers the starting tier PLUS a frontier regene
 
 import { runRouter } from '../lib/router.mjs';
 
-test('runRouter: critical path ticket gets direct mode', async () => {
-  const tmp = makeTmp();
-  try {
-    const ticketsPath = writeTickets(tmp, [
-      { id: 'T1', title: 'Block', category: 'feature', rails: ['a', 'b'], scope: ['a', 'b'],
-        edges: [{ to: 'T2', contract: 'types.ts' }], duration: 1 },
-      { id: 'T2', title: 'Dep', category: 'feature', rails: ['c', 'd'], scope: ['c', 'd'], duration: 1 },
-    ]);
-    const result = await runRouter({ ticketsPath, floor: 0.2, adlcDir: join(tmp, '.adlc') });
-    // Both T1 and T2 are on the critical path (linear chain)
-    const t1 = result.assignments.find((a) => a.id === 'T1');
-    const t2 = result.assignments.find((a) => a.id === 'T2');
-    assert.equal(t1.mode, 'direct');
-    assert.equal(t2.mode, 'direct');
-  } finally {
-    cleanup(tmp);
-  }
+test('runRouter: critical path ticket gets direct mode', async (t) => {
+  const dir = tmp(t, 'model-router-test-');
+  const ticketsPath = writeTickets(dir, [
+    { id: 'T1', title: 'Block', category: 'feature', rails: ['a', 'b'], scope: ['a', 'b'],
+      edges: [{ to: 'T2', contract: 'types.ts' }], duration: 1 },
+    { id: 'T2', title: 'Dep', category: 'feature', rails: ['c', 'd'], scope: ['c', 'd'], duration: 1 },
+  ]);
+  const result = await runRouter({ ticketsPath, floor: 0.2, adlcDir: join(dir, '.adlc') });
+  // Both T1 and T2 are on the critical path (linear chain)
+  const t1 = result.assignments.find((a) => a.id === 'T1');
+  const t2 = result.assignments.find((a) => a.id === 'T2');
+  assert.equal(t1.mode, 'direct');
+  assert.equal(t2.mode, 'direct');
 });
 
-test('runRouter: ticket with float uses ladder mode', async () => {
-  const tmp = makeTmp();
-  try {
-    // T1 and T2 both depend on T3; T1 has duration 1, T2 has duration 3
-    // T1 has float 2 (T3 must wait for T2 to finish)
-    const ticketsPath = writeTickets(tmp, [
-      { id: 'T1', title: 'Short', category: 'feature',
-        rails: ['a', 'b', 'c', 'd'], scope: ['a', 'b', 'c', 'd'],
-        edges: [{ to: 'T3', contract: 'x.ts' }], duration: 1 },
-      { id: 'T2', title: 'Long', category: 'feature',
-        rails: ['e', 'f', 'g', 'h'], scope: ['e', 'f', 'g', 'h'],
-        edges: [{ to: 'T3', contract: 'y.ts' }], duration: 3 },
-      { id: 'T3', title: 'Gate', category: 'feature',
-        rails: ['i', 'j', 'k', 'l'], scope: ['i', 'j', 'k', 'l'], duration: 1 },
-    ]);
-    const result = await runRouter({ ticketsPath, floor: 0.2, adlcDir: join(tmp, '.adlc') });
-    const t1 = result.assignments.find((a) => a.id === 'T1');
-    const t2 = result.assignments.find((a) => a.id === 'T2');
-    // T1 has float 2, T2 has float 0 (critical), T3 has float 0
-    assert.equal(t1.float, 2);
-    assert.equal(t1.mode, 'ladder');
-    assert.equal(t2.float, 0);
-    assert.equal(t2.mode, 'direct');
-  } finally {
-    cleanup(tmp);
-  }
+test('runRouter: ticket with float uses ladder mode', async (t) => {
+  const dir = tmp(t, 'model-router-test-');
+  // T1 and T2 both depend on T3; T1 has duration 1, T2 has duration 3
+  // T1 has float 2 (T3 must wait for T2 to finish)
+  const ticketsPath = writeTickets(dir, [
+    { id: 'T1', title: 'Short', category: 'feature',
+      rails: ['a', 'b', 'c', 'd'], scope: ['a', 'b', 'c', 'd'],
+      edges: [{ to: 'T3', contract: 'x.ts' }], duration: 1 },
+    { id: 'T2', title: 'Long', category: 'feature',
+      rails: ['e', 'f', 'g', 'h'], scope: ['e', 'f', 'g', 'h'],
+      edges: [{ to: 'T3', contract: 'y.ts' }], duration: 3 },
+    { id: 'T3', title: 'Gate', category: 'feature',
+      rails: ['i', 'j', 'k', 'l'], scope: ['i', 'j', 'k', 'l'], duration: 1 },
+  ]);
+  const result = await runRouter({ ticketsPath, floor: 0.2, adlcDir: join(dir, '.adlc') });
+  const t1 = result.assignments.find((a) => a.id === 'T1');
+  const t2 = result.assignments.find((a) => a.id === 'T2');
+  // T1 has float 2, T2 has float 0 (critical), T3 has float 0
+  assert.equal(t1.float, 2);
+  assert.equal(t1.mode, 'ladder');
+  assert.equal(t2.float, 0);
+  assert.equal(t2.mode, 'direct');
 });
 
 // ── integration: cycle detection ──────────────────────────────────────────────
 
-test('runRouter: cycle → opError', async () => {
-  const tmp = makeTmp();
-  try {
-    const ticketsPath = writeTickets(tmp, [
-      { id: 'T1', title: 'A', category: 'feature', edges: [{ to: 'T2', contract: 'x' }] },
-      { id: 'T2', title: 'B', category: 'feature', edges: [{ to: 'T1', contract: 'y' }] },
-    ]);
-    await assert.rejects(
-      () => runRouter({ ticketsPath, floor: 0.2, adlcDir: join(tmp, '.adlc') }),
-      (err) => {
-        assert.ok(err.message.includes('cycle'), `expected 'cycle' in: ${err.message}`);
-        return true;
-      }
-    );
-  } finally {
-    cleanup(tmp);
-  }
+test('runRouter: cycle → opError', async (t) => {
+  const dir = tmp(t, 'model-router-test-');
+  const ticketsPath = writeTickets(dir, [
+    { id: 'T1', title: 'A', category: 'feature', edges: [{ to: 'T2', contract: 'x' }] },
+    { id: 'T2', title: 'B', category: 'feature', edges: [{ to: 'T1', contract: 'y' }] },
+  ]);
+  await assert.rejects(
+    () => runRouter({ ticketsPath, floor: 0.2, adlcDir: join(dir, '.adlc') }),
+    (err) => {
+      assert.ok(err.message.includes('cycle'), `expected 'cycle' in: ${err.message}`);
+      return true;
+    }
+  );
 });
 
 // ── integration: prior influence ──────────────────────────────────────────────
 
-test('runRouter: priors influence critical path tier', async () => {
-  const tmp = makeTmp();
-  try {
-    writeManifest(tmp, [
-      { type: 'build', model: 'cheap', firstPass: true },
-      { type: 'build', model: 'cheap', firstPass: true },
-      { type: 'build', model: 'cheap', firstPass: true },
-      { type: 'build', model: 'cheap', firstPass: true },
-      { type: 'build', model: 'cheap', firstPass: true },
-    ]);
-    const ticketsPath = writeTickets(tmp, [
-      { id: 'T1', title: 'Solo', category: 'feature',
-        rails: ['a', 'b'], scope: ['a', 'b'] },
-    ]);
-    const result = await runRouter({ ticketsPath, floor: 0.2, adlcDir: join(tmp, '.adlc') });
-    const t1 = result.assignments.find((a) => a.id === 'T1');
-    // T1 is on critical path (only ticket); priors say 'cheap' is best
-    assert.equal(t1.tier, 'cheap');
-    assert.equal(t1.mode, 'direct');
-  } finally {
-    cleanup(tmp);
-  }
+test('runRouter: priors influence critical path tier', async (t) => {
+  const dir = tmp(t, 'model-router-test-');
+  writeManifest(dir, [
+    { type: 'build', model: 'cheap', firstPass: true },
+    { type: 'build', model: 'cheap', firstPass: true },
+    { type: 'build', model: 'cheap', firstPass: true },
+    { type: 'build', model: 'cheap', firstPass: true },
+    { type: 'build', model: 'cheap', firstPass: true },
+  ]);
+  const ticketsPath = writeTickets(dir, [
+    { id: 'T1', title: 'Solo', category: 'feature',
+      rails: ['a', 'b'], scope: ['a', 'b'] },
+  ]);
+  const result = await runRouter({ ticketsPath, floor: 0.2, adlcDir: join(dir, '.adlc') });
+  const t1 = result.assignments.find((a) => a.id === 'T1');
+  // T1 is on critical path (only ticket); priors say 'cheap' is best
+  assert.equal(t1.tier, 'cheap');
+  assert.equal(t1.mode, 'direct');
 });
 
 // T-MANIFEST-FOREST (adversarial-review finding): priors must reflect
 // evidence recorded post-cutover in a segment, not just root.
-test('runRouter: priors reflect entries recorded in a manifest.d/ segment, not just root', async () => {
-  const tmp = makeTmp();
-  try {
-    const adlc = join(tmp, '.adlc');
-    mkdirSync(join(adlc, 'manifest.d'), { recursive: true });
-    const lines = [
-      { type: 'build', model: 'cheap', firstPass: true },
-      { type: 'build', model: 'cheap', firstPass: true },
-      { type: 'build', model: 'cheap', firstPass: true },
-      { type: 'build', model: 'cheap', firstPass: true },
-      { type: 'build', model: 'cheap', firstPass: true },
-    ].map((e) => JSON.stringify(e)).join('\n') + '\n';
-    writeFileSync(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), lines);
-    const ticketsPath = writeTickets(tmp, [
-      { id: 'T1', title: 'Solo', category: 'feature', rails: ['a', 'b'], scope: ['a', 'b'] },
-    ]);
-    const result = await runRouter({ ticketsPath, floor: 0.2, adlcDir: adlc });
-    const t1 = result.assignments.find((a) => a.id === 'T1');
-    assert.equal(t1.tier, 'cheap', 'priors from the segment must count toward routing, same as root would');
-    assert.equal(t1.mode, 'direct');
-  } finally {
-    cleanup(tmp);
-  }
+test('runRouter: priors reflect entries recorded in a manifest.d/ segment, not just root', async (t) => {
+  const dir = tmp(t, 'model-router-test-');
+  const adlc = join(dir, '.adlc');
+  mkdirSync(join(adlc, 'manifest.d'), { recursive: true });
+  const lines = [
+    { type: 'build', model: 'cheap', firstPass: true },
+    { type: 'build', model: 'cheap', firstPass: true },
+    { type: 'build', model: 'cheap', firstPass: true },
+    { type: 'build', model: 'cheap', firstPass: true },
+    { type: 'build', model: 'cheap', firstPass: true },
+  ].map((e) => JSON.stringify(e)).join('\n') + '\n';
+  writeFileSync(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), lines);
+  const ticketsPath = writeTickets(dir, [
+    { id: 'T1', title: 'Solo', category: 'feature', rails: ['a', 'b'], scope: ['a', 'b'] },
+  ]);
+  const result = await runRouter({ ticketsPath, floor: 0.2, adlcDir: adlc });
+  const t1 = result.assignments.find((a) => a.id === 'T1');
+  assert.equal(t1.tier, 'cheap', 'priors from the segment must count toward routing, same as root would');
+  assert.equal(t1.mode, 'direct');
 });
 
 // ── integration: floor gate (exit 2) via CLI ──────────────────────────────────
 
-test('CLI: exit 2 when ticket below floor', () => {
-  const tmp = makeTmp();
-  try {
-    const adlc = join(tmp, '.adlc');
-    mkdirSync(adlc, { recursive: true });
-    const ticketsPath = join(adlc, 'tickets.json');
-    writeFileSync(ticketsPath, JSON.stringify({
-      tickets: [
-        { id: 'T1', title: 'Unreiled', category: 'feature', scope: ['a', 'b'] },
-      ],
-    }));
-    const r = runCLI(['--tickets', ticketsPath, '--floor', '0.2'], tmp);
-    assert.equal(r.code, 2, `expected exit 2, got ${r.code}\nstdout:${r.stdout}\nstderr:${r.stderr}`);
-    assert.ok(r.stderr.includes('P3 finding') || r.stdout.includes('P3 finding'),
-      `expected P3 finding in output:\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
-  } finally {
-    cleanup(tmp);
-  }
+test('CLI: exit 2 when ticket below floor', (t) => {
+  const dir = tmp(t, 'model-router-test-');
+  const adlc = join(dir, '.adlc');
+  mkdirSync(adlc, { recursive: true });
+  const ticketsPath = join(adlc, 'tickets.json');
+  writeFileSync(ticketsPath, JSON.stringify({
+    tickets: [
+      { id: 'T1', title: 'Unreiled', category: 'feature', scope: ['a', 'b'] },
+    ],
+  }));
+  const r = runCLI(['--tickets', ticketsPath, '--floor', '0.2'], dir);
+  assert.equal(r.code, 2, `expected exit 2, got ${r.code}\nstdout:${r.stdout}\nstderr:${r.stderr}`);
+  assert.ok(r.stderr.includes('P3 finding') || r.stdout.includes('P3 finding'),
+    `expected P3 finding in output:\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
 });
 
-test('CLI: exit 0 when all tickets railed above floor', () => {
-  const tmp = makeTmp();
-  try {
-    const adlc = join(tmp, '.adlc');
-    mkdirSync(adlc, { recursive: true });
-    const ticketsPath = join(adlc, 'tickets.json');
-    writeFileSync(ticketsPath, JSON.stringify({
-      tickets: [
-        { id: 'T1', title: 'Railed', category: 'feature',
-          rails: ['a', 'b'], scope: ['a', 'b'] },
-      ],
-    }));
-    const r = runCLI(['--tickets', ticketsPath, '--floor', '0.2'], tmp);
-    assert.equal(r.code, 0, `expected exit 0, got ${r.code}\nstdout:${r.stdout}\nstderr:${r.stderr}`);
-  } finally {
-    cleanup(tmp);
-  }
+test('CLI: exit 0 when all tickets railed above floor', (t) => {
+  const dir = tmp(t, 'model-router-test-');
+  const adlc = join(dir, '.adlc');
+  mkdirSync(adlc, { recursive: true });
+  const ticketsPath = join(adlc, 'tickets.json');
+  writeFileSync(ticketsPath, JSON.stringify({
+    tickets: [
+      { id: 'T1', title: 'Railed', category: 'feature',
+        rails: ['a', 'b'], scope: ['a', 'b'] },
+    ],
+  }));
+  const r = runCLI(['--tickets', ticketsPath, '--floor', '0.2'], dir);
+  assert.equal(r.code, 0, `expected exit 0, got ${r.code}\nstdout:${r.stdout}\nstderr:${r.stderr}`);
 });
 
-test('CLI: exit 0 for frontier category even below floor', () => {
-  const tmp = makeTmp();
-  try {
-    const adlc = join(tmp, '.adlc');
-    mkdirSync(adlc, { recursive: true });
-    const ticketsPath = join(adlc, 'tickets.json');
-    writeFileSync(ticketsPath, JSON.stringify({
-      tickets: [
-        // contract category → frontier anyway, no gate fail
-        { id: 'T1', title: 'ContractTicket', category: 'contract', scope: ['a', 'b'] },
-      ],
-    }));
-    const r = runCLI(['--tickets', ticketsPath, '--floor', '0.2'], tmp);
-    assert.equal(r.code, 0, `expected exit 0, got ${r.code}\n${r.stderr}`);
-  } finally {
-    cleanup(tmp);
-  }
+test('CLI: exit 0 for frontier category even below floor', (t) => {
+  const dir = tmp(t, 'model-router-test-');
+  const adlc = join(dir, '.adlc');
+  mkdirSync(adlc, { recursive: true });
+  const ticketsPath = join(adlc, 'tickets.json');
+  writeFileSync(ticketsPath, JSON.stringify({
+    tickets: [
+      // contract category → frontier anyway, no gate fail
+      { id: 'T1', title: 'ContractTicket', category: 'contract', scope: ['a', 'b'] },
+    ],
+  }));
+  const r = runCLI(['--tickets', ticketsPath, '--floor', '0.2'], dir);
+  assert.equal(r.code, 0, `expected exit 0, got ${r.code}\n${r.stderr}`);
 });
 
-test('CLI: exit 1 on missing tickets file', () => {
-  const tmp = makeTmp();
-  try {
-    const r = runCLI(['--tickets', join(tmp, 'nonexistent.json')], tmp);
-    assert.equal(r.code, 1, `expected exit 1, got ${r.code}`);
-  } finally {
-    cleanup(tmp);
-  }
+test('CLI: exit 1 on missing tickets file', (t) => {
+  const dir = tmp(t, 'model-router-test-');
+  const r = runCLI(['--tickets', join(dir, 'nonexistent.json')], dir);
+  assert.equal(r.code, 1, `expected exit 1, got ${r.code}`);
 });
 
-test('CLI: --json flag produces valid JSON', () => {
-  const tmp = makeTmp();
-  try {
-    const adlc = join(tmp, '.adlc');
-    mkdirSync(adlc, { recursive: true });
-    const ticketsPath = join(adlc, 'tickets.json');
-    writeFileSync(ticketsPath, JSON.stringify({
-      tickets: [
-        { id: 'T1', title: 'Railed', category: 'feature',
-          rails: ['a', 'b', 'c', 'd'], scope: ['a', 'b', 'c', 'd'] },
-      ],
-    }));
-    const r = runCLI(['--tickets', ticketsPath, '--json'], tmp);
-    assert.equal(r.code, 0);
-    const parsed = JSON.parse(r.stdout);
-    assert.ok(Array.isArray(parsed.assignments));
-    assert.ok(Array.isArray(parsed.p3Findings));
-    assert.equal(parsed.assignments[0].id, 'T1');
-  } finally {
-    cleanup(tmp);
-  }
+test('CLI: --json flag produces valid JSON', (t) => {
+  const dir = tmp(t, 'model-router-test-');
+  const adlc = join(dir, '.adlc');
+  mkdirSync(adlc, { recursive: true });
+  const ticketsPath = join(adlc, 'tickets.json');
+  writeFileSync(ticketsPath, JSON.stringify({
+    tickets: [
+      { id: 'T1', title: 'Railed', category: 'feature',
+        rails: ['a', 'b', 'c', 'd'], scope: ['a', 'b', 'c', 'd'] },
+    ],
+  }));
+  const r = runCLI(['--tickets', ticketsPath, '--json'], dir);
+  assert.equal(r.code, 0);
+  const parsed = JSON.parse(r.stdout);
+  assert.ok(Array.isArray(parsed.assignments));
+  assert.ok(Array.isArray(parsed.p3Findings));
+  assert.equal(parsed.assignments[0].id, 'T1');
 });
 
-test('CLI: no-args smoke (missing default tickets file → exit 1)', () => {
-  const tmp = makeTmp();
-  try {
-    const r = runCLI([], tmp);
-    // .adlc/tickets.json doesn't exist → operational error → exit 1
-    assert.equal(r.code, 1, `expected exit 1, got ${r.code}`);
-  } finally {
-    cleanup(tmp);
-  }
+test('CLI: no-args smoke (missing default tickets file → exit 1)', (t) => {
+  const dir = tmp(t, 'model-router-test-');
+  const r = runCLI([], dir);
+  // .adlc/tickets.json doesn't exist → operational error → exit 1
+  assert.equal(r.code, 1, `expected exit 1, got ${r.code}`);
 });
 
 // ── integration: full fixture run ─────────────────────────────────────────────
 
-test('CLI: realistic fixture run', () => {
-  const tmp = makeTmp();
-  try {
-    writeManifest(tmp, [
-      { type: 'build', model: 'cheap', category: 'feature', firstPass: true },
-      { type: 'build', model: 'cheap', category: 'feature', firstPass: true },
-      { type: 'build', model: 'cheap', category: 'feature', firstPass: true },
-      { type: 'build', model: 'mid', category: 'feature', firstPass: false },
-      { type: 'build', model: 'mid', category: 'feature', firstPass: false },
-      { type: 'build', model: 'mid', category: 'feature', firstPass: false },
-    ]);
-    const ticketsPath = writeTickets(tmp, [
-      // On critical path, well railed, feature → direct, priors say cheap
-      { id: 'T1', title: 'AuthModule', category: 'feature',
-        rails: ['test/auth/login.test.ts', 'test/auth/signup.test.ts'],
-        scope: ['src/auth/login.ts', 'src/auth/signup.ts'],
-        edges: [{ to: 'T3', contract: 'src/types/auth.d.ts' }], duration: 2 },
-      // Has float, high density → ladder cheap
-      { id: 'T2', title: 'UIComponents', category: 'feature',
-        rails: ['test/ui/button.test.ts', 'test/ui/form.test.ts'],
-        scope: ['src/ui/button.ts', 'src/ui/form.ts'],
-        edges: [{ to: 'T3', contract: 'src/types/ui.d.ts' }], duration: 1 },
-      // Gate ticket, critical path end
-      { id: 'T3', title: 'IntegrationSpec', category: 'spec',
-        scope: ['docs/spec.md'], duration: 1 },
-    ]);
-    const r = runCLI(['--tickets', ticketsPath, '--json'], tmp);
-    assert.equal(r.code, 0, `expected exit 0\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
-    const parsed = JSON.parse(r.stdout);
-    const t3 = parsed.assignments.find((a) => a.id === 'T3');
-    assert.equal(t3.tier, 'frontier', 'spec category should be frontier');
-    assert.equal(t3.mode, 'direct');
+test('CLI: realistic fixture run', (t) => {
+  const dir = tmp(t, 'model-router-test-');
+  writeManifest(dir, [
+    { type: 'build', model: 'cheap', category: 'feature', firstPass: true },
+    { type: 'build', model: 'cheap', category: 'feature', firstPass: true },
+    { type: 'build', model: 'cheap', category: 'feature', firstPass: true },
+    { type: 'build', model: 'mid', category: 'feature', firstPass: false },
+    { type: 'build', model: 'mid', category: 'feature', firstPass: false },
+    { type: 'build', model: 'mid', category: 'feature', firstPass: false },
+  ]);
+  const ticketsPath = writeTickets(dir, [
+    // On critical path, well railed, feature → direct, priors say cheap
+    { id: 'T1', title: 'AuthModule', category: 'feature',
+      rails: ['test/auth/login.test.ts', 'test/auth/signup.test.ts'],
+      scope: ['src/auth/login.ts', 'src/auth/signup.ts'],
+      edges: [{ to: 'T3', contract: 'src/types/auth.d.ts' }], duration: 2 },
+    // Has float, high density → ladder cheap
+    { id: 'T2', title: 'UIComponents', category: 'feature',
+      rails: ['test/ui/button.test.ts', 'test/ui/form.test.ts'],
+      scope: ['src/ui/button.ts', 'src/ui/form.ts'],
+      edges: [{ to: 'T3', contract: 'src/types/ui.d.ts' }], duration: 1 },
+    // Gate ticket, critical path end
+    { id: 'T3', title: 'IntegrationSpec', category: 'spec',
+      scope: ['docs/spec.md'], duration: 1 },
+  ]);
+  const r = runCLI(['--tickets', ticketsPath, '--json'], dir);
+  assert.equal(r.code, 0, `expected exit 0\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+  const parsed = JSON.parse(r.stdout);
+  const t3 = parsed.assignments.find((a) => a.id === 'T3');
+  assert.equal(t3.tier, 'frontier', 'spec category should be frontier');
+  assert.equal(t3.mode, 'direct');
 
-    const t2 = parsed.assignments.find((a) => a.id === 'T2');
-    // T2 has float (shorter duration than T1 for same gate), high density
-    assert.equal(t2.mode, 'ladder');
-    assert.equal(t2.tier, 'cheap');
+  const t2 = parsed.assignments.find((a) => a.id === 'T2');
+  // T2 has float (shorter duration than T1 for same gate), high density
+  assert.equal(t2.mode, 'ladder');
+  assert.equal(t2.tier, 'cheap');
 
-    const t1 = parsed.assignments.find((a) => a.id === 'T1');
-    assert.equal(t1.mode, 'direct'); // critical path
-  } finally {
-    cleanup(tmp);
-  }
+  const t1 = parsed.assignments.find((a) => a.id === 'T1');
+  assert.equal(t1.mode, 'direct'); // critical path
 });
 
-test('runRouter: completed ticket is not assigned, but active ticket depending on it routes', async () => {
-  const tmp = makeTmp();
-  try {
-    const ticketsPath = writeTickets(tmp, [
-      { id: 'T1', title: 'shipped', completed: true, scope: ['a/**'], rails: ['test/a/**'], edges: [{ to: 'T2' }] },
-      { id: 'T2', title: 'still open', scope: ['b/**'], rails: ['test/b/**'] },
-    ]);
-    const { assignments } = await runRouter({ ticketsPath, adlcDir: join(tmp, '.adlc') });
-    const ids = assignments.map((a) => a.id);
-    assert.ok(!ids.includes('T1'), 'completed T1 must not be assigned');
-    assert.ok(ids.includes('T2'), 'active T2 must still be assigned');
-  } finally {
-    cleanup(tmp);
-  }
+test('runRouter: completed ticket is not assigned, but active ticket depending on it routes', async (t) => {
+  const dir = tmp(t, 'model-router-test-');
+  const ticketsPath = writeTickets(dir, [
+    { id: 'T1', title: 'shipped', completed: true, scope: ['a/**'], rails: ['test/a/**'], edges: [{ to: 'T2' }] },
+    { id: 'T2', title: 'still open', scope: ['b/**'], rails: ['test/b/**'] },
+  ]);
+  const { assignments } = await runRouter({ ticketsPath, adlcDir: join(dir, '.adlc') });
+  const ids = assignments.map((a) => a.id);
+  assert.ok(!ids.includes('T1'), 'completed T1 must not be assigned');
+  assert.ok(ids.includes('T2'), 'active T2 must still be assigned');
 });
 

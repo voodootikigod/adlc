@@ -72,8 +72,6 @@ const ALLOWLIST = new Set([
   'packages/lesson-foundry/test/foundry.test.mjs',
   'packages/lesson-foundry/test/stable-cluster-id.test.mjs',
   'packages/lesson-foundry/test/write-preserve-existing.test.mjs',
-  'packages/model-router/test/floor-zero.test.mjs',
-  'packages/model-router/test/model-router.test.mjs',
   'packages/preflight/test/integration.test.mjs',
   'packages/preflight/test/unit.test.mjs',
   'packages/quartermaster/test/registry-isolation.test.mjs',
