@@ -1,39 +1,24 @@
 // preflight integration tests — runChecks orchestration and CLI e2e.
 // node:test, offline, no API keys, scratch git repos in mkdtemp.
 
-import { describe, it, before, after } from 'node:test';
+import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { tmp, gitRepo } from '@adlc/core/test-kit';
 
 import { runChecks } from '../lib/runner.mjs';
 import { computeVerdict } from '../lib/render.mjs';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-function makeTmp() {
-  return mkdtempSync(join(tmpdir(), 'preflight-int-'));
-}
-
-function cleanTmp(dir) {
-  rmSync(dir, { recursive: true, force: true });
-}
-
-function initRepo(dir) {
-  const g = (args) =>
-    execFileSync('git', args, {
-      cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8',
-    });
-  g(['init', '-b', 'main']);
-  g(['config', 'user.email', 'test@example.com']);
-  g(['config', 'user.name', 'Test']);
-  g(['config', 'commit.gpgsign', 'false']);
+function initRepo(t) {
+  const { dir, git } = gitRepo(t, { prefix: 'preflight-int-' });
   writeFileSync(join(dir, 'README.md'), 'test');
-  g(['add', '.']);
-  g(['commit', '-m', 'init']);
-  return g;
+  git('add', '.');
+  git('commit', '-m', 'init');
+  return dir;
 }
 
 const CLI_PATH = new URL('../bin/preflight.mjs', import.meta.url).pathname;
@@ -43,12 +28,9 @@ const CLI_PATH = new URL('../bin/preflight.mjs', import.meta.url).pathname;
 describe('runChecks all-required-pass', () => {
   let dir;
 
-  before(() => {
-    dir = makeTmp();
-    initRepo(dir);
+  beforeEach((t) => {
+    dir = initRepo(t);
   });
-
-  after(() => cleanTmp(dir));
 
   it('all four required checks pass in a valid git repo', async () => {
     const results = await runChecks({ cwd: dir });
@@ -84,12 +66,9 @@ describe('runChecks all-required-pass', () => {
 describe('runChecks custom dir option', () => {
   let dir;
 
-  before(() => {
-    dir = makeTmp();
-    initRepo(dir);
+  beforeEach((t) => {
+    dir = initRepo(t);
   });
-
-  after(() => cleanTmp(dir));
 
   it('supports custom dir option without creating .adlc', async () => {
     const customDir = '.sdlc/.adlc';
@@ -108,8 +87,9 @@ describe('runChecks custom dir option', () => {
 describe('runChecks non-repo dir', () => {
   let dir;
 
-  before(() => { dir = makeTmp(); });
-  after(() => cleanTmp(dir));
+  beforeEach((t) => {
+    dir = tmp(t, 'preflight-int-');
+  });
 
   it('git check fails in non-repo', async () => {
     const results = await runChecks({ cwd: dir });
@@ -130,12 +110,9 @@ describe('runChecks non-repo dir', () => {
 describe('CLI --test-cmd exits 2 on failure', () => {
   let dir;
 
-  before(() => {
-    dir = makeTmp();
-    initRepo(dir);
+  beforeEach((t) => {
+    dir = initRepo(t);
   });
-
-  after(() => cleanTmp(dir));
 
   it('exits 2 when --test-cmd command fails', () => {
     const result = spawnSync(
@@ -170,15 +147,9 @@ describe('residue cleanup — pass and fail paths', () => {
   let passDir;
   let failDir;
 
-  before(() => {
-    passDir = makeTmp();
-    initRepo(passDir);
-    failDir = makeTmp(); // non-repo — git/branch checks fail
-  });
-
-  after(() => {
-    cleanTmp(passDir);
-    cleanTmp(failDir);
+  beforeEach((t) => {
+    passDir = initRepo(t);
+    failDir = tmp(t, 'preflight-int-'); // non-repo — git/branch checks fail
   });
 
   it('no residue after passing run', async () => {
@@ -211,12 +182,9 @@ describe('residue cleanup — pass and fail paths', () => {
 describe('CLI --json output', () => {
   let dir;
 
-  before(() => {
-    dir = makeTmp();
-    initRepo(dir);
+  beforeEach((t) => {
+    dir = initRepo(t);
   });
-
-  after(() => cleanTmp(dir));
 
   it('outputs valid JSON with checks and verdict', () => {
     const result = spawnSync(
@@ -237,12 +205,9 @@ describe('CLI --json output', () => {
 describe('CLI --dir option', () => {
   let dir;
 
-  before(() => {
-    dir = makeTmp();
-    initRepo(dir);
+  beforeEach((t) => {
+    dir = initRepo(t);
   });
-
-  after(() => cleanTmp(dir));
 
   it('passes --dir flag and writes to custom adlc directory', () => {
     const customDir = '.custom-adlc';

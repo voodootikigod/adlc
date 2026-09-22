@@ -1,12 +1,12 @@
 // preflight unit tests — individual check functions and render utilities.
 // node:test, offline, no API keys, temp dirs cleaned up.
 
-import { describe, it, before, after } from 'node:test';
+import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { tmp, gitRepo } from '@adlc/core/test-kit';
 
 import { computeVerdict, renderTable } from '../lib/render.mjs';
 import {
@@ -16,27 +16,12 @@ import {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-function makeTmp() {
-  return mkdtempSync(join(tmpdir(), 'preflight-unit-'));
-}
-
-function cleanTmp(dir) {
-  rmSync(dir, { recursive: true, force: true });
-}
-
-function initRepo(dir) {
-  const g = (args) =>
-    execFileSync('git', args, {
-      cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8',
-    });
-  g(['init', '-b', 'main']);
-  g(['config', 'user.email', 'test@example.com']);
-  g(['config', 'user.name', 'Test']);
-  g(['config', 'commit.gpgsign', 'false']);
+function initRepo(t) {
+  const { dir, git } = gitRepo(t, { prefix: 'preflight-unit-' });
   writeFileSync(join(dir, 'README.md'), 'test');
-  g(['add', '.']);
-  g(['commit', '-m', 'init']);
-  return g;
+  git('add', '.');
+  git('commit', '-m', 'init');
+  return dir;
 }
 
 // ── checkBash ─────────────────────────────────────────────────────────────────
@@ -55,15 +40,9 @@ describe('checkGit', () => {
   let repoDir;
   let nonRepoDir;
 
-  before(() => {
-    repoDir = makeTmp();
-    initRepo(repoDir);
-    nonRepoDir = makeTmp();
-  });
-
-  after(() => {
-    cleanTmp(repoDir);
-    cleanTmp(nonRepoDir);
+  beforeEach((t) => {
+    repoDir = initRepo(t);
+    nonRepoDir = tmp(t, 'preflight-unit-');
   });
 
   it('passes in a git repo', async () => {
@@ -85,8 +64,7 @@ describe('checkGit', () => {
 describe('checkWrite', () => {
   let dir;
 
-  before(() => { dir = makeTmp(); });
-  after(() => cleanTmp(dir));
+  beforeEach((t) => { dir = tmp(t, 'preflight-unit-'); });
 
   it('passes and leaves no residue', async () => {
     const result = await checkWrite(dir);
@@ -119,12 +97,9 @@ describe('checkWrite', () => {
 describe('checkBranch', () => {
   let dir;
 
-  before(() => {
-    dir = makeTmp();
-    initRepo(dir);
+  beforeEach((t) => {
+    dir = initRepo(t);
   });
-
-  after(() => cleanTmp(dir));
 
   it('passes and cleans up the branch', async () => {
     const result = await checkBranch(dir);
@@ -139,14 +114,10 @@ describe('checkBranch', () => {
     );
   });
 
-  it('fails gracefully in a non-repo dir', async () => {
-    const nonRepo = makeTmp();
-    try {
-      const result = await checkBranch(nonRepo);
-      assert.equal(result.status, 'fail');
-    } finally {
-      cleanTmp(nonRepo);
-    }
+  it('fails gracefully in a non-repo dir', async (t) => {
+    const nonRepo = tmp(t, 'preflight-unit-');
+    const result = await checkBranch(nonRepo);
+    assert.equal(result.status, 'fail');
   });
 });
 
@@ -155,12 +126,9 @@ describe('checkBranch', () => {
 describe('checkWorktrees', () => {
   let dir;
 
-  before(() => {
-    dir = makeTmp();
-    initRepo(dir);
+  beforeEach((t) => {
+    dir = initRepo(t);
   });
-
-  after(() => cleanTmp(dir));
 
   it('passes and leaves no residue', async () => {
     const result = await checkWorktrees(dir);
@@ -175,8 +143,7 @@ describe('checkWorktrees', () => {
 describe('checkTestCmd', () => {
   let dir;
 
-  before(() => { dir = makeTmp(); });
-  after(() => cleanTmp(dir));
+  beforeEach((t) => { dir = tmp(t, 'preflight-unit-'); });
 
   it('passes when command exits 0', async () => {
     const result = await checkTestCmd('exit 0', dir);

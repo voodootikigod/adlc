@@ -60,8 +60,6 @@ const ALLOWLIST = new Set([
   'packages/gate-manifest/test/usage-roundtrip.test.mjs',
   'packages/hollow-test/test/hollow-test.test.mjs',
   'packages/hollow-test/test/unit.test.mjs',
-  'packages/preflight/test/integration.test.mjs',
-  'packages/preflight/test/unit.test.mjs',
   'packages/quartermaster/test/registry-isolation.test.mjs',
 
   'plugins/adlc-claude-code/hooks/test/handoff-continuation-start.test.mjs',
