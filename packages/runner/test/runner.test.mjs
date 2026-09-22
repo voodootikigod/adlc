@@ -1,11 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, appendFileSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, appendFileSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { tmpdir } from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { assertPhase } from '../lib/assertions.mjs';
 import { canonicalJson, resolveRevision, sha256 } from '@adlc/core';
+import { tmp, gitRepo } from '@adlc/core/test-kit';
 import { appendManifestEntry as realAppendManifestEntry } from '@adlc/gate-manifest';
 import { recordAcceptancePacket as realRecordAcceptancePacket } from '../lib/acceptance.mjs';
 
@@ -17,8 +17,8 @@ import { ticketHash as domainTicketHash } from '@adlc/tickets';
 
 const repoRoot = resolve(new URL('../../../', import.meta.url).pathname);
 
-function tmpAdlc() {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-runner-'));
+function tmpAdlc(t) {
+  const dir = tmp(t, 'adlc-runner-');
   mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -142,22 +142,8 @@ function writeP5Finding(dir, {
   }]);
 }
 
-function gitRepo() {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-runner-git-'));
-  const g = (...args) => execFileSync('git', args, {
-    cwd: dir,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'ignore'],
-  });
-  g('init', '-q', '-b', 'main');
-  g('config', 'user.email', 't@t.co');
-  g('config', 'user.name', 'tester');
-  g('config', 'commit.gpgsign', 'false');
-  return { dir, g };
-}
-
-function p4Fixture() {
-  const cwd = mkdtempSync(join(tmpdir(), 'adlc-runner-p4-'));
+function p4Fixture(t) {
+  const cwd = tmp(t, 'adlc-runner-p4-');
   const dir = join(cwd, '.adlc');
   mkdirSync(join(cwd, 'test'), { recursive: true });
   mkdirSync(dir, { recursive: true });
@@ -201,161 +187,129 @@ function writeP4EvidenceForTicket(dir, ticket, content) {
 }
 
 describe('assertPhase', () => {
-  it('passes p4 when rails-check rail hashes match current rail files', () => {
-    const { cwd, dir, railPath } = p4Fixture();
-    try {
-      writeP4Evidence(dir, readFileSync(railPath));
-      const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
-      assert.equal(result.ok, true);
-    } finally {
-      rmSync(cwd, { recursive: true, force: true });
-    }
+  it('passes p4 when rails-check rail hashes match current rail files', (t) => {
+    const { cwd, dir, railPath } = p4Fixture(t);
+    writeP4Evidence(dir, readFileSync(railPath));
+    const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
+    assert.equal(result.ok, true);
   });
 
-  it('reports exactly the missing marker when only one of the three p4 markers is absent', () => {
-    const { cwd, dir, railPath } = p4Fixture();
-    try {
-      writeManifest(dir, [
-        { gate: 'p4-build', ticket: 'T1' },
-        {
-          type: 'rails-check',
-          ticket: 'T1',
-          railsDiffEmpty: true,
-          suppressionsClean: true,
-          railFiles: { 'test/a.test.mjs': sha256(readFileSync(railPath)) },
-        },
-        // flail-check deliberately omitted
-      ]);
-      const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
-      assert.equal(result.ok, false);
-      assert.deepEqual(result.missing, ['flail-check']);
-    } finally {
-      rmSync(cwd, { recursive: true, force: true });
-    }
+  it('reports exactly the missing marker when only one of the three p4 markers is absent', (t) => {
+    const { cwd, dir, railPath } = p4Fixture(t);
+    writeManifest(dir, [
+      { gate: 'p4-build', ticket: 'T1' },
+      {
+        type: 'rails-check',
+        ticket: 'T1',
+        railsDiffEmpty: true,
+        suppressionsClean: true,
+        railFiles: { 'test/a.test.mjs': sha256(readFileSync(railPath)) },
+      },
+      // flail-check deliberately omitted
+    ]);
+    const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.missing, ['flail-check']);
   });
 
-  it('reports exactly p4-build missing when only it is absent', () => {
-    const { cwd, dir, railPath } = p4Fixture();
-    try {
-      writeManifest(dir, [
-        // p4-build deliberately omitted
-        {
-          type: 'rails-check',
-          ticket: 'T1',
-          railsDiffEmpty: true,
-          suppressionsClean: true,
-          railFiles: { 'test/a.test.mjs': sha256(readFileSync(railPath)) },
-        },
-        { type: 'flail-check', ticket: 'T1' },
-      ]);
-      const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
-      assert.equal(result.ok, false);
-      assert.deepEqual(result.missing, ['p4-build']);
-    } finally {
-      rmSync(cwd, { recursive: true, force: true });
-    }
+  it('reports exactly p4-build missing when only it is absent', (t) => {
+    const { cwd, dir, railPath } = p4Fixture(t);
+    writeManifest(dir, [
+      // p4-build deliberately omitted
+      {
+        type: 'rails-check',
+        ticket: 'T1',
+        railsDiffEmpty: true,
+        suppressionsClean: true,
+        railFiles: { 'test/a.test.mjs': sha256(readFileSync(railPath)) },
+      },
+      { type: 'flail-check', ticket: 'T1' },
+    ]);
+    const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.missing, ['p4-build']);
   });
 
-  it('reports exactly rails-check missing when only it is absent', () => {
-    const { cwd, dir } = p4Fixture();
-    try {
-      writeManifest(dir, [
-        { gate: 'p4-build', ticket: 'T1' },
-        // rails-check deliberately omitted
-        { type: 'flail-check', ticket: 'T1' },
-      ]);
-      const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
-      assert.equal(result.ok, false);
-      assert.deepEqual(result.missing, ['rails-check']);
-    } finally {
-      rmSync(cwd, { recursive: true, force: true });
-    }
+  it('reports exactly rails-check missing when only it is absent', (t) => {
+    const { cwd, dir } = p4Fixture(t);
+    writeManifest(dir, [
+      { gate: 'p4-build', ticket: 'T1' },
+      // rails-check deliberately omitted
+      { type: 'flail-check', ticket: 'T1' },
+    ]);
+    const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.missing, ['rails-check']);
   });
 
-  it('requires ticket-scoped evidence for p3 and p4', () => {
-    const { cwd, dir, railPath } = p4Fixture();
-    try {
-      writeP4EvidenceForTicket(dir, 'T2', readFileSync(railPath));
+  it('requires ticket-scoped evidence for p3 and p4', (t) => {
+    const { cwd, dir, railPath } = p4Fixture(t);
+    writeP4EvidenceForTicket(dir, 'T2', readFileSync(railPath));
 
-      const p3 = assertPhase('p3', { dir, cwd });
-      assert.equal(p3.ok, false);
-      assert.equal(p3.operational, true);
-      assert.match(p3.errors[0], /p3 requires --ticket/);
+    const p3 = assertPhase('p3', { dir, cwd });
+    assert.equal(p3.ok, false);
+    assert.equal(p3.operational, true);
+    assert.match(p3.errors[0], /p3 requires --ticket/);
 
-      const p4 = assertPhase('p4', { dir, cwd });
-      assert.equal(p4.ok, false);
-      assert.equal(p4.operational, true);
-      assert.match(p4.errors[0], /p4 requires --ticket/);
+    const p4 = assertPhase('p4', { dir, cwd });
+    assert.equal(p4.ok, false);
+    assert.equal(p4.operational, true);
+    assert.match(p4.errors[0], /p4 requires --ticket/);
 
-      const t1 = assertPhase('p4', { dir, ticket: 'T1', cwd });
-      assert.equal(t1.ok, false);
-      assert.deepEqual(t1.missing, ['p4-build', 'rails-check', 'flail-check']);
-    } finally {
-      rmSync(cwd, { recursive: true, force: true });
-    }
+    const t1 = assertPhase('p4', { dir, ticket: 'T1', cwd });
+    assert.equal(t1.ok, false);
+    assert.deepEqual(t1.missing, ['p4-build', 'rails-check', 'flail-check']);
   });
 
-  it('rejects p4 when rails-check lacks rail file hashes', () => {
-    const { cwd, dir } = p4Fixture();
-    try {
-      writeManifest(dir, [
-        { gate: 'p4-build', ticket: 'T1' },
-        { type: 'rails-check', ticket: 'T1', railsDiffEmpty: true, suppressionsClean: true },
-        { type: 'flail-check', ticket: 'T1' },
-      ]);
-      const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
-      assert.equal(result.ok, false);
-      assert.equal(result.operational, true);
-      assert.ok(result.errors.some((error) => error.includes('missing railFiles hash snapshot')));
-    } finally {
-      rmSync(cwd, { recursive: true, force: true });
-    }
+  it('rejects p4 when rails-check lacks rail file hashes', (t) => {
+    const { cwd, dir } = p4Fixture(t);
+    writeManifest(dir, [
+      { gate: 'p4-build', ticket: 'T1' },
+      { type: 'rails-check', ticket: 'T1', railsDiffEmpty: true, suppressionsClean: true },
+      { type: 'flail-check', ticket: 'T1' },
+    ]);
+    const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
+    assert.equal(result.ok, false);
+    assert.equal(result.operational, true);
+    assert.ok(result.errors.some((error) => error.includes('missing railFiles hash snapshot')));
   });
 
-  it('rejects p4 when rail files change after rails-check evidence is recorded', () => {
-    const { cwd, dir, railPath } = p4Fixture();
-    try {
-      writeP4Evidence(dir, readFileSync(railPath));
-      writeFileSync(railPath, 'test("rail", () => { throw new Error("changed"); });\n');
-      const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
-      assert.equal(result.ok, false);
-      assert.equal(result.operational, true);
-      assert.ok(result.errors.some((error) => error.includes('rail file hash changed')));
-    } finally {
-      rmSync(cwd, { recursive: true, force: true });
-    }
+  it('rejects p4 when rail files change after rails-check evidence is recorded', (t) => {
+    const { cwd, dir, railPath } = p4Fixture(t);
+    writeP4Evidence(dir, readFileSync(railPath));
+    writeFileSync(railPath, 'test("rail", () => { throw new Error("changed"); });\n');
+    const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
+    assert.equal(result.ok, false);
+    assert.equal(result.operational, true);
+    assert.ok(result.errors.some((error) => error.includes('rail file hash changed')));
   });
 
-  it('passes p5 only when p5-complete exists', () => {
-    const dir = tmpAdlc();
+  it('passes p5 only when p5-complete exists', (t) => {
+    const dir = tmpAdlc(t);
     const revision = resolveRevision();
     writeP5Evidence(dir, { revision });
     const result = assertPhase('p5', { dir, ticket: 'T1' });
     assert.equal(result.ok, true);
   });
 
-  it('uses explicit p5 revision as an offline manifest and artifact selector', () => {
-    const cwd = mkdtempSync(join(tmpdir(), 'adlc-runner-offline-'));
+  it('uses explicit p5 revision as an offline manifest and artifact selector', (t) => {
+    const cwd = tmp(t, 'adlc-runner-offline-');
     const dir = join(cwd, '.adlc');
-    try {
-      mkdirSync(dir, { recursive: true });
-      writeP5Evidence(dir, { revision: 'fixture-revision' });
-      const result = assertPhase('p5', {
-        dir,
-        ticket: 'T1',
-        revision: 'fixture-revision',
-        cwd,
-      });
-      assert.equal(result.ok, true);
-      assert.equal(result.revision, 'fixture-revision');
-      assert.equal(result.currentRevision, undefined);
-    } finally {
-      rmSync(cwd, { recursive: true, force: true });
-    }
+    mkdirSync(dir, { recursive: true });
+    writeP5Evidence(dir, { revision: 'fixture-revision' });
+    const result = assertPhase('p5', {
+      dir,
+      ticket: 'T1',
+      revision: 'fixture-revision',
+      cwd,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.revision, 'fixture-revision');
+    assert.equal(result.currentRevision, undefined);
   });
 
-  it('rejects a forged bare p5-complete manifest entry', () => {
-    const dir = tmpAdlc();
+  it('rejects a forged bare p5-complete manifest entry', (t) => {
+    const dir = tmpAdlc(t);
     const revision = resolveRevision();
     writeTicketDefinition(dir);
     writeManifest(dir, [{
@@ -372,8 +326,8 @@ describe('assertPhase', () => {
     assert.ok(result.errors.some((error) => error.includes('missing reviewPacket')));
   });
 
-  it('rejects p5-complete when a verified finding remains unresolved at the same revision', () => {
-    const dir = tmpAdlc();
+  it('rejects p5-complete when a verified finding remains unresolved at the same revision', (t) => {
+    const dir = tmpAdlc(t);
     const revision = resolveRevision();
     writeP5Finding(dir, { revision, id: 'F1' });
     writeP5Evidence(dir, { revision });
@@ -383,8 +337,8 @@ describe('assertPhase', () => {
     assert.ok(result.errors.some((error) => error.includes('unresolved p5-finding-verified F1')));
   });
 
-  it('accepts p5-complete after a later killed disposition resolves a verified finding', () => {
-    const dir = tmpAdlc();
+  it('accepts p5-complete after a later killed disposition resolves a verified finding', (t) => {
+    const dir = tmpAdlc(t);
     const revision = resolveRevision();
     writeP5Finding(dir, { revision, id: 'F1' });
     writeP5Finding(dir, { type: 'p5-finding-killed', revision, id: 'F1' });
@@ -393,8 +347,8 @@ describe('assertPhase', () => {
     assert.equal(result.ok, true);
   });
 
-  it('accepts p5-complete when a killed disposition resolves a verified finding from an earlier pass', () => {
-    const dir = tmpAdlc();
+  it('accepts p5-complete when a killed disposition resolves a verified finding from an earlier pass', (t) => {
+    const dir = tmpAdlc(t);
     const revision = resolveRevision();
     writeP5Finding(dir, { revision, id: 'F1', pass: 1 });
     writeP5Finding(dir, { type: 'p5-finding-killed', revision, id: 'F1', pass: 2 });
@@ -403,8 +357,8 @@ describe('assertPhase', () => {
     assert.equal(result.ok, true);
   });
 
-  it('does not resolve a verified finding with a killed finding that only shares the id', () => {
-    const dir = tmpAdlc();
+  it('does not resolve a verified finding with a killed finding that only shares the id', (t) => {
+    const dir = tmpAdlc(t);
     const revision = resolveRevision();
     writeP5Finding(dir, { revision, id: 'F1', lens: 'security', file: 'src/auth.mjs', claim: 'auth bypass' });
     writeP5Finding(dir, {
@@ -423,8 +377,8 @@ describe('assertPhase', () => {
     assert.ok(result.errors.some((error) => error.includes('unresolved p5-finding-verified F1')));
   });
 
-  it('rejects p5-complete when a killed disposition is appended after completion', () => {
-    const dir = tmpAdlc();
+  it('rejects p5-complete when a killed disposition is appended after completion', (t) => {
+    const dir = tmpAdlc(t);
     const revision = resolveRevision();
     writeP5Finding(dir, { revision, id: 'F1' });
     writeP5Evidence(dir, { revision });
@@ -435,8 +389,8 @@ describe('assertPhase', () => {
     assert.ok(result.errors.some((error) => error.includes('unresolved p5-finding-verified F1')));
   });
 
-  it('fails p6 without p5 evidence and acceptance packet', () => {
-    const dir = tmpAdlc();
+  it('fails p6 without p5 evidence and acceptance packet', (t) => {
+    const dir = tmpAdlc(t);
     const revision = resolveRevision();
     writeManifest(dir, [{ type: 'p6-acceptance-packet', ticket: 'T1', revision }]);
     const result = assertPhase('p6', { dir, ticket: 'T1' });
@@ -444,8 +398,8 @@ describe('assertPhase', () => {
     assert.deepEqual(result.missing, ['p5-complete']);
   });
 
-  it('rejects p6 acceptance packets before matching p5 evidence exists', () => {
-    const dir = tmpAdlc();
+  it('rejects p6 acceptance packets before matching p5 evidence exists', (t) => {
+    const dir = tmpAdlc(t);
     writeTicketDefinition(dir);
     const packet = join(dir, 'acceptance.json');
     writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
@@ -454,8 +408,8 @@ describe('assertPhase', () => {
     assert.ok(result.errors.some((error) => error.includes('no p5-complete for ticket T1')));
   });
 
-  it('rejects explicit-revision p6 acceptance before matching p5 evidence exists', () => {
-    const dir = tmpAdlc();
+  it('rejects explicit-revision p6 acceptance before matching p5 evidence exists', (t) => {
+    const dir = tmpAdlc(t);
     writeTicketDefinition(dir);
     const packet = join(dir, 'acceptance.json');
     writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
@@ -464,8 +418,8 @@ describe('assertPhase', () => {
     assert.ok(result.errors.some((error) => error.includes('no p5-complete for ticket T1 at fixture-revision')));
   });
 
-  it('passes p6 with revision-scoped p5 evidence and acceptance packet', () => {
-    const dir = tmpAdlc();
+  it('passes p6 with revision-scoped p5 evidence and acceptance packet', (t) => {
+    const dir = tmpAdlc(t);
     const revision = resolveRevision();
     const packet = join(dir, 'acceptance.json');
     writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
@@ -484,40 +438,36 @@ describe('assertPhase', () => {
     assert.match(manifest, /"bindingScope":"ticket"/);
   });
 
-  it('uses explicit p6 revision as an offline manifest and artifact selector', () => {
-    const cwd = mkdtempSync(join(tmpdir(), 'adlc-runner-offline-'));
+  it('uses explicit p6 revision as an offline manifest and artifact selector', (t) => {
+    const cwd = tmp(t, 'adlc-runner-offline-');
     const dir = join(cwd, '.adlc');
-    try {
-      mkdirSync(dir, { recursive: true });
-      writeP5Evidence(dir, { revision: 'fixture-revision' });
-      const packet = join(dir, 'acceptance.json');
-      writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
+    mkdirSync(dir, { recursive: true });
+    writeP5Evidence(dir, { revision: 'fixture-revision' });
+    const packet = join(dir, 'acceptance.json');
+    writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
 
-      const recorded = recordAcceptancePacket({
-        dir,
-        ticket: 'T1',
-        packet,
-        revision: 'fixture-revision',
-        cwd,
-      });
-      assert.equal(recorded.ok, true);
-      assert.equal(recorded.revision, 'fixture-revision');
+    const recorded = recordAcceptancePacket({
+      dir,
+      ticket: 'T1',
+      packet,
+      revision: 'fixture-revision',
+      cwd,
+    });
+    assert.equal(recorded.ok, true);
+    assert.equal(recorded.revision, 'fixture-revision');
 
-      const result = assertPhase('p6', {
-        dir,
-        ticket: 'T1',
-        revision: 'fixture-revision',
-        cwd,
-      });
-      assert.equal(result.ok, true);
-      assert.equal(result.revision, 'fixture-revision');
-    } finally {
-      rmSync(cwd, { recursive: true, force: true });
-    }
+    const result = assertPhase('p6', {
+      dir,
+      ticket: 'T1',
+      revision: 'fixture-revision',
+      cwd,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.revision, 'fixture-revision');
   });
 
-  it('rejects a forged bare p6 acceptance packet manifest entry', () => {
-    const dir = tmpAdlc();
+  it('rejects a forged bare p6 acceptance packet manifest entry', (t) => {
+    const dir = tmpAdlc(t);
     const revision = resolveRevision();
     writeP5Evidence(dir, { revision });
     writeManifest(dir, [{ type: 'p6-acceptance-packet', ticket: 'T1', revision }]);
@@ -529,644 +479,563 @@ describe('assertPhase', () => {
     assert.ok(result.errors.some((error) => error.includes('missing packetHash')));
   });
 
-  it('passes p6 when the acceptance packet is created inside an evidence root after p5', () => {
-    const repo = gitRepo();
+  it('passes p6 when the acceptance packet is created inside an evidence root after p5', (t) => {
+    const repo = gitRepo(t);
     const dir = join(repo.dir, '.adlc');
     const packet = join(dir, 'acceptance.json');
-    try {
-      writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
-      repo.g('add', '-A');
-      repo.g('commit', '-qm', 'base');
-      const revision = resolveRevision({ cwd: repo.dir });
-      mkdirSync(dir, { recursive: true });
-      writeP5Evidence(dir, { revision });
-      writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
+    writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base');
+    const revision = resolveRevision({ cwd: repo.dir });
+    mkdirSync(dir, { recursive: true });
+    writeP5Evidence(dir, { revision });
+    writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
 
-      const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
-      assert.equal(recorded.ok, true);
-      assert.equal(recorded.revision, revision);
+    const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
+    assert.equal(recorded.ok, true);
+    assert.equal(recorded.revision, revision);
 
-      const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
-      assert.equal(result.ok, true);
-      assert.equal(result.revision, revision);
-    } finally {
-      rmSync(repo.dir, { recursive: true, force: true });
-    }
+    const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(result.ok, true);
+    assert.equal(result.revision, revision);
   });
 
-  it('passes p6 when the documented packet and snapshots are created inside an evidence root after p5', () => {
-    const repo = gitRepo();
-    const dir = tmpAdlc();
-    try {
-      writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
-      repo.g('add', '-A');
-      repo.g('commit', '-qm', 'base');
-      const revision = resolveRevision({ cwd: repo.dir });
-      writeP5Evidence(dir, { revision });
-      mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
-      writeFileSync(join(repo.dir, '.adlc/before.json'), '{"before":true}\n');
-      writeFileSync(join(repo.dir, '.adlc/after.json'), '{"after":true}\n');
-      const packet = join(repo.dir, '.adlc/packet.json');
-      writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
+  it('passes p6 when the documented packet and snapshots are created inside an evidence root after p5', (t) => {
+    const repo = gitRepo(t);
+    const dir = tmpAdlc(t);
+    writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base');
+    const revision = resolveRevision({ cwd: repo.dir });
+    writeP5Evidence(dir, { revision });
+    mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
+    writeFileSync(join(repo.dir, '.adlc/before.json'), '{"before":true}\n');
+    writeFileSync(join(repo.dir, '.adlc/after.json'), '{"after":true}\n');
+    const packet = join(repo.dir, '.adlc/packet.json');
+    writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
 
-      const recorded = recordAcceptancePacket({
-        dir,
-        ticket: 'T1',
-        packet,
-        before: '.adlc/before.json',
-        after: '.adlc/after.json',
-        cwd: repo.dir,
-      });
-      assert.equal(recorded.ok, true);
-      assert.equal(recorded.revision, revision);
+    const recorded = recordAcceptancePacket({
+      dir,
+      ticket: 'T1',
+      packet,
+      before: '.adlc/before.json',
+      after: '.adlc/after.json',
+      cwd: repo.dir,
+    });
+    assert.equal(recorded.ok, true);
+    assert.equal(recorded.revision, revision);
 
-      const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
-      assert.equal(result.ok, true);
-      assert.equal(result.revision, revision);
-    } finally {
-      rmSync(repo.dir, { recursive: true, force: true });
-    }
+    const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(result.ok, true);
+    assert.equal(result.revision, revision);
   });
 
-  it('rejects in-worktree P6 artifacts outside evidence roots', () => {
-    const repo = gitRepo();
-    const dir = tmpAdlc();
-    try {
-      writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
-      repo.g('add', '-A');
-      repo.g('commit', '-qm', 'base');
-      const revision = resolveRevision({ cwd: repo.dir });
-      writeP5Evidence(dir, { revision });
-      writeFileSync(join(repo.dir, 'packet.json'), JSON.stringify({ behaviorDiff: 'accepted' }));
+  it('rejects in-worktree P6 artifacts outside evidence roots', (t) => {
+    const repo = gitRepo(t);
+    const dir = tmpAdlc(t);
+    writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base');
+    const revision = resolveRevision({ cwd: repo.dir });
+    writeP5Evidence(dir, { revision });
+    writeFileSync(join(repo.dir, 'packet.json'), JSON.stringify({ behaviorDiff: 'accepted' }));
 
-      const recorded = recordAcceptancePacket({
-        dir,
-        ticket: 'T1',
-        packet: 'packet.json',
-        before: 'src.txt',
-        cwd: repo.dir,
-      });
-      assert.equal(recorded.ok, false);
-      assert.ok(recorded.errors.some((error) => error.includes('packet inside the worktree must live')));
-      assert.ok(recorded.errors.some((error) => error.includes('artifact inside the worktree must live')));
-    } finally {
-      rmSync(repo.dir, { recursive: true, force: true });
-    }
+    const recorded = recordAcceptancePacket({
+      dir,
+      ticket: 'T1',
+      packet: 'packet.json',
+      before: 'src.txt',
+      cwd: repo.dir,
+    });
+    assert.equal(recorded.ok, false);
+    assert.ok(recorded.errors.some((error) => error.includes('packet inside the worktree must live')));
+    assert.ok(recorded.errors.some((error) => error.includes('artifact inside the worktree must live')));
   });
 
-  it('stales p6 when recorded acceptance packet or snapshot evidence changes', () => {
-    const repo = gitRepo();
-    const dir = tmpAdlc();
-    try {
-      writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
-      repo.g('add', '-A');
-      repo.g('commit', '-qm', 'base');
-      const revision = resolveRevision({ cwd: repo.dir });
-      writeP5Evidence(dir, { revision });
-      mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
-      writeFileSync(join(repo.dir, '.adlc/before.json'), '{"before":true}\n');
-      writeFileSync(join(repo.dir, '.adlc/after.json'), '{"after":true}\n');
-      const packet = join(repo.dir, '.adlc/packet.json');
-      writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
-      const recorded = recordAcceptancePacket({
-        dir,
-        ticket: 'T1',
-        packet,
-        before: '.adlc/before.json',
-        after: '.adlc/after.json',
-        cwd: repo.dir,
-      });
-      assert.equal(recorded.ok, true);
-      assert.equal(assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir }).ok, true);
+  it('stales p6 when recorded acceptance packet or snapshot evidence changes', (t) => {
+    const repo = gitRepo(t);
+    const dir = tmpAdlc(t);
+    writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base');
+    const revision = resolveRevision({ cwd: repo.dir });
+    writeP5Evidence(dir, { revision });
+    mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
+    writeFileSync(join(repo.dir, '.adlc/before.json'), '{"before":true}\n');
+    writeFileSync(join(repo.dir, '.adlc/after.json'), '{"after":true}\n');
+    const packet = join(repo.dir, '.adlc/packet.json');
+    writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
+    const recorded = recordAcceptancePacket({
+      dir,
+      ticket: 'T1',
+      packet,
+      before: '.adlc/before.json',
+      after: '.adlc/after.json',
+      cwd: repo.dir,
+    });
+    assert.equal(recorded.ok, true);
+    assert.equal(assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir }).ok, true);
 
-      writeFileSync(join(repo.dir, '.adlc/after.json'), '{"after":"tampered"}\n');
-      const afterTamper = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
-      assert.equal(afterTamper.ok, false);
-      assert.ok(afterTamper.errors.some((error) => error.includes('artifact hash changed')));
+    writeFileSync(join(repo.dir, '.adlc/after.json'), '{"after":"tampered"}\n');
+    const afterTamper = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(afterTamper.ok, false);
+    assert.ok(afterTamper.errors.some((error) => error.includes('artifact hash changed')));
 
-      writeFileSync(join(repo.dir, '.adlc/after.json'), '{"after":true}\n');
-      writeFileSync(packet, JSON.stringify({ behaviorDiff: 'tampered' }));
-      const packetTamper = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
-      assert.equal(packetTamper.ok, false);
-      assert.ok(packetTamper.errors.some((error) => error.includes('packet hash changed')));
-    } finally {
-      rmSync(repo.dir, { recursive: true, force: true });
-    }
+    writeFileSync(join(repo.dir, '.adlc/after.json'), '{"after":true}\n');
+    writeFileSync(packet, JSON.stringify({ behaviorDiff: 'tampered' }));
+    const packetTamper = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(packetTamper.ok, false);
+    assert.ok(packetTamper.errors.some((error) => error.includes('packet hash changed')));
   });
 
-  it('passes p6 with a non-default manifest dir inside the worktree', () => {
-    const repo = gitRepo();
-    try {
-      writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
-      repo.g('add', '-A');
-      repo.g('commit', '-qm', 'base');
-      const dir = join(repo.dir, '.review');
-      mkdirSync(dir, { recursive: true });
-      mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
-      const revision = resolveRevision({ cwd: repo.dir });
-      writeP5Evidence(dir, { revision, transcriptPath: join(repo.dir, '.adlc/p5-review.txt') });
-      const packet = join(repo.dir, '.adlc/packet.json');
-      writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
+  it('passes p6 with a non-default manifest dir inside the worktree', (t) => {
+    const repo = gitRepo(t);
+    writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base');
+    const dir = join(repo.dir, '.review');
+    mkdirSync(dir, { recursive: true });
+    mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
+    const revision = resolveRevision({ cwd: repo.dir });
+    writeP5Evidence(dir, { revision, transcriptPath: join(repo.dir, '.adlc/p5-review.txt') });
+    const packet = join(repo.dir, '.adlc/packet.json');
+    writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
 
-      const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
-      assert.equal(recorded.ok, true);
+    const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
+    assert.equal(recorded.ok, true);
 
-      const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
-      assert.equal(result.ok, true);
-      assert.equal(result.revision, revision);
-    } finally {
-      rmSync(repo.dir, { recursive: true, force: true });
-    }
+    const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(result.ok, true);
+    assert.equal(result.revision, revision);
   });
 
-  it('binds non-default manifest evidence to the manifest-dir ticket file before root .adlc tickets', () => {
-    const repo = gitRepo();
-    try {
-      writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
-      mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
-      writeFileSync(join(repo.dir, '.adlc/tickets.json'), JSON.stringify({
-        tickets: [{ id: 'T1', title: 'root ticket', scope: ['root/**'], rails: ['root-test/**'], edges: [] }],
-      }));
-      repo.g('add', '-A');
-      repo.g('commit', '-qm', 'base');
-      const dir = join(repo.dir, '.review');
-      mkdirSync(dir, { recursive: true });
-      const activeTicket = { id: 'T1', title: 'active ticket', scope: ['src/**'], rails: ['test/**'], edges: [] };
-      writeFileSync(join(dir, 'tickets.json'), JSON.stringify({ tickets: [activeTicket] }));
-      mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
-      const revision = resolveRevision({ cwd: repo.dir, ignorePaths: [join(dir, 'tickets.json')] });
-      writeP5Evidence(dir, {
-        revision,
-        hash: ticketHash(activeTicket),
-        transcriptPath: join(repo.dir, '.adlc/p5-review.txt'),
-      });
-      const packet = join(repo.dir, '.adlc/packet.json');
-      writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
+  it('binds non-default manifest evidence to the manifest-dir ticket file before root .adlc tickets', (t) => {
+    const repo = gitRepo(t);
+    writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
+    mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
+    writeFileSync(join(repo.dir, '.adlc/tickets.json'), JSON.stringify({
+      tickets: [{ id: 'T1', title: 'root ticket', scope: ['root/**'], rails: ['root-test/**'], edges: [] }],
+    }));
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base');
+    const dir = join(repo.dir, '.review');
+    mkdirSync(dir, { recursive: true });
+    const activeTicket = { id: 'T1', title: 'active ticket', scope: ['src/**'], rails: ['test/**'], edges: [] };
+    writeFileSync(join(dir, 'tickets.json'), JSON.stringify({ tickets: [activeTicket] }));
+    mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
+    const revision = resolveRevision({ cwd: repo.dir, ignorePaths: [join(dir, 'tickets.json')] });
+    writeP5Evidence(dir, {
+      revision,
+      hash: ticketHash(activeTicket),
+      transcriptPath: join(repo.dir, '.adlc/p5-review.txt'),
+    });
+    const packet = join(repo.dir, '.adlc/packet.json');
+    writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
 
-      const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
-      assert.equal(recorded.ok, true);
-      assert.equal(assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir }).ok, true);
+    const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
+    assert.equal(recorded.ok, true);
+    assert.equal(assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir }).ok, true);
 
-      writeFileSync(join(dir, 'tickets.json'), JSON.stringify({
-        tickets: [{ ...activeTicket, scope: ['changed/**'] }],
-      }));
-      const staleRecorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
-      assert.equal(staleRecorded.ok, false);
-      assert.ok(staleRecorded.errors.some((error) => error.includes('ticket definition changed')));
-      const stalePhase = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
-      assert.equal(stalePhase.ok, false);
-      assert.ok(stalePhase.errors.some((error) => error.includes('ticket definition changed')));
-    } finally {
-      rmSync(repo.dir, { recursive: true, force: true });
-    }
+    writeFileSync(join(dir, 'tickets.json'), JSON.stringify({
+      tickets: [{ ...activeTicket, scope: ['changed/**'] }],
+    }));
+    const staleRecorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
+    assert.equal(staleRecorded.ok, false);
+    assert.ok(staleRecorded.errors.some((error) => error.includes('ticket definition changed')));
+    const stalePhase = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(stalePhase.ok, false);
+    assert.ok(stalePhase.errors.some((error) => error.includes('ticket definition changed')));
   });
 
-  it('passes p6 after a reviewed dirty tree is committed without content changes', () => {
-    const repo = gitRepo();
-    const dir = tmpAdlc();
-    try {
-      writeFileSync(join(repo.dir, 'src.txt'), 'base\n');
-      repo.g('add', '-A');
-      repo.g('commit', '-qm', 'base');
-      writeFileSync(join(repo.dir, 'src.txt'), 'reviewed change\n');
-      writeFileSync(join(repo.dir, 'feature.mjs'), 'export const reviewed = true;\n');
-      const revision = resolveRevision({ cwd: repo.dir });
-      writeP5Evidence(dir, { revision });
-      repo.g('add', '-A');
-      repo.g('commit', '-qm', 'reviewed change');
-      mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
-      const packet = join(repo.dir, '.adlc/packet.json');
-      writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
+  it('passes p6 after a reviewed dirty tree is committed without content changes', (t) => {
+    const repo = gitRepo(t);
+    const dir = tmpAdlc(t);
+    writeFileSync(join(repo.dir, 'src.txt'), 'base\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base');
+    writeFileSync(join(repo.dir, 'src.txt'), 'reviewed change\n');
+    writeFileSync(join(repo.dir, 'feature.mjs'), 'export const reviewed = true;\n');
+    const revision = resolveRevision({ cwd: repo.dir });
+    writeP5Evidence(dir, { revision });
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'reviewed change');
+    mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
+    const packet = join(repo.dir, '.adlc/packet.json');
+    writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
 
-      const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
-      assert.equal(recorded.ok, true);
-      assert.equal(recorded.revision, revision);
+    const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
+    assert.equal(recorded.ok, true);
+    assert.equal(recorded.revision, revision);
 
-      const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
-      assert.equal(result.ok, true);
-      assert.equal(result.revision, revision);
-    } finally {
-      rmSync(repo.dir, { recursive: true, force: true });
-    }
+    const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(result.ok, true);
+    assert.equal(result.revision, revision);
   });
 
-  it('does not stale one ticket when an unrelated ticket is added', () => {
-    const repo = gitRepo();
-    const dir = tmpAdlc();
-    try {
-      const ticket = { id: 'T1', title: 'one', scope: ['src/**'], edges: [] };
-      mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
-      writeFileSync(join(repo.dir, '.adlc/tickets.json'), JSON.stringify({ tickets: [ticket] }));
-      writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
-      repo.g('add', '-A');
-      repo.g('commit', '-qm', 'base');
-      const revision = resolveRevision({ cwd: repo.dir });
-      writeP5Evidence(dir, { revision, hash: ticketHash(ticket) });
-      writeFileSync(join(repo.dir, '.adlc/tickets.json'), JSON.stringify({
-        tickets: [ticket, { id: 'T2', title: 'two', scope: ['other/**'], edges: [] }],
-      }));
-      const packet = join(repo.dir, '.adlc/packet.json');
-      writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
+  it('does not stale one ticket when an unrelated ticket is added', (t) => {
+    const repo = gitRepo(t);
+    const dir = tmpAdlc(t);
+    const ticket = { id: 'T1', title: 'one', scope: ['src/**'], edges: [] };
+    mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
+    writeFileSync(join(repo.dir, '.adlc/tickets.json'), JSON.stringify({ tickets: [ticket] }));
+    writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base');
+    const revision = resolveRevision({ cwd: repo.dir });
+    writeP5Evidence(dir, { revision, hash: ticketHash(ticket) });
+    writeFileSync(join(repo.dir, '.adlc/tickets.json'), JSON.stringify({
+      tickets: [ticket, { id: 'T2', title: 'two', scope: ['other/**'], edges: [] }],
+    }));
+    const packet = join(repo.dir, '.adlc/packet.json');
+    writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
 
-      const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
-      assert.equal(recorded.ok, true);
-      const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
-      assert.equal(result.ok, true);
-    } finally {
-      rmSync(repo.dir, { recursive: true, force: true });
-    }
+    const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
+    assert.equal(recorded.ok, true);
+    const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(result.ok, true);
   });
 
-  it('does not stale p6 when the active ticket definition is key-reordered only', () => {
-    const repo = gitRepo();
-    const dir = tmpAdlc();
-    try {
-      const ticket = {
-        id: 'T1',
-        title: 'one',
-        scope: ['src/**'],
+  it('does not stale p6 when the active ticket definition is key-reordered only', (t) => {
+    const repo = gitRepo(t);
+    const dir = tmpAdlc(t);
+    const ticket = {
+      id: 'T1',
+      title: 'one',
+      scope: ['src/**'],
+      edges: [],
+      metadata: { priority: 'high', owner: 'codex' },
+    };
+    mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
+    writeFileSync(join(repo.dir, '.adlc/tickets.json'), JSON.stringify({ tickets: [ticket] }));
+    writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base');
+    const revision = resolveRevision({ cwd: repo.dir });
+    writeP5Evidence(dir, { revision, hash: ticketHash(ticket) });
+    writeFileSync(join(repo.dir, '.adlc/tickets.json'), JSON.stringify({
+      tickets: [{
+        metadata: { owner: 'codex', priority: 'high' },
         edges: [],
-        metadata: { priority: 'high', owner: 'codex' },
-      };
-      mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
-      writeFileSync(join(repo.dir, '.adlc/tickets.json'), JSON.stringify({ tickets: [ticket] }));
-      writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
-      repo.g('add', '-A');
-      repo.g('commit', '-qm', 'base');
-      const revision = resolveRevision({ cwd: repo.dir });
-      writeP5Evidence(dir, { revision, hash: ticketHash(ticket) });
-      writeFileSync(join(repo.dir, '.adlc/tickets.json'), JSON.stringify({
-        tickets: [{
-          metadata: { owner: 'codex', priority: 'high' },
-          edges: [],
-          scope: ['src/**'],
-          title: 'one',
-          id: 'T1',
-        }],
-      }));
-      const packet = join(repo.dir, '.adlc/packet.json');
-      writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
+        scope: ['src/**'],
+        title: 'one',
+        id: 'T1',
+      }],
+    }));
+    const packet = join(repo.dir, '.adlc/packet.json');
+    writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
 
-      const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
-      assert.equal(recorded.ok, true);
-      const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
-      assert.equal(result.ok, true);
-    } finally {
-      rmSync(repo.dir, { recursive: true, force: true });
-    }
+    const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
+    assert.equal(recorded.ok, true);
+    const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(result.ok, true);
   });
 
-  it('stales p6 when the active ticket definition changes after p5', () => {
-    const repo = gitRepo();
-    const dir = tmpAdlc();
-    try {
-      const ticket = { id: 'T1', title: 'one', scope: ['src/**'], edges: [] };
-      mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
-      writeFileSync(join(repo.dir, '.adlc/tickets.json'), JSON.stringify({ tickets: [ticket] }));
-      writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
-      repo.g('add', '-A');
-      repo.g('commit', '-qm', 'base');
-      const revision = resolveRevision({ cwd: repo.dir });
-      writeP5Evidence(dir, { revision, hash: ticketHash(ticket) });
-      const packet = join(repo.dir, '.adlc/packet.json');
-      writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
-      const recordedBeforeChange = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
-      assert.equal(recordedBeforeChange.ok, true);
-      writeFileSync(join(repo.dir, '.adlc/tickets.json'), JSON.stringify({
-        tickets: [{ ...ticket, scope: ['changed/**'] }],
-      }));
+  it('stales p6 when the active ticket definition changes after p5', (t) => {
+    const repo = gitRepo(t);
+    const dir = tmpAdlc(t);
+    const ticket = { id: 'T1', title: 'one', scope: ['src/**'], edges: [] };
+    mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
+    writeFileSync(join(repo.dir, '.adlc/tickets.json'), JSON.stringify({ tickets: [ticket] }));
+    writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base');
+    const revision = resolveRevision({ cwd: repo.dir });
+    writeP5Evidence(dir, { revision, hash: ticketHash(ticket) });
+    const packet = join(repo.dir, '.adlc/packet.json');
+    writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
+    const recordedBeforeChange = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
+    assert.equal(recordedBeforeChange.ok, true);
+    writeFileSync(join(repo.dir, '.adlc/tickets.json'), JSON.stringify({
+      tickets: [{ ...ticket, scope: ['changed/**'] }],
+    }));
 
-      const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
-      assert.equal(recorded.ok, false);
-      assert.ok(recorded.errors.some((error) => error.includes('ticket definition changed')));
-      const pinnedRecorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, revision, cwd: repo.dir });
-      assert.equal(pinnedRecorded.ok, false);
-      assert.ok(pinnedRecorded.errors.some((error) => error.includes('ticket definition changed')));
-      const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
-      assert.equal(result.ok, false);
-      assert.equal(result.operational, true);
-      assert.ok(result.errors.some((error) => error.includes('ticket definition changed')));
-      const pinned = assertPhase('p6', { dir, ticket: 'T1', revision, cwd: repo.dir });
-      assert.equal(pinned.ok, false);
-      assert.equal(pinned.operational, true);
-      assert.ok(pinned.errors.some((error) => error.includes('ticket definition changed')));
-    } finally {
-      rmSync(repo.dir, { recursive: true, force: true });
-    }
+    const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
+    assert.equal(recorded.ok, false);
+    assert.ok(recorded.errors.some((error) => error.includes('ticket definition changed')));
+    const pinnedRecorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, revision, cwd: repo.dir });
+    assert.equal(pinnedRecorded.ok, false);
+    assert.ok(pinnedRecorded.errors.some((error) => error.includes('ticket definition changed')));
+    const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(result.ok, false);
+    assert.equal(result.operational, true);
+    assert.ok(result.errors.some((error) => error.includes('ticket definition changed')));
+    const pinned = assertPhase('p6', { dir, ticket: 'T1', revision, cwd: repo.dir });
+    assert.equal(pinned.ok, false);
+    assert.equal(pinned.operational, true);
+    assert.ok(pinned.errors.some((error) => error.includes('ticket definition changed')));
   });
 
-  it('stales p5 and p6 when P5 did not bind a ticket definition that now exists', () => {
-    const repo = gitRepo();
-    const dir = tmpAdlc();
-    try {
-      const ticket = { id: 'T1', title: 'one', scope: ['src/**'], edges: [] };
-      writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
-      repo.g('add', '-A');
-      repo.g('commit', '-qm', 'base');
-      const revision = resolveRevision({ cwd: repo.dir });
-      writeP5Evidence(dir, { revision, hash: null });
-      mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
-      writeFileSync(join(repo.dir, '.adlc/tickets.json'), JSON.stringify({ tickets: [ticket] }));
-      const packet = join(repo.dir, '.adlc/packet.json');
-      writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
+  it('stales p5 and p6 when P5 did not bind a ticket definition that now exists', (t) => {
+    const repo = gitRepo(t);
+    const dir = tmpAdlc(t);
+    const ticket = { id: 'T1', title: 'one', scope: ['src/**'], edges: [] };
+    writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base');
+    const revision = resolveRevision({ cwd: repo.dir });
+    writeP5Evidence(dir, { revision, hash: null });
+    mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
+    writeFileSync(join(repo.dir, '.adlc/tickets.json'), JSON.stringify({ tickets: [ticket] }));
+    const packet = join(repo.dir, '.adlc/packet.json');
+    writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
 
-      const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
-      assert.equal(recorded.ok, false);
-      assert.ok(recorded.errors.some((error) => error.includes('ticket definition was not bound')));
-      rmSync(packet, { force: true });
-      const p5 = assertPhase('p5', { dir, ticket: 'T1', cwd: repo.dir });
-      assert.equal(p5.ok, false);
-      assert.equal(p5.operational, true);
-      assert.ok(p5.errors.some((error) => error.includes('ticket definition was not bound')));
-      const p6 = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
-      assert.equal(p6.ok, false);
-      assert.equal(p6.operational, true);
-      assert.ok(p6.errors.some((error) => error.includes('ticket definition was not bound')));
-    } finally {
-      rmSync(repo.dir, { recursive: true, force: true });
-    }
+    const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
+    assert.equal(recorded.ok, false);
+    assert.ok(recorded.errors.some((error) => error.includes('ticket definition was not bound')));
+    rmSync(packet, { force: true });
+    const p5 = assertPhase('p5', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(p5.ok, false);
+    assert.equal(p5.operational, true);
+    assert.ok(p5.errors.some((error) => error.includes('ticket definition was not bound')));
+    const p6 = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(p6.ok, false);
+    assert.equal(p6.operational, true);
+    assert.ok(p6.errors.some((error) => error.includes('ticket definition was not bound')));
   });
 
-  it('stales p6 when recorded P5 transcript evidence changes after prosecution', () => {
-    const repo = gitRepo();
-    const dir = tmpAdlc();
-    try {
-      writeFileSync(join(repo.dir, '.gitignore'), '.adlc/*\n');
-      writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
-      repo.g('add', '-A');
-      repo.g('commit', '-qm', 'base');
-      mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
-      const transcript = join(repo.dir, '.adlc/p5-review.txt');
-      writeFileSync(transcript, [
-        'ticket: T1',
-        'reviewed revision: pending',
-        'review transcript fixture with enough detail to be accepted as evidence',
-      ].join('\n'));
-      const revision = resolveRevision({ cwd: repo.dir });
-      writeP5Evidence(dir, { revision, transcriptPath: transcript });
-      writeManifest(dir, [{ type: 'p6-acceptance-packet', ticket: 'T1', revision }]);
-      writeFileSync(transcript, [
-        'ticket: T1',
-        'reviewed revision: pending',
-        'mutated review transcript after P5',
-        'review transcript fixture with enough detail to be accepted as evidence',
-      ].join('\n'));
-      const packet = join(repo.dir, '.adlc/packet.json');
-      writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
+  it('stales p6 when recorded P5 transcript evidence changes after prosecution', (t) => {
+    const repo = gitRepo(t);
+    const dir = tmpAdlc(t);
+    writeFileSync(join(repo.dir, '.gitignore'), '.adlc/*\n');
+    writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base');
+    mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
+    const transcript = join(repo.dir, '.adlc/p5-review.txt');
+    writeFileSync(transcript, [
+      'ticket: T1',
+      'reviewed revision: pending',
+      'review transcript fixture with enough detail to be accepted as evidence',
+    ].join('\n'));
+    const revision = resolveRevision({ cwd: repo.dir });
+    writeP5Evidence(dir, { revision, transcriptPath: transcript });
+    writeManifest(dir, [{ type: 'p6-acceptance-packet', ticket: 'T1', revision }]);
+    writeFileSync(transcript, [
+      'ticket: T1',
+      'reviewed revision: pending',
+      'mutated review transcript after P5',
+      'review transcript fixture with enough detail to be accepted as evidence',
+    ].join('\n'));
+    const packet = join(repo.dir, '.adlc/packet.json');
+    writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
 
-      const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
-      assert.equal(recorded.ok, false);
-      assert.ok(recorded.errors.some((error) => error.includes('transcript hash changed')));
-      const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
-      assert.equal(result.ok, false);
-      assert.equal(result.operational, true);
-      assert.ok(result.errors.some((error) => error.includes('transcript hash changed')));
-      const pinned = assertPhase('p6', { dir, ticket: 'T1', revision, cwd: repo.dir });
-      assert.equal(pinned.ok, false);
-      assert.equal(pinned.operational, true);
-      assert.ok(pinned.errors.some((error) => error.includes('transcript hash changed')));
-    } finally {
-      rmSync(repo.dir, { recursive: true, force: true });
-    }
+    const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
+    assert.equal(recorded.ok, false);
+    assert.ok(recorded.errors.some((error) => error.includes('transcript hash changed')));
+    const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(result.ok, false);
+    assert.equal(result.operational, true);
+    assert.ok(result.errors.some((error) => error.includes('transcript hash changed')));
+    const pinned = assertPhase('p6', { dir, ticket: 'T1', revision, cwd: repo.dir });
+    assert.equal(pinned.ok, false);
+    assert.equal(pinned.operational, true);
+    assert.ok(pinned.errors.some((error) => error.includes('transcript hash changed')));
   });
 
-  it('stales p5 and p6 when recorded P5 reviewed input evidence changes after prosecution', () => {
-    const repo = gitRepo();
-    const dir = tmpAdlc();
-    try {
-      writeFileSync(join(repo.dir, 'src.txt'), 'base\n');
-      repo.g('add', '-A');
-      repo.g('commit', '-qm', 'base');
-      const revision = resolveRevision({ cwd: repo.dir });
-      writeP5Evidence(dir, { revision });
-      const complete = readFileSync(join(dir, 'manifest.jsonl'), 'utf8')
-        .trim()
-        .split('\n')
-        .map((line) => JSON.parse(line))
-        .find((entry) => entry.type === 'p5-complete');
-      writeFileSync(complete.reviewPacket.inputs.path, 'tampered reviewed input packet\n');
-      const p5 = assertPhase('p5', { dir, ticket: 'T1', cwd: repo.dir });
-      assert.equal(p5.ok, false);
-      assert.ok(p5.errors.some((error) => error.includes('reviewPacket.inputs hash changed')));
-      const packet = join(repo.dir, '.adlc/packet.json');
-      mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
-      writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
-      const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
-      assert.equal(recorded.ok, false);
-      assert.ok(recorded.errors.some((error) => error.includes('reviewPacket.inputs hash changed')));
-    } finally {
-      rmSync(repo.dir, { recursive: true, force: true });
-      rmSync(dir, { recursive: true, force: true });
-    }
+  it('stales p5 and p6 when recorded P5 reviewed input evidence changes after prosecution', (t) => {
+    const repo = gitRepo(t);
+    const dir = tmpAdlc(t);
+    writeFileSync(join(repo.dir, 'src.txt'), 'base\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base');
+    const revision = resolveRevision({ cwd: repo.dir });
+    writeP5Evidence(dir, { revision });
+    const complete = readFileSync(join(dir, 'manifest.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .find((entry) => entry.type === 'p5-complete');
+    writeFileSync(complete.reviewPacket.inputs.path, 'tampered reviewed input packet\n');
+    const p5 = assertPhase('p5', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(p5.ok, false);
+    assert.ok(p5.errors.some((error) => error.includes('reviewPacket.inputs hash changed')));
+    const packet = join(repo.dir, '.adlc/packet.json');
+    mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
+    writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
+    const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
+    assert.equal(recorded.ok, false);
+    assert.ok(recorded.errors.some((error) => error.includes('reviewPacket.inputs hash changed')));
   });
 
-  it('allows re-prosecution to supersede an older P5 transcript at the same path', () => {
-    const repo = gitRepo();
-    const dir = tmpAdlc();
-    try {
-      writeFileSync(join(repo.dir, '.gitignore'), '.adlc/*\n');
-      writeFileSync(join(repo.dir, 'src.txt'), 'reviewed A\n');
-      repo.g('add', '-A');
-      repo.g('commit', '-qm', 'base A');
-      mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
-      const transcript = join(repo.dir, '.adlc/p5-review.txt');
-      writeFileSync(transcript, [
-        'ticket: T1',
-        'reviewed revision: A',
-        'review transcript fixture with enough detail to be accepted as evidence',
-      ].join('\n'));
-      const revisionA = resolveRevision({ cwd: repo.dir });
-      writeP5Evidence(dir, { revision: revisionA, transcriptPath: transcript });
+  it('allows re-prosecution to supersede an older P5 transcript at the same path', (t) => {
+    const repo = gitRepo(t);
+    const dir = tmpAdlc(t);
+    writeFileSync(join(repo.dir, '.gitignore'), '.adlc/*\n');
+    writeFileSync(join(repo.dir, 'src.txt'), 'reviewed A\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base A');
+    mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
+    const transcript = join(repo.dir, '.adlc/p5-review.txt');
+    writeFileSync(transcript, [
+      'ticket: T1',
+      'reviewed revision: A',
+      'review transcript fixture with enough detail to be accepted as evidence',
+    ].join('\n'));
+    const revisionA = resolveRevision({ cwd: repo.dir });
+    writeP5Evidence(dir, { revision: revisionA, transcriptPath: transcript });
 
-      writeFileSync(join(repo.dir, 'src.txt'), 'reviewed B\n');
-      repo.g('add', '-A');
-      repo.g('commit', '-qm', 'base B');
-      writeFileSync(transcript, [
-        'ticket: T1',
-        'reviewed revision: B',
-        'new review transcript fixture with enough detail to be accepted as evidence',
-      ].join('\n'));
-      const revisionB = resolveRevision({ cwd: repo.dir });
-      writeP5Evidence(dir, { revision: revisionB, transcriptPath: transcript });
-      const packet = join(repo.dir, '.adlc/packet.json');
-      writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
+    writeFileSync(join(repo.dir, 'src.txt'), 'reviewed B\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base B');
+    writeFileSync(transcript, [
+      'ticket: T1',
+      'reviewed revision: B',
+      'new review transcript fixture with enough detail to be accepted as evidence',
+    ].join('\n'));
+    const revisionB = resolveRevision({ cwd: repo.dir });
+    writeP5Evidence(dir, { revision: revisionB, transcriptPath: transcript });
+    const packet = join(repo.dir, '.adlc/packet.json');
+    writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
 
-      const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
-      assert.equal(recorded.ok, true);
-      assert.equal(recorded.revision, revisionB);
-      const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
-      assert.equal(result.ok, true);
-      assert.equal(result.revision, revisionB);
-    } finally {
-      rmSync(repo.dir, { recursive: true, force: true });
-    }
+    const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
+    assert.equal(recorded.ok, true);
+    assert.equal(recorded.revision, revisionB);
+    const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(result.ok, true);
+    assert.equal(result.revision, revisionB);
   });
 
-  it('stales p6 when an older distinct P5 transcript evidence file changes after re-prosecution', () => {
-    const repo = gitRepo();
-    const dir = tmpAdlc();
-    try {
-      writeFileSync(join(repo.dir, '.gitignore'), '.adlc/*\n');
-      writeFileSync(join(repo.dir, 'src.txt'), 'reviewed A\n');
-      repo.g('add', '-A');
-      repo.g('commit', '-qm', 'base A');
-      mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
-      const transcriptA = join(repo.dir, '.adlc/p5-review-A.txt');
-      const revisionA = resolveRevision({ cwd: repo.dir });
-      writeP5Evidence(dir, { revision: revisionA, transcriptPath: transcriptA });
+  it('stales p6 when an older distinct P5 transcript evidence file changes after re-prosecution', (t) => {
+    const repo = gitRepo(t);
+    const dir = tmpAdlc(t);
+    writeFileSync(join(repo.dir, '.gitignore'), '.adlc/*\n');
+    writeFileSync(join(repo.dir, 'src.txt'), 'reviewed A\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base A');
+    mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
+    const transcriptA = join(repo.dir, '.adlc/p5-review-A.txt');
+    const revisionA = resolveRevision({ cwd: repo.dir });
+    writeP5Evidence(dir, { revision: revisionA, transcriptPath: transcriptA });
 
-      writeFileSync(join(repo.dir, 'src.txt'), 'reviewed B\n');
-      repo.g('add', '-A');
-      repo.g('commit', '-qm', 'base B');
-      const transcriptB = join(repo.dir, '.adlc/p5-review-B.txt');
-      const revisionB = resolveRevision({ cwd: repo.dir });
-      writeP5Evidence(dir, { revision: revisionB, transcriptPath: transcriptB });
-      const packet = join(repo.dir, '.adlc/packet.json');
-      writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
+    writeFileSync(join(repo.dir, 'src.txt'), 'reviewed B\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base B');
+    const transcriptB = join(repo.dir, '.adlc/p5-review-B.txt');
+    const revisionB = resolveRevision({ cwd: repo.dir });
+    writeP5Evidence(dir, { revision: revisionB, transcriptPath: transcriptB });
+    const packet = join(repo.dir, '.adlc/packet.json');
+    writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
 
-      const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
-      assert.equal(recorded.ok, true);
-      assert.equal(recorded.revision, revisionB);
-      assert.equal(assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir }).ok, true);
+    const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
+    assert.equal(recorded.ok, true);
+    assert.equal(recorded.revision, revisionB);
+    assert.equal(assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir }).ok, true);
 
-      writeFileSync(transcriptA, 'mutated older transcript after P6 acceptance\n');
-      const staleRecorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
-      assert.equal(staleRecorded.ok, false);
-      assert.ok(staleRecorded.errors.some((error) => error.includes('transcript hash changed')));
-      const stalePhase = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
-      assert.equal(stalePhase.ok, false);
-      assert.equal(stalePhase.operational, true);
-      assert.ok(stalePhase.errors.some((error) => error.includes('transcript hash changed')));
-    } finally {
-      rmSync(repo.dir, { recursive: true, force: true });
-    }
+    writeFileSync(transcriptA, 'mutated older transcript after P6 acceptance\n');
+    const staleRecorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
+    assert.equal(staleRecorded.ok, false);
+    assert.ok(staleRecorded.errors.some((error) => error.includes('transcript hash changed')));
+    const stalePhase = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(stalePhase.ok, false);
+    assert.equal(stalePhase.operational, true);
+    assert.ok(stalePhase.errors.some((error) => error.includes('transcript hash changed')));
   });
 
-  it('does not ignore root after.json unless it is recorded as a p6 artifact', () => {
-    const repo = gitRepo();
-    const dir = tmpAdlc();
-    try {
-      writeFileSync(join(repo.dir, 'after.json'), '{"reviewed":true}\n');
-      repo.g('add', '-A');
-      repo.g('commit', '-qm', 'base');
-      const revision = resolveRevision({ cwd: repo.dir });
-      writeP5Evidence(dir, { revision });
-      writeFileSync(join(repo.dir, 'after.json'), '{"reviewed":false}\n');
-      mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
-      const packet = join(repo.dir, '.adlc/packet.json');
-      writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
+  it('does not ignore root after.json unless it is recorded as a p6 artifact', (t) => {
+    const repo = gitRepo(t);
+    const dir = tmpAdlc(t);
+    writeFileSync(join(repo.dir, 'after.json'), '{"reviewed":true}\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base');
+    const revision = resolveRevision({ cwd: repo.dir });
+    writeP5Evidence(dir, { revision });
+    writeFileSync(join(repo.dir, 'after.json'), '{"reviewed":false}\n');
+    mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
+    const packet = join(repo.dir, '.adlc/packet.json');
+    writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
 
-      const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
-      assert.equal(recorded.ok, false);
-      assert.ok(recorded.errors.some((error) => error.includes('P5 evidence is stale')));
-    } finally {
-      rmSync(repo.dir, { recursive: true, force: true });
-    }
+    const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
+    assert.equal(recorded.ok, false);
+    assert.ok(recorded.errors.some((error) => error.includes('P5 evidence is stale')));
   });
 
-  it('fails implicit p6 acceptance when tracked source changes after p5', () => {
-    const repo = gitRepo();
-    const dir = tmpAdlc();
-    try {
-      writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
-      repo.g('add', '-A');
-      repo.g('commit', '-qm', 'base');
-      writeFileSync(join(repo.dir, 'src.txt'), 'reviewed change\n');
-      const revision = resolveRevision({ cwd: repo.dir });
-      writeP5Evidence(dir, { revision });
-      writeFileSync(join(repo.dir, 'src.txt'), 'unreviewed change\n');
-      mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
-      const packet = join(repo.dir, '.adlc/acceptance.json');
-      writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
+  it('fails implicit p6 acceptance when tracked source changes after p5', (t) => {
+    const repo = gitRepo(t);
+    const dir = tmpAdlc(t);
+    writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base');
+    writeFileSync(join(repo.dir, 'src.txt'), 'reviewed change\n');
+    const revision = resolveRevision({ cwd: repo.dir });
+    writeP5Evidence(dir, { revision });
+    writeFileSync(join(repo.dir, 'src.txt'), 'unreviewed change\n');
+    mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
+    const packet = join(repo.dir, '.adlc/acceptance.json');
+    writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
 
-      const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
-      assert.equal(recorded.ok, false);
-      assert.ok(recorded.errors.some((error) => error.includes('P5 evidence is stale')));
-      const pinnedRecorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, revision, cwd: repo.dir });
-      assert.equal(pinnedRecorded.ok, true);
+    const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
+    assert.equal(recorded.ok, false);
+    assert.ok(recorded.errors.some((error) => error.includes('P5 evidence is stale')));
+    const pinnedRecorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, revision, cwd: repo.dir });
+    assert.equal(pinnedRecorded.ok, true);
 
-      const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
-      assert.equal(result.ok, false);
-      assert.equal(result.operational, true);
-      assert.ok(result.errors.some((error) => error.includes('P5 evidence is stale')));
-      const pinned = assertPhase('p6', { dir, ticket: 'T1', revision, cwd: repo.dir });
-      assert.equal(pinned.ok, true);
-    } finally {
-      rmSync(repo.dir, { recursive: true, force: true });
-    }
+    const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(result.ok, false);
+    assert.equal(result.operational, true);
+    assert.ok(result.errors.some((error) => error.includes('P5 evidence is stale')));
+    const pinned = assertPhase('p6', { dir, ticket: 'T1', revision, cwd: repo.dir });
+    assert.equal(pinned.ok, true);
   });
 
-  it('uses explicit p5 revision as a selector when tracked source changes after p5', () => {
-    const repo = gitRepo();
-    const dir = tmpAdlc();
-    try {
-      writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
-      repo.g('add', '-A');
-      repo.g('commit', '-qm', 'base');
-      const revision = resolveRevision({ cwd: repo.dir });
-      writeP5Evidence(dir, { revision });
-      writeFileSync(join(repo.dir, 'src.txt'), 'unreviewed change\n');
+  it('uses explicit p5 revision as a selector when tracked source changes after p5', (t) => {
+    const repo = gitRepo(t);
+    const dir = tmpAdlc(t);
+    writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base');
+    const revision = resolveRevision({ cwd: repo.dir });
+    writeP5Evidence(dir, { revision });
+    writeFileSync(join(repo.dir, 'src.txt'), 'unreviewed change\n');
 
-      const implicit = assertPhase('p5', { dir, ticket: 'T1', cwd: repo.dir });
-      assert.equal(implicit.ok, false);
-      assert.equal(implicit.operational, true);
-      assert.ok(implicit.errors.some((error) => error.includes('P5 evidence is stale')));
+    const implicit = assertPhase('p5', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(implicit.ok, false);
+    assert.equal(implicit.operational, true);
+    assert.ok(implicit.errors.some((error) => error.includes('P5 evidence is stale')));
 
-      const pinned = assertPhase('p5', { dir, ticket: 'T1', revision, cwd: repo.dir });
-      assert.equal(pinned.ok, true);
-      assert.equal(pinned.revision, revision);
-    } finally {
-      rmSync(repo.dir, { recursive: true, force: true });
-    }
+    const pinned = assertPhase('p5', { dir, ticket: 'T1', revision, cwd: repo.dir });
+    assert.equal(pinned.ok, true);
+    assert.equal(pinned.revision, revision);
   });
 
-  it('fails p6 acceptance when untracked source appears after p5', () => {
-    const repo = gitRepo();
-    const dir = tmpAdlc();
-    try {
-      writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
-      repo.g('add', '-A');
-      repo.g('commit', '-qm', 'base');
-      const revision = resolveRevision({ cwd: repo.dir });
-      writeP5Evidence(dir, { revision });
-      writeFileSync(join(repo.dir, 'feature.mjs'), 'export const unreviewed = true;\n');
-      mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
-      const packet = join(repo.dir, '.adlc/acceptance.json');
-      writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
+  it('fails p6 acceptance when untracked source appears after p5', (t) => {
+    const repo = gitRepo(t);
+    const dir = tmpAdlc(t);
+    writeFileSync(join(repo.dir, 'src.txt'), 'reviewed\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base');
+    const revision = resolveRevision({ cwd: repo.dir });
+    writeP5Evidence(dir, { revision });
+    writeFileSync(join(repo.dir, 'feature.mjs'), 'export const unreviewed = true;\n');
+    mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
+    const packet = join(repo.dir, '.adlc/acceptance.json');
+    writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
 
-      const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
-      assert.equal(recorded.ok, false);
-      assert.ok(recorded.errors.some((error) => error.includes('P5 evidence is stale')));
-    } finally {
-      rmSync(repo.dir, { recursive: true, force: true });
-    }
+    const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
+    assert.equal(recorded.ok, false);
+    assert.ok(recorded.errors.some((error) => error.includes('P5 evidence is stale')));
   });
 
-  it('fails p6 when current revision cannot be resolved', () => {
-    const dir = tmpAdlc();
-    const cwd = mkdtempSync(join(tmpdir(), 'adlc-not-git-'));
-    try {
-      writeP5Evidence(dir, { revision: 'git-worktree:old' });
-      writeManifest(dir, [{ type: 'p6-acceptance-packet', ticket: 'T1', revision: 'git-worktree:old' }]);
-      const result = assertPhase('p6', { dir, ticket: 'T1', cwd });
-      assert.equal(result.ok, false);
-      assert.equal(result.operational, true);
-      assert.ok(result.errors.some((error) => error.includes('current worktree revision could not be resolved')));
-    } finally {
-      rmSync(cwd, { recursive: true, force: true });
-    }
+  it('fails p6 when current revision cannot be resolved', (t) => {
+    const dir = tmpAdlc(t);
+    const cwd = tmp(t, 'adlc-not-git-');
+    writeP5Evidence(dir, { revision: 'git-worktree:old' });
+    writeManifest(dir, [{ type: 'p6-acceptance-packet', ticket: 'T1', revision: 'git-worktree:old' }]);
+    const result = assertPhase('p6', { dir, ticket: 'T1', cwd });
+    assert.equal(result.ok, false);
+    assert.equal(result.operational, true);
+    assert.ok(result.errors.some((error) => error.includes('current worktree revision could not be resolved')));
   });
 
-  it('requires a ticket for p5 and p6', () => {
-    const dir = tmpAdlc();
+  it('requires a ticket for p5 and p6', (t) => {
+    const dir = tmpAdlc(t);
     const result = assertPhase('p5', { dir });
     assert.equal(result.ok, false);
     assert.equal(result.operational, true);
     assert.match(result.errors[0], /requires --ticket/);
   });
 
-  it('does not accept unmatched explicit revision evidence', () => {
-    const dir = tmpAdlc();
+  it('does not accept unmatched explicit revision evidence', (t) => {
+    const dir = tmpAdlc(t);
     writeManifest(dir, [{ type: 'p5-complete', ticket: 'T1', revision: 'git-worktree:old' }]);
     const result = assertPhase('p5', { dir, ticket: 'T1', revision: 'git-worktree:new' });
     assert.equal(result.ok, false);
@@ -1174,8 +1043,8 @@ describe('assertPhase', () => {
     assert.deepEqual(result.missing, ['p5-complete']);
   });
 
-  it('fails when manifest has malformed lines', () => {
-    const dir = tmpAdlc();
+  it('fails when manifest has malformed lines', (t) => {
+    const dir = tmpAdlc(t);
     const revision = resolveRevision();
     appendFileSync(join(dir, 'manifest.jsonl'), '{bad\n');
     const result = assertPhase('p5', { dir, ticket: 'T1', revision });
@@ -1189,8 +1058,8 @@ describe('adlc cli', () => {
   // test): a line that genuinely will not parse must still be called
   // malformed, and must name itself — a bare count tells the operator a number
   // and leaves them to find the line.
-  it('reports a genuinely malformed manifest line as malformed, and names it', () => {
-    const dir = tmpAdlc();
+  it('reports a genuinely malformed manifest line as malformed, and names it', (t) => {
+    const dir = tmpAdlc(t);
     const bin = new URL('../bin/adlc.mjs', import.meta.url).pathname;
     appendFileSync(join(dir, 'manifest.jsonl'), '{bad\n');
     const result = spawnSync(process.execPath, [
@@ -1204,8 +1073,8 @@ describe('adlc cli', () => {
   // The other real skip shape: a segment FILE the store rejects outright
   // (`{segment, line: null}`). It has no position to name, and naming one
   // anyway ("segment.jsonl:: reason") sends the reader looking for a line.
-  it('locates a skip that has no line number by segment alone', () => {
-    const dir = tmpAdlc();
+  it('locates a skip that has no line number by segment alone', (t) => {
+    const dir = tmpAdlc(t);
     const bin = new URL('../bin/adlc.mjs', import.meta.url).pathname;
     mkdirSync(join(dir, 'manifest.d'), { recursive: true });
     writeFileSync(join(dir, 'manifest.d', 'not-a-segment.jsonl'), '{"seq":1}\n');
@@ -1216,8 +1085,8 @@ describe('adlc cli', () => {
     assert.match(result.stderr, /not-a-segment\.jsonl: bad filename grammar/);
   });
 
-  it('exits 1 when scoped evidence omits ticket', () => {
-    const dir = tmpAdlc();
+  it('exits 1 when scoped evidence omits ticket', (t) => {
+    const dir = tmpAdlc(t);
     const bin = new URL('../bin/adlc.mjs', import.meta.url).pathname;
     let code = 0;
     try {
@@ -1228,8 +1097,8 @@ describe('adlc cli', () => {
     assert.equal(code, 1);
   });
 
-  it('rejects p6 acceptance without prior p5 evidence', () => {
-    const dir = tmpAdlc();
+  it('rejects p6 acceptance without prior p5 evidence', (t) => {
+    const dir = tmpAdlc(t);
     writeTicketDefinition(dir);
     const packet = join(dir, 'acceptance.json');
     writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
@@ -1254,8 +1123,8 @@ describe('adlc cli', () => {
     assert.equal(code, 1);
   });
 
-  it('adlc run p4 exits 0 once real rails-guard, flail-detector, and gate-manifest recordings all land for a ticket', () => {
-    const { dir: cwd, g } = gitRepo();
+  it('adlc run p4 exits 0 once real rails-guard, flail-detector, and gate-manifest recordings all land for a ticket', (t) => {
+    const { dir: cwd, g } = gitRepo(t);
     const adlcDir = join(cwd, '.adlc');
     mkdirSync(join(cwd, 'test'), { recursive: true });
     writeFileSync(join(cwd, 'test/a.test.mjs'), 'test("rail", () => {});\n');

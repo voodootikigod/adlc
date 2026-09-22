@@ -1,10 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolveRevision, sha256 } from '@adlc/core';
+import { tmp } from '@adlc/core/test-kit';
 
 const repoRoot = resolve(new URL('../../../', import.meta.url).pathname);
 
@@ -20,19 +21,15 @@ describe('codex plugin smoke script', () => {
     assert.equal(parsed.mcpServers, 1);
   });
 
-  it('fails if isolated install mutates real Codex plugin data', () => {
-    const home = mkdtempSync(join(tmpdir(), 'adlc-real-home-'));
-    try {
-      mkdirSync(join(home, '.codex/plugins/data'), { recursive: true });
-      const result = spawnSync(process.execPath, [join(repoRoot, 'scripts/codex-install-smoke.mjs'), repoRoot], {
-        env: { ...process.env, HOME: home, ADLC_CODEX_SMOKE_MUTATE_REAL_PLUGIN_DATA: '1' },
-        encoding: 'utf8',
-      });
-      assert.equal(result.status, 2);
-      assert.match(result.stderr, /mutated the caller real HOME\/XDG Codex state/);
-    } finally {
-      rmSync(home, { recursive: true, force: true });
-    }
+  it('fails if isolated install mutates real Codex plugin data', (t) => {
+    const home = tmp(t, 'adlc-real-home-');
+    mkdirSync(join(home, '.codex/plugins/data'), { recursive: true });
+    const result = spawnSync(process.execPath, [join(repoRoot, 'scripts/codex-install-smoke.mjs'), repoRoot], {
+      env: { ...process.env, HOME: home, ADLC_CODEX_SMOKE_MUTATE_REAL_PLUGIN_DATA: '1' },
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /mutated the caller real HOME\/XDG Codex state/);
   });
 
   it('cleans every temporary root when live setup fails partway through', () => {
@@ -50,135 +47,131 @@ describe('codex plugin smoke script', () => {
 });
 
 describe('codex integration docs flow', () => {
-  it('runs the documented P5 to P6 auto-revision commands', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'adlc-docs-flow-'));
-    try {
-      const g = (...args) => execFileSync('git', args, {
-        cwd: dir,
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-      });
-      g('init', '-q', '-b', 'main');
-      g('config', 'user.email', 't@t.co');
-      g('config', 'user.name', 'tester');
-      g('config', 'commit.gpgsign', 'false');
-      writeFileSync(join(dir, 'src.txt'), 'base\n');
-      g('add', '-A');
-      g('commit', '-qm', 'base');
+  it('runs the documented P5 to P6 auto-revision commands', (t) => {
+    const dir = tmp(t, 'adlc-docs-flow-');
+    const g = (...args) => execFileSync('git', args, {
+      cwd: dir,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    g('init', '-q', '-b', 'main');
+    g('config', 'user.email', 't@t.co');
+    g('config', 'user.name', 'tester');
+    g('config', 'commit.gpgsign', 'false');
+    writeFileSync(join(dir, 'src.txt'), 'base\n');
+    g('add', '-A');
+    g('commit', '-qm', 'base');
 
-      mkdirSync(join(dir, '.adlc'), { recursive: true });
-      writeFileSync(join(dir, '.adlc/tickets.json'), JSON.stringify({
-        tickets: [{ id: 'T1', title: 'Docs flow ticket', scope: ['src/**'], rails: ['test/**'], edges: [] }],
-      }));
-      const transcriptPath = join(dir, '.adlc/p5-review.txt');
-      const passes = JSON.parse(readFileSync(join(repoRoot, 'docs/examples/p5-passes.json'), 'utf8'));
-      passes.provenance.transcript = '.adlc/p5-review.txt';
-      const revision = resolveRevision({ cwd: dir, ignorePaths: [transcriptPath] });
-      writeFileSync(transcriptPath, [
-        'ticket: T1',
-        `reviewed revision: ${revision}`,
-        'security finding killed; correctness dry; tests dry; behavior dry',
-        'review transcript fixture with enough detail to be accepted as evidence',
-      ].join('\n'));
-      const promptPath = join(dir, '.adlc/p5-prompt.txt');
-      const inputsPath = join(dir, '.adlc/p5-inputs.txt');
-      writeFileSync(promptPath, `review prompt for ${revision}\n`);
-      writeFileSync(inputsPath, `reviewed input packet for ${revision}\n`);
-      passes.review_packet = {
-        prompt: '.adlc/p5-prompt.txt',
-        prompt_hash: sha256(readFileSync(promptPath)),
-        inputs: '.adlc/p5-inputs.txt',
-        inputs_hash: sha256(readFileSync(inputsPath)),
-        clean_worktree: revision,
-      };
-      writeFileSync(join(dir, '.adlc/p5-passes.json'), JSON.stringify(passes));
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, '.adlc/tickets.json'), JSON.stringify({
+      tickets: [{ id: 'T1', title: 'Docs flow ticket', scope: ['src/**'], rails: ['test/**'], edges: [] }],
+    }));
+    const transcriptPath = join(dir, '.adlc/p5-review.txt');
+    const passes = JSON.parse(readFileSync(join(repoRoot, 'docs/examples/p5-passes.json'), 'utf8'));
+    passes.provenance.transcript = '.adlc/p5-review.txt';
+    const revision = resolveRevision({ cwd: dir, ignorePaths: [transcriptPath] });
+    writeFileSync(transcriptPath, [
+      'ticket: T1',
+      `reviewed revision: ${revision}`,
+      'security finding killed; correctness dry; tests dry; behavior dry',
+      'review transcript fixture with enough detail to be accepted as evidence',
+    ].join('\n'));
+    const promptPath = join(dir, '.adlc/p5-prompt.txt');
+    const inputsPath = join(dir, '.adlc/p5-inputs.txt');
+    writeFileSync(promptPath, `review prompt for ${revision}\n`);
+    writeFileSync(inputsPath, `reviewed input packet for ${revision}\n`);
+    passes.review_packet = {
+      prompt: '.adlc/p5-prompt.txt',
+      prompt_hash: sha256(readFileSync(promptPath)),
+      inputs: '.adlc/p5-inputs.txt',
+      inputs_hash: sha256(readFileSync(inputsPath)),
+      clean_worktree: revision,
+    };
+    writeFileSync(join(dir, '.adlc/p5-passes.json'), JSON.stringify(passes));
 
-      // Commit the .adlc bundle so tickets.json is TRACKED and unchanged vs base —
-      // matching real usage. Otherwise the working-tree-inclusive trust-root tier
-      // (T39) would (correctly) treat the untracked .adlc/tickets.json as a
-      // trust-root change and demand a cross-model attestation; this test exercises
-      // the documented P5→P6 recorder flow, not tiering.
-      g('add', '-A');
-      g('commit', '-qm', 'adlc bundle');
+    // Commit the .adlc bundle so tickets.json is TRACKED and unchanged vs base —
+    // matching real usage. Otherwise the working-tree-inclusive trust-root tier
+    // (T39) would (correctly) treat the untracked .adlc/tickets.json as a
+    // trust-root change and demand a cross-model attestation; this test exercises
+    // the documented P5→P6 recorder flow, not tiering.
+    g('add', '-A');
+    g('commit', '-qm', 'adlc bundle');
 
-      const prosecute = join(repoRoot, 'packages/prosecute/bin/adlc-prosecute.mjs');
-      const runner = join(repoRoot, 'packages/runner/bin/adlc.mjs');
-      const common = { cwd: dir, encoding: 'utf8' };
+    const prosecute = join(repoRoot, 'packages/prosecute/bin/adlc-prosecute.mjs');
+    const runner = join(repoRoot, 'packages/runner/bin/adlc.mjs');
+    const common = { cwd: dir, encoding: 'utf8' };
 
-      // #365 — pass --revision explicitly rather than letting adlc-prosecute auto-resolve one.
-      // This test commits the .adlc bundle directly onto `main` (no separate feature branch),
-      // so `main` itself advances mid-test; the NEW default resolution derives its identity from
-      // `base` (main) at call time, which would then differ from the value already embedded in
-      // the transcript/review_packet above. Pinning --revision to the SAME value this test
-      // already computed keeps it self-consistent regardless of what `main` points to, and
-      // matches packages/runner's own assertPhase()/resolveRevision() (unchanged by #365), which
-      // this test's later p5/p6 steps depend on resolving to the identical value.
-      const p5Record = execFileSync(process.execPath, [
-        prosecute,
-        '--input',
-        '.adlc/p5-passes.json',
-        '--ticket',
-        'T1',
-        '--dir',
-        '.adlc',
-        '--revision',
-        revision,
-        '--json',
-      ], common);
-      assert.equal(JSON.parse(p5Record).exitCode, 0);
+    // #365 — pass --revision explicitly rather than letting adlc-prosecute auto-resolve one.
+    // This test commits the .adlc bundle directly onto `main` (no separate feature branch),
+    // so `main` itself advances mid-test; the NEW default resolution derives its identity from
+    // `base` (main) at call time, which would then differ from the value already embedded in
+    // the transcript/review_packet above. Pinning --revision to the SAME value this test
+    // already computed keeps it self-consistent regardless of what `main` points to, and
+    // matches packages/runner's own assertPhase()/resolveRevision() (unchanged by #365), which
+    // this test's later p5/p6 steps depend on resolving to the identical value.
+    const p5Record = execFileSync(process.execPath, [
+      prosecute,
+      '--input',
+      '.adlc/p5-passes.json',
+      '--ticket',
+      'T1',
+      '--dir',
+      '.adlc',
+      '--revision',
+      revision,
+      '--json',
+    ], common);
+    assert.equal(JSON.parse(p5Record).exitCode, 0);
 
-      const p5Run = execFileSync(process.execPath, [
-        runner,
-        'run',
-        'p5',
-        '--ticket',
-        'T1',
-        '--dir',
-        '.adlc',
-        '--json',
-      ], common);
-      assert.equal(JSON.parse(p5Run).ok, true);
+    const p5Run = execFileSync(process.execPath, [
+      runner,
+      'run',
+      'p5',
+      '--ticket',
+      'T1',
+      '--dir',
+      '.adlc',
+      '--json',
+    ], common);
+    assert.equal(JSON.parse(p5Run).ok, true);
 
-      writeFileSync(join(dir, '.adlc/before.json'), '{"before":true}\n');
-      writeFileSync(join(dir, '.adlc/after.json'), '{"after":true}\n');
-      writeFileSync(join(dir, '.adlc/packet.json'), JSON.stringify({ behaviorDiff: 'accepted' }));
-      const accepted = execFileSync(process.execPath, [
-        runner,
-        'accept',
-        '--ticket',
-        'T1',
-        '--packet',
-        '.adlc/packet.json',
-        '--before',
-        '.adlc/before.json',
-        '--after',
-        '.adlc/after.json',
-        '--dir',
-        '.adlc',
-        '--json',
-      ], common);
-      assert.equal(JSON.parse(accepted).ok, true);
+    writeFileSync(join(dir, '.adlc/before.json'), '{"before":true}\n');
+    writeFileSync(join(dir, '.adlc/after.json'), '{"after":true}\n');
+    writeFileSync(join(dir, '.adlc/packet.json'), JSON.stringify({ behaviorDiff: 'accepted' }));
+    const accepted = execFileSync(process.execPath, [
+      runner,
+      'accept',
+      '--ticket',
+      'T1',
+      '--packet',
+      '.adlc/packet.json',
+      '--before',
+      '.adlc/before.json',
+      '--after',
+      '.adlc/after.json',
+      '--dir',
+      '.adlc',
+      '--json',
+    ], common);
+    assert.equal(JSON.parse(accepted).ok, true);
 
-      const p6Run = execFileSync(process.execPath, [
-        runner,
-        'run',
-        'p6',
-        '--ticket',
-        'T1',
-        '--dir',
-        '.adlc',
-        '--json',
-      ], common);
-      assert.equal(JSON.parse(p6Run).ok, true);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    const p6Run = execFileSync(process.execPath, [
+      runner,
+      'run',
+      'p6',
+      '--ticket',
+      'T1',
+      '--dir',
+      '.adlc',
+      '--json',
+    ], common);
+    assert.equal(JSON.parse(p6Run).ok, true);
   });
 });
 
 describe('adlc rails hook', () => {
-  function fixture() {
-    const dir = mkdtempSync(join(tmpdir(), 'adlc-hook-'));
+  function fixture(t) {
+    const dir = tmp(t, 'adlc-hook-');
     mkdirSync(join(dir, '.adlc'), { recursive: true });
     writeFileSync(join(dir, '.adlc/tickets.json'), JSON.stringify({
       tickets: [
@@ -188,8 +181,8 @@ describe('adlc rails hook', () => {
     return dir;
   }
 
-  it('is inactive in auto mode when no ticket is selected', () => {
-    const dir = fixture();
+  it('is inactive in auto mode when no ticket is selected', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
       cwd: dir,
@@ -200,8 +193,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /inactive/);
   });
 
-  it('blocks rail edits when active', () => {
-    const dir = fixture();
+  it('blocks rail edits when active', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
       cwd: dir,
@@ -213,8 +206,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /blocked rail edit/);
   });
 
-  it('blocks absolute rail paths after project-relative normalization', () => {
-    const dir = fixture();
+  it('blocks absolute rail paths after project-relative normalization', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
       cwd: dir,
@@ -226,8 +219,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /blocked rail edit/);
   });
 
-  it('blocks dot-prefixed rail paths after normalization', () => {
-    const dir = fixture();
+  it('blocks dot-prefixed rail paths after normalization', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
       cwd: dir,
@@ -239,8 +232,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /blocked rail edit/);
   });
 
-  it('allows non-rail edits from Codex apply_patch hook payloads', () => {
-    const dir = fixture();
+  it('allows non-rail edits from Codex apply_patch hook payloads', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const patch = [
       '*** Begin Patch',
@@ -261,8 +254,8 @@ describe('adlc rails hook', () => {
     assert.equal(result.status, 0);
   });
 
-  it('blocks rail edits from Codex apply_patch hook payloads', () => {
-    const dir = fixture();
+  it('blocks rail edits from Codex apply_patch hook payloads', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const patch = [
       '*** Begin Patch',
@@ -284,8 +277,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /blocked rail edit/);
   });
 
-  it('blocks rail edits from fully-qualified Codex apply_patch hook payloads', () => {
-    const dir = fixture();
+  it('blocks rail edits from fully-qualified Codex apply_patch hook payloads', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const patch = [
       '*** Begin Patch',
@@ -307,8 +300,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /blocked rail edit/);
   });
 
-  it('blocks edits to the ticket trust root while rails are active', () => {
-    const dir = fixture();
+  it('blocks edits to the ticket trust root while rails are active', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const patch = [
       '*** Begin Patch',
@@ -331,8 +324,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /blocked rail edit/);
   });
 
-  it('blocks nested edits from Codex multi_tool_use wrapper payloads', () => {
-    const dir = fixture();
+  it('blocks nested edits from Codex multi_tool_use wrapper payloads', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const patch = [
       '*** Begin Patch',
@@ -359,8 +352,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /blocked rail edit/);
   });
 
-  it('blocks nested shell writes from Codex multi_tool_use wrapper payloads', () => {
-    const dir = fixture();
+  it('blocks nested shell writes from Codex multi_tool_use wrapper payloads', (t) => {
+    const dir = fixture(t);
     mkdirSync(join(dir, 'test'), { recursive: true });
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
@@ -384,8 +377,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /blocked rail edit/);
   });
 
-  it('blocks shell-based writes to rail paths', () => {
-    const dir = fixture();
+  it('blocks shell-based writes to rail paths', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
       cwd: dir,
@@ -400,8 +393,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /blocked rail edit/);
   });
 
-  it('blocks shell writes relative to a Codex command workdir', () => {
-    const dir = fixture();
+  it('blocks shell writes relative to a Codex command workdir', (t) => {
+    const dir = fixture(t);
     mkdirSync(join(dir, 'test'), { recursive: true });
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
@@ -420,8 +413,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /blocked rail edit/);
   });
 
-  it('fails closed on non-empty interactive shell stdin during active P4', () => {
-    const dir = fixture();
+  it('fails closed on non-empty interactive shell stdin during active P4', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
       cwd: dir,
@@ -436,8 +429,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /interactive shell stdin/);
   });
 
-  it('allows empty interactive shell stdin polling during active P4', () => {
-    const dir = fixture();
+  it('allows empty interactive shell stdin polling during active P4', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
       cwd: dir,
@@ -451,8 +444,8 @@ describe('adlc rails hook', () => {
     assert.equal(result.status, 0);
   });
 
-  it('blocks Python interpreter writes to rail paths', () => {
-    const dir = fixture();
+  it('blocks Python interpreter writes to rail paths', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
       cwd: dir,
@@ -467,8 +460,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /blocked rail edit/);
   });
 
-  it('blocks Node interpreter writes to rail paths', () => {
-    const dir = fixture();
+  it('blocks Node interpreter writes to rail paths', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
       cwd: dir,
@@ -483,8 +476,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /blocked rail edit/);
   });
 
-  it('blocks Ruby interpreter writes to rail paths', () => {
-    const dir = fixture();
+  it('blocks Ruby interpreter writes to rail paths', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
       cwd: dir,
@@ -499,8 +492,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /blocked rail edit/);
   });
 
-  it('fails closed on cwd-changing shell writes', () => {
-    const dir = fixture();
+  it('fails closed on cwd-changing shell writes', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
       cwd: dir,
@@ -515,8 +508,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /changes cwd/);
   });
 
-  it('fails closed on variable-expanded shell writes', () => {
-    const dir = fixture();
+  it('fails closed on variable-expanded shell writes', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
       cwd: dir,
@@ -531,8 +524,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /shell expansion/);
   });
 
-  it('fails closed on variable-expanded tee writes', () => {
-    const dir = fixture();
+  it('fails closed on variable-expanded tee writes', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
       cwd: dir,
@@ -547,8 +540,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /shell expansion/);
   });
 
-  it('blocks dd key-value shell writes to rails', () => {
-    const dir = fixture();
+  it('blocks dd key-value shell writes to rails', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
       cwd: dir,
@@ -563,8 +556,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /blocked rail edit/);
   });
 
-  it('blocks unlisted shell writers with literal rail targets', () => {
-    const dir = fixture();
+  it('blocks unlisted shell writers with literal rail targets', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     for (const command of [
       'truncate -s 0 test/a.test.mjs',
@@ -586,8 +579,8 @@ describe('adlc rails hook', () => {
     }
   });
 
-  it('fails closed on destructive find commands without literal file targets', () => {
-    const dir = fixture();
+  it('fails closed on destructive find commands without literal file targets', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
       cwd: dir,
@@ -602,8 +595,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /blocked rail edit/);
   });
 
-  it('blocks project-root destructive shell targets because they overlap every rail', () => {
-    const dir = fixture();
+  it('blocks project-root destructive shell targets because they overlap every rail', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     for (const command of [
       'find . -type f -delete',
@@ -624,8 +617,8 @@ describe('adlc rails hook', () => {
     }
   });
 
-  it('fails closed on opaque shell mutators even when they mention a patch file', () => {
-    const dir = fixture();
+  it('fails closed on opaque shell mutators even when they mention a patch file', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
       cwd: dir,
@@ -640,8 +633,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /opaque command/);
   });
 
-  it('blocks sed write scripts to rail paths', () => {
-    const dir = fixture();
+  it('blocks sed write scripts to rail paths', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
       cwd: dir,
@@ -656,8 +649,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /blocked rail edit/);
   });
 
-  it('fails closed on unknown pathless shell commands', () => {
-    const dir = fixture();
+  it('fails closed on unknown pathless shell commands', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
       cwd: dir,
@@ -672,8 +665,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /known read-only command nor a path-transparent mutation/);
   });
 
-  it('allows read-only shell commands with no editable paths', () => {
-    const dir = fixture();
+  it('allows read-only shell commands with no editable paths', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
       cwd: dir,
@@ -687,8 +680,8 @@ describe('adlc rails hook', () => {
     assert.equal(result.status, 0);
   });
 
-  it('fails closed when allowlisted read-only shell commands use output options', () => {
-    const dir = fixture();
+  it('fails closed when allowlisted read-only shell commands use output options', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     for (const command of [
       'git diff --output=test/a.test.mjs',
@@ -708,8 +701,8 @@ describe('adlc rails hook', () => {
     }
   });
 
-  it('allows required P4 gate and test commands with no editable paths', () => {
-    const dir = fixture();
+  it('allows required P4 gate and test commands with no editable paths', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     for (const command of [
       'npm test',
@@ -732,8 +725,8 @@ describe('adlc rails hook', () => {
     }
   });
 
-  it('fails closed on malformed active hook payloads', () => {
-    const dir = fixture();
+  it('fails closed on malformed active hook payloads', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
       cwd: dir,
@@ -745,8 +738,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /malformed hook payload JSON/);
   });
 
-  it('fails closed when active payload contains no editable paths', () => {
-    const dir = fixture();
+  it('fails closed when active payload contains no editable paths', (t) => {
+    const dir = fixture(t);
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
       cwd: dir,
@@ -758,8 +751,8 @@ describe('adlc rails hook', () => {
     assert.match(result.stderr, /did not include any editable paths/);
   });
 
-  it('allows non-rail edits when active from current-ticket.json', () => {
-    const dir = fixture();
+  it('allows non-rail edits when active from current-ticket.json', (t) => {
+    const dir = fixture(t);
     writeFileSync(join(dir, '.adlc/current-ticket.json'), JSON.stringify({ id: 'T1' }));
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
@@ -771,8 +764,8 @@ describe('adlc rails hook', () => {
     assert.equal(result.status, 0);
   });
 
-  it('fails closed on conflicting active ticket sources', () => {
-    const dir = fixture();
+  it('fails closed on conflicting active ticket sources', (t) => {
+    const dir = fixture(t);
     writeFileSync(join(dir, '.adlc/current-ticket.json'), JSON.stringify({ id: 'T2' }));
     const hook = join(repoRoot, 'plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
     const result = spawnSync(process.execPath, [hook], {
