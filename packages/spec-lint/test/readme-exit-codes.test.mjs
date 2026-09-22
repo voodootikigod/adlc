@@ -14,11 +14,11 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync, statSync, existsSync, realpathSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync, realpathSync } from 'node:fs';
 import { join, extname } from 'node:path';
-import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { tmp } from '@adlc/core/test-kit';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const PKG_ROOT = join(HERE, '..');
@@ -28,8 +28,8 @@ const README = join(PKG_ROOT, 'README.md');
 
 const ZERO_CRITERIA_SPEC = '# Spec: thing\n\n## Summary\nDo the thing.\n';
 
-function runOnZeroCriteriaSpec() {
-  const dir = mkdtempSync(join(tmpdir(), 'spec-lint-readme-'));
+function runOnZeroCriteriaSpec(t) {
+  const dir = tmp(t, 'spec-lint-readme-');
   const spec = join(dir, 'nocrit.md');
   writeFileSync(spec, ZERO_CRITERIA_SPEC);
   try {
@@ -37,8 +37,6 @@ function runOnZeroCriteriaSpec() {
     return 0;
   } catch (err) {
     return err.status ?? 1;
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
   }
 }
 
@@ -159,8 +157,8 @@ function staleClaimOffenders(files, root) {
 }
 
 describe('spec-lint documented exit codes match the binary (issue #525)', () => {
-  it('the binary exits 2 on a spec with no acceptance criteria', () => {
-    assert.equal(runOnZeroCriteriaSpec(), 2);
+  it('the binary exits 2 on a spec with no acceptance criteria', (t) => {
+    assert.equal(runOnZeroCriteriaSpec(t), 2);
   });
 
   it('the README exit-code table does not promise 0 for a zero-criteria spec', () => {
@@ -194,21 +192,19 @@ describe('spec-lint documented exit codes match the binary (issue #525)', () => 
   // live under `.claude/worktrees/`, which the skip list does not name, so the
   // walk used to read another branch's stale docs and fail on them — red on any
   // operator's machine, green in CI, with nothing wrong in the shipped docs.
-  it('the doc scan does not descend into a nested git checkout', () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'spec-lint-walk-')));
-    try {
-      writeFileSync(join(root, 'ours.md'), '# ours\n');
+  it('the doc scan does not descend into a nested git checkout', (t) => {
+    const root = tmp(t, 'spec-lint-walk-');
+    writeFileSync(join(root, 'ours.md'), '# ours\n');
 
-      const worktree = join(root, '.claude', 'worktrees', 'stale');
-      mkdirSync(worktree, { recursive: true });
-      writeFileSync(join(worktree, '.git'), 'gitdir: /elsewhere/.git/worktrees/stale\n');
-      // exactly the stale claim this suite exists to catch — but on a dead branch
-      writeFileSync(join(worktree, 'stale.md'), '| `0` | no criteria found; passes |\n');
+    const worktree = join(root, '.claude', 'worktrees', 'stale');
+    mkdirSync(worktree, { recursive: true });
+    writeFileSync(join(worktree, '.git'), 'gitdir: /elsewhere/.git/worktrees/stale\n');
+    // exactly the stale claim this suite exists to catch — but on a dead branch
+    writeFileSync(join(worktree, 'stale.md'), '| `0` | no criteria found; passes |\n');
 
-      const scanned = docFiles(root).map((f) => f.slice(root.length + 1));
-      assert.ok(scanned.includes('ours.md'), 'our own docs are still scanned');
-      assert.deepEqual(scanned.filter((f) => f.startsWith('.claude')), [], 'nested checkout not scanned');
-    } finally { rmSync(root, { recursive: true, force: true }); }
+    const scanned = docFiles(root).map((f) => f.slice(root.length + 1));
+    assert.ok(scanned.includes('ours.md'), 'our own docs are still scanned');
+    assert.deepEqual(scanned.filter((f) => f.startsWith('.claude')), [], 'nested checkout not scanned');
   });
 
   // Only tracked docs ship. An operator's untracked scratch at the repo root —
@@ -216,32 +212,30 @@ describe('spec-lint documented exit codes match the binary (issue #525)', () => 
   // doc making the claim, but the heuristic cannot tell quoting from claiming.
   // Scanning it turned every audit run into a red suite with every shipped doc
   // correct. Tracking the same file must still catch it: the gate stays live.
-  it('the doc scan reads tracked docs only', () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'spec-lint-tracked-')));
+  it('the doc scan reads tracked docs only', (t) => {
+    const root = tmp(t, 'spec-lint-tracked-');
     const git = (...args) => execFileSync('git', args, { cwd: root, stdio: 'ignore' });
-    try {
-      git('init', '-q');
+    git('init', '-q');
 
-      writeFileSync(join(root, 'shipped.md'), '# shipped\n');
-      git('add', 'shipped.md');
-      // exactly the stale claim this suite exists to catch, quoted by a report
-      writeFileSync(join(root, 'audit-report.md'), '| `0` | no criteria found; passes |\n');
+    writeFileSync(join(root, 'shipped.md'), '# shipped\n');
+    git('add', 'shipped.md');
+    // exactly the stale claim this suite exists to catch, quoted by a report
+    writeFileSync(join(root, 'audit-report.md'), '| `0` | no criteria found; passes |\n');
 
-      const untracked = docFiles(root).map((f) => f.slice(root.length + 1));
-      assert.deepEqual(untracked, ['shipped.md'], 'an untracked doc is not scanned');
-      assert.deepEqual(
-        staleClaimOffenders(docFiles(root), root),
-        [],
-        'an untracked report quoting the claim does not redden the scan',
-      );
+    const untracked = docFiles(root).map((f) => f.slice(root.length + 1));
+    assert.deepEqual(untracked, ['shipped.md'], 'an untracked doc is not scanned');
+    assert.deepEqual(
+      staleClaimOffenders(docFiles(root), root),
+      [],
+      'an untracked report quoting the claim does not redden the scan',
+    );
 
-      git('add', 'audit-report.md');
-      assert.deepEqual(
-        staleClaimOffenders(docFiles(root), root),
-        ['audit-report.md:1'],
-        'once tracked, the same doc is caught — the gate did not go inert',
-      );
-    } finally { rmSync(root, { recursive: true, force: true }); }
+    git('add', 'audit-report.md');
+    assert.deepEqual(
+      staleClaimOffenders(docFiles(root), root),
+      ['audit-report.md:1'],
+      'once tracked, the same doc is caught — the gate did not go inert',
+    );
   });
 
   it('no documentation file in the repo still claims exit 0 when there is nothing to check', () => {
