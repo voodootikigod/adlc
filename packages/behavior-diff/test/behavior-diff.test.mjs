@@ -4,10 +4,10 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
+import { tmp } from '@adlc/core/test-kit';
 
 import { diffJson, diffRoute, routeKey } from '../lib/diff.mjs';
 import { validateConfig, runCapture, reachableCount } from '../lib/capture.mjs';
@@ -15,10 +15,6 @@ import { compareSnapshots, loadSnapshot } from '../lib/compare.mjs';
 import { renderReport } from '../lib/report.mjs';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function tmpDir() {
-  return mkdtempSync(join(tmpdir(), 'behavior-diff-test-'));
-}
 
 function startServer(handler) {
   return new Promise((resolve) => {
@@ -518,50 +514,39 @@ describe('loadSnapshot', () => {
     assert.throws(() => loadSnapshot('/nonexistent/path/file.json'), /cannot read/);
   });
 
-  test('throws on invalid JSON', () => {
-    const dir = tmpDir();
+  test('throws on invalid JSON', (t) => {
+    const dir = tmp(t, 'behavior-diff-test-');
     const file = join(dir, 'bad.json');
     writeFileSync(file, 'not json');
-    try {
-      assert.throws(() => loadSnapshot(file), /not valid JSON/);
-    } finally {
-      rmSync(dir, { recursive: true });
-    }
+    assert.throws(() => loadSnapshot(file), /not valid JSON/);
   });
 
-  test('throws on missing routes array', () => {
-    const dir = tmpDir();
+  test('throws on missing routes array', (t) => {
+    const dir = tmp(t, 'behavior-diff-test-');
     const file = join(dir, 'snap.json');
     writeFileSync(file, JSON.stringify({ baseUrl: 'http://localhost' }));
-    try {
-      assert.throws(() => loadSnapshot(file), /missing required .routes/);
-    } finally {
-      rmSync(dir, { recursive: true });
-    }
+    assert.throws(() => loadSnapshot(file), /missing required .routes/);
   });
 
-  test('loads valid snapshot', () => {
-    const dir = tmpDir();
+  test('loads valid snapshot', (t) => {
+    const dir = tmp(t, 'behavior-diff-test-');
     const file = join(dir, 'snap.json');
     const data = { baseUrl: 'http://localhost', capturedAt: '2024-01-01T00:00:00Z', routes: [{ method: 'GET', path: '/health', status: 200, contentType: 'application/json', body: { ok: true } }] };
     writeFileSync(file, JSON.stringify(data));
-    try {
-      const snap = loadSnapshot(file);
-      assert.deepEqual(snap, data);
-    } finally {
-      rmSync(dir, { recursive: true });
-    }
+    const snap = loadSnapshot(file);
+    assert.deepEqual(snap, data);
   });
 });
 
 // ── runCapture against real HTTP server ───────────────────────────────────────
 
 describe('runCapture', () => {
-  test('captures JSON endpoint correctly', async () => {
+  test('captures JSON endpoint correctly', async (t) => {
     const server = await startServer((_req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ hello: 'world', count: 42 }));
     });
+    t.after(() => stopServer(server));
 
     const { port } = server.address();
     const config = {
@@ -569,26 +554,23 @@ describe('runCapture', () => {
       routes: [{ method: 'GET', path: '/api/test' }],
     };
 
-    try {
-      const snapshot = await runCapture(config);
-      assert.equal(snapshot.routes.length, 1);
-      const route = snapshot.routes[0];
-      assert.equal(route.status, 200);
-      assert.ok(route.contentType.includes('application/json'));
-      assert.deepEqual(route.body, { hello: 'world', count: 42 });
-      assert.equal(route.method, 'GET');
-      assert.equal(route.path, '/api/test');
-      assert.ok(!route.error);
-    } finally {
-      await stopServer(server);
-    }
+    const snapshot = await runCapture(config);
+    assert.equal(snapshot.routes.length, 1);
+    const route = snapshot.routes[0];
+    assert.equal(route.status, 200);
+    assert.ok(route.contentType.includes('application/json'));
+    assert.deepEqual(route.body, { hello: 'world', count: 42 });
+    assert.equal(route.method, 'GET');
+    assert.equal(route.path, '/api/test');
+    assert.ok(!route.error);
   });
 
-  test('captures text endpoint with hash', async () => {
+  test('captures text endpoint with hash', async (t) => {
     const server = await startServer((_req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       res.end('hello text');
     });
+    t.after(() => stopServer(server));
 
     const { port } = server.address();
     const config = {
@@ -596,15 +578,11 @@ describe('runCapture', () => {
       routes: [{ method: 'GET', path: '/text' }],
     };
 
-    try {
-      const snapshot = await runCapture(config);
-      const route = snapshot.routes[0];
-      assert.ok(route.body.textHash, 'should have textHash');
-      assert.equal(typeof route.body.textHash, 'string');
-      assert.ok(route.body.bytes > 0);
-    } finally {
-      await stopServer(server);
-    }
+    const snapshot = await runCapture(config);
+    const route = snapshot.routes[0];
+    assert.ok(route.body.textHash, 'should have textHash');
+    assert.equal(typeof route.body.textHash, 'string');
+    assert.ok(route.body.bytes > 0);
   });
 
   test('records error for unreachable route without aborting run', async () => {
@@ -621,7 +599,7 @@ describe('runCapture', () => {
     assert.ok(snapshot.routes[0].error, 'should have error recorded');
   });
 
-  test('captures POST with body', async () => {
+  test('captures POST with body', async (t) => {
     let receivedBody = '';
     const server = await startServer(async (req, res) => {
       const chunks = [];
@@ -630,6 +608,7 @@ describe('runCapture', () => {
       res.writeHead(201, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ created: true }));
     });
+    t.after(() => stopServer(server));
 
     const { port } = server.address();
     const config = {
@@ -637,22 +616,19 @@ describe('runCapture', () => {
       routes: [{ method: 'POST', path: '/items', body: { name: 'test' } }],
     };
 
-    try {
-      const snapshot = await runCapture(config);
-      const route = snapshot.routes[0];
-      assert.equal(route.status, 201);
-      assert.deepEqual(route.body, { created: true });
-      assert.deepEqual(JSON.parse(receivedBody), { name: 'test' });
-    } finally {
-      await stopServer(server);
-    }
+    const snapshot = await runCapture(config);
+    const route = snapshot.routes[0];
+    assert.equal(route.status, 201);
+    assert.deepEqual(route.body, { created: true });
+    assert.deepEqual(JSON.parse(receivedBody), { name: 'test' });
   });
 
-  test('records correct capturedAt timestamp', async () => {
+  test('records correct capturedAt timestamp', async (t) => {
     const server = await startServer((_req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end('{}');
     });
+    t.after(() => stopServer(server));
 
     const { port } = server.address();
     const config = {
@@ -660,22 +636,19 @@ describe('runCapture', () => {
       routes: [{ method: 'GET', path: '/' }],
     };
 
-    try {
-      const before = Date.now();
-      const snapshot = await runCapture(config);
-      const after = Date.now();
-      const ts = new Date(snapshot.capturedAt).getTime();
-      assert.ok(ts >= before && ts <= after, 'capturedAt should be within test window');
-    } finally {
-      await stopServer(server);
-    }
+    const before = Date.now();
+    const snapshot = await runCapture(config);
+    const after = Date.now();
+    const ts = new Date(snapshot.capturedAt).getTime();
+    assert.ok(ts >= before && ts <= after, 'capturedAt should be within test window');
   });
 
-  test('timeout produces error entry not crash', async () => {
+  test('timeout produces error entry not crash', async (t) => {
     // Server that never responds
     const server = await startServer((_req, _res) => {
       // intentionally no response — connection hangs
     });
+    t.after(() => stopServer(server));
 
     const { port } = server.address();
     const config = {
@@ -683,24 +656,21 @@ describe('runCapture', () => {
       routes: [{ method: 'GET', path: '/slow' }],
     };
 
-    try {
-      const snapshot = await runCapture(config, 100); // very short timeout
-      assert.ok(snapshot.routes[0].error, 'should record timeout error');
-      assert.match(snapshot.routes[0].error, /timeout/);
-    } finally {
-      await stopServer(server);
-    }
+    const snapshot = await runCapture(config, 100); // very short timeout
+    assert.ok(snapshot.routes[0].error, 'should record timeout error');
+    assert.match(snapshot.routes[0].error, /timeout/);
   });
 });
 
 // ── Integration: full round-trip capture + compare ────────────────────────────
 
 describe('round-trip: capture → compare', () => {
-  test('identical before/after produces no changes', async () => {
+  test('identical before/after produces no changes', async (t) => {
     const server = await startServer((_req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ version: 1 }));
     });
+    t.after(() => stopServer(server));
 
     const { port } = server.address();
     const config = {
@@ -708,24 +678,21 @@ describe('round-trip: capture → compare', () => {
       routes: [{ method: 'GET', path: '/version' }],
     };
 
-    try {
-      const snap1 = await runCapture(config);
-      const snap2 = await runCapture(config);
-      const result = compareSnapshots(snap1, snap2);
-      assert.equal(result.identical.length, 1);
-      assert.equal(result.changed.length, 0);
-    } finally {
-      await stopServer(server);
-    }
+    const snap1 = await runCapture(config);
+    const snap2 = await runCapture(config);
+    const result = compareSnapshots(snap1, snap2);
+    assert.equal(result.identical.length, 1);
+    assert.equal(result.changed.length, 0);
   });
 
-  test('changed response body detected in compare', async () => {
+  test('changed response body detected in compare', async (t) => {
     let count = 0;
     const server = await startServer((_req, res) => {
       count++;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ count }));
     });
+    t.after(() => stopServer(server));
 
     const { port } = server.address();
     const config = {
@@ -733,16 +700,12 @@ describe('round-trip: capture → compare', () => {
       routes: [{ method: 'GET', path: '/counter' }],
     };
 
-    try {
-      const before = await runCapture(config);
-      const after = await runCapture(config);
-      const result = compareSnapshots(before, after);
-      assert.equal(result.changed.length, 1);
-      const bodyDiff = result.changed[0].diffs.find((d) => d.field === 'body');
-      assert.ok(bodyDiff);
-    } finally {
-      await stopServer(server);
-    }
+    const before = await runCapture(config);
+    const after = await runCapture(config);
+    const result = compareSnapshots(before, after);
+    assert.equal(result.changed.length, 1);
+    const bodyDiff = result.changed[0].diffs.find((d) => d.field === 'body');
+    assert.ok(bodyDiff);
   });
 
   // ── Regression: operator forgot to start the server for BOTH captures ───────
