@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, utimesSync, chmodSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, writeFileSync, utimesSync, chmodSync } from 'node:fs';
+import { tmp, gitRepo } from '../lib/test-kit.mjs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -36,35 +36,27 @@ test('extractJson: throws on no JSON', () => {
   assert.throws(() => extractJson('nothing here'));
 });
 
-test('ledger: append + read round-trip, malformed lines reported not swallowed', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-ledger-'));
-  try {
-    // A GENERIC ledger name — `findings` now carries a publishability boundary that
-    // rejects non-finding entries, so this generic round-trip uses a neutral name.
-    appendEntry('scratch', { id: 1 }, dir);
-    appendEntry('scratch', { id: 2 }, dir);
-    writeFileSync(join(dir, 'scratch.jsonl'), '{"id":1}\nnot json\n{"id":3}\n');
-    const { entries, skipped } = readEntries('scratch', dir);
-    assert.equal(entries.length, 2);
-    assert.equal(skipped.length, 1);
-    assert.equal(skipped[0].line, 2);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('ledger: append + read round-trip, malformed lines reported not swallowed', (t) => {
+  const dir = tmp(t, 'adlc-ledger-');
+  // A GENERIC ledger name — `findings` now carries a publishability boundary that
+  // rejects non-finding entries, so this generic round-trip uses a neutral name.
+  appendEntry('scratch', { id: 1 }, dir);
+  appendEntry('scratch', { id: 2 }, dir);
+  writeFileSync(join(dir, 'scratch.jsonl'), '{"id":1}\nnot json\n{"id":3}\n');
+  const { entries, skipped } = readEntries('scratch', dir);
+  assert.equal(entries.length, 2);
+  assert.equal(skipped.length, 1);
+  assert.equal(skipped[0].line, 2);
 });
 
-test('ledger: the `findings` ledger enforces the finding boundary on append', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-ledger-findings-'));
-  try {
-    // A valid finding round-trips; a non-finding entry is rejected AT append.
-    appendEntry('findings', { tool: 't', file: 'a.mjs', desc: 'a real finding', verdict: 'open' }, dir);
-    assert.equal(readEntries('findings', dir).entries.length, 1);
-    assert.throws(() => appendEntry('findings', { id: 1 }, dir), /desc/);
-    assert.throws(() => appendEntry('findings', null, dir), /finding object/);
-    assert.equal(readEntries('findings', dir).entries.length, 1, 'a rejected entry never lands');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('ledger: the `findings` ledger enforces the finding boundary on append', (t) => {
+  const dir = tmp(t, 'adlc-ledger-findings-');
+  // A valid finding round-trips; a non-finding entry is rejected AT append.
+  appendEntry('findings', { tool: 't', file: 'a.mjs', desc: 'a real finding', verdict: 'open' }, dir);
+  assert.equal(readEntries('findings', dir).entries.length, 1);
+  assert.throws(() => appendEntry('findings', { id: 1 }, dir), /desc/);
+  assert.throws(() => appendEntry('findings', null, dir), /finding object/);
+  assert.equal(readEntries('findings', dir).entries.length, 1, 'a rejected entry never lands');
 });
 
 test('sha256 + hashFiles: deterministic, missing file hashes null', () => {
@@ -107,22 +99,18 @@ test('validateTicket: catches missing fields', () => {
   assert.ok(validateTicket({ id: 'T1', title: 'x', duration: -1 }).length > 0);
 });
 
-test('loadTickets: detects duplicate ids and unknown edges', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-tickets-'));
-  try {
-    const p = join(dir, 'tickets.json');
-    writeFileSync(p, JSON.stringify({
-      tickets: [
-        { id: 'A', title: 'a', edges: [{ to: 'GHOST' }] },
-        { id: 'A', title: 'dup' },
-      ],
-    }));
-    const { errors } = loadTickets(p);
-    assert.ok(errors.some((e) => e.includes('duplicate')));
-    assert.ok(errors.some((e) => e.includes('GHOST')));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('loadTickets: detects duplicate ids and unknown edges', (t) => {
+  const dir = tmp(t, 'adlc-tickets-');
+  const p = join(dir, 'tickets.json');
+  writeFileSync(p, JSON.stringify({
+    tickets: [
+      { id: 'A', title: 'a', edges: [{ to: 'GHOST' }] },
+      { id: 'A', title: 'dup' },
+    ],
+  }));
+  const { errors } = loadTickets(p);
+  assert.ok(errors.some((e) => e.includes('duplicate')));
+  assert.ok(errors.some((e) => e.includes('GHOST')));
 });
 
 test('topoSort: orders DAG, detects cycle', () => {
@@ -552,7 +540,7 @@ test('off-by-one: chunkSize and bufferSize mutate again (#372 defect 2)', () => 
   assert.equal(offByOne().apply('  const opts = { bufferSize: 64 };'), '  const opts = { bufferSize: 65 };');
 });
 
-test('off-by-one: the chunkSize mutant is KILLABLE — a batch length changes with it', async () => {
+test('off-by-one: the chunkSize mutant is KILLABLE — a batch length changes with it', async (t) => {
   // Run the real code both ways. If a test can see this difference, +1 on a
   // chunk size is a boundary bug the gate must be allowed to plant.
   const source = [
@@ -567,18 +555,16 @@ test('off-by-one: the chunkSize mutant is KILLABLE — a batch length changes wi
   assert.ok(mutant, 'expected off-by-one to plant a mutant on the chunkSize line');
 
   const items = Array.from({ length: 200 }, (_, i) => i);
-  const dir = mkdtempSync(join(tmpdir(), 'mutate-chunk-'));
+  const dir = tmp(t, 'mutate-chunk-');
   const evaluate = async (src, name) => {
     const file = join(dir, name);
     writeFileSync(file, src);
     const { chunk } = await import(pathToFileURL(file).href);
     return chunk(items).map((batch) => batch.length);
   };
-  try {
-    assert.deepEqual(await evaluate(source, 'baseline.mjs'), [100, 100], 'baseline batches the list in two');
-    assert.deepEqual(await evaluate(applyMutant(source, mutant), 'mutant.mjs'), [101, 99],
-      'the mutant changes an OBSERVABLE batch length — masking it removed real prosecution');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  assert.deepEqual(await evaluate(source, 'baseline.mjs'), [100, 100], 'baseline batches the list in two');
+  assert.deepEqual(await evaluate(applyMutant(source, mutant), 'mutant.mjs'), [101, 99],
+    'the mutant changes an OBSERVABLE batch length — masking it removed real prosecution');
 });
 
 // ── #372 defect 3: two ASSIGNMENT shapes the old disclosure implied were covered ─
@@ -766,111 +752,78 @@ test('changedLinesFromDiff: maps new-side line numbers', () => {
   assert.deepEqual([...changed['x.mjs']].sort(), [2, 4]);
 });
 
-function gitRepo() {
-  const dir = mkdtempSync(join(tmpdir(), 'core-git-'));
-  const g = (...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-  g('init', '-q', '-b', 'main');
-  g('config', 'user.email', 't@t.co');
-  g('config', 'user.name', 'tester');
-  g('config', 'commit.gpgsign', 'false'); // never depend on the dev's signing setup in a test
-  return { dir, g };
-}
 
-test('resolveBase: returns merge-base with trunk, not HEAD (freeze-gate baseline)', () => {
-  const { dir, g } = gitRepo();
-  try {
-    writeFileSync(join(dir, 'a.txt'), 'one\n');
-    g('add', '-A'); g('commit', '-qm', 'init');
-    const baseCommit = g('rev-parse', 'HEAD').trim();
-    g('checkout', '-q', '-b', 'feature');
-    writeFileSync(join(dir, 'a.txt'), 'two\n');
-    g('add', '-A'); g('commit', '-qm', 'committed edit');
-    const base = resolveBase(dir);
-    assert.equal(base, baseCommit, 'base must be the divergence point, so committed edits are still visible');
-    assert.notEqual(base, g('rev-parse', 'HEAD').trim());
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('resolveBase: returns merge-base with trunk, not HEAD (freeze-gate baseline)', (t) => {
+  const { dir, g } = gitRepo(t);
+  writeFileSync(join(dir, 'a.txt'), 'one\n');
+  g('add', '-A'); g('commit', '-qm', 'init');
+  const baseCommit = g('rev-parse', 'HEAD').trim();
+  g('checkout', '-q', '-b', 'feature');
+  writeFileSync(join(dir, 'a.txt'), 'two\n');
+  g('add', '-A'); g('commit', '-qm', 'committed edit');
+  const base = resolveBase(dir);
+  assert.equal(base, baseCommit, 'base must be the divergence point, so committed edits are still visible');
+  assert.notEqual(base, g('rev-parse', 'HEAD').trim());
 });
 
-test('resolveBase: returns null when no trunk candidate exists (callers must fail closed)', () => {
-  const { dir, g } = gitRepo();
-  try {
-    writeFileSync(join(dir, 'a.txt'), 'one\n');
-    g('add', '-A'); g('commit', '-qm', 'init');
-    g('branch', '-m', 'main', 'work'); // rename away from main/master
-    assert.equal(refExists('main', dir), false);
-    assert.equal(resolveBase(dir), null);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('resolveBase: returns null when no trunk candidate exists (callers must fail closed)', (t) => {
+  const { dir, g } = gitRepo(t);
+  writeFileSync(join(dir, 'a.txt'), 'one\n');
+  g('add', '-A'); g('commit', '-qm', 'init');
+  g('branch', '-m', 'main', 'work'); // rename away from main/master
+  assert.equal(refExists('main', dir), false);
+  assert.equal(resolveBase(dir), null);
 });
 
-test('changedFiles: an ordinary unstaged working-tree edit is reported', () => {
-  const { dir, g } = gitRepo();
-  try {
-    writeFileSync(join(dir, 'a.txt'), 'one\n');
-    g('add', '-A'); g('commit', '-qm', 'init');
-    const base = g('rev-parse', 'HEAD').trim();
-    writeFileSync(join(dir, 'a.txt'), 'two\n'); // edited, never staged
-    assert.deepEqual(changedFiles(base, dir), ['a.txt']);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('changedFiles: an ordinary unstaged working-tree edit is reported', (t) => {
+  const { dir, g } = gitRepo(t);
+  writeFileSync(join(dir, 'a.txt'), 'one\n');
+  g('add', '-A'); g('commit', '-qm', 'init');
+  const base = g('rev-parse', 'HEAD').trim();
+  writeFileSync(join(dir, 'a.txt'), 'two\n'); // edited, never staged
+  assert.deepEqual(changedFiles(base, dir), ['a.txt']);
 });
 
-test('changedFiles: a staged-then-reverted edit is still reported (#244 bypass)', () => {
+test('changedFiles: a staged-then-reverted edit is still reported (#244 bypass)', (t) => {
   // Stage a change, then restore the working-tree copy to baseline. base-vs-worktree
   // diff sees nothing, but the index still holds the change and it is what a commit
   // would record — so the changed-file SET must include it, or a rail check reading
   // this set is deciding about a tree that is not the one being committed.
-  const { dir, g } = gitRepo();
-  try {
-    writeFileSync(join(dir, 'a.txt'), 'one\n');
-    g('add', '-A'); g('commit', '-qm', 'init');
-    const base = g('rev-parse', 'HEAD').trim();
-    writeFileSync(join(dir, 'a.txt'), 'staged violation\n');
-    g('add', 'a.txt');            // change now lives in the index
-    writeFileSync(join(dir, 'a.txt'), 'one\n'); // working tree restored to baseline
-    // Sanity: the working-tree-only diff is empty, so the old contract missed this.
-    assert.equal(
-      g('diff', '--name-only', base, '--').trim(), '',
-      'fixture must have an empty base-vs-worktree diff to exercise the bypass'
-    );
-    assert.deepEqual(changedFiles(base, dir), ['a.txt']);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const { dir, g } = gitRepo(t);
+  writeFileSync(join(dir, 'a.txt'), 'one\n');
+  g('add', '-A'); g('commit', '-qm', 'init');
+  const base = g('rev-parse', 'HEAD').trim();
+  writeFileSync(join(dir, 'a.txt'), 'staged violation\n');
+  g('add', 'a.txt');            // change now lives in the index
+  writeFileSync(join(dir, 'a.txt'), 'one\n'); // working tree restored to baseline
+  // Sanity: the working-tree-only diff is empty, so the old contract missed this.
+  assert.equal(
+    g('diff', '--name-only', base, '--').trim(), '',
+    'fixture must have an empty base-vs-worktree diff to exercise the bypass'
+  );
+  assert.deepEqual(changedFiles(base, dir), ['a.txt']);
 });
 
-test('changedFiles: a file changed in BOTH index and worktree is reported once', () => {
-  const { dir, g } = gitRepo();
-  try {
-    writeFileSync(join(dir, 'a.txt'), 'one\n');
-    g('add', '-A'); g('commit', '-qm', 'init');
-    const base = g('rev-parse', 'HEAD').trim();
-    writeFileSync(join(dir, 'a.txt'), 'staged\n');
-    g('add', 'a.txt');
-    writeFileSync(join(dir, 'a.txt'), 'staged then edited again\n'); // differs in both
-    assert.deepEqual(changedFiles(base, dir), ['a.txt'], 'union must de-duplicate');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('changedFiles: a file changed in BOTH index and worktree is reported once', (t) => {
+  const { dir, g } = gitRepo(t);
+  writeFileSync(join(dir, 'a.txt'), 'one\n');
+  g('add', '-A'); g('commit', '-qm', 'init');
+  const base = g('rev-parse', 'HEAD').trim();
+  writeFileSync(join(dir, 'a.txt'), 'staged\n');
+  g('add', 'a.txt');
+  writeFileSync(join(dir, 'a.txt'), 'staged then edited again\n'); // differs in both
+  assert.deepEqual(changedFiles(base, dir), ['a.txt'], 'union must de-duplicate');
 });
 
-test('changedFiles: a clean tree at base reports nothing', () => {
-  const { dir, g } = gitRepo();
-  try {
-    writeFileSync(join(dir, 'a.txt'), 'one\n');
-    g('add', '-A'); g('commit', '-qm', 'init');
-    const base = g('rev-parse', 'HEAD').trim();
-    assert.deepEqual(changedFiles(base, dir), []);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('changedFiles: a clean tree at base reports nothing', (t) => {
+  const { dir, g } = gitRepo(t);
+  writeFileSync(join(dir, 'a.txt'), 'one\n');
+  g('add', '-A'); g('commit', '-qm', 'init');
+  const base = g('rev-parse', 'HEAD').trim();
+  assert.deepEqual(changedFiles(base, dir), []);
 });
 
-test('changedFiles: does not throw when a tracked path collides with the base ref name', () => {
+test('changedFiles: does not throw when a tracked path collides with the base ref name', (t) => {
   // Both the worktree AND staged `git diff` calls must keep their trailing `--`.
   // Without it, `git diff <base>` is genuinely AMBIGUOUS the moment a tracked
   // path shares a name with the ref — git refuses outright:
@@ -879,198 +832,147 @@ test('changedFiles: does not throw when a tracked path collides with the base re
   // 'main', so a repo with a top-level file or directory named `main` is not a
   // contrived edge case. Mutation-tested: dropping either `--` survived the rest
   // of this suite with zero failures before this test existed.
-  const { dir, g } = gitRepo();
-  try {
-    writeFileSync(join(dir, 'a.txt'), 'one\n');
-    g('add', '-A'); g('commit', '-qm', 'init');
-    mkdirSync(join(dir, 'main'));
-    writeFileSync(join(dir, 'main', 'file.txt'), 'colliding path\n'); // unstaged
-    writeFileSync(join(dir, 'a.txt'), 'two\n');
-    g('add', 'main/file.txt'); // staged, so the --cached half is exercised too
-    assert.doesNotThrow(() => changedFiles('main', dir));
-    assert.deepEqual(changedFiles('main', dir).sort(), ['a.txt', 'main/file.txt']);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const { dir, g } = gitRepo(t);
+  writeFileSync(join(dir, 'a.txt'), 'one\n');
+  g('add', '-A'); g('commit', '-qm', 'init');
+  mkdirSync(join(dir, 'main'));
+  writeFileSync(join(dir, 'main', 'file.txt'), 'colliding path\n'); // unstaged
+  writeFileSync(join(dir, 'a.txt'), 'two\n');
+  g('add', 'main/file.txt'); // staged, so the --cached half is exercised too
+  assert.doesNotThrow(() => changedFiles('main', dir));
+  assert.deepEqual(changedFiles('main', dir).sort(), ['a.txt', 'main/file.txt']);
 });
 
-test('resolveRevision: handles large tracked diffs without exec buffer failure', () => {
-  const { dir, g } = gitRepo();
-  try {
-    const file = join(dir, 'large.txt');
-    writeFileSync(file, 'a'.repeat(2 * 1024 * 1024));
-    g('add', '-A'); g('commit', '-qm', 'large');
-    writeFileSync(file, 'b'.repeat(2 * 1024 * 1024));
-    const revision = resolveWorktreeRevision({ cwd: dir });
-    assert.match(revision, /^git-worktree:/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('resolveRevision: handles large tracked diffs without exec buffer failure', (t) => {
+  const { dir, g } = gitRepo(t);
+  const file = join(dir, 'large.txt');
+  writeFileSync(file, 'a'.repeat(2 * 1024 * 1024));
+  g('add', '-A'); g('commit', '-qm', 'large');
+  writeFileSync(file, 'b'.repeat(2 * 1024 * 1024));
+  const revision = resolveWorktreeRevision({ cwd: dir });
+  assert.match(revision, /^git-worktree:/);
 });
 
-test('resolveRevision: touching an untracked file without content change is stable', () => {
-  const { dir, g } = gitRepo();
-  try {
-    writeFileSync(join(dir, 'tracked.txt'), 'base\n');
-    g('add', '-A'); g('commit', '-qm', 'base');
-    const untracked = join(dir, 'review.txt');
-    writeFileSync(untracked, 'same content\n'.repeat(10));
-    const before = resolveWorktreeRevision({ cwd: dir });
-    const now = new Date();
-    utimesSync(untracked, now, new Date(now.getTime() + 10_000));
-    const after = resolveWorktreeRevision({ cwd: dir });
-    assert.equal(after, before);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('resolveRevision: touching an untracked file without content change is stable', (t) => {
+  const { dir, g } = gitRepo(t);
+  writeFileSync(join(dir, 'tracked.txt'), 'base\n');
+  g('add', '-A'); g('commit', '-qm', 'base');
+  const untracked = join(dir, 'review.txt');
+  writeFileSync(untracked, 'same content\n'.repeat(10));
+  const before = resolveWorktreeRevision({ cwd: dir });
+  const now = new Date();
+  utimesSync(untracked, now, new Date(now.getTime() + 10_000));
+  const after = resolveWorktreeRevision({ cwd: dir });
+  assert.equal(after, before);
 });
 
-test('resolveRevision: untracked source content changes the fingerprint', () => {
-  const { dir, g } = gitRepo();
-  try {
-    writeFileSync(join(dir, 'tracked.txt'), 'base\n');
-    g('add', '-A'); g('commit', '-qm', 'base');
-    const before = resolveWorktreeRevision({ cwd: dir });
-    writeFileSync(join(dir, 'feature.mjs'), 'export const value = 1;\n');
-    const after = resolveWorktreeRevision({ cwd: dir });
-    assert.notEqual(after, before);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('resolveRevision: untracked source content changes the fingerprint', (t) => {
+  const { dir, g } = gitRepo(t);
+  writeFileSync(join(dir, 'tracked.txt'), 'base\n');
+  g('add', '-A'); g('commit', '-qm', 'base');
+  const before = resolveWorktreeRevision({ cwd: dir });
+  writeFileSync(join(dir, 'feature.mjs'), 'export const value = 1;\n');
+  const after = resolveWorktreeRevision({ cwd: dir });
+  assert.notEqual(after, before);
 });
 
-test('resolveRevision: handles dirty files whose paths contain newlines', () => {
-  const { dir, g } = gitRepo();
-  try {
-    const file = join(dir, 'multi\nline.txt');
-    writeFileSync(file, 'base\n');
-    g('add', '-A'); g('commit', '-qm', 'base');
-    const before = resolveWorktreeRevision({ cwd: dir });
-    writeFileSync(file, 'changed\n');
-    const after = resolveWorktreeRevision({ cwd: dir });
-    assert.match(after, /^git-worktree:/);
-    assert.notEqual(after, before);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('resolveRevision: handles dirty files whose paths contain newlines', (t) => {
+  const { dir, g } = gitRepo(t);
+  const file = join(dir, 'multi\nline.txt');
+  writeFileSync(file, 'base\n');
+  g('add', '-A'); g('commit', '-qm', 'base');
+  const before = resolveWorktreeRevision({ cwd: dir });
+  writeFileSync(file, 'changed\n');
+  const after = resolveWorktreeRevision({ cwd: dir });
+  assert.match(after, /^git-worktree:/);
+  assert.notEqual(after, before);
 });
 
-test('resolveRevision: explicitly ignored review artifacts do not change the fingerprint', () => {
-  const { dir, g } = gitRepo();
-  try {
-    writeFileSync(join(dir, 'tracked.txt'), 'base\n');
-    g('add', '-A'); g('commit', '-qm', 'base');
-    const before = resolveWorktreeRevision({ cwd: dir });
-    writeFileSync(join(dir, 'acceptance.json'), '{"accepted":true}\n');
-    const after = resolveWorktreeRevision({ cwd: dir, ignorePaths: ['acceptance.json'] });
-    assert.equal(after, before);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('resolveRevision: explicitly ignored review artifacts do not change the fingerprint', (t) => {
+  const { dir, g } = gitRepo(t);
+  writeFileSync(join(dir, 'tracked.txt'), 'base\n');
+  g('add', '-A'); g('commit', '-qm', 'base');
+  const before = resolveWorktreeRevision({ cwd: dir });
+  writeFileSync(join(dir, 'acceptance.json'), '{"accepted":true}\n');
+  const after = resolveWorktreeRevision({ cwd: dir, ignorePaths: ['acceptance.json'] });
+  assert.equal(after, before);
 });
 
-test('resolveRevision: root files with artifact basenames are fingerprinted unless explicitly ignored', () => {
-  const { dir, g } = gitRepo();
-  try {
-    writeFileSync(join(dir, 'tracked.txt'), 'base\n');
-    g('add', '-A'); g('commit', '-qm', 'base');
-    const before = resolveWorktreeRevision({ cwd: dir });
-    writeFileSync(join(dir, 'after.json'), '{"unreviewed":true}\n');
-    assert.notEqual(resolveWorktreeRevision({ cwd: dir }), before);
-    assert.equal(resolveWorktreeRevision({ cwd: dir, ignorePaths: ['after.json'] }), before);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('resolveRevision: root files with artifact basenames are fingerprinted unless explicitly ignored', (t) => {
+  const { dir, g } = gitRepo(t);
+  writeFileSync(join(dir, 'tracked.txt'), 'base\n');
+  g('add', '-A'); g('commit', '-qm', 'base');
+  const before = resolveWorktreeRevision({ cwd: dir });
+  writeFileSync(join(dir, 'after.json'), '{"unreviewed":true}\n');
+  assert.notEqual(resolveWorktreeRevision({ cwd: dir }), before);
+  assert.equal(resolveWorktreeRevision({ cwd: dir, ignorePaths: ['after.json'] }), before);
 });
 
-test('resolveRevision: nested files with artifact basenames still change the fingerprint', () => {
-  const { dir, g } = gitRepo();
-  try {
-    writeFileSync(join(dir, 'tracked.txt'), 'base\n');
-    g('add', '-A'); g('commit', '-qm', 'base');
-    const before = resolveWorktreeRevision({ cwd: dir });
-    mkdirSync(join(dir, 'test/fixtures'), { recursive: true });
-    writeFileSync(join(dir, 'test/fixtures/after.json'), '{"unreviewed":true}\n');
-    const after = resolveWorktreeRevision({ cwd: dir });
-    assert.notEqual(after, before);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('resolveRevision: nested files with artifact basenames still change the fingerprint', (t) => {
+  const { dir, g } = gitRepo(t);
+  writeFileSync(join(dir, 'tracked.txt'), 'base\n');
+  g('add', '-A'); g('commit', '-qm', 'base');
+  const before = resolveWorktreeRevision({ cwd: dir });
+  mkdirSync(join(dir, 'test/fixtures'), { recursive: true });
+  writeFileSync(join(dir, 'test/fixtures/after.json'), '{"unreviewed":true}\n');
+  const after = resolveWorktreeRevision({ cwd: dir });
+  assert.notEqual(after, before);
 });
 
-test('resolveRevision: .adlc runtime and ticket files are ignored by the generic worktree hash', () => {
-  const { dir, g } = gitRepo();
-  try {
-    writeFileSync(join(dir, 'tracked.txt'), 'base\n');
-    g('add', '-A'); g('commit', '-qm', 'base');
-    const before = resolveWorktreeRevision({ cwd: dir });
-    mkdirSync(join(dir, '.adlc'), { recursive: true });
-    writeFileSync(join(dir, '.adlc/manifest.jsonl'), '{"type":"runtime"}\n');
-    assert.equal(resolveWorktreeRevision({ cwd: dir }), before);
-    writeFileSync(join(dir, '.adlc/tickets.json'), '{"tickets":[]}\n');
-    assert.equal(resolveWorktreeRevision({ cwd: dir }), before);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('resolveRevision: .adlc runtime and ticket files are ignored by the generic worktree hash', (t) => {
+  const { dir, g } = gitRepo(t);
+  writeFileSync(join(dir, 'tracked.txt'), 'base\n');
+  g('add', '-A'); g('commit', '-qm', 'base');
+  const before = resolveWorktreeRevision({ cwd: dir });
+  mkdirSync(join(dir, '.adlc'), { recursive: true });
+  writeFileSync(join(dir, '.adlc/manifest.jsonl'), '{"type":"runtime"}\n');
+  assert.equal(resolveWorktreeRevision({ cwd: dir }), before);
+  writeFileSync(join(dir, '.adlc/tickets.json'), '{"tickets":[]}\n');
+  assert.equal(resolveWorktreeRevision({ cwd: dir }), before);
 });
 
-test('resolveRevision: ignored .adlc tickets stay out of the generic worktree hash', () => {
-  const { dir, g } = gitRepo();
-  try {
-    writeFileSync(join(dir, '.gitignore'), '.adlc/*\n!.adlc/tickets.example.json\n');
-    writeFileSync(join(dir, 'tracked.txt'), 'base\n');
-    g('add', '-A'); g('commit', '-qm', 'base');
-    const before = resolveWorktreeRevision({ cwd: dir });
-    mkdirSync(join(dir, '.adlc'), { recursive: true });
-    writeFileSync(join(dir, '.adlc/tickets.json'), '{"tickets":[]}\n');
-    assert.equal(resolveWorktreeRevision({ cwd: dir }), before);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('resolveRevision: ignored .adlc tickets stay out of the generic worktree hash', (t) => {
+  const { dir, g } = gitRepo(t);
+  writeFileSync(join(dir, '.gitignore'), '.adlc/*\n!.adlc/tickets.example.json\n');
+  writeFileSync(join(dir, 'tracked.txt'), 'base\n');
+  g('add', '-A'); g('commit', '-qm', 'base');
+  const before = resolveWorktreeRevision({ cwd: dir });
+  mkdirSync(join(dir, '.adlc'), { recursive: true });
+  writeFileSync(join(dir, '.adlc/tickets.json'), '{"tickets":[]}\n');
+  assert.equal(resolveWorktreeRevision({ cwd: dir }), before);
 });
 
-test('resolveRevision: sharded active/archive ticket files stay out of the generic worktree hash', () => {
-  const { dir, g } = gitRepo();
-  try {
-    writeFileSync(join(dir, 'tracked.txt'), 'base\n');
-    g('add', '-A'); g('commit', '-qm', 'base');
-    mkdirSync(join(dir, '.adlc/tickets'), { recursive: true });
-    mkdirSync(join(dir, '.adlc/ticket-archive'), { recursive: true });
-    writeFileSync(join(dir, '.adlc/tickets/.store.json'), '{}\n');
-    writeFileSync(join(dir, '.adlc/ticket-archive/.store.json'), '{}\n');
-    const before = resolveWorktreeRevision({ cwd: dir });
-    writeFileSync(join(dir, '.adlc/tickets/t.json'), '{"id":"T"}\n');
-    writeFileSync(join(dir, '.adlc/ticket-archive/a.json'), '{"id":"A"}\n');
-    assert.equal(resolveWorktreeRevision({ cwd: dir }), before);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+test('resolveRevision: sharded active/archive ticket files stay out of the generic worktree hash', (t) => {
+  const { dir, g } = gitRepo(t);
+  writeFileSync(join(dir, 'tracked.txt'), 'base\n');
+  g('add', '-A'); g('commit', '-qm', 'base');
+  mkdirSync(join(dir, '.adlc/tickets'), { recursive: true });
+  mkdirSync(join(dir, '.adlc/ticket-archive'), { recursive: true });
+  writeFileSync(join(dir, '.adlc/tickets/.store.json'), '{}\n');
+  writeFileSync(join(dir, '.adlc/ticket-archive/.store.json'), '{}\n');
+  const before = resolveWorktreeRevision({ cwd: dir });
+  writeFileSync(join(dir, '.adlc/tickets/t.json'), '{"id":"T"}\n');
+  writeFileSync(join(dir, '.adlc/ticket-archive/a.json'), '{"id":"A"}\n');
+  assert.equal(resolveWorktreeRevision({ cwd: dir }), before);
+});
+test('withLedgerLock: serialises writers so large concurrent lines never interleave', (t) => {
+  const dir = tmp(t, 'core-lock-');
+  const big = 'x'.repeat(8192); // > PIPE_BUF
+  for (let i = 0; i < 5; i++) appendEntry('manifest', { i, big }, dir);
+  const { entries, skipped } = readEntries('manifest', dir);
+  assert.equal(skipped.length, 0, 'no malformed (interleaved) lines');
+  assert.equal(entries.length, 5);
 });
 
-test('withLedgerLock: serialises writers so large concurrent lines never interleave', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'core-lock-'));
-  try {
-    const big = 'x'.repeat(8192); // > PIPE_BUF
-    for (let i = 0; i < 5; i++) appendEntry('manifest', { i, big }, dir);
-    const { entries, skipped } = readEntries('manifest', dir);
-    assert.equal(skipped.length, 0, 'no malformed (interleaved) lines');
-    assert.equal(entries.length, 5);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('withLedgerLock: never steals an old lock from a potentially live owner', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'core-owner-lock-'));
-  try {
-    const target = join(dir, 'manifest.jsonl');
-    const lock = `${target}.lock`;
-    writeFileSync(lock, JSON.stringify({ token: 'existing-owner', pid: 1 }));
-    const old = new Date(Date.now() - 60_000);
-    utimesSync(lock, old, old);
-    assert.throws(() => withLedgerLock(target, () => assert.fail('must not enter'), { retries: 0, delayMs: 0 }), /could not acquire ledger lock/);
-    assert.equal(JSON.parse(readFileSync(lock, 'utf8')).token, 'existing-owner');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('withLedgerLock: never steals an old lock from a potentially live owner', (t) => {
+  const dir = tmp(t, 'core-owner-lock-');
+  const target = join(dir, 'manifest.jsonl');
+  const lock = `${target}.lock`;
+  writeFileSync(lock, JSON.stringify({ token: 'existing-owner', pid: 1 }));
+  const old = new Date(Date.now() - 60_000);
+  utimesSync(lock, old, old);
+  assert.throws(() => withLedgerLock(target, () => assert.fail('must not enter'), { retries: 0, delayMs: 0 }), /could not acquire ledger lock/);
+  assert.equal(JSON.parse(readFileSync(lock, 'utf8')).token, 'existing-owner');
 });
 
 // --- agy provider ---
@@ -1108,14 +1010,13 @@ test('agy provider: tier map resolves to Antigravity model names', () => {
 
 // Live test — opt-in only (burns one Antigravity request per run):
 //   ADLC_LIVE_AGY=1 node --test test/core.test.mjs
-test('agy provider: live completion round-trip', { skip: process.env.ADLC_LIVE_AGY !== '1' }, async () => {
+test('agy provider: live completion round-trip', { skip: process.env.ADLC_LIVE_AGY !== '1' }, async (t) => {
   process.env.ADLC_PROVIDER = 'agy';
-  try {
-    const out = await complete({ tier: 'cheap', prompt: 'Reply with exactly: ADLC-AGY-OK' });
-    assert.match(out, /ADLC-AGY-OK/);
-  } finally {
+  t.after(() => {
     delete process.env.ADLC_PROVIDER;
-  }
+  });
+  const out = await complete({ tier: 'cheap', prompt: 'Reply with exactly: ADLC-AGY-OK' });
+  assert.match(out, /ADLC-AGY-OK/);
 });
 
 import { isAgyTimeout } from '../lib/llm.mjs';
@@ -1143,8 +1044,8 @@ test('agy provider: ADLC_AGY=false/0 do NOT enable the provider', () => {
 // `agy` binary (a shell script that just echoes its argv) so we can assert
 // the timeout/sandbox flags actually came from the injected env, not from
 // real process.env, without needing the real Antigravity CLI installed.
-test('complete: injected env reaches the agy provider send() (timeout/sandbox honored, not process.env)', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-agy-stub-'));
+test('complete: injected env reaches the agy provider send() (timeout/sandbox honored, not process.env)', async (t) => {
+  const dir = tmp(t, 'adlc-agy-stub-');
   const stubPath = join(dir, 'fake-agy.sh');
   // Drain stdin fully before exiting — otherwise the parent's stdin.end()
   // can race the child's exit and surface as an unrelated EPIPE.
@@ -1158,23 +1059,22 @@ test('complete: injected env reaches the agy provider send() (timeout/sandbox ho
   process.env.ADLC_AGY_TIMEOUT = '999s-WRONG-PROCESS-ENV';
   delete process.env.ADLC_AGY_SANDBOX;
 
-  try {
-    const injectedEnv = {
-      ADLC_AGY: stubPath,
-      ADLC_AGY_TIMEOUT: '5s',
-      ADLC_AGY_SANDBOX: '1',
-    };
-    const out = await complete({ tier: 'mid', prompt: 'hi', provider: 'agy' }, injectedEnv);
-    assert.match(out, /--print-timeout 5s/, 'should use the injected timeout, not process.env');
-    assert.match(out, /--sandbox/, 'should pass --sandbox from the injected env');
-    assert.ok(!out.includes('999s-WRONG-PROCESS-ENV'), 'must not fall back to process.env');
-  } finally {
+  t.after(() => {
     if (prevTimeout === undefined) delete process.env.ADLC_AGY_TIMEOUT;
     else process.env.ADLC_AGY_TIMEOUT = prevTimeout;
     if (prevSandbox === undefined) delete process.env.ADLC_AGY_SANDBOX;
     else process.env.ADLC_AGY_SANDBOX = prevSandbox;
-    rmSync(dir, { recursive: true, force: true });
-  }
+  });
+
+  const injectedEnv = {
+    ADLC_AGY: stubPath,
+    ADLC_AGY_TIMEOUT: '5s',
+    ADLC_AGY_SANDBOX: '1',
+  };
+  const out = await complete({ tier: 'mid', prompt: 'hi', provider: 'agy' }, injectedEnv);
+  assert.match(out, /--print-timeout 5s/, 'should use the injected timeout, not process.env');
+  assert.match(out, /--sandbox/, 'should pass --sandbox from the injected env');
+  assert.ok(!out.includes('999s-WRONG-PROCESS-ENV'), 'must not fall back to process.env');
 });
 
 // --- per-invocation provider selection (issue #63) ---
@@ -1215,10 +1115,13 @@ test('PROVIDER_NAMES: lists all known provider names for CLI validation', () => 
   assert.deepEqual(PROVIDER_NAMES, ['anthropic', 'openai', 'gemini', 'agy']);
 });
 
-test('complete: opts.provider overrides auto-detect (mocked fetch, no real API keys/network)', async () => {
+test('complete: opts.provider overrides auto-detect (mocked fetch, no real API keys/network)', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic', OPENAI_API_KEY: 'k-openai' };
   const calledUrls = [];
   const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
   globalThis.fetch = async (url) => {
     calledUrls.push(String(url));
     if (String(url).includes('openai.com')) {
@@ -1232,32 +1135,27 @@ test('complete: opts.provider overrides auto-detect (mocked fetch, no real API k
       json: async () => ({ content: [{ text: 'from-anthropic' }] }),
     };
   };
-  try {
-    // Auto-detect would pick anthropic (first in list) — override picks openai.
-    const out = await complete({ tier: 'mid', prompt: 'hi', provider: 'openai' }, env);
-    assert.equal(out, 'from-openai');
-    assert.ok(calledUrls.some((u) => u.includes('openai.com')));
-    assert.ok(!calledUrls.some((u) => u.includes('anthropic.com')));
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  // Auto-detect would pick anthropic (first in list) — override picks openai.
+  const out = await complete({ tier: 'mid', prompt: 'hi', provider: 'openai' }, env);
+  assert.equal(out, 'from-openai');
+  assert.ok(calledUrls.some((u) => u.includes('openai.com')));
+  assert.ok(!calledUrls.some((u) => u.includes('anthropic.com')));
 });
 
-test('complete: without opts.provider, falls back to auto-detect (unchanged default behavior)', async () => {
+test('complete: without opts.provider, falls back to auto-detect (unchanged default behavior)', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic', OPENAI_API_KEY: 'k-openai' };
   const calledUrls = [];
   const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
   globalThis.fetch = async (url) => {
     calledUrls.push(String(url));
     return { ok: true, json: async () => ({ content: [{ text: 'from-anthropic' }] }) };
   };
-  try {
-    const out = await complete({ tier: 'mid', prompt: 'hi' }, env);
-    assert.equal(out, 'from-anthropic');
-    assert.ok(calledUrls.every((u) => u.includes('anthropic.com')));
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  const out = await complete({ tier: 'mid', prompt: 'hi' }, env);
+  assert.equal(out, 'from-anthropic');
+  assert.ok(calledUrls.every((u) => u.includes('anthropic.com')));
 });
 
 test('complete: naming an unavailable provider throws a clear, provider-specific error', async () => {
@@ -1268,7 +1166,8 @@ test('complete: naming an unavailable provider throws a clear, provider-specific
   );
 });
 
-test('fanProviders: issues ONE completion per distinct named provider, not N samples of one provider', async () => {
+
+test('fanProviders: issues ONE completion per distinct named provider, not N samples of one provider', async (t) => {
   const env = {
     ANTHROPIC_API_KEY: 'k-anthropic',
     OPENAI_API_KEY: 'k-openai',
@@ -1276,6 +1175,9 @@ test('fanProviders: issues ONE completion per distinct named provider, not N sam
   };
   const seenUrls = [];
   const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
   globalThis.fetch = async (url) => {
     seenUrls.push(String(url));
     if (String(url).includes('openai.com')) {
@@ -1286,50 +1188,42 @@ test('fanProviders: issues ONE completion per distinct named provider, not N sam
     }
     return { ok: true, json: async () => ({ content: [{ text: 'anthropic-out' }] }) };
   };
-  try {
-    const results = await fanProviders(
-      { tier: 'mid', prompt: 'find the bug' },
-      ['anthropic', 'openai', 'gemini'],
-      env
-    );
-    assert.equal(results.length, 3);
-    assert.ok(results.every((r) => r.ok));
-    assert.deepEqual(results.map((r) => r.provider), ['anthropic', 'openai', 'gemini']);
-    assert.deepEqual(results.map((r) => r.value), ['anthropic-out', 'openai-out', 'gemini-out']);
-    // Exactly one call landed on each provider's host — genuinely distinct
-    // families, not N resamples of the same detected provider.
-    assert.equal(seenUrls.filter((u) => u.includes('anthropic.com')).length, 1);
-    assert.equal(seenUrls.filter((u) => u.includes('openai.com')).length, 1);
-    assert.equal(seenUrls.filter((u) => u.includes('generativelanguage.googleapis.com')).length, 1);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  const results = await fanProviders(
+    { tier: 'mid', prompt: 'find the bug' },
+    ['anthropic', 'openai', 'gemini'],
+    env
+  );
+  assert.equal(results.length, 3);
+  assert.ok(results.every((r) => r.ok));
+  assert.deepEqual(results.map((r) => r.provider), ['anthropic', 'openai', 'gemini']);
+  assert.deepEqual(results.map((r) => r.value), ['anthropic-out', 'openai-out', 'gemini-out']);
+  // Exactly one call landed on each provider's host — genuinely distinct
+  // families, not N resamples of the same detected provider.
+  assert.equal(seenUrls.filter((u) => u.includes('anthropic.com')).length, 1);
+  assert.equal(seenUrls.filter((u) => u.includes('openai.com')).length, 1);
+  assert.equal(seenUrls.filter((u) => u.includes('generativelanguage.googleapis.com')).length, 1);
 });
 
-test('fanProviders: a provider missing its API key surfaces as a per-provider failure, not a thrown exception', async () => {
+test('fanProviders: a provider missing its API key surfaces as a per-provider failure, not a thrown exception', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic' }; // no OPENAI_API_KEY
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => ({ ok: true, json: async () => ({ content: [{ text: 'anthropic-out' }] }) });
-  try {
-    const results = await fanProviders({ tier: 'mid', prompt: 'x' }, ['anthropic', 'openai'], env);
-    assert.equal(results[0].ok, true);
-    assert.equal(results[1].ok, false);
-    assert.match(results[1].error, /provider "openai"/);
-    assert.equal(results[1].provider, 'openai');
-  } finally {
+  t.after(() => {
     globalThis.fetch = originalFetch;
-  }
+  });
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ content: [{ text: 'anthropic-out' }] }) });
+  const results = await fanProviders({ tier: 'mid', prompt: 'x' }, ['anthropic', 'openai'], env);
+  assert.equal(results[0].ok, true);
+  assert.equal(results[1].ok, false);
+  assert.match(results[1].error, /provider "openai"/);
+  assert.equal(results[1].provider, 'openai');
 });
 
-// ─── usage accounting (issue #272) ────────────────────────────────────────
-// complete() must keep returning a plain string (every existing caller in
-// the toolkit does `const text = await complete(...)`) — usage is an
-// additive opt-in side-channel via opts.onUsage, never a change to the
-// return shape.
-
-test('complete: anthropic usage is parsed and reported via onUsage, return value is still a plain string', async () => {
+test('complete: anthropic usage is parsed and reported via onUsage, return value is still a plain string', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
   const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
   globalThis.fetch = async () => ({
     ok: true,
     json: async () => ({
@@ -1338,26 +1232,25 @@ test('complete: anthropic usage is parsed and reported via onUsage, return value
     }),
   });
   let captured = null;
-  try {
-    const out = await complete({ tier: 'mid', prompt: 'hi', onUsage: (u) => { captured = u; } }, env);
-    assert.equal(typeof out, 'string');
-    assert.equal(out, 'from-anthropic');
-    assert.deepEqual(captured, {
-      inputTokens: 120,
-      outputTokens: 30,
-      cachedTokens: 45, // cache_read + cache_creation
-      provider: 'anthropic',
-      model: 'claude-sonnet-4-6',
-      tier: 'mid',
-    });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  const out = await complete({ tier: 'mid', prompt: 'hi', onUsage: (u) => { captured = u; } }, env);
+  assert.equal(typeof out, 'string');
+  assert.equal(out, 'from-anthropic');
+  assert.deepEqual(captured, {
+    inputTokens: 120,
+    outputTokens: 30,
+    cachedTokens: 45, // cache_read + cache_creation
+    provider: 'anthropic',
+    model: 'claude-sonnet-4-6',
+    tier: 'mid',
+  });
 });
 
-test('complete: openai usage is parsed (prompt_tokens/completion_tokens/cached_tokens)', async () => {
+test('complete: openai usage is parsed (prompt_tokens/completion_tokens/cached_tokens)', async (t) => {
   const env = { OPENAI_API_KEY: 'k-openai' };
   const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
   globalThis.fetch = async () => ({
     ok: true,
     json: async () => ({
@@ -1366,24 +1259,23 @@ test('complete: openai usage is parsed (prompt_tokens/completion_tokens/cached_t
     }),
   });
   let captured = null;
-  try {
-    await complete({ tier: 'mid', prompt: 'hi', provider: 'openai', onUsage: (u) => { captured = u; } }, env);
-    assert.deepEqual(captured, {
-      inputTokens: 200,
-      outputTokens: 50,
-      cachedTokens: 80,
-      provider: 'openai',
-      model: 'gpt-5.1',
-      tier: 'mid',
-    });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  await complete({ tier: 'mid', prompt: 'hi', provider: 'openai', onUsage: (u) => { captured = u; } }, env);
+  assert.deepEqual(captured, {
+    inputTokens: 200,
+    outputTokens: 50,
+    cachedTokens: 80,
+    provider: 'openai',
+    model: 'gpt-5.1',
+    tier: 'mid',
+  });
 });
 
-test('complete: gemini usage is parsed (usageMetadata)', async () => {
+test('complete: gemini usage is parsed (usageMetadata)', async (t) => {
   const env = { GEMINI_API_KEY: 'k-gemini' };
   const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
   globalThis.fetch = async () => ({
     ok: true,
     json: async () => ({
@@ -1392,53 +1284,50 @@ test('complete: gemini usage is parsed (usageMetadata)', async () => {
     }),
   });
   let captured = null;
-  try {
-    await complete({ tier: 'mid', prompt: 'hi', provider: 'gemini', onUsage: (u) => { captured = u; } }, env);
-    assert.deepEqual(captured, {
-      inputTokens: 90,
-      outputTokens: 15,
-      cachedTokens: 10,
-      provider: 'gemini',
-      model: 'gemini-2.5-pro',
-      tier: 'mid',
-    });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  await complete({ tier: 'mid', prompt: 'hi', provider: 'gemini', onUsage: (u) => { captured = u; } }, env);
+  assert.deepEqual(captured, {
+    inputTokens: 90,
+    outputTokens: 15,
+    cachedTokens: 10,
+    provider: 'gemini',
+    model: 'gemini-2.5-pro',
+    tier: 'mid',
+  });
 });
 
-test('complete: a provider response with no usage block does not throw and does not call onUsage', async () => {
+test('complete: a provider response with no usage block does not throw and does not call onUsage', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
   const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
   globalThis.fetch = async () => ({ ok: true, json: async () => ({ content: [{ text: 'no-usage-here' }] }) });
   let called = false;
-  try {
-    const out = await complete({ tier: 'mid', prompt: 'hi', onUsage: () => { called = true; } }, env);
-    assert.equal(out, 'no-usage-here');
-    assert.equal(called, false);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  const out = await complete({ tier: 'mid', prompt: 'hi', onUsage: () => { called = true; } }, env);
+  assert.equal(out, 'no-usage-here');
+  assert.equal(called, false);
 });
 
-test('complete: without opts.onUsage, behavior is byte-identical to before usage accounting existed', async () => {
+test('complete: without opts.onUsage, behavior is byte-identical to before usage accounting existed', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
   const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
   globalThis.fetch = async () => ({
     ok: true,
     json: async () => ({ content: [{ text: 'unchanged' }], usage: { input_tokens: 10, output_tokens: 2 } }),
   });
-  try {
-    const out = await complete({ tier: 'mid', prompt: 'hi' }, env);
-    assert.equal(out, 'unchanged');
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  const out = await complete({ tier: 'mid', prompt: 'hi' }, env);
+  assert.equal(out, 'unchanged');
 });
 
-test('fan: opts.onUsage fires once per resample, each with that resample\'s own usage', async () => {
+test('fan: opts.onUsage fires once per resample, each with that resample\'s own usage', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
   const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
   let call = 0;
   globalThis.fetch = async () => {
     // Capture the invocation index NOW — the 3 fan calls run concurrently,
@@ -1454,107 +1343,99 @@ test('fan: opts.onUsage fires once per resample, each with that resample\'s own 
     };
   };
   const seen = [];
-  try {
-    const results = await fan({ tier: 'cheap', prompt: 'x', onUsage: (u) => seen.push(u) }, 3, env);
-    assert.equal(results.length, 3);
-    assert.equal(seen.length, 3, 'onUsage must fire once per fan resample');
-    assert.deepEqual(seen.map((u) => u.inputTokens).sort((a, b) => a - b), [100, 200, 300]);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  const results = await fan({ tier: 'cheap', prompt: 'x', onUsage: (u) => seen.push(u) }, 3, env);
+  assert.equal(results.length, 3);
+  assert.equal(seen.length, 3, 'onUsage must fire once per fan resample');
+  assert.deepEqual(seen.map((u) => u.inputTokens).sort((a, b) => a - b), [100, 200, 300]);
 });
 
-// ─── prompt caching (issue #273) ──────────────────────────────────────────
-
-test('complete: without cacheable, anthropic sends plain string system/content (unchanged from before caching existed)', async () => {
+test('complete: without cacheable, anthropic sends plain string system/content (unchanged from before caching existed)', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
   const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
   let capturedBody;
   globalThis.fetch = async (_url, init) => {
     capturedBody = JSON.parse(init.body);
     return { ok: true, json: async () => ({ content: [{ text: 'ok' }] }) };
   };
-  try {
-    await complete({ tier: 'mid', system: 'sys', prompt: 'hi' }, env);
-    assert.equal(capturedBody.system, 'sys');
-    assert.equal(capturedBody.messages[0].content, 'hi');
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  await complete({ tier: 'mid', system: 'sys', prompt: 'hi' }, env);
+  assert.equal(capturedBody.system, 'sys');
+  assert.equal(capturedBody.messages[0].content, 'hi');
 });
 
-test('complete: cacheable:true wraps system and the user message in cache_control blocks (anthropic)', async () => {
+test('complete: cacheable:true wraps system and the user message in cache_control blocks (anthropic)', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
   const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
   let capturedBody;
   globalThis.fetch = async (_url, init) => {
     capturedBody = JSON.parse(init.body);
     return { ok: true, json: async () => ({ content: [{ text: 'ok' }] }) };
   };
-  try {
-    await complete({ tier: 'mid', system: 'sys', prompt: 'hi', cacheable: true }, env);
-    assert.deepEqual(capturedBody.system, [{ type: 'text', text: 'sys', cache_control: { type: 'ephemeral' } }]);
-    assert.deepEqual(capturedBody.messages[0].content, [{ type: 'text', text: 'hi', cache_control: { type: 'ephemeral' } }]);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  await complete({ tier: 'mid', system: 'sys', prompt: 'hi', cacheable: true }, env);
+  assert.deepEqual(capturedBody.system, [{ type: 'text', text: 'sys', cache_control: { type: 'ephemeral' } }]);
+  assert.deepEqual(capturedBody.messages[0].content, [{ type: 'text', text: 'hi', cache_control: { type: 'ephemeral' } }]);
 });
 
-test('complete: cacheable:true with no system still caches the user message, and sends no system field', async () => {
+test('complete: cacheable:true with no system still caches the user message, and sends no system field', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
   const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
   let capturedBody;
   globalThis.fetch = async (_url, init) => {
     capturedBody = JSON.parse(init.body);
     return { ok: true, json: async () => ({ content: [{ text: 'ok' }] }) };
   };
-  try {
-    await complete({ tier: 'mid', prompt: 'hi', cacheable: true }, env);
-    assert.equal('system' in capturedBody, false);
-    assert.deepEqual(capturedBody.messages[0].content, [{ type: 'text', text: 'hi', cache_control: { type: 'ephemeral' } }]);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  await complete({ tier: 'mid', prompt: 'hi', cacheable: true }, env);
+  assert.equal('system' in capturedBody, false);
+  assert.deepEqual(capturedBody.messages[0].content, [{ type: 'text', text: 'hi', cache_control: { type: 'ephemeral' } }]);
 });
 
-test('fan: defaults to cacheable:true — every resample sends cache_control blocks', async () => {
+test('fan: defaults to cacheable:true — every resample sends cache_control blocks', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
   const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
   const bodies = [];
   globalThis.fetch = async (_url, init) => {
     bodies.push(JSON.parse(init.body));
     return { ok: true, json: async () => ({ content: [{ text: 'ok' }] }) };
   };
-  try {
-    await fan({ tier: 'cheap', system: 'sys', prompt: 'x' }, 3, env);
-    assert.equal(bodies.length, 3);
-    for (const body of bodies) {
-      assert.deepEqual(body.system, [{ type: 'text', text: 'sys', cache_control: { type: 'ephemeral' } }]);
-    }
-  } finally {
-    globalThis.fetch = originalFetch;
+  await fan({ tier: 'cheap', system: 'sys', prompt: 'x' }, 3, env);
+  assert.equal(bodies.length, 3);
+  for (const body of bodies) {
+    assert.deepEqual(body.system, [{ type: 'text', text: 'sys', cache_control: { type: 'ephemeral' } }]);
   }
 });
 
-test('fan: cacheable:false explicitly opts out of caching', async () => {
+test('fan: cacheable:false explicitly opts out of caching', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
   const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
   let capturedBody;
   globalThis.fetch = async (_url, init) => {
     capturedBody = JSON.parse(init.body);
     return { ok: true, json: async () => ({ content: [{ text: 'ok' }] }) };
   };
-  try {
-    await fan({ tier: 'cheap', system: 'sys', prompt: 'x', cacheable: false }, 1, env);
-    assert.equal(capturedBody.system, 'sys');
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  await fan({ tier: 'cheap', system: 'sys', prompt: 'x', cacheable: false }, 1, env);
+  assert.equal(capturedBody.system, 'sys');
 });
 
-test('fanProviders: does NOT default to cacheable (one call per provider — no repeat to amortize a cache write against)', async () => {
+test('fanProviders: does NOT default to cacheable (one call per provider — no repeat to amortize a cache write against)', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic', OPENAI_API_KEY: 'k-openai' };
   const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
   let anthropicBody;
   globalThis.fetch = async (url, init) => {
     if (String(url).includes('anthropic.com')) anthropicBody = JSON.parse(init.body);
@@ -1563,47 +1444,41 @@ test('fanProviders: does NOT default to cacheable (one call per provider — no 
     }
     return { ok: true, json: async () => ({ content: [{ text: 'anthropic-out' }] }) };
   };
-  try {
-    await fanProviders({ tier: 'mid', system: 'sys', prompt: 'x' }, ['anthropic', 'openai'], env);
-    assert.equal(anthropicBody.system, 'sys', 'fanProviders must not force cache_control by default');
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  await fanProviders({ tier: 'mid', system: 'sys', prompt: 'x' }, ['anthropic', 'openai'], env);
+  assert.equal(anthropicBody.system, 'sys', 'fanProviders must not force cache_control by default');
 });
 
-test('complete: openai/gemini providers ignore the cacheable flag without erroring (no explicit cache_control support wired for them yet)', async () => {
+test('complete: openai/gemini providers ignore the cacheable flag without erroring (no explicit cache_control support wired for them yet)', async (t) => {
   const env = { OPENAI_API_KEY: 'k-openai' };
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: 'ok' } }] }) });
-  try {
-    const out = await complete({ tier: 'mid', system: 'sys', prompt: 'hi', provider: 'openai', cacheable: true }, env);
-    assert.equal(out, 'ok');
-  } finally {
+  t.after(() => {
     globalThis.fetch = originalFetch;
-  }
+  });
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: 'ok' } }] }) });
+  const out = await complete({ tier: 'mid', system: 'sys', prompt: 'hi', provider: 'openai', cacheable: true }, env);
+  assert.equal(out, 'ok');
 });
-
-test('agy provider: onUsage is never called (no metered usage available) — text still returned normally', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-agy-usage-'));
+test('agy provider: onUsage is never called (no metered usage available) — text still returned normally', async (t) => {
+  const dir = tmp(t, 'adlc-agy-usage-');
   const stubPath = join(dir, 'fake-agy.sh');
   writeFileSync(stubPath, '#!/bin/sh\ncat >/dev/null\necho "stub output"\n');
   chmodSync(stubPath, 0o755);
   let called = false;
-  try {
-    const out = await complete(
-      { tier: 'cheap', prompt: 'hi', provider: 'agy', onUsage: () => { called = true; } },
-      { ADLC_AGY: stubPath }
-    );
-    assert.match(out, /stub output/);
-    assert.equal(called, false);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const out = await complete(
+    { tier: 'cheap', prompt: 'hi', provider: 'agy', onUsage: () => { called = true; } },
+    { ADLC_AGY: stubPath }
+  );
+  assert.match(out, /stub output/);
+  assert.equal(called, false);
 });
 
-test('parseArgs: pre-scans for --help and prints usage', () => {
+test('parseArgs: pre-scans for --help and prints usage', (t) => {
   const originalExit = process.exit;
   const originalLog = console.log;
+  t.after(() => {
+    process.exit = originalExit;
+    console.log = originalLog;
+  });
   let exitCode = null;
   let loggedMsg = null;
   
@@ -1615,27 +1490,25 @@ test('parseArgs: pre-scans for --help and prints usage', () => {
     loggedMsg = msg;
   };
   
-  try {
-    assert.throws(() => {
-      corePublic.parseArgs({
-        args: ['--help'],
-        usage: 'my custom usage text',
-        options: {
-          foo: { type: 'boolean' }
-        }
-      });
-    }, /exited/);
-    
-    assert.equal(exitCode, 0);
-    assert.equal(loggedMsg, 'my custom usage text');
-  } finally {
-    process.exit = originalExit;
-    console.log = originalLog;
-  }
+  assert.throws(() => {
+    corePublic.parseArgs({
+      args: ['--help'],
+      usage: 'my custom usage text',
+      options: {
+        foo: { type: 'boolean' }
+      }
+    });
+  }, /exited/);
+  
+  assert.equal(exitCode, 0);
+  assert.equal(loggedMsg, 'my custom usage text');
 });
 
-test('parseArgs: calls callback usage if it is a function', () => {
+test('parseArgs: calls callback usage if it is a function', (t) => {
   const originalExit = process.exit;
+  t.after(() => {
+    process.exit = originalExit;
+  });
   let exitCode = null;
   let called = false;
   
@@ -1644,24 +1517,20 @@ test('parseArgs: calls callback usage if it is a function', () => {
     throw new Error('exited');
   };
   
-  try {
-    assert.throws(() => {
-      corePublic.parseArgs({
-        args: ['-h'],
-        usage: () => {
-          called = true;
-        },
-        options: {
-          foo: { type: 'boolean' }
-        }
-      });
-    }, /exited/);
-    
-    assert.equal(exitCode, 0);
-    assert.equal(called, true);
-  } finally {
-    process.exit = originalExit;
-  }
+  assert.throws(() => {
+    corePublic.parseArgs({
+      args: ['-h'],
+      usage: () => {
+        called = true;
+      },
+      options: {
+        foo: { type: 'boolean' }
+      }
+    });
+  }, /exited/);
+  
+  assert.equal(exitCode, 0);
+  assert.equal(called, true);
 });
 
 test('parseArgs: does not intercept help if options explicitly declares it', () => {
