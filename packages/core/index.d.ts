@@ -23,6 +23,7 @@ export const OpError: {
 };
 export function readStdin(): Promise<string>;
 export function promptOnly(prompts: string | readonly string[]): never;
+export function tokenizeCommand(template: string): string[];
 
 export type ModelTier = 'cheap' | 'mid' | 'frontier';
 export type Provider = {

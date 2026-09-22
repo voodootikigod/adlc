@@ -16,4 +16,4 @@ export * from './lib/text.mjs';
 
 // Promoted shared helpers
 export { activeTickets } from './lib/tickets.mjs';
-export { isPlainObject, OpError } from './lib/cli.mjs';
+export { isPlainObject, OpError, tokenizeCommand } from './lib/cli.mjs';

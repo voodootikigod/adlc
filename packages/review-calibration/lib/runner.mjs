@@ -4,51 +4,9 @@
 
 import { writeFileSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { tokenizeCommand } from '@adlc/core';
 
-/**
- * Tokenize a command template into argv elements, honoring single and double
- * quotes. Quotes group whitespace and are stripped from the resulting token.
- * This is a shell-free tokenizer — it does NOT interpret `$`, backticks,
- * pipes, redirects, or any other shell metacharacter.
- *
- * @param {string} template
- * @returns {string[]} argv tokens
- */
-export function tokenizeCommand(template) {
-  const tokens = [];
-  let current = '';
-  let inToken = false;
-  let quote = null;
-
-  for (let i = 0; i < template.length; i++) {
-    const ch = template[i];
-    if (quote) {
-      if (ch === quote) quote = null;
-      else current += ch;
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      inToken = true;
-      continue;
-    }
-    if (ch === ' ' || ch === '\t' || ch === '\n') {
-      if (inToken) {
-        tokens.push(current);
-        current = '';
-        inToken = false;
-      }
-      continue;
-    }
-    current += ch;
-    inToken = true;
-  }
-  if (quote) {
-    throw new Error(`Unterminated quote in command template: ${template}`);
-  }
-  if (inToken) tokens.push(current);
-  return tokens;
-}
+export { tokenizeCommand };
 
 /**
  * Substitute a placeholder into a tokenized command. The (untrusted) value is

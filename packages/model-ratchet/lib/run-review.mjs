@@ -1,55 +1,9 @@
 // run-review.mjs — Execute the --review-cmd per file and parse findings.
 
 import { spawnSync } from 'node:child_process';
+import { tokenizeCommand } from '@adlc/core';
 
-/**
- * Tokenize a command template into argv elements, honoring single and double
- * quotes (so `--msg "hello world"` becomes two argv elements). Quotes only
- * group whitespace; they are stripped from the resulting token. This is a
- * deliberately small, shell-free tokenizer — it does NOT interpret `$`,
- * backticks, pipes, redirects, globs, or any other shell metacharacter.
- *
- * @param {string} template
- * @returns {string[]} argv tokens
- */
-export function tokenizeCommand(template) {
-  const tokens = [];
-  let current = '';
-  let inToken = false;
-  let quote = null; // "'" | '"' | null
-
-  for (let i = 0; i < template.length; i++) {
-    const ch = template[i];
-    if (quote) {
-      if (ch === quote) {
-        quote = null;
-      } else {
-        current += ch;
-      }
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      inToken = true;
-      continue;
-    }
-    if (ch === ' ' || ch === '\t' || ch === '\n') {
-      if (inToken) {
-        tokens.push(current);
-        current = '';
-        inToken = false;
-      }
-      continue;
-    }
-    current += ch;
-    inToken = true;
-  }
-  if (quote) {
-    throw new Error(`Unterminated quote in command template: ${template}`);
-  }
-  if (inToken) tokens.push(current);
-  return tokens;
-}
+export { tokenizeCommand };
 
 /**
  * Substitute {file} into a tokenized command. The untrusted value is placed
