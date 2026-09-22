@@ -3,12 +3,13 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+import { tmp } from '@adlc/core/test-kit';
 import { buildPrompt, ticketToText, SYSTEM_PROMPT } from '../lib/prompt.mjs';
 import { renderReport, buildJsonOutput, allPass } from '../lib/report.mjs';
 import { buildCheckTicket, aggregateCheckAllUsage } from '../lib/gate.mjs';
@@ -18,10 +19,6 @@ const CLI = fileURLToPath(new URL('../bin/coldstart.mjs', import.meta.url));
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
-
-function makeTempDir() {
-  return mkdtempSync(join(tmpdir(), 'coldstart-test-'));
-}
 
 function writeTickets(dir, tickets) {
   const path = join(dir, 'tickets.json');
@@ -288,12 +285,8 @@ describe('allPass', () => {
 describe('CLI integration (no network)', () => {
   let tmpDir;
 
-  test.before(() => {
-    tmpDir = makeTempDir();
-  });
-
-  test.after(() => {
-    rmSync(tmpDir, { recursive: true, force: true });
+  test.beforeEach((t) => {
+    tmpDir = tmp(t, 'coldstart-test-');
   });
 
   test('no args → exit 1 with usage message', () => {
@@ -568,31 +561,27 @@ describe('aggregateCheckAllUsage', () => {
 });
 
 describe('coldstart → gate-manifest end-to-end usage recording (issue #272)', () => {
-  test('running checkAll then recording its aggregate usage populates inputTokens in the manifest ledger', async () => {
+  test('running checkAll then recording its aggregate usage populates inputTokens in the manifest ledger', async (t) => {
     const { record } = await import('@adlc/gate-manifest/lib/record.mjs');
     const { loadFiltered } = await import('@adlc/gate-manifest/lib/show.mjs');
-    const dir = mkdtempSync(join(tmpdir(), 'coldstart-manifest-test-'));
-    try {
-      // Mock provider: completeFn simulates what core's real complete() does —
-      // calls onUsage, returns the completion text.
-      const stubComplete = async (opts) => {
-        opts.onUsage({ inputTokens: 350, outputTokens: 45, cachedTokens: 0, provider: 'anthropic', model: 'claude-haiku-4-5', tier: 'cheap' });
-        return '{"gaps":[]}';
-      };
-      const checkTicketWith = buildCheckTicket(stubComplete, (t) => JSON.parse(t));
-      const results = [await checkTicketWith({ id: 'T1', title: 'Ticket one' })];
+    const dir = tmp(t, 'coldstart-manifest-test-');
+    // Mock provider: completeFn simulates what core's real complete() does —
+    // calls onUsage, returns the completion text.
+    const stubComplete = async (opts) => {
+      opts.onUsage({ inputTokens: 350, outputTokens: 45, cachedTokens: 0, provider: 'anthropic', model: 'claude-haiku-4-5', tier: 'cheap' });
+      return '{"gaps":[]}';
+    };
+    const checkTicketWith = buildCheckTicket(stubComplete, (t) => JSON.parse(t));
+    const results = [await checkTicketWith({ id: 'T1', title: 'Ticket one' })];
 
-      const usage = aggregateCheckAllUsage(results);
-      assert.ok(usage, 'aggregate usage must be present for this mock run');
-      record({ key: null, gate: 'coldstart', ticket: 'T1', rawData: JSON.stringify({ usage, ticketIds: ['T1'], tier: 'cheap' }), dir });
+    const usage = aggregateCheckAllUsage(results);
+    assert.ok(usage, 'aggregate usage must be present for this mock run');
+    record({ key: null, gate: 'coldstart', ticket: 'T1', rawData: JSON.stringify({ usage, ticketIds: ['T1'], tier: 'cheap' }), dir });
 
-      const { entries } = loadFiltered({ dir });
-      assert.equal(entries.length, 1);
-      assert.equal(entries[0].gate, 'coldstart');
-      assert.equal(entries[0].data.usage.inputTokens, 350);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    const { entries } = loadFiltered({ dir });
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].gate, 'coldstart');
+    assert.equal(entries[0].data.usage.inputTokens, 350);
   });
 });
 
@@ -643,12 +632,8 @@ describe('--all aggregation logic (unit)', () => {
 describe('CLI integration — exit code 2 and --json (mock gate)', () => {
   let tmpDir;
 
-  test.before(() => {
-    tmpDir = makeTempDir();
-  });
-
-  test.after(() => {
-    rmSync(tmpDir, { recursive: true, force: true });
+  test.beforeEach((t) => {
+    tmpDir = tmp(t, 'coldstart-test-');
   });
 
   test('exit 2 when ticket has gaps (spec: EXIT 2 listing gaps)', () => {
@@ -672,16 +657,12 @@ describe('CLI integration — exit code 2 and --json (mock gate)', () => {
     );
   });
 
-  test('the ADLC_GATE_MOCK_RESPONSE test seam writes no gate-manifest entry — no real call was made, so there is nothing real to report (issue #272)', () => {
-    const dir = makeTempDir();
-    try {
-      const ticketsPath = writeTickets(dir, [{ id: 'T-MOCK', title: 'Mocked ticket' }]);
-      const result = runCLIWithMockGate(['T-MOCK', '--tickets', ticketsPath], { gaps: [] }, { cwd: dir });
-      assert.equal(result.status, 0);
-      assert.equal(existsSync(join(dir, '.adlc', 'manifest.jsonl')), false, 'mock seam must not fabricate a usage entry');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  test('the ADLC_GATE_MOCK_RESPONSE test seam writes no gate-manifest entry — no real call was made, so there is nothing real to report (issue #272)', (t) => {
+    const dir = tmp(t, 'coldstart-test-');
+    const ticketsPath = writeTickets(dir, [{ id: 'T-MOCK', title: 'Mocked ticket' }]);
+    const result = runCLIWithMockGate(['T-MOCK', '--tickets', ticketsPath], { gaps: [] }, { cwd: dir });
+    assert.equal(result.status, 0);
+    assert.equal(existsSync(join(dir, '.adlc', 'manifest.jsonl')), false, 'mock seam must not fabricate a usage entry');
   });
 
   test('exit 2 with --all when any ticket has gaps', () => {
@@ -783,12 +764,8 @@ describe('CLI integration — exit code 2 and --json (mock gate)', () => {
 describe('F5 regression — mock gate backdoor closed in production', () => {
   let tmpDir;
 
-  test.before(() => {
-    tmpDir = makeTempDir();
-  });
-
-  test.after(() => {
-    rmSync(tmpDir, { recursive: true, force: true });
+  test.beforeEach((t) => {
+    tmpDir = tmp(t, 'coldstart-test-');
   });
 
   test('vague ticket does NOT get a green mock verdict without NODE_ENV=test', () => {
@@ -830,12 +807,8 @@ describe('F5 regression — mock gate backdoor closed in production', () => {
 describe('--record-verdict (prompt-only verdict capture)', () => {
   let tmpDir;
 
-  test.before(() => {
-    tmpDir = makeTempDir();
-  });
-
-  test.after(() => {
-    rmSync(tmpDir, { recursive: true, force: true });
+  test.beforeEach((t) => {
+    tmpDir = tmp(t, 'coldstart-test-');
   });
 
   test('--prompt-only --record-verdict <file> writes a gate-manifest entry with the verdict', () => {
@@ -864,27 +837,23 @@ describe('--record-verdict (prompt-only verdict capture)', () => {
     assert.deepEqual(entry.data.ticketIds, ['T1']);
   });
 
-  test('--record-verdict - reads the verdict from stdin', () => {
-    const dir = makeTempDir();
-    try {
-      const ticketsPath = writeTickets(dir, [{ id: 'T2', title: 'Checkout flow' }]);
-      const result = spawnSync(process.execPath, [
-        CLI, 'T2', '--tickets', ticketsPath, '--prompt-only', '--record-verdict', '-',
-      ], {
-        cwd: dir,
-        input: 'FAIL: missing target file path.\n',
-        encoding: 'utf8',
-        env: { ...process.env, ANTHROPIC_API_KEY: undefined, OPENAI_API_KEY: undefined, GEMINI_API_KEY: undefined },
-      });
+  test('--record-verdict - reads the verdict from stdin', (t) => {
+    const dir = tmp(t, 'coldstart-test-');
+    const ticketsPath = writeTickets(dir, [{ id: 'T2', title: 'Checkout flow' }]);
+    const result = spawnSync(process.execPath, [
+      CLI, 'T2', '--tickets', ticketsPath, '--prompt-only', '--record-verdict', '-',
+    ], {
+      cwd: dir,
+      input: 'FAIL: missing target file path.\n',
+      encoding: 'utf8',
+      env: { ...process.env, ANTHROPIC_API_KEY: undefined, OPENAI_API_KEY: undefined, GEMINI_API_KEY: undefined },
+    });
 
-      assert.equal(result.status, 0, `expected exit 0, got ${result.status}\nstderr: ${result.stderr}`);
-      const manifestPath = join(dir, '.adlc', 'manifest.jsonl');
-      const entry = JSON.parse(readFileSync(manifestPath, 'utf8').trim());
-      assert.equal(entry.gate, 'coldstart');
-      assert.ok(entry.data.verdict.includes('FAIL: missing target file path'));
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    assert.equal(result.status, 0, `expected exit 0, got ${result.status}\nstderr: ${result.stderr}`);
+    const manifestPath = join(dir, '.adlc', 'manifest.jsonl');
+    const entry = JSON.parse(readFileSync(manifestPath, 'utf8').trim());
+    assert.equal(entry.gate, 'coldstart');
+    assert.ok(entry.data.verdict.includes('FAIL: missing target file path'));
   });
 
   test('--record-verdict without --prompt-only → exit 1 with clear error', () => {
@@ -894,29 +863,21 @@ describe('--record-verdict (prompt-only verdict capture)', () => {
     assert.ok(result.stderr.includes('--record-verdict requires --prompt-only'), `unexpected stderr: ${result.stderr}`);
   });
 
-  test('omitting --record-verdict preserves current --prompt-only behavior (no manifest file written)', () => {
-    const dir = makeTempDir();
-    try {
-      const ticketsPath = writeTickets(dir, [{ id: 'T1', title: 'Login form', body: 'Create login.' }]);
-      const result = runCLI(['T1', '--tickets', ticketsPath, '--prompt-only'], { cwd: dir });
-      assert.equal(result.status, 0);
-      assert.ok(result.stdout.includes('Login form'));
-      assert.equal(existsSync(join(dir, '.adlc', 'manifest.jsonl')), false, 'no manifest file when flag omitted');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  test('omitting --record-verdict preserves current --prompt-only behavior (no manifest file written)', (t) => {
+    const dir = tmp(t, 'coldstart-test-');
+    const ticketsPath = writeTickets(dir, [{ id: 'T1', title: 'Login form', body: 'Create login.' }]);
+    const result = runCLI(['T1', '--tickets', ticketsPath, '--prompt-only'], { cwd: dir });
+    assert.equal(result.status, 0);
+    assert.ok(result.stdout.includes('Login form'));
+    assert.equal(existsSync(join(dir, '.adlc', 'manifest.jsonl')), false, 'no manifest file when flag omitted');
   });
 
-  test('--record-verdict "" (empty string) does NOT silently degrade to plain --prompt-only — errors instead', () => {
-    const dir = makeTempDir();
-    try {
-      const ticketsPath = writeTickets(dir, [{ id: 'T1', title: 'Login form', body: 'Create login.' }]);
-      const result = runCLI(['T1', '--tickets', ticketsPath, '--prompt-only', '--record-verdict', ''], { cwd: dir });
-      assert.notEqual(result.status, 0, `empty --record-verdict must not silently succeed; got exit 0\nstdout: ${result.stdout}`);
-      assert.equal(existsSync(join(dir, '.adlc', 'manifest.jsonl')), false, 'no manifest entry should be written for an empty verdict source');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  test('--record-verdict "" (empty string) does NOT silently degrade to plain --prompt-only — errors instead', (t) => {
+    const dir = tmp(t, 'coldstart-test-');
+    const ticketsPath = writeTickets(dir, [{ id: 'T1', title: 'Login form', body: 'Create login.' }]);
+    const result = runCLI(['T1', '--tickets', ticketsPath, '--prompt-only', '--record-verdict', ''], { cwd: dir });
+    assert.notEqual(result.status, 0, `empty --record-verdict must not silently succeed; got exit 0\nstdout: ${result.stdout}`);
+    assert.equal(existsSync(join(dir, '.adlc', 'manifest.jsonl')), false, 'no manifest entry should be written for an empty verdict source');
   });
 
   test('--record-verdict "" without --prompt-only → exit 1 with the mutual-exclusion error (not silently ignored)', () => {
@@ -926,34 +887,26 @@ describe('--record-verdict (prompt-only verdict capture)', () => {
     assert.ok(result.stderr.includes('--record-verdict requires --prompt-only'), `unexpected stderr: ${result.stderr}`);
   });
 
-  test('coldstart --all --prompt-only audits only the active ticket, skipping the completed one', () => {
-    const dir = makeTempDir();
-    try {
-      const ticketsPath = writeTickets(dir, [
-        { id: 'T1', title: 'open work', scope: ['a/**'] },
-        { id: 'T2', title: 'shipped', completed: true, scope: ['b/**'] },
-      ]);
-      const result = runCLI(['--all', '--prompt-only', '--tickets', ticketsPath], { cwd: dir });
-      assert.equal(result.status, 0);
-      assert.match(result.stdout, /user \(T1\)/);
-      assert.doesNotMatch(result.stdout, /user \(T2\)/);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  test('coldstart --all --prompt-only audits only the active ticket, skipping the completed one', (t) => {
+    const dir = tmp(t, 'coldstart-test-');
+    const ticketsPath = writeTickets(dir, [
+      { id: 'T1', title: 'open work', scope: ['a/**'] },
+      { id: 'T2', title: 'shipped', completed: true, scope: ['b/**'] },
+    ]);
+    const result = runCLI(['--all', '--prompt-only', '--tickets', ticketsPath], { cwd: dir });
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /user \(T1\)/);
+    assert.doesNotMatch(result.stdout, /user \(T2\)/);
   });
 
-  test('coldstart of a completed ticket BY ID still emits its prompt', () => {
-    const dir = makeTempDir();
-    try {
-      const ticketsPath = writeTickets(dir, [
-        { id: 'T1', title: 'open work', scope: ['a/**'] },
-        { id: 'T2', title: 'shipped', completed: true, scope: ['b/**'] },
-      ]);
-      const result = runCLI(['T2', '--prompt-only', '--tickets', ticketsPath], { cwd: dir });
-      assert.equal(result.status, 0);
-      assert.match(result.stdout, /user \(T2\)/);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  test('coldstart of a completed ticket BY ID still emits its prompt', (t) => {
+    const dir = tmp(t, 'coldstart-test-');
+    const ticketsPath = writeTickets(dir, [
+      { id: 'T1', title: 'open work', scope: ['a/**'] },
+      { id: 'T2', title: 'shipped', completed: true, scope: ['b/**'] },
+    ]);
+    const result = runCLI(['T2', '--prompt-only', '--tickets', ticketsPath], { cwd: dir });
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /user \(T2\)/);
   });
 });
