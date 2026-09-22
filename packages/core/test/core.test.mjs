@@ -1,16 +1,30 @@
-import { test } from 'node:test';
+import { test as nodeTest } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync, utimesSync, chmodSync } from 'node:fs';
 import { tmp, gitRepo } from '../lib/test-kit.mjs';
 
-// Compatibility wrapper for Node 18.0–18.12 where TestContext.after was added in Node 18.13.0.
-function after(t, fn) {
-  if (typeof t?.after === 'function') {
-    Reflect.apply(t.after, t, [fn]);
-  } else if (typeof test?.after === 'function') {
-    Reflect.apply(test.after, test, [fn]);
+// Compatibility wrapper ensuring t.after exists across all Node 18+ releases
+// (Node 18.0–18.12 lacked TestContext.after, added in 18.13.0). Guarantees both
+// direct hooks and tmp(t) lifecycle cleanup run without leaks on all supported runtimes.
+function test(...args) {
+  const fn = args.pop();
+  if (typeof fn !== 'function') {
+    return nodeTest(...args, fn);
   }
+  const wrapped = (t) => {
+    if (t && typeof t.after !== 'function') {
+      const cleanups = [];
+      t.after = (cb) => cleanups.push(cb);
+      nodeTest.after(() => {
+        while (cleanups.length > 0) cleanups.shift()();
+      });
+    }
+    return fn(t);
+  };
+  return nodeTest(...args, wrapped);
 }
+Object.assign(test, nodeTest);
+
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -1021,7 +1035,7 @@ test('agy provider: tier map resolves to Antigravity model names', () => {
 //   ADLC_LIVE_AGY=1 node --test test/core.test.mjs
 test('agy provider: live completion round-trip', { skip: process.env.ADLC_LIVE_AGY !== '1' }, async (t) => {
   process.env.ADLC_PROVIDER = 'agy';
-  after(t, () => {
+  t.after(() => {
     delete process.env.ADLC_PROVIDER;
   });
   const out = await complete({ tier: 'cheap', prompt: 'Reply with exactly: ADLC-AGY-OK' });
@@ -1068,7 +1082,7 @@ test('complete: injected env reaches the agy provider send() (timeout/sandbox ho
   process.env.ADLC_AGY_TIMEOUT = '999s-WRONG-PROCESS-ENV';
   delete process.env.ADLC_AGY_SANDBOX;
 
-  after(t, () => {
+  t.after(() => {
     if (prevTimeout === undefined) delete process.env.ADLC_AGY_TIMEOUT;
     else process.env.ADLC_AGY_TIMEOUT = prevTimeout;
     if (prevSandbox === undefined) delete process.env.ADLC_AGY_SANDBOX;
@@ -1128,7 +1142,7 @@ test('complete: opts.provider overrides auto-detect (mocked fetch, no real API k
   const env = { ANTHROPIC_API_KEY: 'k-anthropic', OPENAI_API_KEY: 'k-openai' };
   const calledUrls = [];
   const originalFetch = globalThis.fetch;
-  after(t, () => {
+  t.after(() => {
     globalThis.fetch = originalFetch;
   });
   globalThis.fetch = async (url) => {
@@ -1155,7 +1169,7 @@ test('complete: without opts.provider, falls back to auto-detect (unchanged defa
   const env = { ANTHROPIC_API_KEY: 'k-anthropic', OPENAI_API_KEY: 'k-openai' };
   const calledUrls = [];
   const originalFetch = globalThis.fetch;
-  after(t, () => {
+  t.after(() => {
     globalThis.fetch = originalFetch;
   });
   globalThis.fetch = async (url) => {
@@ -1184,7 +1198,7 @@ test('fanProviders: issues ONE completion per distinct named provider, not N sam
   };
   const seenUrls = [];
   const originalFetch = globalThis.fetch;
-  after(t, () => {
+  t.after(() => {
     globalThis.fetch = originalFetch;
   });
   globalThis.fetch = async (url) => {
@@ -1216,7 +1230,7 @@ test('fanProviders: issues ONE completion per distinct named provider, not N sam
 test('fanProviders: a provider missing its API key surfaces as a per-provider failure, not a thrown exception', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic' }; // no OPENAI_API_KEY
   const originalFetch = globalThis.fetch;
-  after(t, () => {
+  t.after(() => {
     globalThis.fetch = originalFetch;
   });
   globalThis.fetch = async () => ({ ok: true, json: async () => ({ content: [{ text: 'anthropic-out' }] }) });
@@ -1230,7 +1244,7 @@ test('fanProviders: a provider missing its API key surfaces as a per-provider fa
 test('complete: anthropic usage is parsed and reported via onUsage, return value is still a plain string', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
   const originalFetch = globalThis.fetch;
-  after(t, () => {
+  t.after(() => {
     globalThis.fetch = originalFetch;
   });
   globalThis.fetch = async () => ({
@@ -1257,7 +1271,7 @@ test('complete: anthropic usage is parsed and reported via onUsage, return value
 test('complete: openai usage is parsed (prompt_tokens/completion_tokens/cached_tokens)', async (t) => {
   const env = { OPENAI_API_KEY: 'k-openai' };
   const originalFetch = globalThis.fetch;
-  after(t, () => {
+  t.after(() => {
     globalThis.fetch = originalFetch;
   });
   globalThis.fetch = async () => ({
@@ -1282,7 +1296,7 @@ test('complete: openai usage is parsed (prompt_tokens/completion_tokens/cached_t
 test('complete: gemini usage is parsed (usageMetadata)', async (t) => {
   const env = { GEMINI_API_KEY: 'k-gemini' };
   const originalFetch = globalThis.fetch;
-  after(t, () => {
+  t.after(() => {
     globalThis.fetch = originalFetch;
   });
   globalThis.fetch = async () => ({
@@ -1307,7 +1321,7 @@ test('complete: gemini usage is parsed (usageMetadata)', async (t) => {
 test('complete: a provider response with no usage block does not throw and does not call onUsage', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
   const originalFetch = globalThis.fetch;
-  after(t, () => {
+  t.after(() => {
     globalThis.fetch = originalFetch;
   });
   globalThis.fetch = async () => ({ ok: true, json: async () => ({ content: [{ text: 'no-usage-here' }] }) });
@@ -1320,7 +1334,7 @@ test('complete: a provider response with no usage block does not throw and does 
 test('complete: without opts.onUsage, behavior is byte-identical to before usage accounting existed', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
   const originalFetch = globalThis.fetch;
-  after(t, () => {
+  t.after(() => {
     globalThis.fetch = originalFetch;
   });
   globalThis.fetch = async () => ({
@@ -1334,7 +1348,7 @@ test('complete: without opts.onUsage, behavior is byte-identical to before usage
 test('fan: opts.onUsage fires once per resample, each with that resample\'s own usage', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
   const originalFetch = globalThis.fetch;
-  after(t, () => {
+  t.after(() => {
     globalThis.fetch = originalFetch;
   });
   let call = 0;
@@ -1361,7 +1375,7 @@ test('fan: opts.onUsage fires once per resample, each with that resample\'s own 
 test('complete: without cacheable, anthropic sends plain string system/content (unchanged from before caching existed)', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
   const originalFetch = globalThis.fetch;
-  after(t, () => {
+  t.after(() => {
     globalThis.fetch = originalFetch;
   });
   let capturedBody;
@@ -1377,7 +1391,7 @@ test('complete: without cacheable, anthropic sends plain string system/content (
 test('complete: cacheable:true wraps system and the user message in cache_control blocks (anthropic)', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
   const originalFetch = globalThis.fetch;
-  after(t, () => {
+  t.after(() => {
     globalThis.fetch = originalFetch;
   });
   let capturedBody;
@@ -1393,7 +1407,7 @@ test('complete: cacheable:true wraps system and the user message in cache_contro
 test('complete: cacheable:true with no system still caches the user message, and sends no system field', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
   const originalFetch = globalThis.fetch;
-  after(t, () => {
+  t.after(() => {
     globalThis.fetch = originalFetch;
   });
   let capturedBody;
@@ -1409,7 +1423,7 @@ test('complete: cacheable:true with no system still caches the user message, and
 test('fan: defaults to cacheable:true — every resample sends cache_control blocks', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
   const originalFetch = globalThis.fetch;
-  after(t, () => {
+  t.after(() => {
     globalThis.fetch = originalFetch;
   });
   const bodies = [];
@@ -1427,7 +1441,7 @@ test('fan: defaults to cacheable:true — every resample sends cache_control blo
 test('fan: cacheable:false explicitly opts out of caching', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic' };
   const originalFetch = globalThis.fetch;
-  after(t, () => {
+  t.after(() => {
     globalThis.fetch = originalFetch;
   });
   let capturedBody;
@@ -1442,7 +1456,7 @@ test('fan: cacheable:false explicitly opts out of caching', async (t) => {
 test('fanProviders: does NOT default to cacheable (one call per provider — no repeat to amortize a cache write against)', async (t) => {
   const env = { ANTHROPIC_API_KEY: 'k-anthropic', OPENAI_API_KEY: 'k-openai' };
   const originalFetch = globalThis.fetch;
-  after(t, () => {
+  t.after(() => {
     globalThis.fetch = originalFetch;
   });
   let anthropicBody;
@@ -1460,7 +1474,7 @@ test('fanProviders: does NOT default to cacheable (one call per provider — no 
 test('complete: openai/gemini providers ignore the cacheable flag without erroring (no explicit cache_control support wired for them yet)', async (t) => {
   const env = { OPENAI_API_KEY: 'k-openai' };
   const originalFetch = globalThis.fetch;
-  after(t, () => {
+  t.after(() => {
     globalThis.fetch = originalFetch;
   });
   globalThis.fetch = async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: 'ok' } }] }) });
@@ -1484,7 +1498,7 @@ test('agy provider: onUsage is never called (no metered usage available) — tex
 test('parseArgs: pre-scans for --help and prints usage', (t) => {
   const originalExit = process.exit;
   const originalLog = console.log;
-  after(t, () => {
+  t.after(() => {
     process.exit = originalExit;
     console.log = originalLog;
   });
@@ -1515,7 +1529,7 @@ test('parseArgs: pre-scans for --help and prints usage', (t) => {
 
 test('parseArgs: calls callback usage if it is a function', (t) => {
   const originalExit = process.exit;
-  after(t, () => {
+  t.after(() => {
     process.exit = originalExit;
   });
   let exitCode = null;
