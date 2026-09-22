@@ -336,3 +336,47 @@ export function resolveRailPath(filePath: string, root: string): string;
 // lib/text.mjs — shared text-shaping helpers for capping prompt payloads
 export function tail(str: string, maxChars?: number): string;
 export function fence(label: string, content: string, maxChars: number, opts?: { bias?: 'head' | 'tail' }): string;
+
+// lib/test-kit.mjs — shared test-kit module with t.after automated cleanup
+export type TestContext = {
+  after?: (fn: () => void | Promise<void>) => void;
+  [key: string]: unknown;
+};
+
+export type GitRepoOptions = {
+  prefix?: string;
+  branch?: string;
+  userEmail?: string;
+  userName?: string;
+  email?: string;
+  name?: string;
+};
+
+export type GitRepoResult = {
+  dir: string;
+  git: (args: string[] | string, ...rest: unknown[]) => string;
+  g: (args: string[] | string, ...rest: unknown[]) => string;
+};
+
+export type RunBinOptions = {
+  cwd?: string;
+  env?: Record<string, string | undefined>;
+  allowEnv?: string[];
+  allowKeys?: string[];
+  allowKey?: boolean;
+  encoding?: BufferEncoding | 'buffer' | string;
+  timeout?: number;
+  platform?: string;
+  [key: string]: unknown;
+};
+
+declare module '@adlc/core/test-kit' {
+  export const DEFAULT_SCRUBBED_ENV: readonly string[];
+  export const GIT_SCRUBBED_ENV: readonly string[];
+  export function tmp(t?: TestContext | string | null, prefix?: string): string;
+  export function gitRepo(t?: TestContext | string | GitRepoOptions | null, options?: GitRepoOptions | string): GitRepoResult;
+  export function runBin(binPath: string, args?: string[] | RunBinOptions, options?: RunBinOptions): import('node:child_process').SpawnSyncReturns<string>;
+}
+
+
+
