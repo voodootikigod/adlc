@@ -1,0 +1,12 @@
+{
+  "body": "Source: whole-repo bloat review (rev-tests finding 1 & 2). `plugins/adlc-cursor/test/rails-guard.test.mjs` contains 33 `try/finally` blocks and a local `cleanup(root)` helper dedicated solely to removing temporary fixture directories. Following the introduction of `@adlc/core/test-kit`, this test file can adopt `tmp(t)` with automatic `t.after` cleanup.\n\nNORMATIVE BEHAVIOUR.\n1. In `plugins/adlc-cursor/test/rails-guard.test.mjs`:\n   - Import `{ tmp }` from `@adlc/core/test-kit`.\n   - Update `fixture(t, options)` helper to take `t` as its first argument and allocate the root directory using `tmp(t, 'adlc-cursor-')`.\n   - Update all test cases calling `fixture` to pass `t`.\n   - Remove all 33 `try { ... } finally { cleanup(root); }` blocks, unindenting test bodies.\n   - Delete the local `const cleanup = (root) => ...` helper.\n2. Verify all tests pass: `node --test plugins/adlc-cursor/test/rails-guard.test.mjs`.\n\nACCEPTANCE CRITERIA.\n- AC1 `grep -c 'finally' plugins/adlc-cursor/test/rails-guard.test.mjs` reports 0 (down from 33).\n- AC2 Local `cleanup` helper is removed.\n- AC3 `node --test plugins/adlc-cursor/test/rails-guard.test.mjs` exits 0 with all test cases passing.\n- AC4 `npm test -w plugins/adlc-cursor` exits 0.\n- AC5 `adlc rails-guard` and `node scripts/mutation-gate.mjs origin/main --max 12` exit 0.",
+  "category": "refactor",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M34X6ZH00CMXD11Z4T409C4Q",
+  "rails": [],
+  "scope": [
+    "plugins/adlc-cursor/test/rails-guard.test.mjs"
+  ],
+  "title": "refactor(adlc-cursor): adopt @adlc/core/test-kit and eliminate 33 try/finally blocks in rails-guard tests"
+}

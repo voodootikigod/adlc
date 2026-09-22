@@ -1,0 +1,12 @@
+{
+  "body": "Source: whole-repo bloat review (rev-tests finding 1 & 2). `plugins/adlc-claude-code/hooks/test/rails.test.mjs` contains 28 `try/finally` blocks and a local `runRails` helper that creates scratch directories with `mkdtempSync` and clears them in `finally`. Following the introduction of `@adlc/core/test-kit`, this test file can adopt `tmp(t)` with automatic `t.after` cleanup.\n\nNORMATIVE BEHAVIOUR.\n1. In `plugins/adlc-claude-code/hooks/test/rails.test.mjs`:\n   - Import `{ tmp }` from `@adlc/core/test-kit`.\n   - Update `runRails(ticketsJson, relPath, options = {}, t = null)`: if `t` is passed and `!options.keepDir`, allocate the directory via `tmp(t, 'adlc-rails-')` and eliminate the manual `rmSync(dir)` in `finally`.\n   - Update test cases to accept `t` and pass `t` to `runRails`.\n   - Remove the redundant `try/finally` blocks around `runRails` invocations.\n2. Verify all tests pass: `node --test plugins/adlc-claude-code/hooks/test/rails.test.mjs`.\n\nACCEPTANCE CRITERIA.\n- AC1 `grep -c 'finally' plugins/adlc-claude-code/hooks/test/rails.test.mjs` reports 0 (down from 28).\n- AC2 All assertions and tests in `rails.test.mjs` remain functionally identical.\n- AC3 `node --test plugins/adlc-claude-code/hooks/test/rails.test.mjs` exits 0 with all test cases passing.\n- AC4 `npm test -w plugins/adlc-claude-code` exits 0.\n- AC5 `adlc rails-guard` and `node scripts/mutation-gate.mjs origin/main --max 12` exit 0.",
+  "category": "refactor",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M34X72676MSWEY4X91ATSJCF",
+  "rails": [],
+  "scope": [
+    "plugins/adlc-claude-code/hooks/test/rails.test.mjs"
+  ],
+  "title": "refactor(adlc-claude-code): adopt @adlc/core/test-kit and eliminate 28 try/finally blocks in rails.test.mjs"
+}
