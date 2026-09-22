@@ -414,6 +414,7 @@ function isChainIntact(lines, key) {
     }
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
     if (i === 0 && !Object.hasOwn(entry, 'anchor')) return false;
+    if (i > 0 && Object.hasOwn(entry, 'anchor')) return false;
     const expectedPrev = prevLine === null ? null : sha256(prevLine);
     if (entry.prev !== expectedPrev || entry.seq !== prevSeq + 1) return false;
     if (key !== null) {

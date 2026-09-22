@@ -459,6 +459,42 @@ describe('resolveOpenSegment (spec §7.1)', () => {
     assert.equal(existsSync(lineagePath(clonedDir)), false, 'no token may have been written');
   });
 
+  it('a KEYED writer refuses when a recovered candidate has an illegal anchor on a continuation entry', (t) => {
+    const { root, dir, g } = repo(t, 'feat/anchor-on-continuation');
+    activate(dir);
+    withKey('a-real-key', () => {
+      appendManifestEntry({ gate: 'evidence', data: { note: 'first' } }, dir, { cwd: root });
+    });
+    const s1 = discoverSegments(dir).valid[0];
+    const segPath = segmentPath(dir, s1);
+    const lines = readFileSync(segPath, 'utf8').trim().split('\n');
+    const secondRaw = {
+      seq: 2,
+      gate: 'evidence',
+      ts: new Date().toISOString(),
+      data: { note: 'second' },
+      files: {},
+      prev: sha256(lines[0]),
+      anchor: { segment: 'root', seq: 1, lineHash: 'x'.repeat(64) },
+      sigVersion: 2,
+    };
+    secondRaw.sig = signEntry('a-real-key', secondRaw);
+    writeFileSync(segPath, `${lines[0]}\n${JSON.stringify(secondRaw)}\n`);
+
+    g('add', '.adlc/manifest.d/.store.json', `.adlc/manifest.d/${s1}`);
+    g('commit', '-q', '-m', 'segment with anchor on continuation entry');
+
+    rmSync(lineagePath(dir), { force: true });
+
+    withKey('a-real-key', () => {
+      assert.throws(
+        () => resolveOpenSegment(dir, { cwd: root, key: 'a-real-key' }),
+        /cannot be authenticated/,
+        'a recovered segment with an anchor on a continuation entry must be refused',
+      );
+    });
+  });
+
   // AC14 — mint-time committability: a branch-derived slug can match an
   // ignore rule that enable's representative probes cannot anticipate.
   it('AC14: minting refuses when the branch-derived segment filename is gitignored — before any evidence is recorded', (t) => withKey(null, () => {
