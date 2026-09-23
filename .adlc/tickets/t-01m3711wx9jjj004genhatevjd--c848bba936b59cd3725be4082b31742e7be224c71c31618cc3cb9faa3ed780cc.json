@@ -1,0 +1,17 @@
+{
+  "body": "Source: repo-bloat review (rev-tests finding 1 & 2, issue #1043). Five test files in plugins/adlc-pi/test/ (classifier-single-source.test.mjs, compaction.test.mjs, evidence-custom-tools.test.mjs, phase4c.test.mjs, widget-wiring.test.mjs) manually invoke mkdtempSync across 10 calls and guard removals in 37 try/finally blocks, and are allowlisted in scripts/test/tmp-fixture-boundary.test.mjs. With @adlc/core/test-kit (tmp), fixture directories automatically register cleanup via t.after when passed the test context t.\n\nNORMATIVE BEHAVIOUR.\n1. In plugins/adlc-pi/test/classifier-single-source.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update tests to accept t and replace mkdtempSync with tmp(t, 'pi-class-ss-').\n   - Remove manual try/finally blocks, unindenting test bodies.\n2. In plugins/adlc-pi/test/compaction.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update tests to accept t and replace mkdtempSync with tmp(t, 'pi-compact-').\n   - Remove manual try/finally blocks, unindenting test bodies.\n3. In plugins/adlc-pi/test/evidence-custom-tools.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update tests to accept t and replace mkdtempSync with tmp(t, 'pi-evid-ct-').\n   - Remove manual try/finally blocks, unindenting test bodies.\n4. In plugins/adlc-pi/test/phase4c.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update tests to accept t and replace mkdtempSync with tmp(t, 'pi-phase4c-').\n   - Remove manual try/finally blocks, unindenting test bodies.\n5. In plugins/adlc-pi/test/widget-wiring.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update tests to accept t and replace mkdtempSync with tmp(t, 'pi-ww-').\n   - Remove manual try/finally blocks, unindenting test bodies.\n6. In scripts/test/tmp-fixture-boundary.test.mjs:\n   - Remove plugins/adlc-pi/test/classifier-single-source.test.mjs, plugins/adlc-pi/test/compaction.test.mjs, plugins/adlc-pi/test/evidence-custom-tools.test.mjs, plugins/adlc-pi/test/phase4c.test.mjs, and plugins/adlc-pi/test/widget-wiring.test.mjs from the ALLOWLIST set (completely eradicating plugins/adlc-pi and the entire plugins/ directory from the allowlist!).\n7. Verification:\n   - node --test plugins/adlc-pi/test/classifier-single-source.test.mjs plugins/adlc-pi/test/compaction.test.mjs plugins/adlc-pi/test/evidence-custom-tools.test.mjs plugins/adlc-pi/test/phase4c.test.mjs plugins/adlc-pi/test/widget-wiring.test.mjs exits 0.\n   - node --test scripts/test/tmp-fixture-boundary.test.mjs exits 0.\n\nACCEPTANCE CRITERIA.\n- AC1 All 5 test files contain 0 finally blocks.\n- AC2 mkdtempSync is not called in any of the 5 test files.\n- AC3 None of the 5 test files appear in scripts/test/tmp-fixture-boundary.test.mjs ALLOWLIST.\n- AC4 All tests in the 5 files pass cleanly under node --test.\n- AC5 node --test scripts/test/tmp-fixture-boundary.test.mjs exits 0.\n- AC6 adlc rails-guard exits 0.",
+  "category": "refactor",
+  "duration": 2,
+  "edges": [],
+  "id": "T-01M3711WX9JJJ004GENHATEVJD",
+  "rails": [],
+  "scope": [
+    "plugins/adlc-pi/test/classifier-single-source.test.mjs",
+    "plugins/adlc-pi/test/compaction.test.mjs",
+    "plugins/adlc-pi/test/evidence-custom-tools.test.mjs",
+    "plugins/adlc-pi/test/phase4c.test.mjs",
+    "plugins/adlc-pi/test/widget-wiring.test.mjs",
+    "scripts/test/tmp-fixture-boundary.test.mjs"
+  ],
+  "title": "refactor(adlc-pi): adopt @adlc/core/test-kit and eliminate 37 try/finally blocks in features and UI tests"
+}

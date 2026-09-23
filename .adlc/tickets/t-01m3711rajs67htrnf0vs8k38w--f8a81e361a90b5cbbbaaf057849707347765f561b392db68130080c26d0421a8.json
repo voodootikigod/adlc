@@ -1,0 +1,16 @@
+{
+  "body": "Source: repo-bloat review (rev-tests finding 1 & 2, issue #1043). Four test files in plugins/adlc-pi/test/ (commands.test.mjs, completion-prosecute.test.mjs, exec-fail-closed.test.mjs, extension.test.mjs) manually invoke mkdtempSync across 18 calls and guard removals in 50 try/finally blocks, and are allowlisted in scripts/test/tmp-fixture-boundary.test.mjs. With @adlc/core/test-kit (tmp), fixture directories automatically register cleanup via t.after when passed the test context t.\n\nNORMATIVE BEHAVIOUR.\n1. In plugins/adlc-pi/test/commands.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update tests to accept t and replace mkdtempSync with tmp(t, 'pi-commands-').\n   - Remove manual try/finally blocks, unindenting test bodies.\n2. In plugins/adlc-pi/test/completion-prosecute.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update tests to accept t and replace mkdtempSync with tmp(t, 'pi-compl-pros-').\n   - Remove manual try/finally blocks, unindenting test bodies.\n3. In plugins/adlc-pi/test/exec-fail-closed.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update tests to accept t and replace mkdtempSync with tmp(t, 'pi-exec-fc-').\n   - Remove manual try/finally blocks, unindenting test bodies.\n4. In plugins/adlc-pi/test/extension.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update tests to accept t and replace mkdtempSync with tmp(t, 'pi-ext-').\n   - Remove manual try/finally blocks, unindenting test bodies.\n5. In scripts/test/tmp-fixture-boundary.test.mjs:\n   - Remove plugins/adlc-pi/test/commands.test.mjs, plugins/adlc-pi/test/completion-prosecute.test.mjs, plugins/adlc-pi/test/exec-fail-closed.test.mjs, and plugins/adlc-pi/test/extension.test.mjs from the ALLOWLIST set.\n6. Verification:\n   - node --test plugins/adlc-pi/test/commands.test.mjs plugins/adlc-pi/test/completion-prosecute.test.mjs plugins/adlc-pi/test/exec-fail-closed.test.mjs plugins/adlc-pi/test/extension.test.mjs exits 0.\n   - node --test scripts/test/tmp-fixture-boundary.test.mjs exits 0.\n\nACCEPTANCE CRITERIA.\n- AC1 All 4 test files contain 0 finally blocks.\n- AC2 mkdtempSync is not called in any of the 4 test files.\n- AC3 None of the 4 test files appear in scripts/test/tmp-fixture-boundary.test.mjs ALLOWLIST.\n- AC4 All tests in the 4 files pass cleanly under node --test.\n- AC5 node --test scripts/test/tmp-fixture-boundary.test.mjs exits 0.\n- AC6 adlc rails-guard exits 0.",
+  "category": "refactor",
+  "duration": 2,
+  "edges": [],
+  "id": "T-01M3711RAJS67HTRNF0VS8K38W",
+  "rails": [],
+  "scope": [
+    "plugins/adlc-pi/test/commands.test.mjs",
+    "plugins/adlc-pi/test/completion-prosecute.test.mjs",
+    "plugins/adlc-pi/test/exec-fail-closed.test.mjs",
+    "plugins/adlc-pi/test/extension.test.mjs",
+    "scripts/test/tmp-fixture-boundary.test.mjs"
+  ],
+  "title": "refactor(adlc-pi): adopt @adlc/core/test-kit and eliminate 50 try/finally blocks in commands and execution tests"
+}
