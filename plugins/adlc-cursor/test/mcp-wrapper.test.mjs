@@ -6,16 +6,15 @@ import {
   cpSync,
   copyFileSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
-  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { after, test } from "node:test";
+import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+import { tmp } from "@adlc/core/test-kit";
 
 import {
   decodeRootsListResult,
@@ -53,26 +52,8 @@ function substituteCursorPluginRoot(server, pluginRoot) {
   };
 }
 
-function tmp(prefix) {
-  return mkdtempSync(join(tmpdir(), prefix));
-}
-const cleanup = (p) => rmSync(p, { recursive: true, force: true });
-
-// Every wrapper launch gets its own state dir; remove them all once the file
-// finishes so repeated runs do not accumulate empty dirs under tmpdir().
-const stateDirs = new Set();
-after(() => {
-  for (const dir of stateDirs) cleanup(dir);
-});
-
-function stateDir() {
-  const dir = tmp("adlc-mcp-state-");
-  stateDirs.add(dir);
-  return dir;
-}
-
-function adlcRepo(pointer = { id: "T1" }) {
-  const root = tmp("adlc-mcp-");
+function adlcRepo(t, pointer = { id: "T1" }) {
+  const root = tmp(t, "adlc-mcp-");
   mkdirSync(join(root, ".adlc"), { recursive: true });
   writeFileSync(
     join(root, ".adlc", "tickets.json"),
@@ -127,16 +108,20 @@ rl.on("line", (line) => {
   return fakeCli;
 }
 
-function spawnWrapper(env, { wrapper = WRAPPER, cwd = join(HERE, "..") } = {}) {
-  return spawn(process.execPath, [wrapper], {
+function spawnWrapper(t, env, { wrapper = WRAPPER, cwd = join(HERE, "..") } = {}) {
+  const child = spawn(process.execPath, [wrapper], {
     cwd,
     env: {
       ...process.env,
-      ADLC_CURSOR_STATE_DIR: stateDir(),
+      ADLC_CURSOR_STATE_DIR: tmp(t, "adlc-mcp-state-"),
       ...env,
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
+  t.after(() => {
+    if (!child.killed) child.kill("SIGKILL");
+  });
+  return child;
 }
 
 function attachCollector(child) {
@@ -167,110 +152,90 @@ function attachCollector(child) {
   };
 }
 
-test("fileUriToPath decodes unix Roots URIs", () => {
-  const root = adlcRepo();
-  try {
-    const decoded = fileUriToPath(pathToFileURL(root).href);
-    assert.equal(decoded, root);
-    assert.equal(fileUriToPath("https://example.com"), null);
-  } finally {
-    cleanup(root);
-  }
+test("fileUriToPath decodes unix Roots URIs", (t) => {
+  const root = adlcRepo(t);
+  const decoded = fileUriToPath(pathToFileURL(root).href);
+  assert.equal(decoded, root);
+  assert.equal(fileUriToPath("https://example.com"), null);
 });
 
-test("rootUriToPath accepts bare absolute paths but rejects schemes and relatives", () => {
-  const root = adlcRepo();
-  try {
-    assert.equal(rootUriToPath(root), root);
-    assert.equal(rootUriToPath("https://example.com/repo"), null);
-    assert.equal(rootUriToPath("vscode-remote://ssh-remote+host/repo"), null);
-    assert.equal(rootUriToPath("relative/repo"), null);
-    assert.equal(
-      rootUriToPath("C:/Users/alice/repo").replaceAll("\\", "/"),
-      "C:/Users/alice/repo",
-    );
-    assert.equal(
-      rootUriToPath("C:\\Users\\alice\\repo").replaceAll("\\", "/"),
-      "C:/Users/alice/repo",
-    );
-    assert.equal(
-      rootUriToPath("/c:/Users/alice/repo").replaceAll("\\", "/").toLowerCase(),
-      "c:/users/alice/repo",
-    );
-    assert.deepEqual(
-      pathsFromRootsListResult({
-        roots: [
-          { uri: root },
-          { uri: "https://example.com/repo" },
-          { uri: "relative/repo" },
-        ],
-      }),
-      [root],
-    );
-  } finally {
-    cleanup(root);
-  }
+test("rootUriToPath accepts bare absolute paths but rejects schemes and relatives", (t) => {
+  const root = adlcRepo(t);
+  assert.equal(rootUriToPath(root), root);
+  assert.equal(rootUriToPath("https://example.com/repo"), null);
+  assert.equal(rootUriToPath("vscode-remote://ssh-remote+host/repo"), null);
+  assert.equal(rootUriToPath("relative/repo"), null);
+  assert.equal(
+    rootUriToPath("C:/Users/alice/repo").replaceAll("\\", "/"),
+    "C:/Users/alice/repo",
+  );
+  assert.equal(
+    rootUriToPath("C:\\Users\\alice\\repo").replaceAll("\\", "/"),
+    "C:/Users/alice/repo",
+  );
+  assert.equal(
+    rootUriToPath("/c:/Users/alice/repo").replaceAll("\\", "/").toLowerCase(),
+    "c:/users/alice/repo",
+  );
+  assert.deepEqual(
+    pathsFromRootsListResult({
+      roots: [
+        { uri: root },
+        { uri: "https://example.com/repo" },
+        { uri: "relative/repo" },
+      ],
+    }),
+    [root],
+  );
 });
 
-test("Roots decoder requires Root objects with supported absolute uris", () => {
+test("Roots decoder requires Root objects with supported absolute uris", (t) => {
   assert.deepEqual(pathsFromRootsListResult({ roots: ["/tmp/a"] }), []);
-  const root = adlcRepo();
-  try {
-    const uri = pathToFileURL(root).href;
-    assert.deepEqual(decodeRootsListResult({ roots: [{ uri }] }), {
-      ok: true,
-      paths: [root],
-    });
-    assert.deepEqual(
-      decodeRootsListResult({
-        roots: [{ uri: root }, { uri: "relative/repo" }],
-      }),
-      {
-        ok: false,
-        message: "Root at index 1 has an unsupported or relative uri",
-      },
-    );
-    assert.deepEqual(
-      decodeRootsListResult({
-        roots: [{ uri: root }, { uri: "https://example.com/repo" }],
-      }),
-      {
-        ok: false,
-        message: "Root at index 1 has an unsupported or relative uri",
-      },
-    );
-    assert.deepEqual(decodeRootsListResult({ roots: [{ uri: root }, {}] }), {
+  const root = adlcRepo(t);
+  const uri = pathToFileURL(root).href;
+  assert.deepEqual(decodeRootsListResult({ roots: [{ uri }] }), {
+    ok: true,
+    paths: [root],
+  });
+  assert.deepEqual(
+    decodeRootsListResult({
+      roots: [{ uri: root }, { uri: "relative/repo" }],
+    }),
+    {
       ok: false,
-      message: "Root at index 1 must have a uri",
-    });
-  } finally {
-    cleanup(root);
-  }
+      message: "Root at index 1 has an unsupported or relative uri",
+    },
+  );
+  assert.deepEqual(
+    decodeRootsListResult({
+      roots: [{ uri: root }, { uri: "https://example.com/repo" }],
+    }),
+    {
+      ok: false,
+      message: "Root at index 1 has an unsupported or relative uri",
+    },
+  );
+  assert.deepEqual(decodeRootsListResult({ roots: [{ uri: root }, {}] }), {
+    ok: false,
+    message: "Root at index 1 must have a uri",
+  });
 });
 
-test("host-env: success when ADLC_CURSOR_MCP_ROOT points at ADLC repo", () => {
-  const root = adlcRepo();
-  try {
-    const r = resolveHostEnvRoot({ ADLC_CURSOR_MCP_ROOT: root });
-    assert.equal(r.ok, true);
-    assert.equal(r.root, root);
-  } finally {
-    cleanup(root);
-  }
+test("host-env: success when ADLC_CURSOR_MCP_ROOT points at ADLC repo", (t) => {
+  const root = adlcRepo(t);
+  const r = resolveHostEnvRoot({ ADLC_CURSOR_MCP_ROOT: root });
+  assert.equal(r.ok, true);
+  assert.equal(r.root, root);
 });
 
-test("host-env: absent env fails closed even if cwd is ADLC-bearing", () => {
-  const root = adlcRepo();
+test("host-env: absent env fails closed even if cwd is ADLC-bearing", (t) => {
+  const root = adlcRepo(t);
   const prev = process.cwd();
-  try {
-    process.chdir(root);
-    const r = resolveHostEnvRoot({});
-    assert.equal(r.ok, false);
-    assert.equal(r.code, "HOST_ENV_ABSENT");
-  } finally {
-    process.chdir(prev);
-    cleanup(root);
-  }
+  t.after(() => process.chdir(prev));
+  process.chdir(root);
+  const r = resolveHostEnvRoot({});
+  assert.equal(r.ok, false);
+  assert.equal(r.code, "HOST_ENV_ABSENT");
 });
 
 test("mcpRootFromWorkspace refuses ambiguity / unresolved", () => {
@@ -334,226 +299,215 @@ test("resolveAdlcMcpSpawn runs the Windows CLI JavaScript through Node", () => {
   assert.deepEqual(resolved.args, [entry, "mcp-server"]);
 });
 
-test("production wrapper refuses host-environment fallback without valid Roots", async () => {
-  const root = adlcRepo();
+test("production wrapper refuses host-environment fallback without valid Roots", async (t) => {
+  const root = adlcRepo(t);
   const fakeCli = writeFakeCli(root);
-  const child = spawnWrapper({
+  const child = spawnWrapper(t, {
     ADLC_CLI_BIN: fakeCli,
     ADLC_CURSOR_MCP_ALLOW_HOSTENV: "1",
     ADLC_CURSOR_MCP_ROOT: root,
     CURSOR_PROJECT_DIR: root,
   });
   const out = attachCollector(child);
-  try {
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2024-11-05",
-          capabilities: {},
-          clientInfo: { name: "test" },
-        },
-      }) + "\n",
-    );
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        method: "notifications/initialized",
-        params: {},
-      }) + "\n",
-    );
-    await out.waitFor((s) => s.includes('"id":1') && s.includes("adlc-cursor"));
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: 2,
-        method: "tools/list",
-        params: {},
-      }) + "\n",
-    );
-    await out.waitFor((s) => s.includes('"id":2') && s.includes("error"));
-    const stdout = out.text();
-    const lines = stdout
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((l) => JSON.parse(l));
-    assert.ok(
-      lines.some(
-        (l) => l.id === 1 && l.result?.serverInfo?.name === "adlc-cursor",
-      ),
-    );
-    assert.match(
-      lines.find((l) => l.id === 2)?.error?.message ?? "",
-      /not bound/,
-    );
-    assert.equal(
-      lines.some((l) => l.id === 2 && l.result?.tools),
-      false,
-      `host-controlled environment must not bind the production wrapper; got: ${stdout}`,
-    );
-  } finally {
-    child.kill();
-    cleanup(root);
-  }
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "test" },
+      },
+    }) + "\n",
+  );
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      method: "notifications/initialized",
+      params: {},
+    }) + "\n",
+  );
+  await out.waitFor((s) => s.includes('"id":1') && s.includes("adlc-cursor"));
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/list",
+      params: {},
+    }) + "\n",
+  );
+  await out.waitFor((s) => s.includes('"id":2') && s.includes("error"));
+  const stdout = out.text();
+  const lines = stdout
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+  assert.ok(
+    lines.some(
+      (l) => l.id === 1 && l.result?.serverInfo?.name === "adlc-cursor",
+    ),
+  );
+  assert.match(
+    lines.find((l) => l.id === 2)?.error?.message ?? "",
+    /not bound/,
+  );
+  assert.equal(
+    lines.some((l) => l.id === 2 && l.result?.tools),
+    false,
+    `host-controlled environment must not bind the production wrapper; got: ${stdout}`,
+  );
+  child.kill();
 });
 
-test("Roots proxy: roots/list with one active root binds and lists tools", async () => {
-  const root = adlcRepo();
+test("Roots proxy: roots/list with one active root binds and lists tools", async (t) => {
+  const root = adlcRepo(t);
   const fakeCli = writeFakeCli(root);
-  const child = spawnWrapper({ ADLC_CLI_BIN: fakeCli });
+  const child = spawnWrapper(t, { ADLC_CLI_BIN: fakeCli });
   const out = attachCollector(child);
-  try {
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2024-11-05",
-          capabilities: { roots: { listChanged: true } },
-          clientInfo: { name: "test" },
-        },
-      }) + "\n",
-    );
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        method: "notifications/initialized",
-        params: {},
-      }) + "\n",
-    );
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: { roots: { listChanged: true } },
+        clientInfo: { name: "test" },
+      },
+    }) + "\n",
+  );
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      method: "notifications/initialized",
+      params: {},
+    }) + "\n",
+  );
 
-    await out.waitFor((s) => s.includes("roots/list"));
-    let stdout = out.text();
-    const pending = stdout
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((l) => JSON.parse(l));
-    const rootsReq = pending.find((l) => l.method === "roots/list");
-    assert.ok(
-      rootsReq,
-      `proxy must request roots/list; got ${stdout}\nerr=${out.err()}`,
-    );
+  await out.waitFor((s) => s.includes("roots/list"));
+  let stdout = out.text();
+  const pending = stdout
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+  const rootsReq = pending.find((l) => l.method === "roots/list");
+  assert.ok(
+    rootsReq,
+    `proxy must request roots/list; got ${stdout}\nerr=${out.err()}`,
+  );
 
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: rootsReq.id,
-        result: { roots: [{ uri: pathToFileURL(root).href }] },
-      }) + "\n",
-    );
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: rootsReq.id,
+      result: { roots: [{ uri: pathToFileURL(root).href }] },
+    }) + "\n",
+  );
 
-    await out.wait(50);
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: 3,
-        method: "tools/list",
-        params: {},
-      }) + "\n",
-    );
-    await out.waitFor(
-      (s) => s.includes('"id":3') && s.includes("adlc_prosecute"),
-    );
-    stdout = out.text();
-    const lines = stdout
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((l) => JSON.parse(l));
-    assert.ok(
-      lines.some(
-        (l) =>
-          l.id === 3 &&
-          l.result?.tools?.some((t) => t.name === "adlc_prosecute"),
-      ),
-    );
-  } finally {
-    child.kill();
-    cleanup(root);
-  }
+  await out.wait(50);
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/list",
+      params: {},
+    }) + "\n",
+  );
+  await out.waitFor(
+    (s) => s.includes('"id":3') && s.includes("adlc_prosecute"),
+  );
+  stdout = out.text();
+  const lines = stdout
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+  assert.ok(
+    lines.some(
+      (l) =>
+        l.id === 3 &&
+        l.result?.tools?.some((t) => t.name === "adlc_prosecute"),
+    ),
+  );
+  child.kill();
 });
 
-test("Roots proxy: Cursor bare-path root binds and lists both tools", async () => {
-  const root = adlcRepo();
+test("Roots proxy: Cursor bare-path root binds and lists both tools", async (t) => {
+  const root = adlcRepo(t);
   const fakeCli = writeFakeCli(root);
   const child = spawnWrapper(
+    t,
     { ADLC_CLI_BIN: fakeCli },
     { wrapper: BUNDLED_WRAPPER },
   );
   const out = attachCollector(child);
-  try {
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2024-11-05",
-          capabilities: { roots: { listChanged: false } },
-          clientInfo: { name: "cursor-live-shape-test" },
-        },
-      }) + "\n",
-    );
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        method: "notifications/initialized",
-        params: {},
-      }) + "\n",
-    );
-    await out.waitFor((stdout) => stdout.includes("roots/list"));
-    const rootsReq = out
-      .text()
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line))
-      .find((line) => line.method === "roots/list");
-    assert.ok(rootsReq);
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: { roots: { listChanged: false } },
+        clientInfo: { name: "cursor-live-shape-test" },
+      },
+    }) + "\n",
+  );
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      method: "notifications/initialized",
+      params: {},
+    }) + "\n",
+  );
+  await out.waitFor((stdout) => stdout.includes("roots/list"));
+  const rootsReq = out
+    .text()
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .find((line) => line.method === "roots/list");
+  assert.ok(rootsReq);
 
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: rootsReq.id,
-        result: { roots: [{ uri: root, name: "cursor-live-root" }] },
-      }) + "\n",
-    );
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: 5,
-        method: "tools/list",
-        params: {},
-      }) + "\n",
-    );
-    await out.waitFor(
-      (stdout) =>
-        stdout.includes('"id":5') && stdout.includes("adlc_prosecute"),
-    );
-    const reply = out
-      .text()
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line))
-      .find((line) => line.id === 5);
-    assert.deepEqual(
-      reply.result.tools.map((tool) => tool.name),
-      ["adlc_gate", "adlc_prosecute"],
-    );
-  } finally {
-    child.kill();
-    cleanup(root);
-  }
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: rootsReq.id,
+      result: { roots: [{ uri: root, name: "cursor-live-root" }] },
+    }) + "\n",
+  );
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 5,
+      method: "tools/list",
+      params: {},
+    }) + "\n",
+  );
+  await out.waitFor(
+    (stdout) =>
+      stdout.includes('"id":5') && stdout.includes("adlc_prosecute"),
+  );
+  const reply = out
+    .text()
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .find((line) => line.id === 5);
+  assert.deepEqual(
+    reply.result.tools.map((tool) => tool.name),
+    ["adlc_gate", "adlc_prosecute"],
+  );
+  child.kill();
 });
 
-test("bundled Roots proxy forwards real adlc_gate and adlc_prosecute calls in the resolved consumer root", async () => {
-  const root = adlcRepo();
+test("bundled Roots proxy forwards real adlc_gate and adlc_prosecute calls in the resolved consumer root", async (t) => {
+  const root = adlcRepo(t);
   const evidenceDir = join(root, ".omo", "evidence");
   mkdirSync(evidenceDir, { recursive: true });
   cpSync(
@@ -568,6 +522,7 @@ test("bundled Roots proxy forwards real adlc_gate and adlc_prosecute calls in th
   commitFixture(root);
 
   const child = spawnWrapper(
+    t,
     { ADLC_CLI_BIN: REAL_CLI },
     { wrapper: BUNDLED_WRAPPER },
   );
@@ -577,104 +532,100 @@ test("bundled Roots proxy forwards real adlc_gate and adlc_prosecute calls in th
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line));
-  try {
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2024-11-05",
-          capabilities: { roots: { listChanged: false } },
-          clientInfo: { name: "real-cli-roundtrip-test" },
-        },
-      }) + "\n",
-    );
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        method: "notifications/initialized",
-        params: {},
-      }) + "\n",
-    );
-    await out.waitFor((stdout) => stdout.includes("roots/list"));
-    const rootsRequest = replies().find((message) => message.method === "roots/list");
-    assert.ok(rootsRequest, `missing Roots request:\n${out.text()}`);
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: rootsRequest.id,
-        result: { roots: [{ uri: root }] },
-      }) + "\n",
-    );
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: { roots: { listChanged: false } },
+        clientInfo: { name: "real-cli-roundtrip-test" },
+      },
+    }) + "\n",
+  );
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      method: "notifications/initialized",
+      params: {},
+    }) + "\n",
+  );
+  await out.waitFor((stdout) => stdout.includes("roots/list"));
+  const rootsRequest = replies().find((message) => message.method === "roots/list");
+  assert.ok(rootsRequest, `missing Roots request:\n${out.text()}`);
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: rootsRequest.id,
+      result: { roots: [{ uri: root }] },
+    }) + "\n",
+  );
 
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: 2,
-        method: "tools/list",
-        params: {},
-      }) + "\n",
-    );
-    await out.waitFor((stdout) =>
-      stdout.includes('"id":2') && stdout.includes("adlc_prosecute"),
-    );
-    assert.deepEqual(
-      replies()
-        .find((message) => message.id === 2)
-        .result.tools.map((tool) => tool.name),
-      ["adlc_gate", "adlc_prosecute"],
-    );
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/list",
+      params: {},
+    }) + "\n",
+  );
+  await out.waitFor((stdout) =>
+    stdout.includes('"id":2') && stdout.includes("adlc_prosecute"),
+  );
+  assert.deepEqual(
+    replies()
+      .find((message) => message.id === 2)
+      .result.tools.map((tool) => tool.name),
+    ["adlc_gate", "adlc_prosecute"],
+  );
 
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: 3,
-        method: "tools/call",
-        params: {
-          name: "adlc_gate",
-          arguments: { gate: "gate-manifest", args: ["show", "--json"] },
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: {
+        name: "adlc_gate",
+        arguments: { gate: "gate-manifest", args: ["show", "--json"] },
+      },
+    }) + "\n",
+  );
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/call",
+      params: {
+        name: "adlc_prosecute",
+        arguments: {
+          input: "passes.json",
+          ticket: "T1",
+          revision: "docs-example-revision",
         },
-      }) + "\n",
-    );
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: 4,
-        method: "tools/call",
-        params: {
-          name: "adlc_prosecute",
-          arguments: {
-            input: "passes.json",
-            ticket: "T1",
-            revision: "docs-example-revision",
-          },
-        },
-      }) + "\n",
-    );
-    await out.waitFor((stdout) =>
-      stdout.includes('"id":3') && stdout.includes('"id":4'),
-    );
+      },
+    }) + "\n",
+  );
+  await out.waitFor((stdout) =>
+    stdout.includes('"id":3') && stdout.includes('"id":4'),
+  );
 
-    for (const id of [3, 4]) {
-      const reply = replies().find((message) => message.id === id);
-      assert.equal(reply.result.isError, false, JSON.stringify(reply));
-      assert.equal(
-        JSON.parse(reply.result.content[0].text).ok,
-        true,
-        JSON.stringify(reply),
-      );
-    }
-  } finally {
-    child.kill();
-    cleanup(root);
+  for (const id of [3, 4]) {
+    const reply = replies().find((message) => message.id === id);
+    assert.equal(reply.result.isError, false, JSON.stringify(reply));
+    assert.equal(
+      JSON.parse(reply.result.content[0].text).ok,
+      true,
+      JSON.stringify(reply),
+    );
   }
+  child.kill();
 });
 
-test("documented plugin-root substitution launches bundle from configured cwd without node_modules", async () => {
-  const root = adlcRepo();
+test("documented plugin-root substitution launches bundle from configured cwd without node_modules", async (t) => {
+  const root = adlcRepo(t);
   const fakeCli = writeFakeCli(root);
-  const stage = tmp("adlc-mcp-plugin-");
+  const stage = tmp(t, "adlc-mcp-plugin-");
   mkdirSync(join(stage, "bin"), { recursive: true });
   copyFileSync(
     BUNDLED_WRAPPER,
@@ -686,6 +637,7 @@ test("documented plugin-root substitution launches bundle from configured cwd wi
   assert.ok(server.args.every((arg) => !arg.includes("${CURSOR_PLUGIN_ROOT}")));
   assert.ok(!server.cwd.includes("${CURSOR_PLUGIN_ROOT}"));
   const child = spawnWrapper(
+    t,
     { ADLC_CLI_BIN: fakeCli },
     {
       wrapper: server.args.find((arg) =>
@@ -695,183 +647,163 @@ test("documented plugin-root substitution launches bundle from configured cwd wi
     },
   );
   const out = attachCollector(child);
-  try {
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2024-11-05",
-          capabilities: { roots: { listChanged: true } },
-          clientInfo: { name: "post-substitution-contract-test" },
-        },
-      }) + "\n",
-    );
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        method: "notifications/initialized",
-        params: {},
-      }) + "\n",
-    );
-    await out.waitFor((stdout) => stdout.includes("roots/list"));
-    const rootsReq = out
-      .text()
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line))
-      .find((line) => line.method === "roots/list");
-    assert.ok(rootsReq);
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: { roots: { listChanged: true } },
+        clientInfo: { name: "post-substitution-contract-test" },
+      },
+    }) + "\n",
+  );
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      method: "notifications/initialized",
+      params: {},
+    }) + "\n",
+  );
+  await out.waitFor((stdout) => stdout.includes("roots/list"));
+  const rootsReq = out
+    .text()
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .find((line) => line.method === "roots/list");
+  assert.ok(rootsReq);
 
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: rootsReq.id,
-        result: { roots: [{ uri: pathToFileURL(root).href }] },
-      }) + "\n",
-    );
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: 4,
-        method: "tools/list",
-        params: {},
-      }) + "\n",
-    );
-    await out.waitFor(
-      (stdout) => stdout.includes('"id":4') && stdout.includes("adlc_gate"),
-    );
-    assert.doesNotMatch(out.err(), /ERR_MODULE_NOT_FOUND|@adlc\/tickets/);
-  } finally {
-    child.kill();
-    cleanup(root);
-    cleanup(stage);
-  }
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: rootsReq.id,
+      result: { roots: [{ uri: pathToFileURL(root).href }] },
+    }) + "\n",
+  );
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/list",
+      params: {},
+    }) + "\n",
+  );
+  await out.waitFor(
+    (stdout) => stdout.includes('"id":4') && stdout.includes("adlc_gate"),
+  );
+  assert.doesNotMatch(out.err(), /ERR_MODULE_NOT_FOUND|@adlc\/tickets/);
+  child.kill();
 });
 
-test("bundled wrapper starts through a symlink path", async () => {
-  const links = tmp("adlc-mcp-symlink-");
-  const foreignCwd = tmp("adlc-mcp-symlink-cwd-");
+test("bundled wrapper starts through a symlink path", async (t) => {
+  const links = tmp(t, "adlc-mcp-symlink-");
+  const foreignCwd = tmp(t, "adlc-mcp-symlink-cwd-");
   const linkedWrapper = join(links, "linked-wrapper.mjs");
   symlinkSync(BUNDLED_WRAPPER, linkedWrapper);
-  const child = spawnWrapper({}, { wrapper: linkedWrapper, cwd: foreignCwd });
+  const child = spawnWrapper(t, {}, { wrapper: linkedWrapper, cwd: foreignCwd });
   const out = attachCollector(child);
-  try {
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2024-11-05",
-          capabilities: { roots: { listChanged: true } },
-          clientInfo: { name: "symlink-launch-test" },
-        },
-      }) + "\n",
-    );
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        method: "notifications/initialized",
-        params: {},
-      }) + "\n",
-    );
-    await out.waitFor(
-      (stdout) => stdout.includes('"id":1') && stdout.includes("roots/list"),
-    );
-    assert.doesNotMatch(out.err(), /ERR_MODULE_NOT_FOUND/);
-  } finally {
-    child.kill();
-    cleanup(links);
-    cleanup(foreignCwd);
-  }
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: { roots: { listChanged: true } },
+        clientInfo: { name: "symlink-launch-test" },
+      },
+    }) + "\n",
+  );
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      method: "notifications/initialized",
+      params: {},
+    }) + "\n",
+  );
+  await out.waitFor(
+    (stdout) => stdout.includes('"id":1') && stdout.includes("roots/list"),
+  );
+  assert.doesNotMatch(out.err(), /ERR_MODULE_NOT_FOUND/);
+  child.kill();
 });
 
-test("Roots proxy: multi-active roots refuse launch (fail closed)", async () => {
-  const a = adlcRepo({ id: "T1" });
-  const b = adlcRepo({ id: "T1" });
+test("Roots proxy: multi-active roots refuse launch (fail closed)", async (t) => {
+  const a = adlcRepo(t, { id: "T1" });
+  const b = adlcRepo(t, { id: "T1" });
   const fakeCli = writeFakeCli(a);
-  const child = spawnWrapper({ ADLC_CLI_BIN: fakeCli });
+  const child = spawnWrapper(t, { ADLC_CLI_BIN: fakeCli });
   const out = attachCollector(child);
-  try {
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2024-11-05",
-          capabilities: { roots: { listChanged: true } },
-          clientInfo: { name: "test" },
-        },
-      }) + "\n",
-    );
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        method: "notifications/initialized",
-        params: {},
-      }) + "\n",
-    );
-    await out.waitFor((s) => s.includes("roots/list"));
-    let stdout = out.text();
-    const rootsReq = stdout
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((l) => JSON.parse(l))
-      .find((l) => l.method === "roots/list");
-    assert.ok(rootsReq);
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: { roots: { listChanged: true } },
+        clientInfo: { name: "test" },
+      },
+    }) + "\n",
+  );
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      method: "notifications/initialized",
+      params: {},
+    }) + "\n",
+  );
+  await out.waitFor((s) => s.includes("roots/list"));
+  let stdout = out.text();
+  const rootsReq = stdout
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l))
+    .find((l) => l.method === "roots/list");
+  assert.ok(rootsReq);
 
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: rootsReq.id,
-        result: {
-          roots: [
-            { uri: pathToFileURL(a).href },
-            { uri: pathToFileURL(b).href },
-          ],
-        },
-      }) + "\n",
-    );
-    await out.wait(50);
-    child.stdin.write(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: 9,
-        method: "tools/list",
-        params: {},
-      }) + "\n",
-    );
-    await out.waitFor((s) => s.includes('"id":9') && s.includes("error"));
-    stdout = out.text();
-    const lines = stdout
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((l) => JSON.parse(l));
-    const err = lines.find((l) => l.id === 9 && l.error);
-    assert.ok(err, `multi-root must fail closed tools/list; got ${stdout}`);
-    assert.match(err.error.message, /AMBIGUOUS|ambiguous|refuse/i);
-  } finally {
-    child.kill();
-    cleanup(a);
-    cleanup(b);
-  }
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: rootsReq.id,
+      result: {
+        roots: [
+          { uri: pathToFileURL(a).href },
+          { uri: pathToFileURL(b).href },
+        ],
+      },
+    }) + "\n",
+  );
+  await out.wait(50);
+  child.stdin.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 9,
+      method: "tools/list",
+      params: {},
+    }) + "\n",
+  );
+  await out.waitFor((s) => s.includes('"id":9') && s.includes("error"));
+  stdout = out.text();
+  const lines = stdout
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+  const err = lines.find((l) => l.id === 9 && l.error);
+  assert.ok(err, `multi-root must fail closed tools/list; got ${stdout}`);
+  assert.match(err.error.message, /AMBIGUOUS|ambiguous|refuse/i);
+  child.kill();
 });
 
-test("resolveConsumerWorkspace still used for multi-root ambiguity (MCP refuses)", () => {
-  const a = adlcRepo({ id: "T1" });
-  const b = adlcRepo({ id: "T1" });
-  try {
-    const ws = resolveConsumerWorkspace({ workspace_roots: [a, b] }, {});
-    assert.equal(ws.outcome, "ambiguous");
-    assert.equal(mcpRootFromWorkspace(ws).ok, false);
-  } finally {
-    cleanup(a);
-    cleanup(b);
-  }
+test("resolveConsumerWorkspace still used for multi-root ambiguity (MCP refuses)", (t) => {
+  const a = adlcRepo(t, { id: "T1" });
+  const b = adlcRepo(t, { id: "T1" });
+  const ws = resolveConsumerWorkspace({ workspace_roots: [a, b] }, {});
+  assert.equal(ws.outcome, "ambiguous");
+  assert.equal(mcpRootFromWorkspace(ws).ok, false);
 });
