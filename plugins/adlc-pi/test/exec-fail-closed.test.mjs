@@ -19,8 +19,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { tmp } from '@adlc/core/test-kit';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeGateExecute, execFailureReason } from '../lib/gate-tool.mjs';
@@ -37,8 +37,8 @@ const TICKET = {
   rails: ['test/contracts/**', '.adlc/tickets.json'],
 };
 
-function makeRepo() {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-failclosed-')));
+function makeRepo(t) {
+  const root = tmp(t, 'pi-exec-fc-');
   mkdirSync(join(root, '.adlc'), { recursive: true });
   writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [TICKET] }, null, 2));
   writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
@@ -80,127 +80,95 @@ async function runGate(root, result) {
 // AC1 / AC2 / AC3 — a killed or codeless exec is a TOOL ERROR, never a PASS
 // =========================================================================
 
-test('AC1: a gate exec killed at the timeout ({code:0, killed:true}) throws instead of reporting PASS', async () => {
-  const root = makeRepo();
-  try {
-    const { execute } = await runGate(root, { stdout: '', stderr: '', code: 0, killed: true });
+test('AC1: a gate exec killed at the timeout ({code:0, killed:true}) throws instead of reporting PASS', async (t) => {
+  const root = makeRepo(t);
+  const { execute } = await runGate(root, { stdout: '', stderr: '', code: 0, killed: true });
+  await assert.rejects(
+    () => execute('tc', { gate: 'preflight' }, undefined, undefined, {}),
+    (err) => {
+      assert.match(err.message, /adlc_gate\(preflight\) failed to execute/);
+      assert.doesNotMatch(err.message, /PASS/);
+      return true;
+    },
+    'a killed exec must surface as a tool error, not a gate verdict'
+  );
+});
+
+test('AC1: the thrown message names the kill so the model can tell a hang from a gate failure', async (t) => {
+  const root = makeRepo(t);
+  const { execute } = await runGate(root, { stdout: '', stderr: '', code: 0, killed: true });
+  await assert.rejects(
+    () => execute('tc', { gate: 'preflight' }, undefined, undefined, {}),
+    /killed/i
+  );
+});
+
+test('AC2: an exec that reports no numeric exit code throws rather than degrading to a gate failure', async (t) => {
+  const root = makeRepo(t);
+  for (const result of [
+    { stdout: '', stderr: '', code: undefined },
+    { stdout: '', stderr: '', code: null },
+    { stdout: '', stderr: '', code: 'nope' },
+    undefined,
+  ]) {
+    const { execute } = await runGate(root, result);
     await assert.rejects(
       () => execute('tc', { gate: 'preflight' }, undefined, undefined, {}),
-      (err) => {
-        assert.match(err.message, /adlc_gate\(preflight\) failed to execute/);
-        assert.doesNotMatch(err.message, /PASS/);
-        return true;
-      },
-      'a killed exec must surface as a tool error, not a gate verdict'
+      /adlc_gate\(preflight\) failed to execute/,
+      `a result of ${JSON.stringify(result ?? null)} must throw`
     );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('AC1: the thrown message names the kill so the model can tell a hang from a gate failure', async () => {
-  const root = makeRepo();
-  try {
-    const { execute } = await runGate(root, { stdout: '', stderr: '', code: 0, killed: true });
-    await assert.rejects(
-      () => execute('tc', { gate: 'preflight' }, undefined, undefined, {}),
-      /killed/i
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('AC2: a normal pass ({code:0, killed:false}) still returns details.pass true', async (t) => {
+  const root = makeRepo(t);
+  const { execute } = await runGate(root, {
+    stdout: JSON.stringify({ ok: true, ready: true }), stderr: '', code: 0, killed: false,
+  });
+  const res = await execute('tc', { gate: 'preflight' }, undefined, undefined, {});
+  assert.equal(res.isError, false);
+  assert.equal(res.details.code, 0);
+  assert.equal(res.details.pass, true);
+  assert.match(res.content[0].text, /PASS/);
 });
 
-test('AC2: an exec that reports no numeric exit code throws rather than degrading to a gate failure', async () => {
-  const root = makeRepo();
-  try {
-    for (const result of [
-      { stdout: '', stderr: '', code: undefined },
-      { stdout: '', stderr: '', code: null },
-      { stdout: '', stderr: '', code: 'nope' },
-      undefined,
-    ]) {
-      const { execute } = await runGate(root, result);
-      await assert.rejects(
-        () => execute('tc', { gate: 'preflight' }, undefined, undefined, {}),
-        /adlc_gate\(preflight\) failed to execute/,
-        `a result of ${JSON.stringify(result ?? null)} must throw`
-      );
-    }
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('AC2: an exec with no `killed` field at all is still a normal result (pi omits it on success)', async (t) => {
+  const root = makeRepo(t);
+  const { execute } = await runGate(root, { stdout: '{}', stderr: '', code: 0 });
+  const res = await execute('tc', { gate: 'preflight' }, undefined, undefined, {});
+  assert.equal(res.details.pass, true);
 });
 
-test('AC2: a normal pass ({code:0, killed:false}) still returns details.pass true', async () => {
-  const root = makeRepo();
-  try {
-    const { execute } = await runGate(root, {
-      stdout: JSON.stringify({ ok: true, ready: true }), stderr: '', code: 0, killed: false,
-    });
-    const res = await execute('tc', { gate: 'preflight' }, undefined, undefined, {});
-    assert.equal(res.isError, false);
-    assert.equal(res.details.code, 0);
-    assert.equal(res.details.pass, true);
-    assert.match(res.content[0].text, /PASS/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('AC2: a gate that FAILS (exit 2) is still a result, not a tool error', async (t) => {
+  const root = makeRepo(t);
+  const violations = ['rail test/contracts/frozen.test.ts was modified'];
+  const { execute } = await runGate(root, {
+    stdout: JSON.stringify({ ok: false, violations }), stderr: '', code: 2, killed: false,
+  });
+  const res = await execute('tc', { gate: 'preflight' }, undefined, undefined, {});
+  assert.equal(res.isError, false);
+  assert.equal(res.details.code, 2);
+  assert.equal(res.details.pass, false);
+  assert.match(res.content[0].text, /GATE FAILED/);
 });
 
-test('AC2: an exec with no `killed` field at all is still a normal result (pi omits it on success)', async () => {
-  const root = makeRepo();
-  try {
-    const { execute } = await runGate(root, { stdout: '{}', stderr: '', code: 0 });
-    const res = await execute('tc', { gate: 'preflight' }, undefined, undefined, {});
-    assert.equal(res.details.pass, true);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('AC3: no adlc-gate-run evidence entry is recorded when the exec was killed', async (t) => {
+  const root = makeRepo(t);
+  const { execute, note } = await runGate(root, { stdout: '', stderr: '', code: 0, killed: true });
+  await assert.rejects(() => execute('tc', { gate: 'preflight' }, undefined, undefined, {}));
+  assert.equal(
+    note.events.length, 0,
+    'a killed exec must not leave a code-0 gate-run entry — shutdown.mjs reads that as state-resolving'
+  );
 });
 
-test('AC2: a gate that FAILS (exit 2) is still a result, not a tool error', async () => {
-  const root = makeRepo();
-  try {
-    const violations = ['rail test/contracts/frozen.test.ts was modified'];
-    const { execute } = await runGate(root, {
-      stdout: JSON.stringify({ ok: false, violations }), stderr: '', code: 2, killed: false,
-    });
-    const res = await execute('tc', { gate: 'preflight' }, undefined, undefined, {});
-    assert.equal(res.isError, false);
-    assert.equal(res.details.code, 2);
-    assert.equal(res.details.pass, false);
-    assert.match(res.content[0].text, /GATE FAILED/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('AC3: no adlc-gate-run evidence entry is recorded when the exec was killed', async () => {
-  const root = makeRepo();
-  try {
-    const { execute, note } = await runGate(root, { stdout: '', stderr: '', code: 0, killed: true });
-    await assert.rejects(() => execute('tc', { gate: 'preflight' }, undefined, undefined, {}));
-    assert.equal(
-      note.events.length, 0,
-      'a killed exec must not leave a code-0 gate-run entry — shutdown.mjs reads that as state-resolving'
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('AC3: a successful exec still records exactly one adlc-gate-run entry', async () => {
-  const root = makeRepo();
-  try {
-    const { execute, note } = await runGate(root, { stdout: '{}', stderr: '', code: 2, killed: false });
-    await execute('tc', { gate: 'preflight' }, undefined, undefined, {});
-    assert.equal(note.events.length, 1);
-    assert.equal(note.events[0].type, 'adlc-gate-run');
-    assert.equal(note.events[0].detail.code, 2);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('AC3: a successful exec still records exactly one adlc-gate-run entry', async (t) => {
+  const root = makeRepo(t);
+  const { execute, note } = await runGate(root, { stdout: '{}', stderr: '', code: 2, killed: false });
+  await execute('tc', { gate: 'preflight' }, undefined, undefined, {});
+  assert.equal(note.events.length, 1);
+  assert.equal(note.events[0].type, 'adlc-gate-run');
+  assert.equal(note.events[0].detail.code, 2);
 });
 
 // =========================================================================
@@ -288,8 +256,8 @@ async function bootAccept(root, exec) {
   return pi;
 }
 
-function makeAcceptRepo() {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-accept-')));
+function makeAcceptRepo(t) {
+  const root = tmp(t, 'pi-exec-fc-');
   mkdirSync(join(root, '.adlc'), { recursive: true });
   const t1 = {
     id: 'T1', title: 'First ticket', body: 'Do the first thing',
@@ -306,20 +274,16 @@ function acceptExecWith(acceptResult) {
   return (cmd, args) => (args[0] === 'accept' ? acceptResult : { stdout: '', stderr: '', code: 0 });
 }
 
-async function runAccept(acceptResult) {
-  const root = makeAcceptRepo();
-  try {
-    const pi = await bootAccept(root, acceptExecWith(acceptResult));
-    const ctx = fakeCtx(root, { confirm: () => true });
-    await pi.commands['adlc-accept'].handler('.adlc/packet.json', ctx);
-    return { notices: ctx.notices, entries: pi.entries };
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+async function runAccept(t, acceptResult) {
+  const root = makeAcceptRepo(t);
+  const pi = await bootAccept(root, acceptExecWith(acceptResult));
+  const ctx = fakeCtx(root, { confirm: () => true });
+  await pi.commands['adlc-accept'].handler('.adlc/packet.json', ctx);
+  return { notices: ctx.notices, entries: pi.entries };
 }
 
-test('AC4: /adlc-accept records the acceptance when the CLI exits 0 with no JSON on stdout', async () => {
-  const { notices } = await runAccept({ stdout: 'accepted\n', stderr: '', code: 0 });
+test('AC4: /adlc-accept records the acceptance when the CLI exits 0 with no JSON on stdout', async (t) => {
+  const { notices } = await runAccept(t, { stdout: 'accepted\n', stderr: '', code: 0 });
   assert.ok(
     notices.some((n) => /recorded P6 acceptance/i.test(n.msg)),
     `expected an acceptance notice, got ${JSON.stringify(notices)}`
@@ -327,8 +291,8 @@ test('AC4: /adlc-accept records the acceptance when the CLI exits 0 with no JSON
   assert.ok(!notices.some((n) => /acceptance gate FAILED/i.test(n.msg)));
 });
 
-test('AC4: /adlc-accept refuses when the CLI exits non-zero with no JSON on stdout', async () => {
-  const { notices } = await runAccept({ stdout: 'nope\n', stderr: 'boom', code: 1 });
+test('AC4: /adlc-accept refuses when the CLI exits non-zero with no JSON on stdout', async (t) => {
+  const { notices } = await runAccept(t, { stdout: 'nope\n', stderr: 'boom', code: 1 });
   assert.ok(
     notices.some((n) => /acceptance gate FAILED/i.test(n.msg) && /Not recorded/i.test(n.msg)),
     `expected a refusal notice, got ${JSON.stringify(notices)}`
@@ -336,8 +300,8 @@ test('AC4: /adlc-accept refuses when the CLI exits non-zero with no JSON on stdo
   assert.ok(!notices.some((n) => /recorded P6 acceptance/i.test(n.msg)));
 });
 
-test('AC4: /adlc-accept reports the CLI\'s structured errors, not its exit code, when it emits them', async () => {
-  const { notices } = await runAccept({
+test('AC4: /adlc-accept reports the CLI\'s structured errors, not its exit code, when it emits them', async (t) => {
+  const { notices } = await runAccept(t, {
     stdout: JSON.stringify({ ok: false, errors: ['no p5 evidence', 'revision drifted'] }),
     stderr: '', code: 2,
   });
@@ -347,8 +311,8 @@ test('AC4: /adlc-accept reports the CLI\'s structured errors, not its exit code,
   assert.doesNotMatch(failure.msg, /exit 2/, 'the structured errors replace the exit-code fallback');
 });
 
-test('AC4: /adlc-accept falls back to the exit code when the CLI JSON carries no error list', async () => {
-  const { notices } = await runAccept({
+test('AC4: /adlc-accept falls back to the exit code when the CLI JSON carries no error list', async (t) => {
+  const { notices } = await runAccept(t, {
     stdout: JSON.stringify({ ok: false }), stderr: 'boom', code: 2,
   });
   const failure = notices.find((n) => /acceptance gate FAILED/i.test(n.msg));
@@ -357,8 +321,8 @@ test('AC4: /adlc-accept falls back to the exit code when the CLI JSON carries no
   assert.match(failure.msg, /boom/);
 });
 
-test('AC4: /adlc-accept refuses a KILLED accept exec even though it reports code 0', async () => {
-  const { notices } = await runAccept({ stdout: '', stderr: '', code: 0, killed: true });
+test('AC4: /adlc-accept refuses a KILLED accept exec even though it reports code 0', async (t) => {
+  const { notices } = await runAccept(t, { stdout: '', stderr: '', code: 0, killed: true });
   const failure = notices.find((n) => /acceptance gate FAILED/i.test(n.msg));
   assert.ok(failure, `expected a refusal notice, got ${JSON.stringify(notices)}`);
   assert.match(failure.msg, /killed/i, 'the refusal names the kill rather than an exit code');
@@ -392,90 +356,82 @@ async function allLensesFail(prompt) {
   throw new Error('spawn pi ENOENT');
 }
 
-test('AC5: every lens degraded with zero findings → INCONCLUSIVE, never CLEAN', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'pi-failclosed-inconclusive-'));
+test('AC5: every lens degraded with zero findings → INCONCLUSIVE, never CLEAN', async (t) => {
+  const dir = tmp(t, 'pi-exec-fc-');
   mkdirSync(join(dir, '.adlc'), { recursive: true });
-  try {
-    const summary = await prosecute({
-      diff: DIFF,
-      ticket: PTICKET,
-      runLens: allLensesFail,
-      recordDir: join(dir, '.adlc'),
-      options: { maxRounds: 1, maxDry: 1 },
-      record: () => {},
-    });
-    assert.ok(summary.degradedLenses.length > 0, 'the failing lenses are reported degraded');
-    assert.equal(summary.findings.length, 0);
-    assert.equal(summary.verdict, 'INCONCLUSIVE', 'a prosecution in which no lens ran is not a clean bill of health');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  const summary = await prosecute({
+    diff: DIFF,
+    ticket: PTICKET,
+    runLens: allLensesFail,
+    recordDir: join(dir, '.adlc'),
+    options: { maxRounds: 1, maxDry: 1 },
+    record: () => {},
+  });
+  assert.ok(summary.degradedLenses.length > 0, 'the failing lenses are reported degraded');
+  assert.equal(summary.findings.length, 0);
+  assert.equal(summary.verdict, 'INCONCLUSIVE', 'a prosecution in which no lens ran is not a clean bill of health');
 });
 
-test('AC5: SOME lenses degraded with zero confirmed findings is still INCONCLUSIVE', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'pi-failclosed-partial-'));
+test('AC5: SOME lenses degraded with zero confirmed findings is still INCONCLUSIVE', async (t) => {
+  const dir = tmp(t, 'pi-exec-fc-');
   mkdirSync(join(dir, '.adlc'), { recursive: true });
-  try {
-    const runLens = async (prompt) => {
-      if (prompt.startsWith('You are an ADLC prosecution VERIFIER')) return JSON.stringify({ real: true });
-      if (prompt.includes('logic errors')) throw new Error('spawn pi ENOENT');
-      return '[]';
-    };
-    const summary = await prosecute({
-      diff: DIFF,
-      ticket: PTICKET,
-      runLens,
-      recordDir: join(dir, '.adlc'),
-      options: { maxRounds: 1, maxDry: 1 },
-      record: () => {},
-    });
-    assert.ok(summary.degradedLenses.length > 0);
-    assert.equal(summary.findings.length, 0);
-    assert.equal(summary.verdict, 'INCONCLUSIVE');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  const runLens = async (prompt) => {
+    if (prompt.startsWith('You are an ADLC prosecution VERIFIER')) return JSON.stringify({ real: true });
+    if (prompt.includes('logic errors')) throw new Error('spawn pi ENOENT');
+    return '[]';
+  };
+  const summary = await prosecute({
+    diff: DIFF,
+    ticket: PTICKET,
+    runLens,
+    recordDir: join(dir, '.adlc'),
+    options: { maxRounds: 1, maxDry: 1 },
+    record: () => {},
+  });
+  assert.ok(summary.degradedLenses.length > 0);
+  assert.equal(summary.findings.length, 0);
+  assert.equal(summary.verdict, 'INCONCLUSIVE');
 });
 
-test('AC5: a confirmed finding is FINDINGS even when lenses degraded', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'pi-failclosed-findings-'));
+test('AC5: a confirmed finding is FINDINGS even when lenses degraded', async (t) => {
+  const dir = tmp(t, 'pi-exec-fc-');
   mkdirSync(join(dir, '.adlc'), { recursive: true });
-  try {
-    const runLens = async (prompt) => {
-      if (prompt.startsWith('You are an ADLC prosecution VERIFIER')) return JSON.stringify({ real: true });
-      if (prompt.includes('logic errors')) throw new Error('spawn pi ENOENT');
-      if (prompt.includes('security')) return JSON.stringify([finding()]);
-      return '[]';
-    };
-    const summary = await prosecute({
-      diff: DIFF,
-      ticket: PTICKET,
-      runLens,
-      recordDir: join(dir, '.adlc'),
-      options: { maxRounds: 1, maxDry: 1 },
-      record: () => {},
-    });
-    assert.ok(summary.degradedLenses.length > 0, 'a lens still degraded');
-    assert.equal(summary.findings.length, 1);
-    assert.equal(summary.verdict, 'FINDINGS', 'confirmed findings outrank degradation');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  const runLens = async (prompt) => {
+    if (prompt.startsWith('You are an ADLC prosecution VERIFIER')) return JSON.stringify({ real: true });
+    if (prompt.includes('logic errors')) throw new Error('spawn pi ENOENT');
+    if (prompt.includes('security')) return JSON.stringify([finding()]);
+    return '[]';
+  };
+  const summary = await prosecute({
+    diff: DIFF,
+    ticket: PTICKET,
+    runLens,
+    recordDir: join(dir, '.adlc'),
+    options: { maxRounds: 1, maxDry: 1 },
+    record: () => {},
+  });
+  assert.ok(summary.degradedLenses.length > 0, 'a lens still degraded');
+  assert.equal(summary.findings.length, 1);
+  assert.equal(summary.verdict, 'FINDINGS', 'confirmed findings outrank degradation');
 });
 
-test('AC5: no degradation and no findings is still CLEAN', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'pi-failclosed-clean-'));
+test('AC5: no degradation and no findings is still CLEAN', async (t) => {
+  const dir = tmp(t, 'pi-exec-fc-');
   mkdirSync(join(dir, '.adlc'), { recursive: true });
-  try {
-    const runLens = async (prompt) => {
-      if (prompt.startsWith('You are an ADLC prosecution VERIFIER')) return JSON.stringify({ real: true });
-      return '[]';
-    };
-    const summary = await prosecute({
-      diff: DIFF,
-      ticket: PTICKET,
-      runLens,
-      recordDir: join(dir, '.adlc'),
-      options: { maxRounds: 1, maxDry: 1 },
-      record: () => {},
-    });
-    assert.equal(summary.degradedLenses.length, 0);
-    assert.equal(summary.verdict, 'CLEAN');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  const runLens = async (prompt) => {
+    if (prompt.startsWith('You are an ADLC prosecution VERIFIER')) return JSON.stringify({ real: true });
+    return '[]';
+  };
+  const summary = await prosecute({
+    diff: DIFF,
+    ticket: PTICKET,
+    runLens,
+    recordDir: join(dir, '.adlc'),
+    options: { maxRounds: 1, maxDry: 1 },
+    record: () => {},
+  });
+  assert.equal(summary.degradedLenses.length, 0);
+  assert.equal(summary.verdict, 'CLEAN');
 });
 
 test('AC5: an empty diff is CLEAN — zero lenses were supposed to run, which is not degradation', async () => {

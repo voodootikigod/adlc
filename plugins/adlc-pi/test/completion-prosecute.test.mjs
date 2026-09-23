@@ -10,9 +10,9 @@ import {
   makeCompletionListener,
 } from '../lib/completion.mjs';
 import { makeProsecuteExecute, registerProsecuteTool } from '../lib/prosecute-tool.mjs';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 import { createExtension } from '../lib/extension.mjs';
 
 // --- helpers -------------------------------------------------------------
@@ -274,44 +274,42 @@ test('F1: a valid base ref resolves to a sha and diffs with a -- pathspec termin
 // extension and reset by turn_start (booted through the fake pi harness).
 // =========================================================================
 
-test('AC4 wiring: message_end is registered on the extension and fires the followUp', async () => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-msgend-')));
+test('AC4 wiring: message_end is registered on the extension and fires the followUp', async (t) => {
+  const root = tmp(t, 'pi-compl-pros-');
   mkdirSync(join(root, '.adlc'), { recursive: true });
   writeFileSync(
     join(root, '.adlc', 'tickets.json'),
     JSON.stringify({ tickets: [{ id: 'T1', title: 'x', body: 'b', scope: ['src/**'], rails: [] }] }, null, 2)
   );
   writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
-  try {
-    const handlers = {};
-    const sent = [];
-    const pi = {
-      on(name, fn) { handlers[name] = fn; },
-      registerCommand() {},
-      registerMessageRenderer() {},
-      registerTool() {},
-      appendEntry() {},
-      sendMessage(message, options) { sent.push({ message, options }); },
-      async exec() { return { stdout: '', stderr: '', code: 0 }; },
-    };
-    createExtension({ env: {} })(pi);
-    const ctx = { cwd: root, ui: { setStatus() {}, notify() {} } };
-    await handlers.session_start({ type: 'session_start' }, ctx);
+  const handlers = {};
+  const sent = [];
+  const pi = {
+    on(name, fn) { handlers[name] = fn; },
+    registerCommand() {},
+    registerMessageRenderer() {},
+    registerTool() {},
+    appendEntry() {},
+    sendMessage(message, options) { sent.push({ message, options }); },
+    async exec() { return { stdout: '', stderr: '', code: 0 }; },
+  };
+  createExtension({ env: {} })(pi);
+  const ctx = { cwd: root, ui: { setStatus() {}, notify() {} } };
+  await handlers.session_start({ type: 'session_start' }, ctx);
 
-    assert.equal(typeof handlers.message_end, 'function', 'message_end handler registered');
-    await handlers.message_end(
-      { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'done\nTICKET-DONE' }] } },
-      ctx
-    );
-    assert.equal(sent.length, 1, 'the TICKET-DONE followUp was sent through pi.sendMessage');
-    assert.equal(sent[0].options.deliverAs, 'followUp');
+  assert.equal(typeof handlers.message_end, 'function', 'message_end handler registered');
+  await handlers.message_end(
+    { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'done\nTICKET-DONE' }] } },
+    ctx
+  );
+  assert.equal(sent.length, 1, 'the TICKET-DONE followUp was sent through pi.sendMessage');
+  assert.equal(sent[0].options.deliverAs, 'followUp');
 
-    // turn_start re-arms; a second identical message after it fires again.
-    await handlers.turn_start({ type: 'turn_start' }, ctx);
-    await handlers.message_end(
-      { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'TICKET-DONE' }] } },
-      ctx
-    );
-    assert.equal(sent.length, 2, 'a new turn re-arms the once-per-turn listener');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  // turn_start re-arms; a second identical message after it fires again.
+  await handlers.turn_start({ type: 'turn_start' }, ctx);
+  await handlers.message_end(
+    { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'TICKET-DONE' }] } },
+    ctx
+  );
+  assert.equal(sent.length, 2, 'a new turn re-arms the once-per-turn listener');
 });
