@@ -3,9 +3,9 @@
 // harness extension.test.mjs uses, never a re-implementation of it.
 
 import { test, after } from 'node:test';
+import { tmp } from '@adlc/core/test-kit';
 import assert from 'node:assert/strict';
 import {
-  mkdtempSync,
   mkdirSync,
   writeFileSync,
   readFileSync,
@@ -60,8 +60,8 @@ const TICKET = {
   rails: ['test/contracts/**'],
 };
 
-function makeRepo({ current = 'T1' } = {}) {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-handoff-')));
+function makeRepo(t, { current = 'T1' } = {}) {
+  const root = tmp(t, 'pi-handoff-deny-');
   mkdirSync(join(root, '.adlc'), { recursive: true });
   writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [TICKET] }, null, 2));
   if (current !== null) {
@@ -95,8 +95,8 @@ function installAdlc(dir) {
  * The gate is contained to ADLC repos, so this is the shape that must stay
  * inert at every fill percent.
  */
-function makeBareDir() {
-  return realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-bare-')));
+function makeBareDir(t) {
+  return tmp(t, 'pi-handoff-deny-bare-');
 }
 
 /**
@@ -104,8 +104,7 @@ function makeBareDir() {
  * before evaluation, so those tests need a root that is actually an ADLC repo
  * or their injected evaluator is never reached.
  */
-const PLUMBING_ROOT = installAdlc(realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-plumbing-'))));
-after(() => rmSync(PLUMBING_ROOT, { recursive: true, force: true }));
+const PLUMBING_ROOT = installAdlc(tmp({ after }, 'pi-handoff-deny-plumbing-'));
 
 function fakePi() {
   const handlers = {};
@@ -284,200 +283,148 @@ test('an unusable mint yields null so the caller fails closed', () => {
 
 // ---- the real extension ----------------------------------------------------
 
-test('clean repo without deny/handoff → the edit runs', async () => {
-  const root = makeRepo();
-  try {
-    const { pi, ctx } = await boot(root, { percent: 5 });
-    const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
-    assert.equal(verdict?.block, undefined);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('clean repo without deny/handoff → the edit runs', async (t) => {
+  const root = makeRepo(t);
+  const { pi, ctx } = await boot(root, { percent: 5 });
+  const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
+  assert.equal(verdict?.block, undefined);
 });
 
-test('an open deny for another session blocks the edit', async () => {
-  const root = makeRepo();
-  try {
-    seedForeignDeny(root);
-    const { pi, ctx } = await boot(root, { percent: 5 });
-    const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
-    assert.equal(verdict.block, true);
-    assert.match(verdict.reason, /D3:unauthorized_open:denier-1/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('an open deny for another session blocks the edit', async (t) => {
+  const root = makeRepo(t);
+  seedForeignDeny(root);
+  const { pi, ctx } = await boot(root, { percent: 5 });
+  const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
+  assert.equal(verdict.block, true);
+  assert.match(verdict.reason, /D3:unauthorized_open:denier-1/);
 });
 
-test('the shell is fail-closed-all under the deny-set', async () => {
-  const root = makeRepo();
-  try {
-    seedForeignDeny(root, 'denier-2');
-    const { pi, ctx } = await boot(root, { percent: 5 });
-    const verdict = await call(pi, ctx, 'bash', { command: 'ls' });
-    assert.equal(verdict.block, true);
-    assert.match(verdict.reason, /bash_fail_closed_under_deny/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('the shell is fail-closed-all under the deny-set', async (t) => {
+  const root = makeRepo(t);
+  seedForeignDeny(root, 'denier-2');
+  const { pi, ctx } = await boot(root, { percent: 5 });
+  const verdict = await call(pi, ctx, 'bash', { command: 'ls' });
+  assert.equal(verdict.block, true);
+  assert.match(verdict.reason, /bash_fail_closed_under_deny/);
 });
 
-test('an agent shell `adlc handoff repair` is tagged mutating-cli', async () => {
-  const root = makeRepo();
-  try {
-    seedForeignDeny(root, 'denier-3');
-    const { pi, ctx } = await boot(root, { percent: 5 });
-    const verdict = await call(pi, ctx, 'bash', { command: 'adlc handoff repair --write' });
-    assert.equal(verdict.block, true);
-    assert.match(verdict.reason, /bash_handoff_mutating_cli/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('an agent shell `adlc handoff repair` is tagged mutating-cli', async (t) => {
+  const root = makeRepo(t);
+  seedForeignDeny(root, 'denier-3');
+  const { pi, ctx } = await boot(root, { percent: 5 });
+  const verdict = await call(pi, ctx, 'bash', { command: 'adlc handoff repair --write' });
+  assert.equal(verdict.block, true);
+  assert.match(verdict.reason, /bash_handoff_mutating_cli/);
 });
 
-test('a custom third-party tool is blocked under the deny-set too', async () => {
-  const root = makeRepo();
-  try {
-    seedForeignDeny(root, 'denier-4');
-    const { pi, ctx } = await boot(root, { percent: 5 });
-    const verdict = await call(pi, ctx, 'some_custom_tool', { anything: 1 });
-    assert.equal(verdict.block, true);
-    assert.match(verdict.reason, /context-rot handoff deny/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('a custom third-party tool is blocked under the deny-set too', async (t) => {
+  const root = makeRepo(t);
+  seedForeignDeny(root, 'denier-4');
+  const { pi, ctx } = await boot(root, { percent: 5 });
+  const verdict = await call(pi, ctx, 'some_custom_tool', { anything: 1 });
+  assert.equal(verdict.block, true);
+  assert.match(verdict.reason, /context-rot handoff deny/);
 });
 
-test('read-only tools still run under the deny-set', async () => {
-  const root = makeRepo();
-  try {
-    seedForeignDeny(root, 'denier-5');
-    const { pi, ctx } = await boot(root, { percent: 5 });
-    const verdict = await call(pi, ctx, 'read', { path: join(root, 'src', 'a.mjs') });
-    assert.equal(verdict?.block, undefined);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('read-only tools still run under the deny-set', async (t) => {
+  const root = makeRepo(t);
+  seedForeignDeny(root, 'denier-5');
+  const { pi, ctx } = await boot(root, { percent: 5 });
+  const verdict = await call(pi, ctx, 'read', { path: join(root, 'src', 'a.mjs') });
+  assert.equal(verdict?.block, undefined);
 });
 
-test('the deny-set holds with NO active ticket — it is not ticket-scoped', async () => {
-  const root = makeRepo({ current: null });
-  try {
-    seedForeignDeny(root, 'denier-6');
-    const { pi, ctx } = await boot(root, { percent: 5 });
-    const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
-    assert.equal(verdict.block, true, 'every other pi gate returns early without a ticket');
-    assert.match(verdict.reason, /D3:unauthorized_open:denier-6/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('the deny-set holds with NO active ticket — it is not ticket-scoped', async (t) => {
+  const root = makeRepo(t, { current: null });
+  seedForeignDeny(root, 'denier-6');
+  const { pi, ctx } = await boot(root, { percent: 5 });
+  const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
+  assert.equal(verdict.block, true, 'every other pi gate returns early without a ticket');
+  assert.match(verdict.reason, /D3:unauthorized_open:denier-6/);
 });
 
-test('the denier stays denied after its record is consumed (D2)', async () => {
-  const root = makeRepo();
-  try {
-    const { pi, ctx } = await boot(root, { percent: HANDOFF_PCT, sessionEvent: {
-      type: 'session_start',
-      reason: 'startup',
-      sessionId: 'denier-sticky',
-    } });
-    // The band fires, the marker is written, and the denier is sticky after a
-    // consume — the deny record survives the session cooling off.
-    await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
-    writeDenyRecord(root, {
-      session_id: 'denier-sticky',
-      ticket_id: 'T1',
-      content_hash: 'abc',
-      status: 'consumed',
-      since: new Date().toISOString(),
-      host: 'test',
-      schema: 1,
-    });
-    const { pi: pi2, ctx: ctx2 } = await boot(root, { percent: 5, sessionEvent: {
-      type: 'session_start',
-      reason: 'startup',
-      sessionId: 'denier-sticky',
-    } });
-    const verdict = await call(pi2, ctx2, 'edit', { path: join(root, 'src', 'a.mjs') });
-    assert.equal(verdict.block, true);
-    assert.match(verdict.reason, /D2:denier_session/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('the denier stays denied after its record is consumed (D2)', async (t) => {
+  const root = makeRepo(t);
+  const { pi, ctx } = await boot(root, { percent: HANDOFF_PCT, sessionEvent: {
+    type: 'session_start',
+    reason: 'startup',
+    sessionId: 'denier-sticky',
+  } });
+  // The band fires, the marker is written, and the denier is sticky after a
+  // consume — the deny record survives the session cooling off.
+  await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
+  writeDenyRecord(root, {
+    session_id: 'denier-sticky',
+    ticket_id: 'T1',
+    content_hash: 'abc',
+    status: 'consumed',
+    since: new Date().toISOString(),
+    host: 'test',
+    schema: 1,
+  });
+  const { pi: pi2, ctx: ctx2 } = await boot(root, { percent: 5, sessionEvent: {
+    type: 'session_start',
+    reason: 'startup',
+    sessionId: 'denier-sticky',
+  } });
+  const verdict = await call(pi2, ctx2, 'edit', { path: join(root, 'src', 'a.mjs') });
+  assert.equal(verdict.block, true);
+  assert.match(verdict.reason, /D2:denier_session/);
 });
 
-test('the live context percent drives the band and writes a deny marker', async () => {
-  const root = makeRepo();
-  try {
-    const { pi, ctx } = await boot(root, {
-      percent: HANDOFF_PCT,
-      sessionEvent: { type: 'session_start', reason: 'startup', sessionId: 'deep-sess' },
-    });
-    const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
-    assert.equal(verdict.block, true);
-    const marker = join(root, '.adlc', 'handoffs', 'denies', 'deep-sess.json');
-    assert.equal(existsSync(marker), true, 'the handoff band must write denies/<session>.json');
-    assert.match(readFileSync(marker, 'utf8'), /"host": "pi"/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('the live context percent drives the band and writes a deny marker', async (t) => {
+  const root = makeRepo(t);
+  const { pi, ctx } = await boot(root, {
+    percent: HANDOFF_PCT,
+    sessionEvent: { type: 'session_start', reason: 'startup', sessionId: 'deep-sess' },
+  });
+  const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
+  assert.equal(verdict.block, true);
+  const marker = join(root, '.adlc', 'handoffs', 'denies', 'deep-sess.json');
+  assert.equal(existsSync(marker), true, 'the handoff band must write denies/<session>.json');
+  assert.match(readFileSync(marker, 'utf8'), /"host": "pi"/);
 });
 
-test('a percent below the handoff band does not deny', async () => {
-  const root = makeRepo();
-  try {
-    const { pi, ctx } = await boot(root, {
-      percent: HANDOFF_PCT - 1,
-      sessionEvent: { type: 'session_start', reason: 'startup', sessionId: 'shallow-sess' },
-    });
-    const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
-    assert.equal(verdict?.block, undefined);
-    assert.equal(
-      existsSync(join(root, '.adlc', 'handoffs', 'denies', 'shallow-sess.json')),
-      false,
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('a percent below the handoff band does not deny', async (t) => {
+  const root = makeRepo(t);
+  const { pi, ctx } = await boot(root, {
+    percent: HANDOFF_PCT - 1,
+    sessionEvent: { type: 'session_start', reason: 'startup', sessionId: 'shallow-sess' },
+  });
+  const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
+  assert.equal(verdict?.block, undefined);
+  assert.equal(
+    existsSync(join(root, '.adlc', 'handoffs', 'denies', 'shallow-sess.json')),
+    false,
+  );
 });
 
-test('a host without getContextUsage stays editable on a clean repo', async () => {
-  const root = makeRepo();
-  try {
-    const { pi, ctx } = await boot(root); // no getContextUsage on ctx
-    const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
-    assert.equal(verdict?.block, undefined);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('a host without getContextUsage stays editable on a clean repo', async (t) => {
+  const root = makeRepo(t);
+  const { pi, ctx } = await boot(root); // no getContextUsage on ctx
+  const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
+  assert.equal(verdict?.block, undefined);
 });
 
-test('writing a handoff trust-root artifact is denied even with a cold store', async () => {
-  const root = makeRepo();
-  try {
-    const { pi, ctx } = await boot(root, { percent: 5 });
-    const verdict = await call(pi, ctx, 'write', {
-      path: join(root, '.adlc', 'handoffs', 'denies', 'x.json'),
-    });
-    assert.equal(verdict.block, true);
-    assert.match(verdict.reason, /path_protected/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('writing a handoff trust-root artifact is denied even with a cold store', async (t) => {
+  const root = makeRepo(t);
+  const { pi, ctx } = await boot(root, { percent: 5 });
+  const verdict = await call(pi, ctx, 'write', {
+    path: join(root, '.adlc', 'handoffs', 'denies', 'x.json'),
+  });
+  assert.equal(verdict.block, true);
+  assert.match(verdict.reason, /path_protected/);
 });
 
-test('the deny is surfaced to the operator and recorded as evidence', async () => {
-  const root = makeRepo();
-  try {
-    seedForeignDeny(root, 'denier-7');
-    const { pi, ctx } = await boot(root, { percent: 5 });
-    await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
-    assert.ok(
-      ctx.notices.some((n) => n.level === 'error' && /handoff deny/.test(n.msg)),
-      'the operator must see why the tool was blocked',
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('the deny is surfaced to the operator and recorded as evidence', async (t) => {
+  const root = makeRepo(t);
+  seedForeignDeny(root, 'denier-7');
+  const { pi, ctx } = await boot(root, { percent: 5 });
+  await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
+  assert.ok(
+    ctx.notices.some((n) => n.level === 'error' && /handoff deny/.test(n.msg)),
+    'the operator must see why the tool was blocked',
+  );
 });
 
 test('the manifest key is threaded so a signed resume-auth can be verified', () => {
@@ -505,31 +452,27 @@ test('a failed marker write stays sticky for the session across calls', () => {
   assert.deepEqual(calls, [false, true, false]);
 });
 
-test('a THROWING getContextUsage fails closed, an absent one does not', async () => {
-  const root = makeRepo();
-  try {
-    // Absent API: a host that does not provide it must not hard-lock the repo.
-    const absent = await boot(root);
-    assert.equal(
-      (await call(absent.pi, absent.ctx, 'edit', { path: join(root, 'src', 'a.mjs') }))?.block,
-      undefined,
-    );
+test('a THROWING getContextUsage fails closed, an absent one does not', async (t) => {
+  const root = makeRepo(t);
+  // Absent API: a host that does not provide it must not hard-lock the repo.
+  const absent = await boot(root);
+  assert.equal(
+    (await call(absent.pi, absent.ctx, 'edit', { path: join(root, 'src', 'a.mjs') }))?.block,
+    undefined,
+  );
 
-    // Present but throwing: that is a FAILED read of a real signal, not the
-    // absence of one. Collapsing the two would let a 95%-full session through
-    // on a transient error.
-    const pi = fakePi();
-    createExtension({ env: { ADLC_CONTEXT_ROT_HANDOFF_ENABLED: '1' } })(pi);
-    const ctx = fakeCtx(root);
-    ctx.getContextUsage = () => {
-      throw new Error('transient');
-    };
-    await pi.handlers.session_start({ type: 'session_start', reason: 'startup' }, ctx);
-    const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
-    assert.equal(verdict?.block, true, 'an unreadable context signal must fail closed');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  // Present but throwing: that is a FAILED read of a real signal, not the
+  // absence of one. Collapsing the two would let a 95%-full session through
+  // on a transient error.
+  const pi = fakePi();
+  createExtension({ env: { ADLC_CONTEXT_ROT_HANDOFF_ENABLED: '1' } })(pi);
+  const ctx = fakeCtx(root);
+  ctx.getContextUsage = () => {
+    throw new Error('transient');
+  };
+  await pi.handlers.session_start({ type: 'session_start', reason: 'startup' }, ctx);
+  const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
+  assert.equal(verdict?.block, true, 'an unreadable context signal must fail closed');
 });
 
 test('the plugin declares the package it enforces with', () => {
@@ -538,202 +481,162 @@ test('the plugin declares the package it enforces with', () => {
   assert.ok(pkg.files.includes('lib/'), 'files must ship lib/');
 });
 
-test('a custom tool reaching the deny store by any extractable key is denied', async () => {
+test('a custom tool reaching the deny store by any extractable key is denied', async (t) => {
   // The rail gate vets custom tools with extractToolPaths, which reads `target`
   // and `file` as well as `path`. The handoff gate read only the three `path`
   // spellings, so these reached the store while the rail checker saw them.
-  const root = makeRepo();
-  try {
-    const { pi, ctx } = await boot(root, { percent: 5 });
-    for (const input of [
-      { target: join(root, '.adlc', '.deny-store') },
-      { file: join(root, '.adlc', 'handoffs', 'denies', 'x.json') },
-    ]) {
-      const verdict = await call(pi, ctx, 'custom_writer', input);
-      assert.equal(verdict.block, true, `must block: ${JSON.stringify(input)}`);
-      assert.match(verdict.reason, /path_protected/);
-    }
-  } finally {
-    rmSync(root, { recursive: true, force: true });
+  const root = makeRepo(t);
+  const { pi, ctx } = await boot(root, { percent: 5 });
+  for (const input of [
+    { target: join(root, '.adlc', '.deny-store') },
+    { file: join(root, '.adlc', 'handoffs', 'denies', 'x.json') },
+  ]) {
+    const verdict = await call(pi, ctx, 'custom_writer', input);
+    assert.equal(verdict.block, true, `must block: ${JSON.stringify(input)}`);
+    assert.match(verdict.reason, /path_protected/);
   }
 });
 
-test('a custom tool targeting ordinary files is still allowed with a cold store', async () => {
-  const root = makeRepo();
-  try {
-    const { pi, ctx } = await boot(root, { percent: 5 });
-    for (const input of [{ target: 'src/app.mjs' }, { path: 'src/app.mjs' }, {}]) {
-      const verdict = await call(pi, ctx, 'custom_writer', input);
-      assert.notEqual(verdict?.block, true, `must allow: ${JSON.stringify(input)}`);
-    }
-  } finally {
-    rmSync(root, { recursive: true, force: true });
+test('a custom tool targeting ordinary files is still allowed with a cold store', async (t) => {
+  const root = makeRepo(t);
+  const { pi, ctx } = await boot(root, { percent: 5 });
+  for (const input of [{ target: 'src/app.mjs' }, { path: 'src/app.mjs' }, {}]) {
+    const verdict = await call(pi, ctx, 'custom_writer', input);
+    assert.notEqual(verdict?.block, true, `must allow: ${JSON.stringify(input)}`);
   }
 });
 
-test('a custom tool naming a protected directory is denied', async () => {
-  const root = makeRepo();
-  try {
-    const { pi, ctx } = await boot(root, { percent: 5 });
-    for (const input of [{ target: join(root, '.adlc', 'handoffs') }, { path: join(root, '.adlc') }]) {
-      const verdict = await call(pi, ctx, 'custom_deleter', input);
-      assert.equal(verdict.block, true, `must block: ${JSON.stringify(input)}`);
-      assert.match(verdict.reason, /path_protected/);
-    }
-  } finally {
-    rmSync(root, { recursive: true, force: true });
+test('a custom tool naming a protected directory is denied', async (t) => {
+  const root = makeRepo(t);
+  const { pi, ctx } = await boot(root, { percent: 5 });
+  for (const input of [{ target: join(root, '.adlc', 'handoffs') }, { path: join(root, '.adlc') }]) {
+    const verdict = await call(pi, ctx, 'custom_deleter', input);
+    assert.equal(verdict.block, true, `must block: ${JSON.stringify(input)}`);
+    assert.match(verdict.reason, /path_protected/);
   }
 });
 
 // ---- containment: the gate only runs where ADLC was installed --------------
 
-test('a directory that never installed ADLC is inert at every fill percent', async () => {
+test('a directory that never installed ADLC is inert at every fill percent', async (t) => {
   // The release blocker this closes: the band alone denied write/edit/bash in
   // any directory the agent happened to open, wrote .adlc state into it, and —
   // the deny store being durable — followed that directory into every later
   // session. Installing ADLC is the opt-in.
   for (const percent of [WARN_PCT, HANDOFF_PCT, HARD_PCT, 95, 100]) {
-    const root = makeBareDir();
-    try {
-      const { pi, ctx } = await boot(root, { percent });
-      for (const [tool, input] of [
-        ['edit', { path: join(root, 'a.txt') }],
-        ['write', { path: join(root, 'a.txt') }],
-        ['bash', { command: 'rm -rf a.txt' }],
-        ['some_custom_tool', { target: join(root, 'a.txt') }],
-      ]) {
-        const verdict = await call(pi, ctx, tool, input);
-        assert.notEqual(verdict?.block, true, `${tool} must be allowed at ${percent}%`);
-      }
-      assert.equal(
-        existsSync(join(root, '.adlc')),
-        false,
-        `the gate must not create .adlc state at ${percent}% in a repo that never opted in`,
-      );
-    } finally {
-      rmSync(root, { recursive: true, force: true });
+    const root = makeBareDir(t);
+    const { pi, ctx } = await boot(root, { percent });
+    for (const [tool, input] of [
+      ['edit', { path: join(root, 'a.txt') }],
+      ['write', { path: join(root, 'a.txt') }],
+      ['bash', { command: 'rm -rf a.txt' }],
+      ['some_custom_tool', { target: join(root, 'a.txt') }],
+    ]) {
+      const verdict = await call(pi, ctx, tool, input);
+      assert.notEqual(verdict?.block, true, `${tool} must be allowed at ${percent}%`);
     }
+    assert.equal(
+      existsSync(join(root, '.adlc')),
+      false,
+      `the gate must not create .adlc state at ${percent}% in a repo that never opted in`,
+    );
   }
 });
 
-test('containment short-circuits before the band is ever evaluated', () => {
-  const root = makeBareDir();
-  try {
-    let evaluated = false;
-    const evaluate = () => {
-      evaluated = true;
-      return { deny: true, reasons: ['D1:band'] };
-    };
-    const verdict = checkHandoff({
-      toolName: 'edit',
-      input: { path: 'a.txt' },
-      sessionId: 'sess-a',
-      usage: { percent: HARD_PCT },
-      root,
-      evaluate,
-    });
-    assert.deepEqual(verdict, { decision: 'allow' });
-    assert.equal(evaluated, false, 'evaluation must not run outside an ADLC repo');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('containment short-circuits before the band is ever evaluated', (t) => {
+  const root = makeBareDir(t);
+  let evaluated = false;
+  const evaluate = () => {
+    evaluated = true;
+    return { deny: true, reasons: ['D1:band'] };
+  };
+  const verdict = checkHandoff({
+    toolName: 'edit',
+    input: { path: 'a.txt' },
+    sessionId: 'sess-a',
+    usage: { percent: HARD_PCT },
+    root,
+    evaluate,
+  });
+  assert.deepEqual(verdict, { decision: 'allow' });
+  assert.equal(evaluated, false, 'evaluation must not run outside an ADLC repo');
 });
 
-test('installing ADLC is what arms the gate', () => {
+test('installing ADLC is what arms the gate', (t) => {
   // The same directory, the same fill: the only difference is `.adlc/`.
-  const root = makeBareDir();
-  try {
-    const args = {
-      toolName: 'edit',
-      input: { path: 'a.txt' },
-      sessionId: 'sess-a',
-      usage: { percent: HANDOFF_PCT },
-      root,
-    };
-    assert.equal(checkHandoff(args).decision, 'allow');
-    // A bare `.adlc/` is what the old bug left lying around; it must not arm.
-    mkdirSync(join(root, '.adlc'), { recursive: true });
-    assert.equal(checkHandoff(args).decision, 'allow', 'a bare .adlc/ is not an install');
-    installAdlc(root);
-    assert.equal(checkHandoff(args).decision, 'deny');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const root = makeBareDir(t);
+  const args = {
+    toolName: 'edit',
+    input: { path: 'a.txt' },
+    sessionId: 'sess-a',
+    usage: { percent: HANDOFF_PCT },
+    root,
+  };
+  assert.equal(checkHandoff(args).decision, 'allow');
+  // A bare `.adlc/` is what the old bug left lying around; it must not arm.
+  mkdirSync(join(root, '.adlc'), { recursive: true });
+  assert.equal(checkHandoff(args).decision, 'allow', 'a bare .adlc/ is not an install');
+  installAdlc(root);
+  assert.equal(checkHandoff(args).decision, 'deny');
 });
 
 // ---- deny text: honest, and keyless where no key is configured -------------
 
-test('the deny text drops the false fresh-session claim', async () => {
+test('the deny text drops the false fresh-session claim', async (t) => {
   // The deny is recorded in the repo and reaches a NEW session (proved by the
   // foreign-denier tests above), so "continue in a fresh session" was advice
   // that could not work.
-  const root = makeRepo();
-  try {
-    seedForeignDeny(root, 'denier-text');
-    const { pi, ctx } = await boot(root, { percent: 5 });
-    const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
-    assert.equal(verdict.block, true);
-    assert.doesNotMatch(verdict.reason, /fresh session/i);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const root = makeRepo(t);
+  seedForeignDeny(root, 'denier-text');
+  const { pi, ctx } = await boot(root, { percent: 5 });
+  const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
+  assert.equal(verdict.block, true);
+  assert.doesNotMatch(verdict.reason, /fresh session/i);
 });
 
-test('the deny text carries a session-bound recovery command', async () => {
-  const root = makeRepo();
-  try {
-    seedForeignDeny(root, 'denier-cmd');
-    const { pi, ctx } = await boot(root, { percent: 5, sessionId: 'my-session' });
-    const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
-    assert.equal(verdict.block, true);
-    assert.match(verdict.reason, /handoff\.mjs/, 'names the recovery CLI by resolved path');
-    assert.match(verdict.reason, /bypass --session my-session /, 'bound to this session');
-    // D6 (round 2 review): the auto-printed command is the dry-run form
-    // only — --write is never directly appended to the copy-pasteable
-    // `--dir <path>` prefix — with the key requirement explained
-    // separately (as prose elsewhere in the message), matching
-    // claude-code/codex/opencode.
-    assert.doesNotMatch(verdict.reason, /--dir \S+ --write\b/);
-    assert.match(verdict.reason, /ADLC_MANIFEST_KEY/, 'names what actually gates a real bypass');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('the deny text carries a session-bound recovery command', async (t) => {
+  const root = makeRepo(t);
+  seedForeignDeny(root, 'denier-cmd');
+  const { pi, ctx } = await boot(root, { percent: 5, sessionId: 'my-session' });
+  const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
+  assert.equal(verdict.block, true);
+  assert.match(verdict.reason, /handoff\.mjs/, 'names the recovery CLI by resolved path');
+  assert.match(verdict.reason, /bypass --session my-session /, 'bound to this session');
+  // D6 (round 2 review): the auto-printed command is the dry-run form
+  // only — --write is never directly appended to the copy-pasteable
+  // `--dir <path>` prefix — with the key requirement explained
+  // separately (as prose elsewhere in the message), matching
+  // claude-code/codex/opencode.
+  assert.doesNotMatch(verdict.reason, /--dir \S+ --write\b/);
+  assert.match(verdict.reason, /ADLC_MANIFEST_KEY/, 'names what actually gates a real bypass');
 });
 
-test('with no manifest key the deny text names the keyless path', async () => {
+test('with no manifest key the deny text names the keyless path', async (t) => {
   // Every mutating verb but one is key-gated, and the exception (`unlock`)
   // reclaims a session LOCK, not a deny — so with no key the only recovery is
   // removing the deny state by hand.
-  const root = makeRepo();
-  try {
-    seedForeignDeny(root, 'denier-keyless');
-    const { pi, ctx } = await boot(root, { percent: 5, sessionId: 'my-session' });
-    const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
-    assert.equal(verdict.block, true);
-    assert.match(verdict.reason, /ADLC_MANIFEST_KEY/);
-    assert.match(verdict.reason, /rm -rf \S*\/\.adlc\/handoffs \S*\/\.adlc\/\.deny-store/, 'one safe command, absolute');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const root = makeRepo(t);
+  seedForeignDeny(root, 'denier-keyless');
+  const { pi, ctx } = await boot(root, { percent: 5, sessionId: 'my-session' });
+  const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
+  assert.equal(verdict.block, true);
+  assert.match(verdict.reason, /ADLC_MANIFEST_KEY/);
+  assert.match(verdict.reason, /rm -rf \S*\/\.adlc\/handoffs \S*\/\.adlc\/\.deny-store/, 'one safe command, absolute');
 });
 
-test('the keyless block is omitted once a manifest key is configured', () => {
-  const root = makeRepo();
-  try {
-    seedForeignDeny(root, 'denier-keyed');
-    const keyed = checkHandoff({
-      toolName: 'edit',
-      input: { path: 'src/a.mjs' },
-      sessionId: 'my-session',
-      root,
-      manifestKey: 'k'.repeat(64),
-    });
-    assert.equal(keyed.decision, 'deny');
-    assert.match(keyed.reason, /bypass --session my-session /);
-    assert.doesNotMatch(keyed.reason, /\.deny-store/, 'a keyed operator has the CLI path');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('the keyless block is omitted once a manifest key is configured', (t) => {
+  const root = makeRepo(t);
+  seedForeignDeny(root, 'denier-keyed');
+  const keyed = checkHandoff({
+    toolName: 'edit',
+    input: { path: 'src/a.mjs' },
+    sessionId: 'my-session',
+    root,
+    manifestKey: 'k'.repeat(64),
+  });
+  assert.equal(keyed.decision, 'deny');
+  assert.match(keyed.reason, /bypass --session my-session /);
+  assert.doesNotMatch(keyed.reason, /\.deny-store/, 'a keyed operator has the CLI path');
 });
 
 
@@ -806,262 +709,231 @@ test('a foreign deny gets an unbound grant, this session\'s own gets a bound one
   assert.equal(foreignDenierOf(undefined, 'sess-B'), null);
 });
 
-test('the command names the denied repo, so cwd cannot redirect it', () => {
-  const root = makeRepo();
-  try {
-    seedForeignDeny(root, 'denier-dir');
-    const { reason } = checkHandoff({
-      toolName: 'edit',
-      input: { path: 'src/a.mjs' },
-      sessionId: 'sess-B',
-      root,
-      manifestKey: 'k'.repeat(64),
-    });
-    // Without --dir the CLI resolves .adlc from process.cwd(), writes the grant
-    // into whatever directory the operator's shell happens to be in, and exits
-    // 0 — reporting success while the denied repo stays denied.
-    assert.match(reason, new RegExp(`--dir '?${realpathSync(root)}/\\.adlc'?`));
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('the command names the denied repo, so cwd cannot redirect it', (t) => {
+  const root = makeRepo(t);
+  seedForeignDeny(root, 'denier-dir');
+  const { reason } = checkHandoff({
+    toolName: 'edit',
+    input: { path: 'src/a.mjs' },
+    sessionId: 'sess-B',
+    root,
+    manifestKey: 'k'.repeat(64),
+  });
+  // Without --dir the CLI resolves .adlc from process.cwd(), writes the grant
+  // into whatever directory the operator's shell happens to be in, and exits
+  // 0 — reporting success while the denied repo stays denied.
+  assert.match(reason, new RegExp(`--dir '?${realpathSync(root)}/\\.adlc'?`));
 });
 
-test('the printed command actually clears a real band-generated foreign deny', async () => {
+test('the printed command actually clears a real band-generated foreign deny', async (t) => {
   // The end-to-end contract: band-generate a deny the way a real session does,
   // take the command the deny text shows a DIFFERENT session, run that exact
   // string in a shell whose cwd is somewhere else entirely, and check what it
   // bought. A band marker is unbound (ticket_id and content_hash both null), so
   // a bound grant would be consumed here and leave the session denied.
   const key = 'k'.repeat(64);
-  const root = makeRepo();
-  const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-elsewhere-')));
-  try {
-    // Session A crosses the handoff band and leaves its own marker behind.
+  const root = makeRepo(t);
+  const elsewhere = tmp(t, 'pi-handoff-deny-elsewhere-');
+  // Session A crosses the handoff band and leaves its own marker behind.
+  checkHandoff({
+    toolName: 'edit',
+    input: { path: 'src/a.mjs' },
+    sessionId: 'sess-A',
+    usage: { percent: HANDOFF_PCT },
+    root,
+  });
+  const marker = JSON.parse(
+    readFileSync(join(root, '.adlc', 'handoffs', 'denies', 'sess-A.json'), 'utf8'),
+  );
+  assert.equal(marker.ticket_id, null, 'a band marker is unbound');
+  assert.equal(marker.content_hash, null, 'a band marker is unbound');
+
+  const askB = () =>
     checkHandoff({
       toolName: 'edit',
       input: { path: 'src/a.mjs' },
-      sessionId: 'sess-A',
-      usage: { percent: HANDOFF_PCT },
+      sessionId: 'sess-B',
       root,
+      manifestKey: key,
     });
-    const marker = JSON.parse(
-      readFileSync(join(root, '.adlc', 'handoffs', 'denies', 'sess-A.json'), 'utf8'),
-    );
-    assert.equal(marker.ticket_id, null, 'a band marker is unbound');
-    assert.equal(marker.content_hash, null, 'a band marker is unbound');
 
-    const askB = () =>
-      checkHandoff({
-        toolName: 'edit',
-        input: { path: 'src/a.mjs' },
-        sessionId: 'sess-B',
-        root,
-        manifestKey: key,
-      });
+  const denied = askB();
+  assert.equal(denied.decision, 'deny');
+  assert.match(denied.reason, /D3:unauthorized_open:sess-A/);
 
-    const denied = askB();
-    assert.equal(denied.decision, 'deny');
-    assert.match(denied.reason, /D3:unauthorized_open:sess-A/);
+  // Pull the command out of the message exactly as an operator would, then
+  // deliberately add --write themselves (D6: the auto-printed form never
+  // carries it).
+  const printedLine = denied.reason.split('\n').find((line) => line.includes('bypass --session'));
+  assert.ok(printedLine, `no command line in:\n${denied.reason}`);
+  // The command now sits alone on its own line (#970 remediation: it must
+  // never be concatenated with the explanatory prose), so `printedLine`
+  // IS the command already — no need to strip a trailing "(dry run..." tail.
+  const dryRunCommand = printedLine.replace(/^[^:]*: /, '');
+  const command = `${dryRunCommand} --write`;
 
-    // Pull the command out of the message exactly as an operator would, then
-    // deliberately add --write themselves (D6: the auto-printed form never
-    // carries it).
-    const printedLine = denied.reason.split('\n').find((line) => line.includes('bypass --session'));
-    assert.ok(printedLine, `no command line in:\n${denied.reason}`);
-    // The command now sits alone on its own line (#970 remediation: it must
-    // never be concatenated with the explanatory prose), so `printedLine`
-    // IS the command already — no need to strip a trailing "(dry run..." tail.
-    const dryRunCommand = printedLine.replace(/^[^:]*: /, '');
-    const command = `${dryRunCommand} --write`;
+  const run = spawnSync(command, {
+    shell: true,
+    cwd: elsewhere,
+    env: { ...process.env, ADLC_MANIFEST_KEY: key },
+    encoding: 'utf8',
+  });
+  assert.equal(run.status, 0, `printed command + --write failed: ${run.stderr}`);
 
-    const run = spawnSync(command, {
-      shell: true,
-      cwd: elsewhere,
-      env: { ...process.env, ADLC_MANIFEST_KEY: key },
-      encoding: 'utf8',
-    });
-    assert.equal(run.status, 0, `printed command + --write failed: ${run.stderr}`);
-
-    assert.equal(askB().decision, 'allow', 'the printed command must actually unblock the caller');
-    assert.equal(askB().decision, 'deny', 'and be consumed by that one mutation, as the text says');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(elsewhere, { recursive: true, force: true });
-  }
+  assert.equal(askB().decision, 'allow', 'the printed command must actually unblock the caller');
+  assert.equal(askB().decision, 'deny', 'and be consumed by that one mutation, as the text says');
 });
 
-test('the operator-facing deny text is pinned phrase by phrase', () => {
+test('the operator-facing deny text is pinned phrase by phrase', (t) => {
   // What an operator reads and pastes IS the contract, and prose is the one
   // part of this module a mutation gate cannot reach — string literals have no
   // comparison to invert. Every load-bearing claim is asserted verbatim here,
   // and every one of them is a fact this branch established by execution
   // rather than by reading the CLI's help.
-  const root = makeRepo();
-  try {
-    seedForeignDeny(root, 'sess-A');
-    const ask = (manifestKey) =>
-      checkHandoff({
-        toolName: 'edit',
-        input: { path: 'src/a.mjs' },
-        sessionId: 'sess-B',
-        root,
-        manifestKey,
-      }).reason;
+  const root = makeRepo(t);
+  seedForeignDeny(root, 'sess-A');
+  const ask = (manifestKey) =>
+    checkHandoff({
+      toolName: 'edit',
+      input: { path: 'src/a.mjs' },
+      sessionId: 'sess-B',
+      root,
+      manifestKey,
+    }).reason;
 
-    const keyless = ask(null);
-    // The correction this ticket exists for: a new session walks back into the
-    // deny, so the old "continue in a fresh session" was unrunnable advice.
-    assert.doesNotMatch(keyless, /fresh session/i);
-    assert.ok(
-      keyless.includes('it holds for new sessions here until an operator clears it'),
-      'must say the deny outlives the session',
-    );
-    // Measured: the grant is consumed by the mutation it authorizes.
-    assert.ok(
-      keyless.includes('authorizes the NEXT gated tool call only'),
-      'must not present a one-shot grant as a clear, nor overstate what spends it',
-    );
-    // Measured: unlock is keyless but reclaims a lock, not a deny.
-    assert.ok(
-      keyless.includes('`adlc handoff unlock` needs no key but reclaims a session lock, not a deny'),
-      'must say why the one keyless verb is not the answer',
-    );
-    // Measured: removing the marker without the sentinel still denies.
-    assert.match(
-      keyless,
-      /rm -rf \S*\/\.adlc\/handoffs \S*\/\.adlc\/\.deny-store/,
-      'the whole tree and the sentinel, by resolved absolute path',
-    );
-    assert.ok(
-      keyless.includes('Do not pick off one marker or glob inside'),
-      'the half-recipe and the glob are both what an operator would otherwise try',
-    );
-    // The exact reason token, not a wildcard: an empty one is rejected by the
-    // CLI, and a changed one changes what lands in the audit record.
-    assert.ok(
-      keyless.includes('--unbound-reason pi-handoff-operator-recovery'),
-      'the grant carries a stable, non-empty operator reason',
-    );
+  const keyless = ask(null);
+  // The correction this ticket exists for: a new session walks back into the
+  // deny, so the old "continue in a fresh session" was unrunnable advice.
+  assert.doesNotMatch(keyless, /fresh session/i);
+  assert.ok(
+    keyless.includes('it holds for new sessions here until an operator clears it'),
+    'must say the deny outlives the session',
+  );
+  // Measured: the grant is consumed by the mutation it authorizes.
+  assert.ok(
+    keyless.includes('authorizes the NEXT gated tool call only'),
+    'must not present a one-shot grant as a clear, nor overstate what spends it',
+  );
+  // Measured: unlock is keyless but reclaims a lock, not a deny.
+  assert.ok(
+    keyless.includes('`adlc handoff unlock` needs no key but reclaims a session lock, not a deny'),
+    'must say why the one keyless verb is not the answer',
+  );
+  // Measured: removing the marker without the sentinel still denies.
+  assert.match(
+    keyless,
+    /rm -rf \S*\/\.adlc\/handoffs \S*\/\.adlc\/\.deny-store/,
+    'the whole tree and the sentinel, by resolved absolute path',
+  );
+  assert.ok(
+    keyless.includes('Do not pick off one marker or glob inside'),
+    'the half-recipe and the glob are both what an operator would otherwise try',
+  );
+  // The exact reason token, not a wildcard: an empty one is rejected by the
+  // CLI, and a changed one changes what lands in the audit record.
+  assert.ok(
+    keyless.includes('--unbound-reason pi-handoff-operator-recovery'),
+    'the grant carries a stable, non-empty operator reason',
+  );
 
-    // A keyed operator gets the durable flows named instead of the file path.
-    const keyed = ask('k'.repeat(64));
-    assert.ok(
-      keyed.includes('`adlc handoff resume` / `continue` are the durable handoff flows'),
-      'a keyed operator needs the durable path, not just the one-shot grant',
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  // A keyed operator gets the durable flows named instead of the file path.
+  const keyed = ask('k'.repeat(64));
+  assert.ok(
+    keyed.includes('`adlc handoff resume` / `continue` are the durable handoff flows'),
+    'a keyed operator needs the durable path, not just the one-shot grant',
+  );
 });
 
-test('opt-in is monotonic — deleting .adlc cannot disarm an armed repo', async () => {
+test('opt-in is monotonic — deleting .adlc cannot disarm an armed repo', async (t) => {
   // Containment must not become an off switch. A custom tool whose target the
   // extractor cannot see is not rail-checked while the store is cold, so an
   // agent below the band could remove `.adlc` and, with a naive presence
   // check, walk past every later handoff deny. Before this branch the band
   // alone denied here; that must stay true for a repo that DID opt in.
-  const root = makeRepo();
-  try {
-    const { pi, ctx } = await boot(root, { percent: 5, sessionId: 'sess-1' });
-    assert.equal(
-      (await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') }))?.block,
-      undefined,
-      'below the band, an opted-in repo is editable',
-    );
+  const root = makeRepo(t);
+  const { pi, ctx } = await boot(root, { percent: 5, sessionId: 'sess-1' });
+  assert.equal(
+    (await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') }))?.block,
+    undefined,
+    'below the band, an opted-in repo is editable',
+  );
 
-    // The agent removes the opt-in marker, taking the deny store with it.
-    rmSync(join(root, '.adlc'), { recursive: true, force: true });
+  // The agent removes the opt-in marker, taking the deny store with it.
+  rmSync(join(root, '.adlc'), { recursive: true, force: true });
 
-    ctx.getContextUsage = () => ({ percent: HARD_PCT, tokens: 1 });
-    const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
-    assert.equal(verdict?.block, true, 'a repo that opted in stays enforced for the session');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  ctx.getContextUsage = () => ({ percent: HARD_PCT, tokens: 1 });
+  const verdict = await call(pi, ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
+  assert.equal(verdict?.block, true, 'a repo that opted in stays enforced for the session');
 });
 
-test('a repo that never opted in stays inert even after the memory is used', () => {
+test('a repo that never opted in stays inert even after the memory is used', (t) => {
   // The monotonic memory must be per-root: remembering repo A must not arm
   // repo B, or containment is undone by the fix for it.
   const adlcRoots = createAdlcRootState();
-  const armed = makeRepo();
-  const never = makeBareDir();
-  try {
-    const ask = (root) =>
-      checkHandoff({
-        toolName: 'edit',
-        input: { path: 'a.txt' },
-        sessionId: 'sess-1',
-        usage: { percent: HARD_PCT },
-        root,
-        adlcRoots,
-      }).decision;
+  const armed = makeRepo(t);
+  const never = makeBareDir(t);
+  const ask = (root) =>
+    checkHandoff({
+      toolName: 'edit',
+      input: { path: 'a.txt' },
+      sessionId: 'sess-1',
+      usage: { percent: HARD_PCT },
+      root,
+      adlcRoots,
+    }).decision;
 
-    assert.equal(ask(armed), 'deny', 'the opted-in repo arms the memory');
-    assert.equal(ask(never), 'allow', 'a different, never-opted-in repo stays inert');
-    assert.equal(existsSync(join(never, '.adlc')), false, 'and gains no state');
+  assert.equal(ask(armed), 'deny', 'the opted-in repo arms the memory');
+  assert.equal(ask(never), 'allow', 'a different, never-opted-in repo stays inert');
+  assert.equal(existsSync(join(never, '.adlc')), false, 'and gains no state');
 
-    rmSync(join(armed, '.adlc'), { recursive: true, force: true });
-    assert.equal(ask(armed), 'deny', 'the remembered root stays enforced');
-    assert.equal(ask(never), 'allow', 'the never-opted-in one still does not');
-  } finally {
-    rmSync(armed, { recursive: true, force: true });
-    rmSync(never, { recursive: true, force: true });
-  }
+  rmSync(join(armed, '.adlc'), { recursive: true, force: true });
+  assert.equal(ask(armed), 'deny', 'the remembered root stays enforced');
+  assert.equal(ask(never), 'allow', 'the never-opted-in one still does not');
 });
 
-test('the opt-in memory is keyed by canonical path, not by spelling', () => {
+test('the opt-in memory is keyed by canonical path, not by spelling', (t) => {
   // Same checkout, three spellings. If the memory keys on the raw string, an
   // agent that removes `.adlc` and then reaches the repo through a symlink or
   // an un-normalized cwd walks past the monotonic guard.
   const adlcRoots = createAdlcRootState();
-  const real = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-canon-')));
-  const linkDir = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-canonlink-')));
+  const real = tmp(t, 'pi-handoff-deny-canon-');
+  const linkDir = tmp(t, 'pi-handoff-deny-canonlink-');
   const link = join(linkDir, 'repo');
-  try {
-    installAdlc(real);
-    symlinkSync(real, link);
-    const ask = (root) =>
-      checkHandoff({
-        toolName: 'edit',
-        input: { path: 'a.txt' },
-        sessionId: 'sess-1',
-        usage: { percent: HARD_PCT },
-        root,
-        adlcRoots,
-        // A stub evaluator keeps this about containment only, and stops a real
-        // deny from re-creating `.adlc` and re-arming the root behind the test.
-        evaluate: () => ({ deny: true, reasons: ['D1:band'] }),
-      }).decision;
+  installAdlc(real);
+  symlinkSync(real, link);
+  const ask = (root) =>
+    checkHandoff({
+      toolName: 'edit',
+      input: { path: 'a.txt' },
+      sessionId: 'sess-1',
+      usage: { percent: HARD_PCT },
+      root,
+      adlcRoots,
+      // A stub evaluator keeps this about containment only, and stops a real
+      // deny from re-creating `.adlc` and re-arming the root behind the test.
+      evaluate: () => ({ deny: true, reasons: ['D1:band'] }),
+    }).decision;
 
-    assert.equal(ask(real), 'deny', 'arm through the canonical path');
-    rmSync(join(real, '.adlc'), { recursive: true, force: true });
+  assert.equal(ask(real), 'deny', 'arm through the canonical path');
+  rmSync(join(real, '.adlc'), { recursive: true, force: true });
 
-    assert.equal(ask(real), 'deny', 'canonical path stays enforced');
-    assert.equal(ask(join(real, '.')), 'deny', 'an un-normalized spelling too');
-    assert.equal(ask(link), 'deny', 'and a symlink to the same checkout');
-  } finally {
-    rmSync(real, { recursive: true, force: true });
-    rmSync(linkDir, { recursive: true, force: true });
-  }
+  assert.equal(ask(real), 'deny', 'canonical path stays enforced');
+  assert.equal(ask(join(real, '.')), 'deny', 'an un-normalized spelling too');
+  assert.equal(ask(link), 'deny', 'and a symlink to the same checkout');
 });
 
-test('the opt-in memory outlives an extension reload within the process', async () => {
+test('the opt-in memory outlives an extension reload within the process', async (t) => {
   // A fresh extension instance must not be a way to forget that this repo
   // opted in — otherwise "delete .adlc, then reload" is the bypass.
-  const root = makeRepo();
-  try {
-    const first = await boot(root, { percent: 5, sessionId: 'sess-1' });
-    await call(first.pi, first.ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
+  const root = makeRepo(t);
+  const first = await boot(root, { percent: 5, sessionId: 'sess-1' });
+  await call(first.pi, first.ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
 
-    rmSync(join(root, '.adlc'), { recursive: true, force: true });
+  rmSync(join(root, '.adlc'), { recursive: true, force: true });
 
-    const reloaded = await boot(root, { percent: HARD_PCT, sessionId: 'sess-2' });
-    const verdict = await call(reloaded.pi, reloaded.ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
-    assert.equal(verdict?.block, true, 'a reload must not forget the opt-in');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const reloaded = await boot(root, { percent: HARD_PCT, sessionId: 'sess-2' });
+  const verdict = await call(reloaded.pi, reloaded.ctx, 'edit', { path: join(root, 'src', 'a.mjs') });
+  assert.equal(verdict?.block, true, 'a reload must not forget the opt-in');
 });
 
 test('a missing or empty root arms nothing — it must not resolve to cwd', () => {
@@ -1088,62 +960,54 @@ test('a missing or empty root arms nothing — it must not resolve to cwd', () =
   );
 });
 
-test('the self-deny label is pinned too — it is the path most operators hit', () => {
+test('the self-deny label is pinned too — it is the path most operators hit', (t) => {
   // A session whose own window crossed the band is the commonest way to meet
   // this deny, and it takes the BOUND branch of the label. The phrase-by-phrase
   // test above asks as a different session, so it only ever sees the unbound
   // branch; without this, the one-shot honesty could be deleted from the
   // likeliest message and every test would still pass.
-  const root = makeRepo();
-  try {
-    const own = checkHandoff({
-      toolName: 'edit',
-      input: { path: 'src/a.mjs' },
-      sessionId: 'sess-A',
-      usage: { percent: HANDOFF_PCT },
-      root,
-      manifestKey: 'k'.repeat(64),
-    });
-    assert.equal(own.decision, 'deny');
-    assert.match(own.reason, /D2:denier_session/, 'this is the self-deny path');
-    assert.ok(
-      own.reason.includes('authorizes the NEXT gated tool call only'),
-      'the one-shot claim must survive on the bound branch',
-    );
-    assert.doesNotMatch(own.reason, /--unbound-reason/, 'a session clearing its own record stays bound');
-    assert.doesNotMatch(own.reason, /fresh session/i);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const root = makeRepo(t);
+  const own = checkHandoff({
+    toolName: 'edit',
+    input: { path: 'src/a.mjs' },
+    sessionId: 'sess-A',
+    usage: { percent: HANDOFF_PCT },
+    root,
+    manifestKey: 'k'.repeat(64),
+  });
+  assert.equal(own.decision, 'deny');
+  assert.match(own.reason, /D2:denier_session/, 'this is the self-deny path');
+  assert.ok(
+    own.reason.includes('authorizes the NEXT gated tool call only'),
+    'the one-shot claim must survive on the bound branch',
+  );
+  assert.doesNotMatch(own.reason, /--unbound-reason/, 'a session clearing its own record stays bound');
+  assert.doesNotMatch(own.reason, /fresh session/i);
 });
 
-test('a deny with no usable session id still refuses the fresh-session lie', () => {
+test('a deny with no usable session id still refuses the fresh-session lie', (t) => {
   // D0:invalid_session_id is a live path — an unresolvable or unsafe id reaches
   // the gate as null and denies — and it renders formatNoSessionIdMessage,
   // which no other test reaches. The canonical package's wording for this case
   // tells the operator to start a new session; that is exactly the claim this
   // branch deletes, so the local twin must not drift back into it.
-  const root = makeRepo();
-  try {
-    for (const sessionId of [null, '../escape']) {
-      const verdict = checkHandoff({
-        toolName: 'edit',
-        input: { path: 'src/a.mjs' },
-        sessionId,
-        usage: { percent: HANDOFF_PCT },
-        root,
-      });
-      assert.equal(verdict.decision, 'deny', `${sessionId} must fail closed`);
-      assert.match(verdict.reason, /D0:invalid_session_id/);
-      assert.doesNotMatch(verdict.reason, /fresh session/i, 'the deleted lie must not return here');
-      assert.ok(
-        verdict.reason.includes('reaches a new session as well'),
-        'must still say a new session does not clear it',
-      );
-      assert.doesNotMatch(verdict.reason, /bypass --session/, 'no --session command exists without an id');
-    }
-  } finally {
-    rmSync(root, { recursive: true, force: true });
+  const root = makeRepo(t);
+  for (const sessionId of [null, '../escape']) {
+    const verdict = checkHandoff({
+      toolName: 'edit',
+      input: { path: 'src/a.mjs' },
+      sessionId,
+      usage: { percent: HANDOFF_PCT },
+      root,
+    });
+    assert.equal(verdict.decision, 'deny', `${sessionId} must fail closed`);
+    assert.match(verdict.reason, /D0:invalid_session_id/);
+    assert.doesNotMatch(verdict.reason, /fresh session/i, 'the deleted lie must not return here');
+    assert.ok(
+      verdict.reason.includes('reaches a new session as well'),
+      'must still say a new session does not clear it',
+    );
+    assert.doesNotMatch(verdict.reason, /bypass --session/, 'no --session command exists without an id');
   }
 });
 
@@ -1194,88 +1058,80 @@ test('a diagnostic that cannot be a command is never labelled as one', () => {
   assert.match(unquotable, /interpreter at .*script at /, 'names both binaries');
 });
 
-test('the keyless recipe names the legacy sentinel, so it terminates', () => {
+test('the keyless recipe names the legacy sentinel, so it terminates', (t) => {
   // A repo carrying the pre-migration .adlc/handoffs/.deny-store re-creates the
   // canonical sentinel from it on the next read, so a recipe naming only
   // .adlc/.deny-store loops forever on D0:deny_store_unavailable. Measured.
-  const root = makeRepo();
-  try {
-    checkHandoff({
-      toolName: 'edit',
-      input: { path: 'src/a.mjs' },
-      sessionId: 'sess-A',
-      usage: { percent: HANDOFF_PCT },
-      root,
-    });
-    writeFileSync(join(root, '.adlc', 'handoffs', '.deny-store'), '1\n');
+  const root = makeRepo(t);
+  checkHandoff({
+    toolName: 'edit',
+    input: { path: 'src/a.mjs' },
+    sessionId: 'sess-A',
+    usage: { percent: HANDOFF_PCT },
+    root,
+  });
+  writeFileSync(join(root, '.adlc', 'handoffs', '.deny-store'), '1\n');
 
-    const text = checkHandoff({
-      toolName: 'edit',
-      input: { path: 'src/a.mjs' },
-      sessionId: 'sess-B',
-      root,
-    }).reason;
-    assert.match(text, /rm -rf \S+\/handoffs \S+\/\.deny-store/, 'the whole tree, in one command');
-    assert.doesNotMatch(text, /denies\/\*/, 'never a glob: it expands through a symlink');
+  const text = checkHandoff({
+    toolName: 'edit',
+    input: { path: 'src/a.mjs' },
+    sessionId: 'sess-B',
+    root,
+  }).reason;
+  assert.match(text, /rm -rf \S+\/handoffs \S+\/\.deny-store/, 'the whole tree, in one command');
+  assert.doesNotMatch(text, /denies\/\*/, 'never a glob: it expands through a symlink');
 
-    // Run the command the MESSAGE prints, parsed out of it, in a shell whose
-    // cwd is the repo — the same standard the foreign-deny e2e uses. Hardcoding
-    // the paths here would let the printed recipe drift away from the one that
-    // works without any test noticing.
-    const recipe = /`(rm -rf [^`]+)`/.exec(text)?.[1];
-    assert.ok(recipe, `no removal command in the message:\n${text}`);
-    const run = spawnSync(recipe, { shell: true, cwd: root, encoding: 'utf8' });
-    assert.equal(run.status, 0, `printed recipe failed: ${run.stderr}`);
-    assert.equal(
-      checkHandoff({ toolName: 'edit', input: { path: 'src/a.mjs' }, sessionId: 'sess-B', root }).decision,
-      'allow',
-      'the recipe as printed must terminate',
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  // Run the command the MESSAGE prints, parsed out of it, in a shell whose
+  // cwd is the repo — the same standard the foreign-deny e2e uses. Hardcoding
+  // the paths here would let the printed recipe drift away from the one that
+  // works without any test noticing.
+  const recipe = /`(rm -rf [^`]+)`/.exec(text)?.[1];
+  assert.ok(recipe, `no removal command in the message:\n${text}`);
+  const run = spawnSync(recipe, { shell: true, cwd: root, encoding: 'utf8' });
+  assert.equal(run.status, 0, `printed recipe failed: ${run.stderr}`);
+  assert.equal(
+    checkHandoff({ toolName: 'edit', input: { path: 'src/a.mjs' }, sessionId: 'sess-B', root }).decision,
+    'allow',
+    'the recipe as printed must terminate',
+  );
 });
 
-test('a session started in a subdirectory is still inside the repo', () => {
+test('a session started in a subdirectory is still inside the repo', (t) => {
   // Containment asks whether this path is INSIDE an ADLC repo, not whether it
   // is one. pi hands the gate its cwd, which is routinely a subdirectory, and
   // an exact-match check let a session in <repo>/src walk past an open
   // repo-wide deny — and, before that, wrote band markers into a stray
   // <repo>/src/.adlc that no operator would think to clear.
-  const root = makeRepo();
-  try {
-    const sub = join(root, 'src', 'deep');
-    mkdirSync(sub, { recursive: true });
+  const root = makeRepo(t);
+  const sub = join(root, 'src', 'deep');
+  mkdirSync(sub, { recursive: true });
 
-    // Session A trips the band at the repo root and leaves an open marker.
-    checkHandoff({
-      toolName: 'edit',
-      input: { path: 'a.txt' },
-      sessionId: 'sess-A',
-      usage: { percent: HANDOFF_PCT },
-      root,
-    });
+  // Session A trips the band at the repo root and leaves an open marker.
+  checkHandoff({
+    toolName: 'edit',
+    input: { path: 'a.txt' },
+    sessionId: 'sess-A',
+    usage: { percent: HANDOFF_PCT },
+    root,
+  });
 
-    const fromSub = checkHandoff({
-      toolName: 'edit',
-      input: { path: 'a.txt' },
-      sessionId: 'sess-B',
-      usage: { percent: 5 },
-      root: sub,
-    });
-    assert.equal(fromSub.decision, 'deny', 'the open deny reaches a session started in a subdirectory');
-    assert.match(fromSub.reason, /D3:unauthorized_open:sess-A/);
-    assert.equal(
-      existsSync(join(sub, '.adlc')),
-      false,
-      'and no stray .adlc is created beside the subdirectory',
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const fromSub = checkHandoff({
+    toolName: 'edit',
+    input: { path: 'a.txt' },
+    sessionId: 'sess-B',
+    usage: { percent: 5 },
+    root: sub,
+  });
+  assert.equal(fromSub.decision, 'deny', 'the open deny reaches a session started in a subdirectory');
+  assert.match(fromSub.reason, /D3:unauthorized_open:sess-A/);
+  assert.equal(
+    existsSync(join(sub, '.adlc')),
+    false,
+    'and no stray .adlc is created beside the subdirectory',
+  );
 });
 
-test('a .git boundary picks which store applies — it does not release enforcement', () => {
+test('a .git boundary picks which store applies — it does not release enforcement', (t) => {
   // The boundary exists so a genuinely vendored checkout keeps its OWN deny
   // store. It must not become a way to switch enforcement off, because `.git`
   // is a directory an agent can create: measured before this, `mkdir src/.git`
@@ -1286,124 +1142,108 @@ test('a .git boundary picks which store applies — it does not release enforcem
   // store — over-enforcing, which is the safe side of a distinction the
   // filesystem cannot make, and correct anyway: the deny is about THIS
   // session's context rot, not about which project owns the file.
-  const root = makeRepo();
-  try {
-    const nested = join(root, 'vendor', 'other-project');
-    makeCheckout(nested);
-    const adlcRoots = createAdlcRootState();
-    const ask = (r) =>
-      checkHandoff({
-        toolName: 'edit',
-        input: { path: 'a.txt' },
-        sessionId: 'sess-1',
-        usage: { percent: HARD_PCT },
-        root: r,
-        adlcRoots,
-      }).decision;
+  const root = makeRepo(t);
+  const nested = join(root, 'vendor', 'other-project');
+  makeCheckout(nested);
+  const adlcRoots = createAdlcRootState();
+  const ask = (r) =>
+    checkHandoff({
+      toolName: 'edit',
+      input: { path: 'a.txt' },
+      sessionId: 'sess-1',
+      usage: { percent: HARD_PCT },
+      root: r,
+      adlcRoots,
+    }).decision;
 
-    assert.equal(ask(root), 'deny', 'the outer repo arms the memory');
-    assert.equal(ask(nested), 'deny', 'a hand-made .git under an armed repo is not an escape');
+  assert.equal(ask(root), 'deny', 'the outer repo arms the memory');
+  assert.equal(ask(nested), 'deny', 'a hand-made .git under an armed repo is not an escape');
 
-    // The same holds once the outer opt-in survives only as a memory.
-    rmSync(join(root, '.adlc'), { recursive: true, force: true });
-    assert.equal(ask(nested), 'deny', 'and still not, once the opt-in is only remembered');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  // The same holds once the outer opt-in survives only as a memory.
+  rmSync(join(root, '.adlc'), { recursive: true, force: true });
+  assert.equal(ask(nested), 'deny', 'and still not, once the opt-in is only remembered');
 });
 
-test('an unarmed outer repo leaves a vendored checkout its own store', () => {
+test('an unarmed outer repo leaves a vendored checkout its own store', (t) => {
   // The other side of the same rule: with nothing remembered, the boundary does
   // its intended job — a nested checkout carrying its own ticket store answers
   // to that store, not to the enclosing repo's.
-  const root = makeRepo();
-  try {
-    const nested = join(root, 'vendor', 'other-project');
-    makeCheckout(nested);
-    installAdlc(nested);
+  const root = makeRepo(t);
+  const nested = join(root, 'vendor', 'other-project');
+  makeCheckout(nested);
+  installAdlc(nested);
 
-    assert.equal(resolveAdlcRoot(nested), realpathSync(nested), 'its own store, not the outer one');
-    assert.equal(resolveAdlcRoot(join(root, 'src')), realpathSync(root), 'an ordinary subdir is the repo');
+  assert.equal(resolveAdlcRoot(nested), realpathSync(nested), 'its own store, not the outer one');
+  assert.equal(resolveAdlcRoot(join(root, 'src')), realpathSync(root), 'an ordinary subdir is the repo');
 
-    // And a nested checkout with NO store of its own is simply not an ADLC repo
-    // when nothing above it has been armed.
-    const bare = join(root, 'vendor', 'plain');
-    makeCheckout(bare);
-    assert.equal(resolveAdlcRoot(bare), null);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  // And a nested checkout with NO store of its own is simply not an ADLC repo
+  // when nothing above it has been armed.
+  const bare = join(root, 'vendor', 'plain');
+  makeCheckout(bare);
+  assert.equal(resolveAdlcRoot(bare), null);
 });
 
-test('resolveAdlcRoot finds the repo, the nested boundary, or nothing', () => {
-  const root = makeRepo();
-  try {
-    const sub = join(root, 'a', 'b', 'c');
-    mkdirSync(sub, { recursive: true });
-    assert.equal(resolveAdlcRoot(root), realpathSync(root));
-    assert.equal(resolveAdlcRoot(sub), realpathSync(root), 'walks up to the ADLC root');
+test('resolveAdlcRoot finds the repo, the nested boundary, or nothing', (t) => {
+  const root = makeRepo(t);
+  const sub = join(root, 'a', 'b', 'c');
+  mkdirSync(sub, { recursive: true });
+  assert.equal(resolveAdlcRoot(root), realpathSync(root));
+  assert.equal(resolveAdlcRoot(sub), realpathSync(root), 'walks up to the ADLC root');
 
-    const bare = makeBareDir();
-    assert.equal(resolveAdlcRoot(bare), null, 'a directory outside any ADLC repo');
-    for (const bogus of ['', null, undefined, 0, {}]) {
-      assert.equal(resolveAdlcRoot(bogus), null, `resolveAdlcRoot(${String(bogus)})`);
-    }
-    rmSync(bare, { recursive: true, force: true });
-  } finally {
-    rmSync(root, { recursive: true, force: true });
+  const bare = makeBareDir(t);
+  assert.equal(resolveAdlcRoot(bare), null, 'a directory outside any ADLC repo');
+  for (const bogus of ['', null, undefined, 0, {}]) {
+    assert.equal(resolveAdlcRoot(bogus), null, `resolveAdlcRoot(${String(bogus)})`);
   }
+
 });
 
-test("the README's keyless command clears a repo with several markers and a legacy sentinel", () => {
+test("the README's keyless command clears a repo with several markers and a legacy sentinel", (t) => {
   // Runs the documented recipe VERBATIM against the worst realistic state —
   // two open markers owned by other sessions, plus the pre-migration sentinel.
   // The earlier singular form ("rm .../<session-id>.json .adlc/.deny-store")
   // left both of those behind and the operator permanently locked out.
-  const root = makeRepo();
-  try {
-    for (const sessionId of ['sess-A', 'sess-B']) {
-      checkHandoff({
-        toolName: 'edit',
-        input: { path: 'src/a.mjs' },
-        sessionId,
-        usage: { percent: HANDOFF_PCT },
-        root,
-      });
-    }
-    writeFileSync(join(root, '.adlc', 'handoffs', '.deny-store'), '1\n');
-
-    const ask = () =>
-      checkHandoff({ toolName: 'edit', input: { path: 'src/a.mjs' }, sessionId: 'sess-C', root })
-        .decision;
-    assert.equal(ask(), 'deny', 'a third session is denied by the others');
-
-    // Run the command the MESSAGE prints — it carries resolved absolute paths,
-    // so it is the authoritative one an operator copies. The README documents
-    // the same shape with a `<repo>` placeholder, asserted separately.
-    const printed = checkHandoff({
+  const root = makeRepo(t);
+  for (const sessionId of ['sess-A', 'sess-B']) {
+    checkHandoff({
       toolName: 'edit',
       input: { path: 'src/a.mjs' },
-      sessionId: 'sess-C',
+      sessionId,
+      usage: { percent: HANDOFF_PCT },
       root,
-    }).reason;
-    const command = /`(rm -rf [^`]+)`/.exec(printed)?.[1];
-    assert.ok(command, `no removal command in the message:\n${printed}`);
-    const run = spawnSync(command, { shell: true, cwd: root, encoding: 'utf8' });
-    assert.equal(run.status, 0, `printed command failed: ${run.stderr}`);
-
-    const readme = readFileSync(join(REPO_ROOT, 'plugins', 'adlc-pi', 'README.md'), 'utf8');
-    assert.ok(
-      readme.includes('rm -rf <repo>/.adlc/handoffs <repo>/.adlc/.deny-store'),
-      'the README must document the same two targets',
-    );
-
-    assert.equal(ask(), 'allow', 'the documented recipe must actually clear the repo');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
+    });
   }
+  writeFileSync(join(root, '.adlc', 'handoffs', '.deny-store'), '1\n');
+
+  const ask = () =>
+    checkHandoff({ toolName: 'edit', input: { path: 'src/a.mjs' }, sessionId: 'sess-C', root })
+      .decision;
+  assert.equal(ask(), 'deny', 'a third session is denied by the others');
+
+  // Run the command the MESSAGE prints — it carries resolved absolute paths,
+  // so it is the authoritative one an operator copies. The README documents
+  // the same shape with a `<repo>` placeholder, asserted separately.
+  const printed = checkHandoff({
+    toolName: 'edit',
+    input: { path: 'src/a.mjs' },
+    sessionId: 'sess-C',
+    root,
+  }).reason;
+  const command = /`(rm -rf [^`]+)`/.exec(printed)?.[1];
+  assert.ok(command, `no removal command in the message:\n${printed}`);
+  const run = spawnSync(command, { shell: true, cwd: root, encoding: 'utf8' });
+  assert.equal(run.status, 0, `printed command failed: ${run.stderr}`);
+
+  const readme = readFileSync(join(REPO_ROOT, 'plugins', 'adlc-pi', 'README.md'), 'utf8');
+  assert.ok(
+    readme.includes('rm -rf <repo>/.adlc/handoffs <repo>/.adlc/.deny-store'),
+    'the README must document the same two targets',
+  );
+
+  assert.equal(ask(), 'allow', 'the documented recipe must actually clear the repo');
 });
 
-test('a different checkout moved to a remembered path is not the remembered repo', () => {
+test('a different checkout moved to a remembered path is not the remembered repo', (t) => {
   // The memory has to tell two things apart that look identical from the path
   // alone: `.adlc` deleted out from under an opted-in repo (must keep
   // enforcing — that is the off switch) and the whole checkout replaced by
@@ -1414,134 +1254,118 @@ test('a different checkout moved to a remembered path is not the remembered repo
   // The replacement is built elsewhere and renamed into place, so its inode is
   // allocated while the original still exists and is therefore guaranteed
   // distinct — a delete-then-recreate could reuse the freed inode and flake.
-  const parent = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-swap-')));
+  const parent = tmp(t, 'pi-handoff-deny-swap-');
   const path = join(parent, 'workspace');
   const replacement = join(parent, 'other-project');
-  try {
-    installAdlc(path);
-    makeCheckout(replacement);
+  installAdlc(path);
+  makeCheckout(replacement);
 
-    const adlcRoots = createAdlcRootState();
-    const ask = () =>
-      checkHandoff({
-        toolName: 'edit',
-        input: { path: 'a.txt' },
-        sessionId: 'sess-1',
-        usage: { percent: HARD_PCT },
-        root: path,
-        adlcRoots,
-      }).decision;
+  const adlcRoots = createAdlcRootState();
+  const ask = () =>
+    checkHandoff({
+      toolName: 'edit',
+      input: { path: 'a.txt' },
+      sessionId: 'sess-1',
+      usage: { percent: HARD_PCT },
+      root: path,
+      adlcRoots,
+    }).decision;
 
-    assert.equal(ask(), 'deny', 'the opted-in checkout arms the memory');
+  assert.equal(ask(), 'deny', 'the opted-in checkout arms the memory');
 
-    // Same path, different checkout.
-    rmSync(path, { recursive: true, force: true });
-    renameSync(replacement, path);
+  // Same path, different checkout.
+  rmSync(path, { recursive: true, force: true });
+  renameSync(replacement, path);
 
-    assert.equal(ask(), 'allow', 'a replacement checkout is not the repo that opted in');
-    assert.equal(existsSync(join(path, '.adlc')), false, 'and gains no ADLC state');
-  } finally {
-    rmSync(parent, { recursive: true, force: true });
-  }
+  assert.equal(ask(), 'allow', 'a replacement checkout is not the repo that opted in');
+  assert.equal(existsSync(join(path, '.adlc')), false, 'and gains no ADLC state');
 });
 
-test('deleting only .adlc still keeps the SAME checkout enforced', () => {
+test('deleting only .adlc still keeps the SAME checkout enforced', (t) => {
   // The other half of the pair above: identical from the path, opposite
   // answer, because the directory itself is unchanged.
-  const root = makeRepo();
-  try {
-    const adlcRoots = createAdlcRootState();
-    const ask = () =>
-      checkHandoff({
-        toolName: 'edit',
-        input: { path: 'a.txt' },
-        sessionId: 'sess-1',
-        usage: { percent: HARD_PCT },
-        root,
-        adlcRoots,
-      }).decision;
-    assert.equal(ask(), 'deny');
-    rmSync(join(root, '.adlc'), { recursive: true, force: true });
-    assert.equal(ask(), 'deny', 'removing .adlc is not a way to be forgotten');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const root = makeRepo(t);
+  const adlcRoots = createAdlcRootState();
+  const ask = () =>
+    checkHandoff({
+      toolName: 'edit',
+      input: { path: 'a.txt' },
+      sessionId: 'sess-1',
+      usage: { percent: HARD_PCT },
+      root,
+      adlcRoots,
+    }).decision;
+  assert.equal(ask(), 'deny');
+  rmSync(join(root, '.adlc'), { recursive: true, force: true });
+  assert.equal(ask(), 'deny', 'removing .adlc is not a way to be forgotten');
 });
 
-test('a non-mutating gated call spends the grant, and the text says so', () => {
+test('a non-mutating gated call spends the grant, and the text says so', (t) => {
   // "authorizes the NEXT mutation" was wrong: pi gates every tool but a read,
   // and the shared adapter consumes a verified grant on any gated call whose
   // other reasons are clear. A `bash pwd` therefore spends it without touching
   // anything, and an operator told otherwise loses their one shot to a
   // diagnostic command.
   const key = 'k'.repeat(64);
-  const root = makeRepo();
-  try {
-    checkHandoff({
-      toolName: 'edit',
-      input: { path: 'src/a.mjs' },
-      sessionId: 'sess-A',
-      usage: { percent: HANDOFF_PCT },
-      root,
-    });
-    const ask = (toolName, input) =>
-      checkHandoff({ toolName, input, sessionId: 'sess-B', root, manifestKey: key }).decision;
+  const root = makeRepo(t);
+  checkHandoff({
+    toolName: 'edit',
+    input: { path: 'src/a.mjs' },
+    sessionId: 'sess-A',
+    usage: { percent: HANDOFF_PCT },
+    root,
+  });
+  const ask = (toolName, input) =>
+    checkHandoff({ toolName, input, sessionId: 'sess-B', root, manifestKey: key }).decision;
 
-    assert.equal(ask('edit', { path: 'src/a.mjs' }), 'deny');
-    const cli = resolveRecoveryCliPath();
-    const grant = spawnSync(
-      process.execPath,
-      [cli, 'bypass', '--session', 'sess-B', '--unbound-reason', 'pi-handoff-operator-recovery',
-        '--dir', join(root, '.adlc'), '--write'],
-      { env: { ...process.env, ADLC_MANIFEST_KEY: key }, encoding: 'utf8' },
-    );
-    assert.equal(grant.status, 0, grant.stderr);
+  assert.equal(ask('edit', { path: 'src/a.mjs' }), 'deny');
+  const cli = resolveRecoveryCliPath();
+  const grant = spawnSync(
+    process.execPath,
+    [cli, 'bypass', '--session', 'sess-B', '--unbound-reason', 'pi-handoff-operator-recovery',
+      '--dir', join(root, '.adlc'), '--write'],
+    { env: { ...process.env, ADLC_MANIFEST_KEY: key }, encoding: 'utf8' },
+  );
+  assert.equal(grant.status, 0, grant.stderr);
 
-    assert.equal(ask('bash', { command: 'pwd' }), 'allow', 'a read-only shell call is still gated');
-    assert.equal(ask('edit', { path: 'src/a.mjs' }), 'deny', 'and it spent the grant');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  assert.equal(ask('bash', { command: 'pwd' }), 'allow', 'a read-only shell call is still gated');
+  assert.equal(ask('edit', { path: 'src/a.mjs' }), 'deny', 'and it spent the grant');
 });
 
-test('a store-integrity deny does not advertise a grant that cannot clear it', () => {
+test('a store-integrity deny does not advertise a grant that cannot clear it', (t) => {
   // Measured: against D0:deny_store_unavailable BOTH grant forms exit 0, are
   // consumed, and leave the session denied. Printing one as the recovery is
   // the same false instruction this gate exists to stop giving.
-  const root = makeRepo();
-  try {
-    checkHandoff({
-      toolName: 'edit',
-      input: { path: 'src/a.mjs' },
-      sessionId: 'sess-A',
-      usage: { percent: HANDOFF_PCT },
-      root,
-    });
-    // Emptied denies/ while the sentinel remains == the store is unavailable.
-    rmSync(join(root, '.adlc', 'handoffs', 'denies', 'sess-A.json'));
+  const root = makeRepo(t);
+  checkHandoff({
+    toolName: 'edit',
+    input: { path: 'src/a.mjs' },
+    sessionId: 'sess-A',
+    usage: { percent: HANDOFF_PCT },
+    root,
+  });
+  // Emptied denies/ while the sentinel remains == the store is unavailable.
+  rmSync(join(root, '.adlc', 'handoffs', 'denies', 'sess-A.json'));
 
-    const verdict = checkHandoff({
-      toolName: 'edit',
-      input: { path: 'src/a.mjs' },
-      sessionId: 'sess-A',
-      root,
-      manifestKey: 'k'.repeat(64),
-    });
-    assert.equal(verdict.decision, 'deny');
-    assert.ok(hasStoreIntegrityFault(verdict.reasons), `expected a store fault: ${verdict.reasons}`);
-    assert.ok(
-      verdict.reason.includes('Only the unbound form above lifts it'),
-      'the text must name the grant form that actually works',
-    );
-    assert.match(verdict.reason, /--unbound-reason/, 'and offer it');
-    assert.match(
-      verdict.reason,
-      /rm -rf \S+\/handoffs \S+\/\.deny-store/,
-      'and must point at the store repair that does',
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const verdict = checkHandoff({
+    toolName: 'edit',
+    input: { path: 'src/a.mjs' },
+    sessionId: 'sess-A',
+    root,
+    manifestKey: 'k'.repeat(64),
+  });
+  assert.equal(verdict.decision, 'deny');
+  assert.ok(hasStoreIntegrityFault(verdict.reasons), `expected a store fault: ${verdict.reasons}`);
+  assert.ok(
+    verdict.reason.includes('Only the unbound form above lifts it'),
+    'the text must name the grant form that actually works',
+  );
+  assert.match(verdict.reason, /--unbound-reason/, 'and offer it');
+  assert.match(
+    verdict.reason,
+    /rm -rf \S+\/handoffs \S+\/\.deny-store/,
+    'and must point at the store repair that does',
+  );
 });
 
 test('hasStoreIntegrityFault names store faults and nothing else', () => {
@@ -1554,45 +1378,41 @@ test('hasStoreIntegrityFault names store faults and nothing else', () => {
   assert.equal(hasStoreIntegrityFault(undefined), false);
 });
 
-test('a relative custom-tool target is reported against the session cwd', () => {
+test('a relative custom-tool target is reported against the session cwd', (t) => {
   // Containment resolves the REPO root, but a tool's relative path is relative
   // to the SESSION's cwd. Conflating the two misreports which file was touched
   // — `a.txt` from <repo>/src is `src/a.txt`, not `a.txt`. No bypass rides on
   // it (every spelling of a protected path denies either way, asserted below),
   // but the deny-set is told the wrong filename.
-  const root = makeRepo();
-  try {
-    const sub = join(root, 'src');
-    mkdirSync(sub, { recursive: true });
+  const root = makeRepo(t);
+  const sub = join(root, 'src');
+  mkdirSync(sub, { recursive: true });
 
-    const seen = [];
-    checkHandoff({
+  const seen = [];
+  checkHandoff({
+    toolName: 'some_custom_tool',
+    input: { target: 'a.txt' },
+    sessionId: 'sess-1',
+    usage: { percent: 5 },
+    root: sub,
+    evaluate: (o) => {
+      seen.push(...o.editRelPaths);
+      return { deny: false, reasons: [] };
+    },
+  });
+  assert.deepEqual(seen, ['src/a.txt'], 'relative to the session, expressed against the repo');
+
+  // And the protected store is denied however it is spelled from there.
+  for (const target of [join('..', '.adlc', '.deny-store'), join(root, '.adlc', '.deny-store')]) {
+    const verdict = checkHandoff({
       toolName: 'some_custom_tool',
-      input: { target: 'a.txt' },
+      input: { target },
       sessionId: 'sess-1',
       usage: { percent: 5 },
       root: sub,
-      evaluate: (o) => {
-        seen.push(...o.editRelPaths);
-        return { deny: false, reasons: [] };
-      },
     });
-    assert.deepEqual(seen, ['src/a.txt'], 'relative to the session, expressed against the repo');
-
-    // And the protected store is denied however it is spelled from there.
-    for (const target of [join('..', '.adlc', '.deny-store'), join(root, '.adlc', '.deny-store')]) {
-      const verdict = checkHandoff({
-        toolName: 'some_custom_tool',
-        input: { target },
-        sessionId: 'sess-1',
-        usage: { percent: 5 },
-        root: sub,
-      });
-      assert.equal(verdict.decision, 'deny', `must deny ${target}`);
-      assert.match(verdict.reason, /path_protected/);
-    }
-  } finally {
-    rmSync(root, { recursive: true, force: true });
+    assert.equal(verdict.decision, 'deny', `must deny ${target}`);
+    assert.match(verdict.reason, /path_protected/);
   }
 });
 
@@ -1639,7 +1459,7 @@ test('a store-integrity deny gets the UNBOUND grant, which is what lifts it', ()
   );
 });
 
-test('the command printed for a store fault, with --write deliberately added by a human, actually lifts it', () => {
+test('the command printed for a store fault, with --write deliberately added by a human, actually lifts it', (t) => {
   // The end-to-end check that would have caught my own false claim: run the
   // printed dry-run command (as a human operator would, after reading it and
   // deliberately adding --write themselves — round 2 review: the auto-printed
@@ -1647,71 +1467,63 @@ test('the command printed for a store fault, with --write deliberately added by 
   // call is allowed. It is — the unbound form lifts D0 where a bound one does
   // not.
   const key = 'k'.repeat(64);
-  const root = makeRepo();
-  try {
-    checkHandoff({
-      toolName: 'edit',
-      input: { path: 'src/a.mjs' },
-      sessionId: 'sess-A',
-      usage: { percent: HANDOFF_PCT },
-      root,
-    });
-    // Emptied denies/ with the sentinel still present == store unavailable.
-    rmSync(join(root, '.adlc', 'handoffs', 'denies', 'sess-A.json'));
+  const root = makeRepo(t);
+  checkHandoff({
+    toolName: 'edit',
+    input: { path: 'src/a.mjs' },
+    sessionId: 'sess-A',
+    usage: { percent: HANDOFF_PCT },
+    root,
+  });
+  // Emptied denies/ with the sentinel still present == store unavailable.
+  rmSync(join(root, '.adlc', 'handoffs', 'denies', 'sess-A.json'));
 
-    const ask = () =>
-      checkHandoff({ toolName: 'edit', input: { path: 'src/a.mjs' }, sessionId: 'sess-B', root, manifestKey: key });
-    const denied = ask();
-    assert.deepEqual(denied.reasons, ['D0:deny_store_unavailable'], 'a clean store fault, nothing else');
+  const ask = () =>
+    checkHandoff({ toolName: 'edit', input: { path: 'src/a.mjs' }, sessionId: 'sess-B', root, manifestKey: key });
+  const denied = ask();
+  assert.deepEqual(denied.reasons, ['D0:deny_store_unavailable'], 'a clean store fault, nothing else');
 
-    const printedLine = denied.reason.split('\n').find((line) => line.includes('bypass --session'));
-    assert.ok(printedLine, `no command printed for a store fault:\n${denied.reason}`);
-    assert.doesNotMatch(printedLine, /--dir \S+ --write\b/, 'the auto-printed command must never carry --write directly (D6)');
-    // The command now sits alone on its own line (#970 remediation: it must
-    // never be concatenated with the explanatory prose), so `printedLine`
-    // IS the command already — no need to strip a trailing "(dry run..." tail.
-    const dryRunCommand = printedLine.replace(/^[^:]*: /, '');
-    const command = `${dryRunCommand} --write`;
+  const printedLine = denied.reason.split('\n').find((line) => line.includes('bypass --session'));
+  assert.ok(printedLine, `no command printed for a store fault:\n${denied.reason}`);
+  assert.doesNotMatch(printedLine, /--dir \S+ --write\b/, 'the auto-printed command must never carry --write directly (D6)');
+  // The command now sits alone on its own line (#970 remediation: it must
+  // never be concatenated with the explanatory prose), so `printedLine`
+  // IS the command already — no need to strip a trailing "(dry run..." tail.
+  const dryRunCommand = printedLine.replace(/^[^:]*: /, '');
+  const command = `${dryRunCommand} --write`;
 
-    const run = spawnSync(command, {
-      shell: true,
-      cwd: realpathSync(tmpdir()),
-      env: { ...process.env, ADLC_MANIFEST_KEY: key },
-      encoding: 'utf8',
-    });
-    assert.equal(run.status, 0, `printed command + --write failed: ${run.stderr}`);
-    assert.equal(ask().decision, 'allow', 'the printed command, with --write deliberately added, must lift the store fault');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const run = spawnSync(command, {
+    shell: true,
+    cwd: realpathSync(tmpdir()),
+    env: { ...process.env, ADLC_MANIFEST_KEY: key },
+    encoding: 'utf8',
+  });
+  assert.equal(run.status, 0, `printed command + --write failed: ${run.stderr}`);
+  assert.equal(ask().decision, 'allow', 'the printed command, with --write deliberately added, must lift the store fault');
 });
 
-test('a protected-path deny offers no grant, because none lifts it', () => {
+test('a protected-path deny offers no grant, because none lifts it', (t) => {
   // Measured: with a verified unbound grant in place, a tool naming
   // `.adlc/.deny-store` is still denied and the grant is not consumed. Offering
   // one spends the operator's single shot on a deny it cannot touch.
-  const root = makeRepo();
-  try {
-    const verdict = checkHandoff({
-      toolName: 'some_custom_tool',
-      input: { target: join(root, '.adlc', '.deny-store') },
-      sessionId: 'sess-B',
-      root,
-      manifestKey: 'k'.repeat(64),
-    });
-    assert.equal(verdict.decision, 'deny');
-    assert.ok(hasProtectedPathFault(verdict.reasons), `expected a protected-path reason: ${verdict.reasons}`);
-    assert.doesNotMatch(verdict.reason, /bypass --session/, 'no grant is offered');
-    assert.match(verdict.reason, /targets an ADLC artifact the deny-set protects/);
-    assert.match(verdict.reason, /target something outside/);
-    // Measured asymmetry, and the operator has to be warned about it: a SHELL
-    // call naming a protected path is refused but still spends a grant, while
-    // a structured tool call does not. The shared adapter claims the grant
-    // before its shell scan appends the reasons.
-    assert.match(verdict.reason, /SPENDS the grant anyway/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const root = makeRepo(t);
+  const verdict = checkHandoff({
+    toolName: 'some_custom_tool',
+    input: { target: join(root, '.adlc', '.deny-store') },
+    sessionId: 'sess-B',
+    root,
+    manifestKey: 'k'.repeat(64),
+  });
+  assert.equal(verdict.decision, 'deny');
+  assert.ok(hasProtectedPathFault(verdict.reasons), `expected a protected-path reason: ${verdict.reasons}`);
+  assert.doesNotMatch(verdict.reason, /bypass --session/, 'no grant is offered');
+  assert.match(verdict.reason, /targets an ADLC artifact the deny-set protects/);
+  assert.match(verdict.reason, /target something outside/);
+  // Measured asymmetry, and the operator has to be warned about it: a SHELL
+  // call naming a protected path is refused but still spends a grant, while
+  // a structured tool call does not. The shared adapter claims the grant
+  // before its shell scan appends the reasons.
+  assert.match(verdict.reason, /SPENDS the grant anyway/);
 });
 
 test('hasProtectedPathFault covers both protected-path spellings', () => {
@@ -1724,7 +1536,7 @@ test('hasProtectedPathFault covers both protected-path spellings', () => {
   assert.equal(hasProtectedPathFault(undefined), false);
 });
 
-test('a nested .adlc cannot outrank the repo it sits in', () => {
+test('a nested .adlc cannot outrank the repo it sits in', (t) => {
   // The escape this closes: an agent below the band creates <repo>/src/.adlc,
   // and a nearest-match walk would then resolve every later call to that empty
   // store, stepping around the outer repo's open deny. Measured before the
@@ -1734,68 +1546,60 @@ test('a nested .adlc cannot outrank the repo it sits in', () => {
   // keeps a separate deny store, it answers to the enclosing repo. One
   // checkout, one ADLC root. An independent nested checkout still keeps its
   // own, because the walk stops at its .git (asserted separately below).
-  const root = makeRepo();
-  try {
-    makeCheckout(root);
-    const sub = join(root, 'src');
-    mkdirSync(sub, { recursive: true });
+  const root = makeRepo(t);
+  makeCheckout(root);
+  const sub = join(root, 'src');
+  mkdirSync(sub, { recursive: true });
 
-    const adlcRoots = createAdlcRootState();
-    const ask = (r) =>
-      checkHandoff({
-        toolName: 'edit',
-        input: { path: 'a.txt' },
-        sessionId: 'sess-B',
-        root: r,
-        adlcRoots,
-      }).decision;
-
-    // Session A leaves an open, repo-wide deny.
+  const adlcRoots = createAdlcRootState();
+  const ask = (r) =>
     checkHandoff({
       toolName: 'edit',
       input: { path: 'a.txt' },
-      sessionId: 'sess-A',
-      usage: { percent: HANDOFF_PCT },
-      root,
+      sessionId: 'sess-B',
+      root: r,
       adlcRoots,
-    });
-    assert.equal(ask(sub), 'deny', 'the subdirectory answers to the repo');
+    }).decision;
 
-    // The strongest form of the escape: the agent plants a complete, valid
-    // ticket store, not just a directory.
-    installAdlc(sub);
-    assert.equal(ask(sub), 'deny', 'and a store planted underneath does not change that');
+  // Session A leaves an open, repo-wide deny.
+  checkHandoff({
+    toolName: 'edit',
+    input: { path: 'a.txt' },
+    sessionId: 'sess-A',
+    usage: { percent: HANDOFF_PCT },
+    root,
+    adlcRoots,
+  });
+  assert.equal(ask(sub), 'deny', 'the subdirectory answers to the repo');
 
-    assert.equal(resolveAdlcRoot(sub), realpathSync(root), 'the repo root is still the root');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  // The strongest form of the escape: the agent plants a complete, valid
+  // ticket store, not just a directory.
+  installAdlc(sub);
+  assert.equal(ask(sub), 'deny', 'and a store planted underneath does not change that');
+
+  assert.equal(resolveAdlcRoot(sub), realpathSync(root), 'the repo root is still the root');
 });
 
-test('a .adlc above the checkout cannot capture it either', () => {
+test('a .adlc above the checkout cannot capture it either', (t) => {
   // The same boundary in the other direction: the walk stops at .git, so an
   // ADLC directory in some parent of the checkout is not this repo's root.
-  const outer = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-above-')));
-  try {
-    installAdlc(outer);
-    const checkout = join(outer, 'project');
-    makeCheckout(checkout);
+  const outer = tmp(t, 'pi-handoff-deny-above-');
+  installAdlc(outer);
+  const checkout = join(outer, 'project');
+  makeCheckout(checkout);
 
-    assert.equal(resolveAdlcRoot(checkout), null, 'the checkout did not opt in');
-    assert.equal(
-      checkHandoff({
-        toolName: 'edit',
-        input: { path: 'a.txt' },
-        sessionId: 'sess-1',
-        usage: { percent: HARD_PCT },
-        root: checkout,
-      }).decision,
-      'allow',
-    );
-    assert.equal(existsSync(join(checkout, '.adlc')), false);
-  } finally {
-    rmSync(outer, { recursive: true, force: true });
-  }
+  assert.equal(resolveAdlcRoot(checkout), null, 'the checkout did not opt in');
+  assert.equal(
+    checkHandoff({
+      toolName: 'edit',
+      input: { path: 'a.txt' },
+      sessionId: 'sess-1',
+      usage: { percent: HARD_PCT },
+      root: checkout,
+    }).decision,
+    'allow',
+  );
+  assert.equal(existsSync(join(checkout, '.adlc')), false);
 });
 
 test('every tool the rail checker calls read-only stays usable under a deny', () => {
@@ -1881,192 +1685,170 @@ test('the unresolved-CLI fallback names the unbound form for a store fault', () 
   assert.match(storeFault, /add --write yourself/, 'must still say how to escalate deliberately');
 });
 
-test('a directory contaminated by the old bug is not an ADLC repo', () => {
+test('a directory contaminated by the old bug is not an ADLC repo', (t) => {
   // The blocker left `.adlc/.deny-store` and markers in ordinary directories.
   // Gating containment on the mere presence of `.adlc` lets those artifacts
   // vouch for the gate that created them, so a repo already hit by the bug
   // stays bricked by the very fix meant to unbrick it. The ticket store — the
   // plugin's own "ADLC is installed here" test — is what decides.
-  const root = makeBareDir();
-  try {
-    // Exactly what the pre-fix gate left behind: deny state, no ticket store.
-    mkdirSync(join(root, '.adlc', 'handoffs', 'denies'), { recursive: true });
-    writeFileSync(join(root, '.adlc', '.deny-store'), JSON.stringify({ schema: 1, sessions: ['old'] }));
-    writeFileSync(
-      join(root, '.adlc', 'handoffs', 'denies', 'old.json'),
-      JSON.stringify({ session_id: 'old', ticket_id: null, content_hash: null, status: 'open' }),
-    );
+  const root = makeBareDir(t);
+  // Exactly what the pre-fix gate left behind: deny state, no ticket store.
+  mkdirSync(join(root, '.adlc', 'handoffs', 'denies'), { recursive: true });
+  writeFileSync(join(root, '.adlc', '.deny-store'), JSON.stringify({ schema: 1, sessions: ['old'] }));
+  writeFileSync(
+    join(root, '.adlc', 'handoffs', 'denies', 'old.json'),
+    JSON.stringify({ session_id: 'old', ticket_id: null, content_hash: null, status: 'open' }),
+  );
 
-    for (const percent of [5, HANDOFF_PCT, HARD_PCT, 95]) {
-      for (const [tool, input] of [
-        ['edit', { path: 'a.txt' }],
-        ['bash', { command: 'npm test' }],
-      ]) {
-        assert.notEqual(
-          checkHandoff({ toolName: tool, input, sessionId: 'sess-1', usage: { percent }, root }).decision,
-          'deny',
-          `${tool} at ${percent}% must not be denied by the old bug's own leftovers`,
-        );
-      }
+  for (const percent of [5, HANDOFF_PCT, HARD_PCT, 95]) {
+    for (const [tool, input] of [
+      ['edit', { path: 'a.txt' }],
+      ['bash', { command: 'npm test' }],
+    ]) {
+      assert.notEqual(
+        checkHandoff({ toolName: tool, input, sessionId: 'sess-1', usage: { percent }, root }).decision,
+        'deny',
+        `${tool} at ${percent}% must not be denied by the old bug's own leftovers`,
+      );
     }
-  } finally {
-    rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('an external ticket store arms the gate with no local .adlc', () => {
+test('an external ticket store arms the gate with no local .adlc', (t) => {
   // The other half, and the fail-open u4 hit: ADLC_TICKET_STORE may be an
   // absolute path to a store outside the worktree, which the rail guard
   // accepts with no local `.adlc`. ANDing a local directory onto the predicate
   // would leave rails enforcing while the deny-set silently stood down.
-  const root = makeBareDir();
-  const storeHome = makeBareDir();
-  try {
-    const store = join(storeHome, 'tickets.json');
-    writeFileSync(store, JSON.stringify({ tickets: [TICKET] }));
-    let evaluatedRoot = null;
-    const verdict = checkHandoff({
-      toolName: 'edit',
-      input: { path: 'a.txt' },
-      sessionId: 'sess-1',
-      usage: { percent: HARD_PCT },
-      root,
-      storeOverride: store,
-      evaluate: (o) => {
-        evaluatedRoot = o.root;
-        return { deny: true, reasons: ['D1:band'] };
-      },
-    });
-    assert.equal(verdict.decision, 'deny', 'an external store still means ADLC is in force');
-    // And enforcement must land on the WORKING directory. An absolute override
-    // is true of every ancestor equally, so letting it drive the walk marched
-    // the root up to `/` — where durable deny state would have been written.
-    assert.equal(evaluatedRoot, realpathSync(root), 'the repo, not an ancestor');
-    assert.equal(resolveAdlcRoot(root, store), realpathSync(root));
-    assert.notEqual(resolveAdlcRoot(root, store), '/');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(storeHome, { recursive: true, force: true });
-  }
+  const root = makeBareDir(t);
+  const storeHome = makeBareDir(t);
+  const store = join(storeHome, 'tickets.json');
+  writeFileSync(store, JSON.stringify({ tickets: [TICKET] }));
+  let evaluatedRoot = null;
+  const verdict = checkHandoff({
+    toolName: 'edit',
+    input: { path: 'a.txt' },
+    sessionId: 'sess-1',
+    usage: { percent: HARD_PCT },
+    root,
+    storeOverride: store,
+    evaluate: (o) => {
+      evaluatedRoot = o.root;
+      return { deny: true, reasons: ['D1:band'] };
+    },
+  });
+  assert.equal(verdict.decision, 'deny', 'an external store still means ADLC is in force');
+  // And enforcement must land on the WORKING directory. An absolute override
+  // is true of every ancestor equally, so letting it drive the walk marched
+  // the root up to `/` — where durable deny state would have been written.
+  assert.equal(evaluatedRoot, realpathSync(root), 'the repo, not an ancestor');
+  assert.equal(resolveAdlcRoot(root, store), realpathSync(root));
+  assert.notEqual(resolveAdlcRoot(root, store), '/');
 });
 
-test('a bare mkdir .git is not a checkout, even on the first gated call', () => {
+test('a bare mkdir .git is not a checkout, even on the first gated call', (t) => {
   // The remembered-root rule only helps once something has been remembered. A
   // session whose FIRST gated call happens below a freshly created `.git` had
   // no memory to fall back on, so an empty directory was a one-command opt-out
   // of the enclosing repo's deny. A real checkout has HEAD.
-  const root = makeRepo();
-  try {
-    makeCheckout(root);
-    const sub = join(root, 'src');
-    mkdirSync(join(sub, '.git'), { recursive: true }); // the agent's version: no HEAD
+  const root = makeRepo(t);
+  makeCheckout(root);
+  const sub = join(root, 'src');
+  mkdirSync(join(sub, '.git'), { recursive: true }); // the agent's version: no HEAD
 
-    // Fresh memory: nothing has been armed yet, exactly as on a first call.
-    const verdict = checkHandoff({
+  // Fresh memory: nothing has been armed yet, exactly as on a first call.
+  const verdict = checkHandoff({
+    toolName: 'edit',
+    input: { path: 'a.txt' },
+    sessionId: 'sess-1',
+    usage: { percent: HARD_PCT },
+    root: sub,
+    adlcRoots: createAdlcRootState(),
+  });
+  assert.equal(verdict.decision, 'deny', 'an empty .git does not release the enclosing repo');
+  assert.equal(resolveAdlcRoot(sub), realpathSync(root));
+
+  // And giving it a convincing HEAD does not either, because the enclosing
+  // repo is a real ADLC repo (git + ticket store). That is the tiebreaker: no
+  // filesystem test separates a forged checkout from a real one, so inside a
+  // real ADLC repo the boundary does not release enforcement at all — cold,
+  // with no remembered root to fall back on.
+  writeFileSync(join(sub, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  assert.equal(resolveAdlcRoot(sub), realpathSync(root), 'still the enclosing repo');
+
+  const linked = join(root, 'linked');
+  mkdirSync(linked, { recursive: true });
+  writeFileSync(join(linked, '.git'), 'gitdir: ../.git/worktrees/linked\n');
+  assert.equal(resolveAdlcRoot(linked), realpathSync(root), 'a worktree pointer does not either');
+
+  const forged = join(root, 'forged');
+  mkdirSync(forged, { recursive: true });
+  for (const content of ['x', '', 'not a gitdir pointer', 'GITDIR: ../elsewhere']) {
+    writeFileSync(join(forged, '.git'), content);
+    assert.equal(
+      resolveAdlcRoot(forged),
+      realpathSync(root),
+      `a .git file containing ${JSON.stringify(content)} is not a checkout`,
+    );
+  }
+});
+
+test('an external store gives one root per checkout, not one per directory', (t) => {
+  // Falling back to the cwd meant each subdirectory became its own handoff
+  // root, so deny markers scattered per-directory and an open deny stopped
+  // being repo-wide — the durable, cross-session property the whole deny-set
+  // rests on.
+  const root = makeCheckout(makeBareDir(t));
+  const storeHome = makeBareDir(t);
+  const store = join(storeHome, 'tickets.json');
+  writeFileSync(store, JSON.stringify({ tickets: [TICKET] }));
+  const deep = join(root, 'packages', 'a', 'src');
+  mkdirSync(deep, { recursive: true });
+
+  assert.equal(resolveAdlcRoot(root, store), realpathSync(root));
+  assert.equal(resolveAdlcRoot(deep, store), realpathSync(root), 'the checkout, not the cwd');
+  assert.equal(
+    resolveAdlcRoot(join(root, 'packages'), store),
+    realpathSync(root),
+    'and the same root from every depth',
+  );
+});
+
+test('the enclosing repo is remembered from session start, before any tool call', (t) => {
+  // The residual escape after the boundary was hardened: a `.git` forged
+  // BEFORE the session leaves no remembered root to outrank it on the first
+  // gated call. Arming at session_start closes that window — the memory is the
+  // one signal an agent cannot construct from inside the session.
+  const root = makeRepo(t);
+  makeCheckout(root);
+  const sub = join(root, 'src');
+  // A convincing forgery, planted before the session ever starts.
+  mkdirSync(join(sub, '.git'), { recursive: true });
+  writeFileSync(join(sub, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+
+  // The forgery does not win even unarmed: inside a real ADLC repo (git +
+  // ticket store) the boundary never releases enforcement. Arming at
+  // session_start is the second, independent guarantee this test pins.
+  assert.equal(resolveAdlcRoot(sub), realpathSync(root), 'the enclosing repo still answers');
+
+  // session_start resolves from the SESSION's root and records it, so the
+  // same call from the subdirectory is outranked by the remembered repo.
+  const adlcRoots = createAdlcRootState();
+  adlcRoots.record(resolveAdlcRoot(root));
+  assert.equal(
+    checkHandoff({
       toolName: 'edit',
       input: { path: 'a.txt' },
       sessionId: 'sess-1',
       usage: { percent: HARD_PCT },
       root: sub,
-      adlcRoots: createAdlcRootState(),
-    });
-    assert.equal(verdict.decision, 'deny', 'an empty .git does not release the enclosing repo');
-    assert.equal(resolveAdlcRoot(sub), realpathSync(root));
-
-    // And giving it a convincing HEAD does not either, because the enclosing
-    // repo is a real ADLC repo (git + ticket store). That is the tiebreaker: no
-    // filesystem test separates a forged checkout from a real one, so inside a
-    // real ADLC repo the boundary does not release enforcement at all — cold,
-    // with no remembered root to fall back on.
-    writeFileSync(join(sub, '.git', 'HEAD'), 'ref: refs/heads/main\n');
-    assert.equal(resolveAdlcRoot(sub), realpathSync(root), 'still the enclosing repo');
-
-    const linked = join(root, 'linked');
-    mkdirSync(linked, { recursive: true });
-    writeFileSync(join(linked, '.git'), 'gitdir: ../.git/worktrees/linked\n');
-    assert.equal(resolveAdlcRoot(linked), realpathSync(root), 'a worktree pointer does not either');
-
-    const forged = join(root, 'forged');
-    mkdirSync(forged, { recursive: true });
-    for (const content of ['x', '', 'not a gitdir pointer', 'GITDIR: ../elsewhere']) {
-      writeFileSync(join(forged, '.git'), content);
-      assert.equal(
-        resolveAdlcRoot(forged),
-        realpathSync(root),
-        `a .git file containing ${JSON.stringify(content)} is not a checkout`,
-      );
-    }
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+      adlcRoots,
+    }).decision,
+    'deny',
+    'a repo armed at session start is not released by a forged boundary',
+  );
 });
 
-test('an external store gives one root per checkout, not one per directory', () => {
-  // Falling back to the cwd meant each subdirectory became its own handoff
-  // root, so deny markers scattered per-directory and an open deny stopped
-  // being repo-wide — the durable, cross-session property the whole deny-set
-  // rests on.
-  const root = makeCheckout(makeBareDir());
-  const storeHome = makeBareDir();
-  try {
-    const store = join(storeHome, 'tickets.json');
-    writeFileSync(store, JSON.stringify({ tickets: [TICKET] }));
-    const deep = join(root, 'packages', 'a', 'src');
-    mkdirSync(deep, { recursive: true });
-
-    assert.equal(resolveAdlcRoot(root, store), realpathSync(root));
-    assert.equal(resolveAdlcRoot(deep, store), realpathSync(root), 'the checkout, not the cwd');
-    assert.equal(
-      resolveAdlcRoot(join(root, 'packages'), store),
-      realpathSync(root),
-      'and the same root from every depth',
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(storeHome, { recursive: true, force: true });
-  }
-});
-
-test('the enclosing repo is remembered from session start, before any tool call', () => {
-  // The residual escape after the boundary was hardened: a `.git` forged
-  // BEFORE the session leaves no remembered root to outrank it on the first
-  // gated call. Arming at session_start closes that window — the memory is the
-  // one signal an agent cannot construct from inside the session.
-  const root = makeRepo();
-  try {
-    makeCheckout(root);
-    const sub = join(root, 'src');
-    // A convincing forgery, planted before the session ever starts.
-    mkdirSync(join(sub, '.git'), { recursive: true });
-    writeFileSync(join(sub, '.git', 'HEAD'), 'ref: refs/heads/main\n');
-
-    // The forgery does not win even unarmed: inside a real ADLC repo (git +
-    // ticket store) the boundary never releases enforcement. Arming at
-    // session_start is the second, independent guarantee this test pins.
-    assert.equal(resolveAdlcRoot(sub), realpathSync(root), 'the enclosing repo still answers');
-
-    // session_start resolves from the SESSION's root and records it, so the
-    // same call from the subdirectory is outranked by the remembered repo.
-    const adlcRoots = createAdlcRootState();
-    adlcRoots.record(resolveAdlcRoot(root));
-    assert.equal(
-      checkHandoff({
-        toolName: 'edit',
-        input: { path: 'a.txt' },
-        sessionId: 'sess-1',
-        usage: { percent: HARD_PCT },
-        root: sub,
-        adlcRoots,
-      }).decision,
-      'deny',
-      'a repo armed at session start is not released by a forged boundary',
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test('session_start itself arms the memory, through the real extension', async () => {
+test('session_start itself arms the memory, through the real extension', async (t) => {
   // The repo here deliberately has a ticket store but NO `.git`, which is the
   // shape the enclosing-ADLC-repo tiebreaker cannot help with: with no git+store
   // ancestor, a forged `<sub>/.git` IS honoured as a boundary, so the memory
@@ -2074,28 +1856,24 @@ test('session_start itself arms the memory, through the real extension', async (
   // escape. (Inside a real git+store repo the boundary never releases at all —
   // covered separately — which is why this test must not use that shape, or it
   // would pass without the wiring it exists to pin.)
-  const root = makeRepo();
-  try {
-    const sub = join(root, 'src');
-    mkdirSync(join(sub, '.git'), { recursive: true });
-    writeFileSync(join(sub, '.git', 'HEAD'), 'ref: refs/heads/main\n');
-    writeFileSync(join(sub, 'a.txt'), 'x\n');
+  const root = makeRepo(t);
+  const sub = join(root, 'src');
+  mkdirSync(join(sub, '.git'), { recursive: true });
+  writeFileSync(join(sub, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  writeFileSync(join(sub, 'a.txt'), 'x\n');
 
-    // Structurally, the forgery DOES win here: no git+store ancestor exists, so
-    // the tiebreaker cannot fire and the boundary is honoured. That is what
-    // makes this the shape where session_start arming is load-bearing.
-    assert.equal(resolveAdlcRoot(sub), null, 'unarmed, the forged boundary is honoured');
+  // Structurally, the forgery DOES win here: no git+store ancestor exists, so
+  // the tiebreaker cannot fire and the boundary is honoured. That is what
+  // makes this the shape where session_start arming is load-bearing.
+  assert.equal(resolveAdlcRoot(sub), null, 'unarmed, the forged boundary is honoured');
 
-    // A session opens in the repo — session_start must record it.
-    await boot(root, { percent: 5, sessionId: 'sess-A' });
+  // A session opens in the repo — session_start must record it.
+  await boot(root, { percent: 5, sessionId: 'sess-A' });
 
-    // A later session opens inside the forged directory.
-    const second = await boot(sub, { percent: HARD_PCT, sessionId: 'sess-B' });
-    const verdict = await call(second.pi, second.ctx, 'edit', { path: join(sub, 'a.txt') });
-    assert.equal(verdict?.block, true, 'the repo armed at session start outranks the forgery');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  // A later session opens inside the forged directory.
+  const second = await boot(sub, { percent: HARD_PCT, sessionId: 'sess-B' });
+  const verdict = await call(second.pi, second.ctx, 'edit', { path: join(sub, 'a.txt') });
+  assert.equal(verdict?.block, true, 'the repo armed at session start outranks the forgery');
 });
 
 test('the keyless recipe never globs, because a glob leaves the repo', () => {
@@ -2127,36 +1905,31 @@ test('the keyless recipe never globs, because a glob leaves the repo', () => {
   );
 });
 
-test('the printed --dir is the real path, not a symlink to it', () => {
+test('the printed --dir is the real path, not a symlink to it', (t) => {
   // `--dir` is pasted into a shell and the CLI insists its last segment is
   // `.adlc`; a symlinked root that resolves elsewhere would hand the operator a
   // path the CLI rejects, or worse, the wrong repo's store. Dropping the
   // realpath survived every other test.
-  const real = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-realdir-')));
-  const linkHome = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-realdir-link-')));
+  const real = tmp(t, 'pi-handoff-deny-realdir-');
+  const linkHome = tmp(t, 'pi-handoff-deny-realdir-link-');
   const link = join(linkHome, 'repo');
-  try {
-    installAdlc(real);
-    symlinkSync(real, link);
-    const viaLink = handoffRecoveryDiagnostic({
-      sessionId: 'sess-a',
-      root: link,
-      reasons: ['D3:unauthorized_open:sess-b'],
-      hasManifestKey: true,
-      cliPath: '/opt/adlc/bin/handoff.mjs',
-    });
-    // --dir is the last token on the command's own first line (the prose
-    // explanation follows on the next line — #970), so check the line
-    // ending rather than a trailing space.
-    assert.ok(
-      viaLink.split('\n')[0].endsWith(`--dir ${join(real, '.adlc')}`),
-      `expected the real path: ${viaLink}`,
-    );
-    assert.ok(!viaLink.includes(link), 'the symlink must not appear in a pasted command');
-  } finally {
-    rmSync(real, { recursive: true, force: true });
-    rmSync(linkHome, { recursive: true, force: true });
-  }
+  installAdlc(real);
+  symlinkSync(real, link);
+  const viaLink = handoffRecoveryDiagnostic({
+    sessionId: 'sess-a',
+    root: link,
+    reasons: ['D3:unauthorized_open:sess-b'],
+    hasManifestKey: true,
+    cliPath: '/opt/adlc/bin/handoff.mjs',
+  });
+  // --dir is the last token on the command's own first line (the prose
+  // explanation follows on the next line — #970), so check the line
+  // ending rather than a trailing space.
+  assert.ok(
+    viaLink.split('\n')[0].endsWith(`--dir ${join(real, '.adlc')}`),
+    `expected the real path: ${viaLink}`,
+  );
+  assert.ok(!viaLink.includes(link), 'the symlink must not appear in a pasted command');
 });
 
 test('a deny with no resolved root prints no command rather than the wrong one', () => {
@@ -2176,7 +1949,7 @@ test('a deny with no resolved root prints no command rather than the wrong one',
   }
 });
 
-test('an unreadable filesystem identity keeps enforcing, on either side', () => {
+test('an unreadable filesystem identity keeps enforcing, on either side', (t) => {
   // The fail-closed branch of the checkout-identity check had no test at all:
   // planting `return false` there — turning "cannot tell" into "forget it" —
   // passed the entire suite. Both halves matter, because both mean the same
@@ -2185,44 +1958,40 @@ test('an unreadable filesystem identity keeps enforcing, on either side', () => 
   const adlcRoots = createAdlcRootState();
 
   // `now === null`: recorded while the directory existed, unreadable after.
-  const parent = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-gone-')));
+  const parent = tmp(t, 'pi-handoff-deny-gone-');
   const root = join(parent, 'repo');
-  try {
-    installAdlc(root);
-    adlcRoots.record(root);
-    assert.equal(adlcRoots.has(root), true, 'armed while present');
+  installAdlc(root);
+  adlcRoots.record(root);
+  assert.equal(adlcRoots.has(root), true, 'armed while present');
 
-    renameSync(root, join(parent, 'moved-away'));
-    assert.equal(adlcRoots.has(root), true, 'and still armed once it cannot be read');
+  renameSync(root, join(parent, 'moved-away'));
+  assert.equal(adlcRoots.has(root), true, 'and still armed once it cannot be read');
 
-    // Through the gate: containment must reach evaluation rather than
-    // short-circuiting to allow. The evaluator is stubbed so this is a
-    // statement about containment only.
-    assert.equal(
-      checkHandoff({
-        toolName: 'edit',
-        input: { path: 'a.txt' },
-        sessionId: 'sess-1',
-        usage: { percent: 5 },
-        root,
-        adlcRoots,
-        evaluate: () => ({ deny: true, reasons: ['D1:band'] }),
-      }).decision,
-      'deny',
-      'a remembered root with no readable identity stays enforced',
-    );
+  // Through the gate: containment must reach evaluation rather than
+  // short-circuiting to allow. The evaluator is stubbed so this is a
+  // statement about containment only.
+  assert.equal(
+    checkHandoff({
+      toolName: 'edit',
+      input: { path: 'a.txt' },
+      sessionId: 'sess-1',
+      usage: { percent: 5 },
+      root,
+      adlcRoots,
+      evaluate: () => ({ deny: true, reasons: ['D1:band'] }),
+    }).decision,
+    'deny',
+    'a remembered root with no readable identity stays enforced',
+  );
 
-    // `recorded === null`: identity was never establishable — a platform
-    // without stable inodes, or a path that vanished before the stat.
-    const neverThere = join(parent, 'never-existed');
-    adlcRoots.record(neverThere);
-    assert.equal(adlcRoots.has(neverThere), true, 'unknown at record time also fails closed');
-  } finally {
-    rmSync(parent, { recursive: true, force: true });
-  }
+  // `recorded === null`: identity was never establishable — a platform
+  // without stable inodes, or a path that vanished before the stat.
+  const neverThere = join(parent, 'never-existed');
+  adlcRoots.record(neverThere);
+  assert.equal(adlcRoots.has(neverThere), true, 'unknown at record time also fails closed');
 });
 
-test('a symlinked .adlc shows its real target in the removal command', () => {
+test('a symlinked .adlc shows its real target in the removal command', (t) => {
   // An external ticket store reached through `.adlc -> /elsewhere` is a
   // supported layout, and `rm -rf .adlc/handoffs` follows the link — measured,
   // it deleted through it. Printing the relative form hid that: the command
@@ -2230,42 +1999,38 @@ test('a symlinked .adlc shows its real target in the removal command', () => {
   // reach visible BEFORE the operator runs it, which is the honest fix; for a
   // genuine external store deleting there is exactly right, and for a repointed
   // one the operator can see the path is not their repo.
-  const parent = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-extstore-')));
-  try {
-    const repo = join(parent, 'repo');
-    const store = join(parent, 'external-store');
-    mkdirSync(repo, { recursive: true });
-    mkdirSync(store, { recursive: true });
-    symlinkSync(store, join(repo, '.adlc'));
+  const parent = tmp(t, 'pi-handoff-deny-extstore-');
+  const repo = join(parent, 'repo');
+  const store = join(parent, 'external-store');
+  mkdirSync(repo, { recursive: true });
+  mkdirSync(store, { recursive: true });
+  symlinkSync(store, join(repo, '.adlc'));
 
-    const text = handoffRecoveryDiagnostic({
-      sessionId: 'sess-a',
-      root: repo,
-      reasons: ['D3:unauthorized_open:sess-b'],
-      hasManifestKey: false,
-      cliPath: '/opt/adlc/bin/handoff.mjs',
-    });
-    assert.ok(
-      text.includes(`rm -rf ${store}/handoffs ${store}/.deny-store`),
-      `the removal must name the real store:\n${text}`,
-    );
-    assert.doesNotMatch(text, /rm -rf \.adlc/, 'never the relative form that hides the hop');
+  const text = handoffRecoveryDiagnostic({
+    sessionId: 'sess-a',
+    root: repo,
+    reasons: ['D3:unauthorized_open:sess-b'],
+    hasManifestKey: false,
+    cliPath: '/opt/adlc/bin/handoff.mjs',
+  });
+  assert.ok(
+    text.includes(`rm -rf ${store}/handoffs ${store}/.deny-store`),
+    `the removal must name the real store:\n${text}`,
+  );
+  assert.doesNotMatch(text, /rm -rf \.adlc/, 'never the relative form that hides the hop');
 
-    // `--dir` keeps the unresolved spelling on purpose: the CLI requires that
-    // argument's last segment to be `.adlc`, which the target is not. It is
-    // also the last token on the command's own first line (the prose
-    // explanation follows on the next line — #970), so check the line
-    // ending rather than a trailing space.
-    assert.ok(
-      text.split('\n')[0].endsWith(`--dir ${join(repo, '.adlc')}`),
-      'the CLI argument stays .adlc-suffixed',
-    );
-  } finally {
-    rmSync(parent, { recursive: true, force: true });
-  }
+  // `--dir` keeps the unresolved spelling on purpose: the CLI requires that
+  // argument's last segment to be `.adlc`, which the target is not. It is
+  // also the last token on the command's own first line (the prose
+  // explanation follows on the next line — #970), so check the line
+  // ending rather than a trailing space.
+  assert.ok(
+    text.split('\n')[0].endsWith(`--dir ${join(repo, '.adlc')}`),
+    'the CLI argument stays .adlc-suffixed',
+  );
 });
 
-test('a forged checkout inside a real ADLC repo cannot release it, even cold', () => {
+test('a forged checkout inside a real ADLC repo cannot release it, even cold', (t) => {
   // The tiebreaker between two requirements that otherwise conflict, given
   // that no filesystem test separates a forged checkout from a real one:
   //   - a `.git` an agent can create must not release an enclosing ADLC repo;
@@ -2273,63 +2038,54 @@ test('a forged checkout inside a real ADLC repo cannot release it, even cold', (
   //     must not enforce over every repo beneath it.
   // An enclosing git+store ancestor tells them apart — a home directory is not
   // a checkout. Both halves are asserted here so neither can be traded away.
-  const enclosing = makeCheckout(makeRepo()); // a real project: git AND a store
-  const home = makeBareDir();
-  try {
-    const forged = join(enclosing, 'src');
-    mkdirSync(forged, { recursive: true });
-    makeCheckout(forged);
+  const enclosing = makeCheckout(makeRepo(t)); // a real project: git AND a store
+  const home = makeBareDir(t);
+  const forged = join(enclosing, 'src');
+  mkdirSync(forged, { recursive: true });
+  makeCheckout(forged);
 
-    // Cold — no memory at all, the case session_start arming cannot help with.
-    assert.equal(resolveAdlcRoot(forged), realpathSync(enclosing), 'no escape from a real ADLC repo');
-    assert.equal(
-      checkHandoff({
-        toolName: 'edit',
-        input: { path: 'a.txt' },
-        sessionId: 'sess-1',
-        usage: { percent: HARD_PCT },
-        root: forged,
-        adlcRoots: createAdlcRootState(),
-      }).decision,
-      'deny',
-    );
+  // Cold — no memory at all, the case session_start arming cannot help with.
+  assert.equal(resolveAdlcRoot(forged), realpathSync(enclosing), 'no escape from a real ADLC repo');
+  assert.equal(
+    checkHandoff({
+      toolName: 'edit',
+      input: { path: 'a.txt' },
+      sessionId: 'sess-1',
+      usage: { percent: HARD_PCT },
+      root: forged,
+      adlcRoots: createAdlcRootState(),
+    }).decision,
+    'deny',
+  );
 
-    // The other half: a ticket store above a directory that is NOT a checkout
-    // must not swallow an unrelated repo beneath it.
-    installAdlc(home);
-    const unrelated = join(home, 'someones-project');
-    mkdirSync(unrelated, { recursive: true });
-    makeCheckout(unrelated);
-    assert.equal(resolveAdlcRoot(unrelated), null, 'a stray store above must not capture a checkout');
-    assert.equal(existsSync(join(unrelated, '.adlc')), false);
-  } finally {
-    rmSync(enclosing, { recursive: true, force: true });
-    rmSync(home, { recursive: true, force: true });
-  }
+  // The other half: a ticket store above a directory that is NOT a checkout
+  // must not swallow an unrelated repo beneath it.
+  installAdlc(home);
+  const unrelated = join(home, 'someones-project');
+  mkdirSync(unrelated, { recursive: true });
+  makeCheckout(unrelated);
+  assert.equal(resolveAdlcRoot(unrelated), null, 'a stray store above must not capture a checkout');
+  assert.equal(existsSync(join(unrelated, '.adlc')), false);
 });
 
-test('the walk stops at the outermost enclosing ADLC repo, not above it', () => {
+test('the walk stops at the outermost enclosing ADLC repo, not above it', (t) => {
   // A regression the tiebreaker introduced and this pins: disabling the
   // boundary whenever ANY ancestor was a real ADLC repo let the walk sail past
   // the outer repo too, so a stray parent `.adlc/tickets.json` outranked the
   // repository itself — the exact shadowing the boundary exists to prevent.
   // The test is per-directory: climb past a boundary only while another real
   // ADLC repo remains ABOVE it.
-  const stray = makeBareDir();
-  try {
-    installAdlc(stray); // a stray store above everything, e.g. a home directory
-    const outer = makeCheckout(installAdlc(join(stray, 'outer')));
-    const inner = makeCheckout(installAdlc(join(outer, 'inner')));
+  const stray = makeBareDir(t);
+  installAdlc(stray); // a stray store above everything, e.g. a home directory
+  const outer = makeCheckout(installAdlc(join(stray, 'outer')));
+  const inner = makeCheckout(installAdlc(join(outer, 'inner')));
 
-    assert.equal(resolveAdlcRoot(inner), realpathSync(outer), 'the outer repo, never the stray parent');
-    assert.equal(resolveAdlcRoot(outer), realpathSync(outer), 'and the outer repo answers for itself');
-    assert.notEqual(resolveAdlcRoot(inner), realpathSync(stray));
-  } finally {
-    rmSync(stray, { recursive: true, force: true });
-  }
+  assert.equal(resolveAdlcRoot(inner), realpathSync(outer), 'the outer repo, never the stray parent');
+  assert.equal(resolveAdlcRoot(outer), realpathSync(outer), 'and the outer repo answers for itself');
+  assert.notEqual(resolveAdlcRoot(inner), realpathSync(stray));
 });
 
-test('a protected SHELL call spends the grant; a structured one does not', () => {
+test('a protected SHELL call spends the grant; a structured one does not', (t) => {
   // The measured asymmetry the deny text now warns about. The shared adapter
   // claims a verified grant while the reason list is still empty, and bash's
   // protected-path reasons are appended after that — so a shell call naming
@@ -2343,39 +2099,35 @@ test('a protected SHELL call spends the grant; a structured one does not', () =>
     ['structured', 'some_custom_tool', (r) => ({ target: join(r, '.adlc', '.deny-store') }), 'allow'],
     ['shell', 'bash', () => ({ command: 'rm .adlc/.deny-store' }), 'deny'],
   ]) {
-    const root = makeRepo();
-    try {
-      checkHandoff({
-        toolName: 'edit',
-        input: { path: 'src/a.mjs' },
-        sessionId: 'sess-A',
-        usage: { percent: HANDOFF_PCT },
-        root,
-      });
-      const ask = (tool, input) =>
-        checkHandoff({ toolName: tool, input, sessionId: 'sess-B', root, manifestKey: key }).decision;
+    const root = makeRepo(t);
+    checkHandoff({
+      toolName: 'edit',
+      input: { path: 'src/a.mjs' },
+      sessionId: 'sess-A',
+      usage: { percent: HANDOFF_PCT },
+      root,
+    });
+    const ask = (tool, input) =>
+      checkHandoff({ toolName: tool, input, sessionId: 'sess-B', root, manifestKey: key }).decision;
 
-      const granted = spawnSync(
-        process.execPath,
-        [cli, 'bypass', '--session', 'sess-B', '--unbound-reason', 'pi-handoff-operator-recovery',
-          '--dir', join(root, '.adlc'), '--write'],
-        { env: { ...process.env, ADLC_MANIFEST_KEY: key }, encoding: 'utf8' },
-      );
-      assert.equal(granted.status, 0, granted.stderr);
+    const granted = spawnSync(
+      process.execPath,
+      [cli, 'bypass', '--session', 'sess-B', '--unbound-reason', 'pi-handoff-operator-recovery',
+        '--dir', join(root, '.adlc'), '--write'],
+      { env: { ...process.env, ADLC_MANIFEST_KEY: key }, encoding: 'utf8' },
+    );
+    assert.equal(granted.status, 0, granted.stderr);
 
-      assert.equal(ask(toolName, makeInput(root)), 'deny', `${label}: a protected target is refused`);
-      assert.equal(
-        ask('edit', { path: 'src/a.mjs' }),
-        expected,
-        `${label}: grant ${expected === 'allow' ? 'must survive' : 'is spent (documented)'}`,
-      );
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    assert.equal(ask(toolName, makeInput(root)), 'deny', `${label}: a protected target is refused`);
+    assert.equal(
+      ask('edit', { path: 'src/a.mjs' }),
+      expected,
+      `${label}: grant ${expected === 'allow' ? 'must survive' : 'is spent (documented)'}`,
+    );
   }
 });
 
-test('deleting the ticket store does not disarm an armed repo, in either layout', () => {
+test('deleting the ticket store does not disarm an armed repo, in either layout', (t) => {
   // u4's round-8 shape, checked against pi. The containment signal is a FILE an
   // agent can delete: measured here, structured tool calls naming the ticket
   // store through every shape pi's extractor admits (path/target/filePath/file)
@@ -2406,52 +2158,48 @@ test('deleting the ticket store does not disarm an armed repo, in either layout'
       return f;
     }],
   ]) {
-    const root = makeBareDir();
-    try {
-      const storeFile = install(root);
-      const adlcRoots = createAdlcRootState();
+    const root = makeBareDir(t);
+    const storeFile = install(root);
+    const adlcRoots = createAdlcRootState();
 
-      // Arm exactly as session_start does.
-      const armed = resolveAdlcRoot(root);
-      assert.equal(armed, realpathSync(root), `${layout}: the repo arms`);
-      adlcRoots.record(armed);
+    // Arm exactly as session_start does.
+    const armed = resolveAdlcRoot(root);
+    assert.equal(armed, realpathSync(root), `${layout}: the repo arms`);
+    adlcRoots.record(armed);
 
-      // The deletion route is open — assert it, so this test notices if the
-      // store ever becomes a protected path and the note above goes stale.
-      for (const key of ['path', 'target', 'filePath', 'file']) {
-        assert.equal(
-          checkHandoff({
-            toolName: 'some_custom_tool',
-            input: { [key]: storeFile },
-            sessionId: 'sess-1',
-            usage: { percent: 5 },
-            root,
-            adlcRoots,
-          }).decision,
-          'allow',
-          `${layout}: a structured {${key}} naming the store is not a protected path today`,
-        );
-      }
-
-      rmSync(storeFile, { force: true });
-      assert.equal(resolveAdlcRoot(root), null, `${layout}: structurally it now reads as never-ADLC`);
-
-      // The latch: below the band, a later mutation must still be evaluated.
+    // The deletion route is open — assert it, so this test notices if the
+    // store ever becomes a protected path and the note above goes stale.
+    for (const key of ['path', 'target', 'filePath', 'file']) {
       assert.equal(
         checkHandoff({
-          toolName: 'edit',
-          input: { path: 'a.txt' },
-          sessionId: 'sess-2',
+          toolName: 'some_custom_tool',
+          input: { [key]: storeFile },
+          sessionId: 'sess-1',
           usage: { percent: 5 },
           root,
           adlcRoots,
-          evaluate: () => ({ deny: true, reasons: ['D1:band'] }),
         }).decision,
-        'deny',
-        `${layout}: deleting the store must not be an off switch`,
+        'allow',
+        `${layout}: a structured {${key}} naming the store is not a protected path today`,
       );
-    } finally {
-      rmSync(root, { recursive: true, force: true });
     }
+
+    rmSync(storeFile, { force: true });
+    assert.equal(resolveAdlcRoot(root), null, `${layout}: structurally it now reads as never-ADLC`);
+
+    // The latch: below the band, a later mutation must still be evaluated.
+    assert.equal(
+      checkHandoff({
+        toolName: 'edit',
+        input: { path: 'a.txt' },
+        sessionId: 'sess-2',
+        usage: { percent: 5 },
+        root,
+        adlcRoots,
+        evaluate: () => ({ deny: true, reasons: ['D1:band'] }),
+      }).decision,
+      'deny',
+      `${layout}: deleting the store must not be an off switch`,
+    );
   }
 });

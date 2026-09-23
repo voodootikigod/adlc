@@ -54,7 +54,6 @@ const ALLOWLIST = new Set([
   'plugins/adlc-pi/test/exec-fail-closed.test.mjs',
   'plugins/adlc-pi/test/extension.test.mjs',
   'plugins/adlc-pi/test/gate-tool.test.mjs',
-  'plugins/adlc-pi/test/handoff-deny.test.mjs',
   'plugins/adlc-pi/test/phase4c.test.mjs',
   'plugins/adlc-pi/test/rails-checker.test.mjs',
   'plugins/adlc-pi/test/reactive-gate.test.mjs',
