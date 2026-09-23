@@ -1,0 +1,16 @@
+{
+  "body": "Source: repo-bloat review (rev-tests finding 1 & 2, issue #1043). Four test files in plugins/adlc-cursor/test manually invoke mkdtempSync and guard removals in 77 try/finally blocks, and are allowlisted in scripts/test/tmp-fixture-boundary.test.mjs. With @adlc/core/test-kit (tmp), fixture directories automatically register cleanup via t.after when passed the test context t.\n\nNORMATIVE BEHAVIOUR.\n1. In plugins/adlc-cursor/test/build-gate.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update test declarations to accept the t parameter from test(...).\n   - Replace mkdtempSync(join(tmpdir(), 'cursor-bg-')) with tmp(t, 'cursor-bg-').\n   - Remove manual try { ... } finally { rmSync(dir, ...); } blocks, unindenting test bodies.\n2. In plugins/adlc-cursor/test/mcp-roots-proxy-lifecycle.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update test declarations to accept t parameter.\n   - Replace mkdtempSync with tmp(t, 'cursor-mcp-lifecycle-').\n   - Remove manual try { ... } finally blocks, unindenting test bodies.\n3. In plugins/adlc-cursor/test/mcp-wrapper.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update test declarations to accept t parameter.\n   - Replace mkdtempSync with tmp(t, 'cursor-mcp-wrapper-').\n   - Remove manual try { ... } finally blocks, unindenting test bodies.\n4. In plugins/adlc-cursor/test/session-start.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update test declarations to accept t parameter.\n   - Replace mkdtempSync with tmp(t, 'cursor-session-start-').\n   - Remove manual try { ... } finally blocks, unindenting test bodies.\n5. In scripts/test/tmp-fixture-boundary.test.mjs:\n   - Remove plugins/adlc-cursor/test/build-gate.test.mjs, plugins/adlc-cursor/test/mcp-roots-proxy-lifecycle.test.mjs, plugins/adlc-cursor/test/mcp-wrapper.test.mjs, and plugins/adlc-cursor/test/session-start.test.mjs from the ALLOWLIST set (completely eradicating plugins/adlc-cursor from the allowlist!).\n6. Verification:\n   - node scripts/run-tests.mjs cursor exits 0 with all tests passing.\n   - node --test scripts/test/tmp-fixture-boundary.test.mjs exits 0.\n   - grep -E 'plugins/adlc-cursor/test/' scripts/test/tmp-fixture-boundary.test.mjs returns nothing.\n\nACCEPTANCE CRITERIA.\n- AC1 All 4 test files contain 0 finally blocks.\n- AC2 mkdtempSync is not called in any of the 4 test files.\n- AC3 grep -E 'plugins/adlc-cursor/test/' scripts/test/tmp-fixture-boundary.test.mjs returns nothing.\n- AC4 node scripts/run-tests.mjs cursor exits 0.\n- AC5 node --test scripts/test/tmp-fixture-boundary.test.mjs exits 0.\n- AC6 adlc rails-guard exits 0.",
+  "category": "refactor",
+  "duration": 2,
+  "edges": [],
+  "id": "T-01M36VWCPMCG7X4GJ5KSGRKKRC",
+  "rails": [],
+  "scope": [
+    "plugins/adlc-cursor/test/build-gate.test.mjs",
+    "plugins/adlc-cursor/test/mcp-roots-proxy-lifecycle.test.mjs",
+    "plugins/adlc-cursor/test/mcp-wrapper.test.mjs",
+    "plugins/adlc-cursor/test/session-start.test.mjs",
+    "scripts/test/tmp-fixture-boundary.test.mjs"
+  ],
+  "title": "refactor(adlc-cursor): adopt @adlc/core/test-kit and eliminate try/finally blocks in Cursor tests"
+}
