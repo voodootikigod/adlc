@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 import { decide } from '../hooks/adlc-rails-guard.mjs';
 
 // Projection-shape contract tests (adlc#142, antigravity-booster#11).
@@ -19,20 +19,26 @@ const ENF = { ADLC_P4_ENFORCEMENT: '1' };
 // Build a booster-style SINGLE-ticket projection. `edges` is opt-in so a test can
 // reproduce the dangling-edge shape the booster produces when it fails to strip a
 // projected-away edge target.
-function projectionRepo({ rails = [], scope = ['src/**'], edges, id = 'T1' } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'agy-proj-'));
+function projectionRepo(t, { rails = [], scope = ['src/**'], edges, id = 'T1' } = {}) {
+  let ctx = t;
+  let opts = { rails, scope, edges, id };
+  if (t && typeof t.after !== 'function') {
+    opts = t;
+    ctx = null;
+  }
+  const root = tmp(ctx, 'gemini-proj-');
   mkdirSync(join(root, '.adlc'), { recursive: true });
-  const ticket = { id, title: 't', body: 'b', scope, rails };
-  if (edges !== undefined) ticket.edges = edges;
+  const ticket = { id: opts.id || 'T1', title: 't', body: 'b', scope: opts.scope || ['src/**'], rails: opts.rails || [] };
+  if (opts.edges !== undefined) ticket.edges = opts.edges;
   writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [ticket] }));
-  writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id }));
+  writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: opts.id || 'T1' }));
   mkdirSync(join(root, 'src'), { recursive: true });
   return root;
 }
 const call = (name, args, env = ENF, extra = {}) => decide({ toolCall: { name, args }, ...extra }, { env });
 
-test('single-ticket projection (no edges): enforces the rail (denies a rail write) and allows an in-scope non-rail write', () => {
-  const root = projectionRepo({ rails: ['src/frozen.js'], scope: ['src/**'] });
+test('single-ticket projection (no edges): enforces the rail (denies a rail write) and allows an in-scope non-rail write', (t) => {
+  const root = projectionRepo(t, { rails: ['src/frozen.js'], scope: ['src/**'] });
 
   // The declared rail is frozen: a structured write to it is denied.
   const railWrite = call('write_to_file', { TargetFile: join(root, 'src', 'frozen.js') });
@@ -44,7 +50,7 @@ test('single-ticket projection (no edges): enforces the rail (denies a rail writ
   assert.equal(nonRailWrite.allow_tool, true);
 });
 
-test('single-ticket projection WITH a dangling edge: current fail-closed deny-all (pins the antigravity-booster#11 / adlc#142 regression)', () => {
+test('single-ticket projection WITH a dangling edge: current fail-closed deny-all (pins the antigravity-booster#11 / adlc#142 regression)', (t) => {
   // When the booster projects a single ticket but leaves an outgoing edge whose
   // target was projected away, core-inline.mjs loadTickets reports
   // "edge to unknown ticket <id>"; rails-checker.mjs railPreconditions reads ANY
@@ -58,7 +64,7 @@ test('single-ticket projection WITH a dangling edge: current fail-closed deny-al
   // the suite rather than being silently "discovered" by a future projection bug.
   //   https://github.com/voodootikigod/antigravity-booster/issues/11
   //   https://github.com/voodootikigod/adlc/issues/142
-  const root = projectionRepo({ rails: ['src/frozen.js'], scope: ['src/**'], edges: [{ to: 'T2' }] });
+  const root = projectionRepo(t, { rails: ['src/frozen.js'], scope: ['src/**'], edges: [{ to: 'T2' }] });
 
   // The rail write is denied — but so is EVERYTHING, so the rail deny alone does
   // not distinguish deny-all from healthy enforcement.

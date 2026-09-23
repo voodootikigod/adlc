@@ -1,17 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 import { isCaseInsensitiveFs, checkRail } from '../rails-checker.mjs';
 
 const ENF = { ADLC_P4_ENFORCEMENT: '1' };
 
-function adlcRepo({ rails = [], id = 'T1' } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'agy-case-'));
+function adlcRepo(t, { rails = [], id = 'T1' } = {}) {
+  let ctx = t;
+  let opts = { rails, id };
+  if (t && typeof t.after !== 'function') {
+    opts = t;
+    ctx = null;
+  }
+  const root = tmp(ctx, 'gemini-case-');
   mkdirSync(join(root, '.adlc'), { recursive: true });
-  writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id, title: 't', body: 'b', scope: ['src/**'], rails }] }));
-  writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id }));
+  writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: opts.id || 'T1', title: 't', body: 'b', scope: ['src/**'], rails: opts.rails || [] }] }));
+  writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: opts.id || 'T1' }));
   mkdirSync(join(root, 'src'), { recursive: true });
   return root;
 }
@@ -60,8 +66,8 @@ test('probe: a root with no alphabetic leaf segment to flip reports sensitive (c
   assert.equal(isCaseInsensitiveFs('/tmp/12345', fns), false);
 });
 
-test('probe: real filesystem call succeeds without throwing (smoke test, no fns injected)', () => {
-  const root = mkdtempSync(join(tmpdir(), 'agy-case-real-'));
+test('probe: real filesystem call succeeds without throwing (smoke test, no fns injected)', (t) => {
+  const root = tmp(t, 'gemini-case-');
   assert.equal(typeof isCaseInsensitiveFs(root), 'boolean');
 });
 
@@ -72,8 +78,8 @@ test('probe: real filesystem call succeeds without throwing (smoke test, no fns 
 const insensitiveProbe = () => true;
 const sensitiveProbe = () => false;
 
-test('checkRail (insensitive fs): differently-cased write to an EXISTING frozen file is DENIED (upper rail, lower write)', () => {
-  const root = adlcRepo({ rails: ['src/FROZEN.js'] });
+test('checkRail (insensitive fs): differently-cased write to an EXISTING frozen file is DENIED (upper rail, lower write)', (t) => {
+  const root = adlcRepo(t, { rails: ['src/FROZEN.js'] });
   writeFileSync(join(root, 'src', 'FROZEN.js'), 'x');
   const result = checkRail({
     filePath: 'src/frozen.js', tool: 'write_to_file', root, env: ENF,
@@ -82,8 +88,8 @@ test('checkRail (insensitive fs): differently-cased write to an EXISTING frozen 
   assert.equal(result.decision, 'deny');
 });
 
-test('checkRail (insensitive fs): differently-cased write to an EXISTING frozen file is DENIED (lower rail, upper write)', () => {
-  const root = adlcRepo({ rails: ['src/frozen.js'] });
+test('checkRail (insensitive fs): differently-cased write to an EXISTING frozen file is DENIED (lower rail, upper write)', (t) => {
+  const root = adlcRepo(t, { rails: ['src/frozen.js'] });
   writeFileSync(join(root, 'src', 'frozen.js'), 'x');
   const result = checkRail({
     filePath: 'src/FROZEN.js', tool: 'write_to_file', root, env: ENF,
@@ -92,8 +98,8 @@ test('checkRail (insensitive fs): differently-cased write to an EXISTING frozen 
   assert.equal(result.decision, 'deny');
 });
 
-test('checkRail (insensitive fs): differently-cased write to a NOT-YET-EXISTING new file is DENIED', () => {
-  const root = adlcRepo({ rails: ['src/FROZEN.js'] });
+test('checkRail (insensitive fs): differently-cased write to a NOT-YET-EXISTING new file is DENIED', (t) => {
+  const root = adlcRepo(t, { rails: ['src/FROZEN.js'] });
   // src/FROZEN.js is declared as a rail but never created on disk — the write
   // targets a brand-new path that differs only in case.
   const result = checkRail({
@@ -103,8 +109,8 @@ test('checkRail (insensitive fs): differently-cased write to a NOT-YET-EXISTING 
   assert.equal(result.decision, 'deny');
 });
 
-test('checkRail (insensitive fs): .adlc/TICKETS.json (case variant of the trust root) is DENIED', () => {
-  const root = adlcRepo({ rails: [] });
+test('checkRail (insensitive fs): .adlc/TICKETS.json (case variant of the trust root) is DENIED', (t) => {
+  const root = adlcRepo(t, { rails: [] });
   const result = checkRail({
     filePath: '.adlc/TICKETS.json', tool: 'write_to_file', root, env: ENF,
     isCaseInsensitiveFsFn: insensitiveProbe,
@@ -112,8 +118,8 @@ test('checkRail (insensitive fs): .adlc/TICKETS.json (case variant of the trust 
   assert.equal(result.decision, 'deny');
 });
 
-test('checkRail (insensitive fs): a genuinely unrelated file is still ALLOWED', () => {
-  const root = adlcRepo({ rails: ['src/FROZEN.js'] });
+test('checkRail (insensitive fs): a genuinely unrelated file is still ALLOWED', (t) => {
+  const root = adlcRepo(t, { rails: ['src/FROZEN.js'] });
   const result = checkRail({
     filePath: 'src/unrelated.js', tool: 'write_to_file', root, env: ENF,
     isCaseInsensitiveFsFn: insensitiveProbe,
@@ -121,8 +127,8 @@ test('checkRail (insensitive fs): a genuinely unrelated file is still ALLOWED', 
   assert.equal(result.decision, 'allow');
 });
 
-test('checkRail (sensitive fs, injected): a differently-cased UNRELATED file is still ALLOWED — no regression', () => {
-  const root = adlcRepo({ rails: ['src/FROZEN.js'] });
+test('checkRail (sensitive fs, injected): a differently-cased UNRELATED file is still ALLOWED — no regression', (t) => {
+  const root = adlcRepo(t, { rails: ['src/FROZEN.js'] });
   writeFileSync(join(root, 'src', 'frozen.js'), 'unrelated content');
   const result = checkRail({
     filePath: 'src/frozen.js', tool: 'write_to_file', root, env: ENF,
@@ -131,11 +137,11 @@ test('checkRail (sensitive fs, injected): a differently-cased UNRELATED file is 
   assert.equal(result.decision, 'allow');
 });
 
-test('checkRail (insensitive fs): a glob-pattern rail denies via glob match alone, not just exact string equality', () => {
+test('checkRail (insensitive fs): a glob-pattern rail denies via glob match alone, not just exact string equality', (t) => {
   // The rail is a glob (SRC/**), so rail.toLowerCase() ('src/**') never literally
   // equals the lowercased candidate path — only globMatch can find this hit. This
   // distinguishes the `||` between exact-equality and globMatch from an `&&`.
-  const root = adlcRepo({ rails: ['SRC/**'] });
+  const root = adlcRepo(t, { rails: ['SRC/**'] });
   const result = checkRail({
     filePath: 'src/nested/newfile.js', tool: 'write_to_file', root, env: ENF,
     isCaseInsensitiveFsFn: insensitiveProbe,
@@ -143,8 +149,8 @@ test('checkRail (insensitive fs): a glob-pattern rail denies via glob match alon
   assert.equal(result.decision, 'deny');
 });
 
-test('checkRail (no probe injected — real fs): exact-case frozen file is still DENIED (byte-identical baseline behaviour)', () => {
-  const root = adlcRepo({ rails: ['src/frozen.js'] });
+test('checkRail (no probe injected — real fs): exact-case frozen file is still DENIED (byte-identical baseline behaviour)', (t) => {
+  const root = adlcRepo(t, { rails: ['src/frozen.js'] });
   const result = checkRail({ filePath: 'src/frozen.js', tool: 'write_to_file', root, env: ENF });
   assert.equal(result.decision, 'deny');
 });
