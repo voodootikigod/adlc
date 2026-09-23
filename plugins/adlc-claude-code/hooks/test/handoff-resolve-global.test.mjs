@@ -16,11 +16,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, realpathSync } from 'node:fs';
 import { join, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { tmp } from '@adlc/core/test-kit';
 import { resolveContextHandoffEntry } from '../handoff-resolve.mjs';
 
 const HOOKS_DIR = join(fileURLToPath(new URL('.', import.meta.url)), '..');
@@ -40,13 +40,13 @@ function plantPackage(nodeModulesDir, { name = '@adlc/context-handoff' } = {}) {
 }
 
 /** A sandbox far from this repo, so the plugin-ancestry walk cannot find anything. */
-function sandbox() {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-handoff-global-')));
+function sandbox(t) {
+  const root = tmp(t, 'adlc-handoff-global-');
   const projectRoot = join(root, 'project');
   const pluginHooksDir = join(root, 'plugin', 'hooks');
   mkdirSync(projectRoot, { recursive: true });
   mkdirSync(pluginHooksDir, { recursive: true });
-  return { root, projectRoot, pluginHooksDir, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  return { root, projectRoot, pluginHooksDir };
 }
 
 /** A POSIX npm prefix: <prefix>/bin/node, packages under <prefix>/lib/node_modules. */
@@ -57,124 +57,100 @@ function posixPrefix(root) {
   return { execPath: join(prefix, 'bin', 'node'), globalRoot };
 }
 
-test('resolves the nested layout a global @adlc/cli install actually produces', () => {
-  const box = sandbox();
-  try {
-    const { execPath, globalRoot } = posixPrefix(box.root);
-    const cliNodeModules = join(globalRoot, '@adlc', 'cli', 'node_modules');
-    mkdirSync(join(globalRoot, '@adlc', 'cli'), { recursive: true });
-    writeFileSync(
-      join(globalRoot, '@adlc', 'cli', 'package.json'),
-      JSON.stringify({ name: '@adlc/cli', version: '0.0.0-test', type: 'module' }),
-    );
-    const { entry } = plantPackage(cliNodeModules);
+test('resolves the nested layout a global @adlc/cli install actually produces', (t) => {
+  const box = sandbox(t);
+  const { execPath, globalRoot } = posixPrefix(box.root);
+  const cliNodeModules = join(globalRoot, '@adlc', 'cli', 'node_modules');
+  mkdirSync(join(globalRoot, '@adlc', 'cli'), { recursive: true });
+  writeFileSync(
+    join(globalRoot, '@adlc', 'cli', 'package.json'),
+    JSON.stringify({ name: '@adlc/cli', version: '0.0.0-test', type: 'module' }),
+  );
+  const { entry } = plantPackage(cliNodeModules);
 
-    const found = resolveContextHandoffEntry({
-      projectRoot: box.projectRoot,
-      pluginHooksDir: box.pluginHooksDir,
-      env: {},
-      execPath,
-    });
-    assert.equal(found && realpathSync(found), entry);
-  } finally {
-    box.cleanup();
-  }
+  const found = resolveContextHandoffEntry({
+    projectRoot: box.projectRoot,
+    pluginHooksDir: box.pluginHooksDir,
+    env: {},
+    execPath,
+  });
+  assert.equal(found && realpathSync(found), entry);
 });
 
-test('resolves the hoisted global layout too', () => {
-  const box = sandbox();
-  try {
-    const { execPath, globalRoot } = posixPrefix(box.root);
-    const { entry } = plantPackage(globalRoot);
+test('resolves the hoisted global layout too', (t) => {
+  const box = sandbox(t);
+  const { execPath, globalRoot } = posixPrefix(box.root);
+  const { entry } = plantPackage(globalRoot);
 
-    const found = resolveContextHandoffEntry({
-      projectRoot: box.projectRoot,
-      pluginHooksDir: box.pluginHooksDir,
-      env: {},
-      execPath,
-    });
-    assert.equal(found && realpathSync(found), entry);
-  } finally {
-    box.cleanup();
-  }
+  const found = resolveContextHandoffEntry({
+    projectRoot: box.projectRoot,
+    pluginHooksDir: box.pluginHooksDir,
+    env: {},
+    execPath,
+  });
+  assert.equal(found && realpathSync(found), entry);
 });
 
-test('resolves the Windows-style prefix where packages sit beside the node binary', () => {
-  const box = sandbox();
-  try {
-    const prefix = join(box.root, 'win-prefix');
-    const globalRoot = join(prefix, 'node_modules');
-    mkdirSync(globalRoot, { recursive: true });
-    const { entry } = plantPackage(globalRoot);
+test('resolves the Windows-style prefix where packages sit beside the node binary', (t) => {
+  const box = sandbox(t);
+  const prefix = join(box.root, 'win-prefix');
+  const globalRoot = join(prefix, 'node_modules');
+  mkdirSync(globalRoot, { recursive: true });
+  const { entry } = plantPackage(globalRoot);
 
-    const found = resolveContextHandoffEntry({
-      projectRoot: box.projectRoot,
-      pluginHooksDir: box.pluginHooksDir,
-      env: {},
-      execPath: join(prefix, 'node.exe'),
-    });
-    assert.equal(found && realpathSync(found), entry);
-  } finally {
-    box.cleanup();
-  }
+  const found = resolveContextHandoffEntry({
+    projectRoot: box.projectRoot,
+    pluginHooksDir: box.pluginHooksDir,
+    env: {},
+    execPath: join(prefix, 'node.exe'),
+  });
+  assert.equal(found && realpathSync(found), entry);
 });
 
-test('resolves a directory listed in NODE_PATH', () => {
-  const box = sandbox();
-  try {
-    const nodePathDir = join(box.root, 'extra-modules');
-    mkdirSync(nodePathDir, { recursive: true });
-    const { entry } = plantPackage(nodePathDir);
+test('resolves a directory listed in NODE_PATH', (t) => {
+  const box = sandbox(t);
+  const nodePathDir = join(box.root, 'extra-modules');
+  mkdirSync(nodePathDir, { recursive: true });
+  const { entry } = plantPackage(nodePathDir);
 
-    const found = resolveContextHandoffEntry({
-      projectRoot: box.projectRoot,
-      pluginHooksDir: box.pluginHooksDir,
-      env: { NODE_PATH: [join(box.root, 'absent'), nodePathDir].join(delimiter) },
-      execPath: join(box.root, 'no-such-prefix', 'bin', 'node'),
-    });
-    assert.equal(found && realpathSync(found), entry);
-  } finally {
-    box.cleanup();
-  }
+  const found = resolveContextHandoffEntry({
+    projectRoot: box.projectRoot,
+    pluginHooksDir: box.pluginHooksDir,
+    env: { NODE_PATH: [join(box.root, 'absent'), nodePathDir].join(delimiter) },
+    execPath: join(box.root, 'no-such-prefix', 'bin', 'node'),
+  });
+  assert.equal(found && realpathSync(found), entry);
 });
 
-test('a project-local copy still wins over a global one', () => {
-  const box = sandbox();
-  try {
-    const { execPath, globalRoot } = posixPrefix(box.root);
-    const global = plantPackage(globalRoot);
-    const local = plantPackage(join(box.projectRoot, 'node_modules'));
-    writeFileSync(
-      join(box.projectRoot, 'package.json'),
-      JSON.stringify({ name: 'consumer', version: '0.0.0', type: 'module' }),
-    );
+test('a project-local copy still wins over a global one', (t) => {
+  const box = sandbox(t);
+  const { execPath, globalRoot } = posixPrefix(box.root);
+  const global = plantPackage(globalRoot);
+  const local = plantPackage(join(box.projectRoot, 'node_modules'));
+  writeFileSync(
+    join(box.projectRoot, 'package.json'),
+    JSON.stringify({ name: 'consumer', version: '0.0.0', type: 'module' }),
+  );
 
-    const found = resolveContextHandoffEntry({
-      projectRoot: box.projectRoot,
-      pluginHooksDir: box.pluginHooksDir,
-      env: {},
-      execPath,
-    });
-    assert.equal(found && realpathSync(found), local.entry);
-    assert.notEqual(found && realpathSync(found), global.entry);
-  } finally {
-    box.cleanup();
-  }
+  const found = resolveContextHandoffEntry({
+    projectRoot: box.projectRoot,
+    pluginHooksDir: box.pluginHooksDir,
+    env: {},
+    execPath,
+  });
+  assert.equal(found && realpathSync(found), local.entry);
+  assert.notEqual(found && realpathSync(found), global.entry);
 });
 
-test('still returns null when the package is installed nowhere — the gate stays fail-closed', () => {
-  const box = sandbox();
-  try {
-    const found = resolveContextHandoffEntry({
-      projectRoot: box.projectRoot,
-      pluginHooksDir: box.pluginHooksDir,
-      env: {},
-      execPath: join(box.root, 'no-such-prefix', 'bin', 'node'),
-    });
-    assert.equal(found, null);
-  } finally {
-    box.cleanup();
-  }
+test('still returns null when the package is installed nowhere — the gate stays fail-closed', (t) => {
+  const box = sandbox(t);
+  const found = resolveContextHandoffEntry({
+    projectRoot: box.projectRoot,
+    pluginHooksDir: box.pluginHooksDir,
+    env: {},
+    execPath: join(box.root, 'no-such-prefix', 'bin', 'node'),
+  });
+  assert.equal(found, null);
 });
 
 test('the default env/execPath still resolve this repo from the real plugin directory', () => {

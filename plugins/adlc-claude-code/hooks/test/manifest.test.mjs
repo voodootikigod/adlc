@@ -6,11 +6,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { tmp } from '@adlc/core/test-kit';
 import { record as realRecord } from '@adlc/gate-manifest/lib/record.mjs';
 import { runHook } from './helpers/run-hook.mjs';
 
@@ -31,8 +30,18 @@ function withKey(key, fn) {
   currentTestKey = key;
   if (key === null) delete process.env.ADLC_MANIFEST_KEY;
   else process.env.ADLC_MANIFEST_KEY = key;
-  try { return fn(); }
-  finally { currentTestKey = prevCurrent; if (prev === undefined) delete process.env.ADLC_MANIFEST_KEY; else process.env.ADLC_MANIFEST_KEY = prev; }
+  try {
+    const res = fn();
+    currentTestKey = prevCurrent;
+    if (prev === undefined) delete process.env.ADLC_MANIFEST_KEY;
+    else process.env.ADLC_MANIFEST_KEY = prev;
+    return res;
+  } catch (err) {
+    currentTestKey = prevCurrent;
+    if (prev === undefined) delete process.env.ADLC_MANIFEST_KEY;
+    else process.env.ADLC_MANIFEST_KEY = prev;
+    throw err;
+  }
 }
 
 /** Run the `manifest` Stop hook against `dir`. Returns the parsed stdout JSON, or {} if empty. */
@@ -52,45 +61,35 @@ function runManifest(dir, { env = {} } = {}) {
   return out.trim() === '' ? {} : JSON.parse(out);
 }
 
-function tmp() {
-  return mkdtempSync(join(tmpdir(), 'adlc-cc-manifest-'));
-}
-
-test('no .adlc/manifest.jsonl — silent, no output', () => {
-  const dir = tmp();
-  try {
-    const out = runManifest(dir, { env: { ADLC_MANIFEST_KEY: KEY } });
-    assert.deepEqual(out, {});
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+test('no .adlc/manifest.jsonl — silent, no output', (t) => {
+  const dir = tmp(t, 'adlc-cc-manifest-');
+  const out = runManifest(dir, { env: { ADLC_MANIFEST_KEY: KEY } });
+  assert.deepEqual(out, {});
 });
 
-test('#378: a legacy-unsigned-prefix manifest (signed since adoption) is silent — no false "evidence chain INVALID"', () => {
-  const dir = tmp();
-  try {
-    withKey(null, () => {
-      record({ gate: 'legacy-1', dir: join(dir, '.adlc') });
-      record({ gate: 'legacy-2', dir: join(dir, '.adlc') });
-    });
-    withKey(KEY, () => {
-      record({ gate: 'signed-1', dir: join(dir, '.adlc') });
-    });
-    const out = runManifest(dir, { env: { ADLC_MANIFEST_KEY: KEY } });
-    assert.deepEqual(out, {}, 'no systemMessage for an honest legacy-unsigned-then-signed chain');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+test('#378: a legacy-unsigned-prefix manifest (signed since adoption) is silent — no false "evidence chain INVALID"', (t) => {
+  const dir = tmp(t, 'adlc-cc-manifest-');
+  withKey(null, () => {
+    record({ gate: 'legacy-1', dir: join(dir, '.adlc') });
+    record({ gate: 'legacy-2', dir: join(dir, '.adlc') });
+  });
+  withKey(KEY, () => {
+    record({ gate: 'signed-1', dir: join(dir, '.adlc') });
+  });
+  const out = runManifest(dir, { env: { ADLC_MANIFEST_KEY: KEY } });
+  assert.deepEqual(out, {}, 'no systemMessage for an honest legacy-unsigned-then-signed chain');
 });
 
-test('a genuinely broken chain still surfaces the "evidence chain INVALID" advisory', () => {
-  const dir = tmp();
-  try {
-    withKey(KEY, () => {
-      record({ gate: 'signed-1', dir: join(dir, '.adlc') });
-    });
-    // Regression after adoption: a later entry recorded with no key.
-    withKey(null, () => {
-      record({ gate: 'plain-after-adoption', dir: join(dir, '.adlc') });
-    });
-    const out = runManifest(dir, { env: { ADLC_MANIFEST_KEY: KEY } });
-    assert.match(out.systemMessage ?? '', /evidence chain INVALID/);
-    assert.match(out.systemMessage ?? '', /unsigned entry/);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+test('a genuinely broken chain still surfaces the "evidence chain INVALID" advisory', (t) => {
+  const dir = tmp(t, 'adlc-cc-manifest-');
+  withKey(KEY, () => {
+    record({ gate: 'signed-1', dir: join(dir, '.adlc') });
+  });
+  // Regression after adoption: a later entry recorded with no key.
+  withKey(null, () => {
+    record({ gate: 'plain-after-adoption', dir: join(dir, '.adlc') });
+  });
+  const out = runManifest(dir, { env: { ADLC_MANIFEST_KEY: KEY } });
+  assert.match(out.systemMessage ?? '', /evidence chain INVALID/);
+  assert.match(out.systemMessage ?? '', /unsigned entry/);
 });

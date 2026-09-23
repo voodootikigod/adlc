@@ -15,8 +15,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { symlinkSync, writeFileSync } from 'node:fs';
+import { tmp } from '@adlc/core/test-kit';
 
 import { entryPointState, importFailureExitCode, ENFORCING_MODES } from '../adlc-hook-run.mjs';
 
@@ -76,21 +76,17 @@ describe('adlc-hook-run entryPointState (injected realpath — no fs required)',
     }
   });
 
-  it('resolves a real symlink on disk (the injected realpath is not the only proof)', () => {
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-entrypoint-')));
-    try {
-      const target = join(dir, 'target.mjs');
-      const link = join(dir, 'link.mjs');
-      writeFileSync(target, '');
-      symlinkSync(target, link);
-      const targetUrl = pathToFileURL(target).href;
-      assert.equal(entryPointState(targetUrl, link), 'yes');
-      assert.equal(entryPointState(targetUrl, target), 'yes');
-      assert.equal(entryPointState(targetUrl, dir), 'no');
-      assert.equal(entryPointState(targetUrl, join(dir, 'gone.mjs')), 'unknown');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  it('resolves a real symlink on disk (the injected realpath is not the only proof)', (t) => {
+    const dir = tmp(t, 'adlc-entrypoint-');
+    const target = join(dir, 'target.mjs');
+    const link = join(dir, 'link.mjs');
+    writeFileSync(target, '');
+    symlinkSync(target, link);
+    const targetUrl = pathToFileURL(target).href;
+    assert.equal(entryPointState(targetUrl, link), 'yes');
+    assert.equal(entryPointState(targetUrl, target), 'yes');
+    assert.equal(entryPointState(targetUrl, dir), 'no');
+    assert.equal(entryPointState(targetUrl, join(dir, 'gone.mjs')), 'unknown');
   });
 });
 

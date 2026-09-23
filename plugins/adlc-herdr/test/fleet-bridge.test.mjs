@@ -5,9 +5,9 @@
 // unknown schema and refusing hostile ticket ids. bin/watcher.mjs only executes.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 import { planFleetBridge, fleetTabArgs, fleetTailPaneArgs, fleetPaneCloseArgs, fleetWorktreeShellArgs, runFleetPlan, runFleetBridgeBeat, tabIdFromResponse, paneIdFromResponse, shouldMarkRunSeen, KNOWN_FLEET_SCHEMA_VERSION, BOUNDED_CLOSE_ATTEMPTS, BOUNDED_SPAWN_ATTEMPTS, MAX_TAIL_PANES } from '../lib/fleet-bridge.mjs';
 import { renderBoard } from '../lib/board-render.mjs';
 import { readFleetStatus } from '../lib/adlc-state.mjs';
@@ -155,8 +155,8 @@ test('shouldMarkRunSeen: only when a tab was requested AND actually opened', () 
   assert.equal(shouldMarkRunSeen(null, { tabId: 'w4:t1' }), false);
 });
 
-test('readFleetStatus reads a valid status and fails soft on bad input', () => {
-  const repo = mkdtempSync(join(tmpdir(), 'adlc-fleet-read-'));
+test('readFleetStatus reads a valid status and fails soft on bad input', (t) => {
+  const repo = tmp(t, 'herdr-fleet-');
   mkdirSync(join(repo, '.adlc'), { recursive: true });
   const p = join(repo, '.adlc', 'fleet-status.json');
   writeFileSync(p, JSON.stringify({ schemaVersion: 1, runId: 'r1', tickets: {} }));
@@ -358,7 +358,7 @@ test('runFleetPlan RETRIES a NEW-RUN teardown whose close failed — a run resta
   assert.equal(state.closing.has('w4:pOld'), true, 'the old pane whose close failed is NOT force-forgotten — it stays pending');
   assert.equal(state.tailed.get('t-a'), 'w4:pNew', 'the new run still spawns a fresh pane for the same ticket id (no collision)');
   assert.equal(spawned.length, 1);
-  // Next beat, still the same run, the socket recovers → the old pane is finally closed.
+  // Next beat, still the same run, the socket recovers → the old pane is eventually closed.
   closeFails = false;
   await runFleetPlan({ plan: { ...newRun, openTab: null }, ...deps });
   assert.equal(state.closing.has('w4:pOld'), false, 'the retried teardown succeeds and the old pane is forgotten');
