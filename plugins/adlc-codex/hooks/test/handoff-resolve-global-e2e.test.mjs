@@ -12,18 +12,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  mkdtempSync,
   mkdirSync,
-  rmSync,
   writeFileSync,
   copyFileSync,
   readdirSync,
   realpathSync,
   symlinkSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join, dirname, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmp } from '@adlc/core/test-kit';
 // Imported under an alias: this file already has its own runHook/spawnHook.
 import { runHook as runBoundedHook } from './helpers/run-hook.mjs';
 
@@ -35,8 +33,8 @@ const REAL_PACKAGE = realpathSync(join(REPO_ROOT, 'packages', 'context-handoff')
  * A plugin install and a project, both outside this repo — so neither the
  * project's node_modules nor the plugin's ancestry can reach the package.
  */
-function detachedInstall() {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-codex-global-')));
+function detachedInstall(t) {
+  const root = tmp(t, 'adlc-codex-global-');
   const hooks = join(root, 'plugin', 'hooks');
   mkdirSync(hooks, { recursive: true });
   for (const name of readdirSync(HOOKS_DIR)) {
@@ -49,7 +47,7 @@ function detachedInstall() {
   mkdirSync(join(project, 'src'), { recursive: true });
   writeFileSync(join(project, 'src', 'app.mjs'), 'export {}\n');
 
-  return { root, hooks, project, hook: join(hooks, 'adlc-handoff-gate.mjs'), cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  return { root, hooks, project, hook: join(hooks, 'adlc-handoff-gate.mjs') };
 }
 
 /** A global-install directory holding @adlc/context-handoff, exposed via NODE_PATH. */
@@ -87,42 +85,34 @@ function bareEnv(extra = {}) {
   return env;
 }
 
-test('a detached plugin allows a mutating call when only a global install is reachable', () => {
-  const box = detachedInstall();
-  try {
-    const nodePath = globalInstall(box.root);
-    const r = runHook({ hook: box.hook, project: box.project, env: bareEnv({ NODE_PATH: nodePath }) });
-    assert.equal(r.status, 0, `expected allow, got ${r.status}:\n${r.stderr}`);
-  } finally {
-    box.cleanup();
-  }
+test('a detached plugin allows a mutating call when only a global install is reachable', (t) => {
+  const box = detachedInstall(t);
+  const nodePath = globalInstall(box.root);
+  const r = runHook({ hook: box.hook, project: box.project, env: bareEnv({ NODE_PATH: nodePath }) });
+  assert.equal(r.status, 0, `expected allow, got ${r.status}:\n${r.stderr}`);
 });
 
-test('a resolvable but unusable global install still denies — fail-closed is intact', () => {
-  const box = detachedInstall();
-  try {
-    // NODE_PATH is consulted ahead of the interpreter-derived global root, so
-    // this stub wins over any real @adlc/cli the running machine happens to
-    // have installed — the assertion does not depend on the host's setup.
-    const stubRoot = join(box.root, 'stub-modules');
-    const stub = join(stubRoot, '@adlc', 'context-handoff');
-    mkdirSync(join(stub, 'lib'), { recursive: true });
-    writeFileSync(
-      join(stub, 'package.json'),
-      JSON.stringify({ name: '@adlc/context-handoff', version: '0.0.0-stub', type: 'module', exports: { '.': './lib/index.mjs' } }),
-    );
-    writeFileSync(join(stub, 'lib', 'index.mjs'), 'export const nothingUseful = true;\n');
+test('a resolvable but unusable global install still denies — fail-closed is intact', (t) => {
+  const box = detachedInstall(t);
+  // NODE_PATH is consulted ahead of the interpreter-derived global root, so
+  // this stub wins over any real @adlc/cli the running machine happens to
+  // have installed — the assertion does not depend on the host's setup.
+  const stubRoot = join(box.root, 'stub-modules');
+  const stub = join(stubRoot, '@adlc', 'context-handoff');
+  mkdirSync(join(stub, 'lib'), { recursive: true });
+  writeFileSync(
+    join(stub, 'package.json'),
+    JSON.stringify({ name: '@adlc/context-handoff', version: '0.0.0-stub', type: 'module', exports: { '.': './lib/index.mjs' } }),
+  );
+  writeFileSync(join(stub, 'lib', 'index.mjs'), 'export const nothingUseful = true;\n');
 
-    const r = runHook({
-      hook: box.hook,
-      project: box.project,
-      env: bareEnv({ NODE_PATH: [stubRoot, join(box.root, 'unused')].join(delimiter) }),
-    });
-    assert.equal(r.status, 2, `expected deny, got ${r.status}:\n${r.stderr}`);
-    assert.match(r.stderr, /@adlc\/context-handoff/);
-  } finally {
-    box.cleanup();
-  }
+  const r = runHook({
+    hook: box.hook,
+    project: box.project,
+    env: bareEnv({ NODE_PATH: [stubRoot, join(box.root, 'unused')].join(delimiter) }),
+  });
+  assert.equal(r.status, 2, `expected deny, got ${r.status}:\n${r.stderr}`);
+  assert.match(r.stderr, /@adlc\/context-handoff/);
 });
 
 test('the recovery diagnostic stops naming a monorepo path when nothing resolves', async () => {

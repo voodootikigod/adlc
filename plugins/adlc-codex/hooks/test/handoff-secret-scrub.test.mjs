@@ -14,10 +14,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmp } from '@adlc/core/test-kit';
 
 import { HOOK_SECRET_ENV_VARS, scrubHookSecrets } from '@adlc/context-handoff';
 import { runHook } from './helpers/run-hook.mjs';
@@ -31,8 +31,8 @@ const KEY = 'f'.repeat(64);
  * A project that ships a hostile `@adlc/context-handoff`. On import it records
  * every secret it can see, then returns a fully permissive gate.
  */
-function plantHostileRepo() {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-hostile-')));
+function plantHostileRepo(t) {
+  const root = tmp(t, 'adlc-hostile-');
   mkdirSync(join(root, '.adlc'), { recursive: true });
   // A real project has a package.json — it is the anchor the resolver uses.
   writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'hostile-repo', type: 'module' }));
@@ -68,8 +68,8 @@ function plantHostileRepo() {
  * finds the real package first, so a fixture that skipped this would prove
  * nothing about how the hook actually ships.
  */
-function isolatedPluginDir() {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-plugin-install-')));
+function isolatedPluginDir(t) {
+  const dir = tmp(t, 'adlc-plugin-install-');
   const hooks = join(dir, 'hooks');
   mkdirSync(hooks, { recursive: true });
   for (const f of [
@@ -99,20 +99,15 @@ function runHookIn(root, hookPath = HOOK) {
   }
 }
 
-test('a hostile project package cannot read the manifest key from the hook', () => {
-  const { root, loot } = plantHostileRepo();
-  const plugin = isolatedPluginDir();
-  try {
-    runHookIn(root, plugin.hook);
-    assert.equal(existsSync(loot), true, 'the fixture must actually run — otherwise this proves nothing');
-    const seen = JSON.parse(readFileSync(loot, 'utf8'));
-    assert.equal(seen.imported, true, 'the fixture ran inside the hook process');
-    assert.equal(seen.ADLC_MANIFEST_KEY, null, 'the manifest signing key must be scrubbed before any import');
-    assert.equal(seen.ADLC_ADMIN_KEY, null, 'the admin key must be scrubbed too');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(plugin.dir, { recursive: true, force: true });
-  }
+test('a hostile project package cannot read the manifest key from the hook', (t) => {
+  const { root, loot } = plantHostileRepo(t);
+  const plugin = isolatedPluginDir(t);
+  runHookIn(root, plugin.hook);
+  assert.equal(existsSync(loot), true, 'the fixture must actually run — otherwise this proves nothing');
+  const seen = JSON.parse(readFileSync(loot, 'utf8'));
+  assert.equal(seen.imported, true, 'the fixture ran inside the hook process');
+  assert.equal(seen.ADLC_MANIFEST_KEY, null, 'the manifest signing key must be scrubbed before any import');
+  assert.equal(seen.ADLC_ADMIN_KEY, null, 'the admin key must be scrubbed too');
 });
 
 test('the scrub bites: without it the key WOULD be readable', () => {
@@ -147,22 +142,17 @@ test('the scrub runs before the resolver, not after', () => {
   assert.ok(scrubAt < loadAt, 'scrubbing after the import would be too late');
 });
 
-test('KNOWN GAP: the hostile package is still imported (bypass half is open)', () => {
+test('KNOWN GAP: the hostile package is still imported (bypass half is open)', (t) => {
   // Documented, not asserted-away: closing this needs a plugin-owned core, and
   // is tracked by its own trust-root ticket. If this test starts FAILING, the
   // gap has been closed and this test should be replaced by one asserting the
   // planted package is never reached.
-  const { root, loot } = plantHostileRepo();
-  const plugin = isolatedPluginDir();
-  try {
-    runHookIn(root, plugin.hook);
-    assert.equal(
-      JSON.parse(readFileSync(loot, 'utf8')).imported,
-      true,
-      'if this now fails, the resolver no longer trusts project code — update this test',
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(plugin.dir, { recursive: true, force: true });
-  }
+  const { root, loot } = plantHostileRepo(t);
+  const plugin = isolatedPluginDir(t);
+  runHookIn(root, plugin.hook);
+  assert.equal(
+    JSON.parse(readFileSync(loot, 'utf8')).imported,
+    true,
+    'if this now fails, the resolver no longer trusts project code — update this test',
+  );
 });

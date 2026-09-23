@@ -5,9 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  mkdtempSync,
   mkdirSync,
-  rmSync,
   writeFileSync,
   readFileSync,
   copyFileSync,
@@ -15,9 +13,9 @@ import {
   realpathSync,
   symlinkSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmp } from '@adlc/core/test-kit';
 import { runHook } from './helpers/run-hook.mjs';
 
 import {
@@ -46,7 +44,7 @@ function makeTranscript(dir, name, toolUseCount) {
   return p;
 }
 
-function runHandoff({
+function runHandoff(t, {
   sessionId = 'sess-a',
   omitSessionId = false,
   toolName = 'apply_patch',
@@ -58,72 +56,68 @@ function runHandoff({
   makeAdlcDir = true,
   env: extraEnv = {},
 } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-codex-handoff-'));
-  try {
-    if (makeAdlcDir) mkdirSync(join(dir, '.adlc'), { recursive: true });
-    mkdirSync(join(dir, 'src'), { recursive: true });
-    writeFileSync(join(dir, 'src', 'app.mjs'), 'export {}\n');
+  const dir = tmp(t, 'adlc-codex-handoff-');
+  if (makeAdlcDir) mkdirSync(join(dir, '.adlc'), { recursive: true });
+  mkdirSync(join(dir, 'src'), { recursive: true });
+  writeFileSync(join(dir, 'src', 'app.mjs'), 'export {}\n');
 
-    if (typeof seedDeny === 'function') seedDeny(dir);
+  if (typeof seedDeny === 'function') seedDeny(dir);
 
-    let transcriptPath;
-    if (transcriptToolCalls !== undefined) {
-      transcriptPath = makeTranscript(
-        dir,
-        transcriptName ?? `${sessionId}.jsonl`,
-        transcriptToolCalls,
-      );
-    }
-
-    const payload = {
-      tool_name: toolName,
-      ...(transcriptPath ? { transcript_path: transcriptPath } : {}),
-      ...(payloadExtra ?? { file_path: join(dir, 'src', 'app.mjs') }),
-    };
-    if (!omitSessionId) payload.session_id = sessionId;
-
-    const input = rawInput ?? JSON.stringify(payload);
-
-    let out = '';
-    let status = 0;
-    try {
-      runHook([HOOK], {
-        input,
-        encoding: 'utf8',
-        cwd: dir,
-        env: {
-          ...process.env,
-          NODE_PATH: [join(REPO_ROOT, 'node_modules'), process.env.NODE_PATH]
-            .filter(Boolean)
-            .join(':'),
-          ...extraEnv,
-        },
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-    } catch (e) {
-      out = e.stderr ?? '';
-      status = e.status ?? 1;
-    }
-
-    const resolvedId = omitSessionId
-      ? transcriptName
-        ? transcriptName.replace(/\.jsonl$/, '')
-        : null
-      : sessionId;
-    const markerPath = resolvedId
-      ? join(dir, '.adlc', 'handoffs', 'denies', `${resolvedId}.json`)
-      : null;
-
-    return {
-      verdict: status === 2 ? 'deny' : status === 0 ? 'allow' : 'error',
-      status,
-      out,
-      markerExists: markerPath ? existsSync(markerPath) : false,
-      marker: markerPath && existsSync(markerPath) ? readFileSync(markerPath, 'utf8') : null,
-    };
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+  let transcriptPath;
+  if (transcriptToolCalls !== undefined) {
+    transcriptPath = makeTranscript(
+      dir,
+      transcriptName ?? `${sessionId}.jsonl`,
+      transcriptToolCalls,
+    );
   }
+
+  const payload = {
+    tool_name: toolName,
+    ...(transcriptPath ? { transcript_path: transcriptPath } : {}),
+    ...(payloadExtra ?? { file_path: join(dir, 'src', 'app.mjs') }),
+  };
+  if (!omitSessionId) payload.session_id = sessionId;
+
+  const input = rawInput ?? JSON.stringify(payload);
+
+  let out = '';
+  let status = 0;
+  try {
+    runHook([HOOK], {
+      input,
+      encoding: 'utf8',
+      cwd: dir,
+      env: {
+        ...process.env,
+        NODE_PATH: [join(REPO_ROOT, 'node_modules'), process.env.NODE_PATH]
+          .filter(Boolean)
+          .join(':'),
+        ...extraEnv,
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch (e) {
+    out = e.stderr ?? '';
+    status = e.status ?? 1;
+  }
+
+  const resolvedId = omitSessionId
+    ? transcriptName
+      ? transcriptName.replace(/\.jsonl$/, '')
+      : null
+    : sessionId;
+  const markerPath = resolvedId
+    ? join(dir, '.adlc', 'handoffs', 'denies', `${resolvedId}.json`)
+    : null;
+
+  return {
+    verdict: status === 2 ? 'deny' : status === 0 ? 'allow' : 'error',
+    status,
+    out,
+    markerExists: markerPath ? existsSync(markerPath) : false,
+    marker: markerPath && existsSync(markerPath) ? readFileSync(markerPath, 'utf8') : null,
+  };
 }
 
 /** Seed an open deny record owned by another session. */
@@ -141,19 +135,19 @@ function seedForeignDeny(name) {
   };
 }
 
-test('clean ADLC repo without deny/handoff → allow apply_patch', () => {
-  const r = runHandoff({ transcriptToolCalls: 5 });
+test('clean ADLC repo without deny/handoff → allow apply_patch', (t) => {
+  const r = runHandoff(t, { transcriptToolCalls: 5 });
   assert.equal(r.verdict, 'allow', r.out);
   assert.equal(r.markerExists, false);
 });
 
-test('a directory that is not an ADLC repo is left alone', () => {
-  const r = runHandoff({ makeAdlcDir: false, transcriptToolCalls: 5 });
+test('a directory that is not an ADLC repo is left alone', (t) => {
+  const r = runHandoff(t, { makeAdlcDir: false, transcriptToolCalls: 5 });
   assert.equal(r.verdict, 'allow', r.out);
 });
 
-test('open deny for another session without resume-auth → deny apply_patch', () => {
-  const r = runHandoff({
+test('open deny for another session without resume-auth → deny apply_patch', (t) => {
+  const r = runHandoff(t, {
     sessionId: 'consumer-1',
     seedDeny: seedForeignDeny('denier-1'),
   });
@@ -161,8 +155,8 @@ test('open deny for another session without resume-auth → deny apply_patch', (
   assert.match(r.out, /D3:unauthorized_open:denier-1/);
 });
 
-test('apply_patch envelope paths are seen (not just file_path)', () => {
-  const r = runHandoff({
+test('apply_patch envelope paths are seen (not just file_path)', (t) => {
+  const r = runHandoff(t, {
     sessionId: 'consumer-1b',
     payloadExtra: {
       input: '*** Update File: src/app.mjs\n@@\n-export {}\n+export const x = 1\n',
@@ -173,8 +167,8 @@ test('apply_patch envelope paths are seen (not just file_path)', () => {
   assert.match(r.out, /D3:unauthorized_open:denier-1b/);
 });
 
-test('shell is fail-closed-all under the deny-set', () => {
-  const r = runHandoff({
+test('shell is fail-closed-all under the deny-set', (t) => {
+  const r = runHandoff(t, {
     sessionId: 'consumer-2',
     toolName: 'exec_command',
     payloadExtra: { command: 'ls' },
@@ -184,8 +178,8 @@ test('shell is fail-closed-all under the deny-set', () => {
   assert.match(r.out, /bash_fail_closed_under_deny/);
 });
 
-test('under deny-set, shell `adlc handoff repair` is tagged mutating-cli', () => {
-  const r = runHandoff({
+test('under deny-set, shell `adlc handoff repair` is tagged mutating-cli', (t) => {
+  const r = runHandoff(t, {
     sessionId: 'consumer-3',
     toolName: 'exec_command',
     payloadExtra: { command: 'adlc handoff repair --write' },
@@ -196,8 +190,8 @@ test('under deny-set, shell `adlc handoff repair` is tagged mutating-cli', () =>
   assert.match(r.out, /bash_handoff_mutating_cli/);
 });
 
-test('under deny-set, a subshell handoff write is tagged mutating-cli', () => {
-  const r = runHandoff({
+test('under deny-set, a subshell handoff write is tagged mutating-cli', (t) => {
+  const r = runHandoff(t, {
     sessionId: 'consumer-3b',
     toolName: 'bash',
     payloadExtra: { command: 'echo $(adlc handoff write --write)' },
@@ -207,8 +201,8 @@ test('under deny-set, a subshell handoff write is tagged mutating-cli', () => {
   assert.match(r.out, /bash_handoff_mutating_cli/);
 });
 
-test('shell is allowed when no deny-set is active', () => {
-  const r = runHandoff({
+test('shell is allowed when no deny-set is active', (t) => {
+  const r = runHandoff(t, {
     sessionId: 'sess-shell',
     toolName: 'exec_command',
     payloadExtra: { command: 'adlc handoff repair --write' },
@@ -217,8 +211,8 @@ test('shell is allowed when no deny-set is active', () => {
   assert.equal(r.verdict, 'allow', r.out);
 });
 
-test('denier session stays denied after consume (D2 sticky)', () => {
-  const r = runHandoff({
+test('denier session stays denied after consume (D2 sticky)', (t) => {
+  const r = runHandoff(t, {
     sessionId: 'denier-sticky',
     seedDeny: (root) => {
       seedForeignDeny('denier-sticky')(root);
@@ -237,8 +231,8 @@ test('denier session stays denied after consume (D2 sticky)', () => {
   assert.match(r.out, /D2:denier_session/);
 });
 
-test('handoff band ensures a deny marker for the current session', () => {
-  const r = runHandoff({
+test('handoff band ensures a deny marker for the current session', (t) => {
+  const r = runHandoff(t, {
     sessionId: 'deep-sess',
     transcriptToolCalls: HANDOFF_DEPTH,
   });
@@ -248,8 +242,8 @@ test('handoff band ensures a deny marker for the current session', () => {
   assert.match(r.marker, /"host": "codex"/);
 });
 
-test('transcript_path stem supplies the session id when the payload omits one', () => {
-  const r = runHandoff({
+test('transcript_path stem supplies the session id when the payload omits one', (t) => {
+  const r = runHandoff(t, {
     omitSessionId: true,
     transcriptName: 'stem-sess.jsonl',
     transcriptToolCalls: HANDOFF_DEPTH,
@@ -258,8 +252,8 @@ test('transcript_path stem supplies the session id when the payload omits one', 
   assert.equal(r.markerExists, true, 'the stem must become the marker filename');
 });
 
-test('no usable session id under deny-store pressure → fail closed', () => {
-  const r = runHandoff({
+test('no usable session id under deny-store pressure → fail closed', (t) => {
+  const r = runHandoff(t, {
     omitSessionId: true,
     seedDeny: seedForeignDeny('denier-4'),
   });
@@ -267,13 +261,13 @@ test('no usable session id under deny-store pressure → fail closed', () => {
   assert.match(r.out, /D0:invalid_session_id/);
 });
 
-test('no usable session id on a clean repo still allows', () => {
-  const r = runHandoff({ omitSessionId: true, transcriptToolCalls: 3 });
+test('no usable session id on a clean repo still allows', (t) => {
+  const r = runHandoff(t, { omitSessionId: true, transcriptToolCalls: 3 });
   assert.equal(r.verdict, 'allow', r.out);
 });
 
-test('writing a handoff trust-root path is denied even with a cold store', () => {
-  const r = runHandoff({
+test('writing a handoff trust-root path is denied even with a cold store', (t) => {
+  const r = runHandoff(t, {
     sessionId: 'sneaky',
     payloadExtra: { file_path: '.adlc/handoffs/denies/sneaky.json' },
     transcriptToolCalls: 2,
@@ -282,14 +276,14 @@ test('writing a handoff trust-root path is denied even with a cold store', () =>
   assert.match(r.out, /path_protected/);
 });
 
-test('resume-auth / model-ok / lock artifacts are protected too', () => {
+test('resume-auth / model-ok / lock artifacts are protected too', (t) => {
   for (const rel of [
     '.adlc/handoffs/sess-a.resume-auth.json',
     '.adlc/handoffs/sess-a.model-ok',
     '.adlc/handoffs/sess-a.lock',
     '.adlc/.deny-store',
   ]) {
-    const r = runHandoff({
+    const r = runHandoff(t, {
       sessionId: 'sneaky',
       payloadExtra: { file_path: rel },
       transcriptToolCalls: 2,
@@ -299,7 +293,7 @@ test('resume-auth / model-ok / lock artifacts are protected too', () => {
   }
 });
 
-test('the hook never hands the manifest key to project-resolved code', () => {
+test('the hook never hands the manifest key to project-resolved code', (t) => {
   // handoff-resolve.mjs deliberately resolves @adlc/context-handoff from the
   // PROJECT's node_modules, so the imported module is project-controlled. If
   // the hook passed ADLC_MANIFEST_KEY into it, any repository shipping a
@@ -321,7 +315,7 @@ test('the hook never hands the manifest key to project-resolved code', () => {
   };
 
   for (const envKey of ['', key]) {
-    const r = runHandoff({
+    const r = runHandoff(t, {
       sessionId: 'consumer-resume',
       seedDeny: seed,
       env: { ADLC_MANIFEST_KEY: envKey },
@@ -338,82 +332,72 @@ test('the hook never hands the manifest key to project-resolved code', () => {
   );
 });
 
-test('the direct-execution guard survives a path containing a space', () => {
+test('the direct-execution guard survives a path containing a space', (t) => {
   // `file://${argv[1]}` does not match import.meta.url for a percent-encoded
   // path, so main() would never run and the hook would exit 0 — read as ALLOW.
-  // realpathSync: macOS tmpdir() is itself a symlink, and import.meta.url is
-  // always the RESOLVED path — without this the two would differ for a reason
-  // that has nothing to do with the space this test is about.
-  const spaced = realpathSync(mkdtempSync(join(tmpdir(), 'adlc codex hook ')));
-  try {
-    const copyDir = join(spaced, 'hooks');
-    mkdirSync(copyDir, { recursive: true });
-    for (const f of [
-      'adlc-handoff-gate.mjs',
-      'handoff-resolve.mjs',
-      'adlc-build-gate.mjs',
-      'generated-active-ticket.mjs',
-      'generated-ticket-reader.mjs',
-      'generated-glob-match.mjs',
-    ]) {
-      copyFileSync(join(HOOKS_DIR, f), join(copyDir, f));
-    }
-    // Let the resolver find the package by walking up from the spaced hooks
-    // dir, so this asserts the real deny rather than the fail-closed path.
-    symlinkSync(join(REPO_ROOT, 'node_modules'), join(spaced, 'node_modules'), 'dir');
-    const repo = mkdtempSync(join(tmpdir(), 'adlc-codex-spaced-'));
-    try {
-      mkdirSync(join(repo, '.adlc'), { recursive: true });
-      seedForeignDeny('denier-spaced')(repo);
-      let status = 0;
-      let out = '';
-      try {
-        runHook([join(copyDir, 'adlc-handoff-gate.mjs')], {
-          input: JSON.stringify({
-            session_id: 'consumer-spaced',
-            tool_name: 'apply_patch',
-            file_path: 'src/app.mjs',
-          }),
-          encoding: 'utf8',
-          cwd: repo,
-          env: {
-            ...process.env,
-            NODE_PATH: [join(REPO_ROOT, 'node_modules'), process.env.NODE_PATH]
-              .filter(Boolean)
-              .join(':'),
-          },
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
-      } catch (e) {
-        out = e.stderr ?? '';
-        status = e.status ?? 1;
-      }
-      assert.equal(status, 2, `the hook must still enforce from a spaced path: ${out}`);
-      assert.match(out, /D3:unauthorized_open:denier-spaced/);
-    } finally {
-      rmSync(repo, { recursive: true, force: true });
-    }
-  } finally {
-    rmSync(spaced, { recursive: true, force: true });
+  // tmp(t, ...) handles realpathSync and registers cleanup via t.after.
+  const spaced = tmp(t, 'adlc codex hook ');
+  const copyDir = join(spaced, 'hooks');
+  mkdirSync(copyDir, { recursive: true });
+  for (const f of [
+    'adlc-handoff-gate.mjs',
+    'handoff-resolve.mjs',
+    'adlc-build-gate.mjs',
+    'generated-active-ticket.mjs',
+    'generated-ticket-reader.mjs',
+    'generated-glob-match.mjs',
+  ]) {
+    copyFileSync(join(HOOKS_DIR, f), join(copyDir, f));
   }
+  // Let the resolver find the package by walking up from the spaced hooks
+  // dir, so this asserts the real deny rather than the fail-closed path.
+  symlinkSync(join(REPO_ROOT, 'node_modules'), join(spaced, 'node_modules'), 'dir');
+  const repo = tmp(t, 'adlc-codex-spaced-');
+  mkdirSync(join(repo, '.adlc'), { recursive: true });
+  seedForeignDeny('denier-spaced')(repo);
+  let status = 0;
+  let out = '';
+  try {
+    runHook([join(copyDir, 'adlc-handoff-gate.mjs')], {
+      input: JSON.stringify({
+        session_id: 'consumer-spaced',
+        tool_name: 'apply_patch',
+        file_path: 'src/app.mjs',
+      }),
+      encoding: 'utf8',
+      cwd: repo,
+      env: {
+        ...process.env,
+        NODE_PATH: [join(REPO_ROOT, 'node_modules'), process.env.NODE_PATH]
+          .filter(Boolean)
+          .join(':'),
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch (e) {
+    out = e.stderr ?? '';
+    status = e.status ?? 1;
+  }
+  assert.equal(status, 2, `the hook must still enforce from a spaced path: ${out}`);
+  assert.match(out, /D3:unauthorized_open:denier-spaced/);
 });
 
-test('a supplied but missing transcript fails closed; an absent one does not', () => {
+test('a supplied but missing transcript fails closed; an absent one does not', (t) => {
   // Absent field → no signal → a harness without telemetry stays usable.
-  const absent = runHandoff({ sessionId: 'sess-absent' });
+  const absent = runHandoff(t, { sessionId: 'sess-absent' });
   assert.equal(absent.verdict, 'allow', absent.out);
 
   // Supplied but unreachable → a FAILED read of a real signal, not the absence
   // of one. A rotated or deleted transcript must not read as "no pressure".
-  const missing = runHandoff({
+  const missing = runHandoff(t, {
     sessionId: 'sess-missing',
     payloadExtra: { file_path: 'src/app.mjs', transcript_path: '/nonexistent/rotated.jsonl' },
   });
   assert.equal(missing.verdict, 'deny', missing.out);
 });
 
-test('malformed stdin fails closed', () => {
-  const r = runHandoff({ rawInput: '{not json' });
+test('malformed stdin fails closed', (t) => {
+  const r = runHandoff(t, { rawInput: '{not json' });
   assert.equal(r.verdict, 'deny');
   assert.match(r.out, /malformed hook payload JSON/);
 });
@@ -445,12 +429,12 @@ test('the plugin ships the new hook and its resolver', () => {
   assert.equal(pkg.dependencies['@adlc/context-handoff'], corePkg.version);
 });
 
-test('a nested shell call inside a parallel envelope is scanned for protected paths', () => {
+test('a nested shell call inside a parallel envelope is scanned for protected paths', (t) => {
   // multi_tool_use.parallel is in this hook's PreToolUse matcher, but the outer
   // envelope is not itself a shell tool. Reading only the outer name left the
   // nested command unscanned, so this deletion was allowed on a cold deny-set
   // while the same command sent directly was denied.
-  const r = runHandoff({
+  const r = runHandoff(t, {
     sessionId: 'parallel-1',
     toolName: 'multi_tool_use.parallel',
     transcriptToolCalls: 5,
@@ -467,8 +451,8 @@ test('a nested shell call inside a parallel envelope is scanned for protected pa
   assert.match(r.out, /path_protected_shell/);
 });
 
-test('a parallel envelope carrying only ordinary work is still allowed', () => {
-  const r = runHandoff({
+test('a parallel envelope carrying only ordinary work is still allowed', (t) => {
+  const r = runHandoff(t, {
     sessionId: 'parallel-2',
     toolName: 'multi_tool_use.parallel',
     transcriptToolCalls: 5,
@@ -489,8 +473,8 @@ test('a parallel envelope carrying only ordinary work is still allowed', () => {
 // own recovery CLI. Both MUST now be allowed unconditionally, regardless of
 // band state, evaluated before any other Hard-Degraded/deny check.
 
-test('Inspection Bash Exception: bare pwd is allowed even under an open deny-set', () => {
-  const r = runHandoff({
+test('Inspection Bash Exception: bare pwd is allowed even under an open deny-set', (t) => {
+  const r = runHandoff(t, {
     sessionId: 'consumer-pwd',
     toolName: 'exec_command',
     payloadExtra: { command: 'pwd' },
@@ -499,9 +483,9 @@ test('Inspection Bash Exception: bare pwd is allowed even under an open deny-set
   assert.equal(r.verdict, 'allow', r.out);
 });
 
-test('Inspection Bash Exception: pwd with an argument or shell chaining is NOT exempt', () => {
+test('Inspection Bash Exception: pwd with an argument or shell chaining is NOT exempt', (t) => {
   for (const decoy of ['pwd -L', 'pwd; ls', 'pwd && rm -rf /']) {
-    const r = runHandoff({
+    const r = runHandoff(t, {
       sessionId: 'consumer-pwd-decoy',
       toolName: 'exec_command',
       payloadExtra: { command: decoy },
@@ -511,10 +495,10 @@ test('Inspection Bash Exception: pwd with an argument or shell chaining is NOT e
   }
 });
 
-test('Recovery Exception: write_stdin carrying the literal text "pwd" is NOT the Inspection Exception', () => {
+test('Recovery Exception: write_stdin carrying the literal text "pwd" is NOT the Inspection Exception', (t) => {
   // write_stdin delivers input to an EXISTING process, not a standalone
   // command — the same literal text means something entirely different.
-  const r = runHandoff({
+  const r = runHandoff(t, {
     sessionId: 'consumer-write-stdin',
     toolName: 'write_stdin',
     payloadExtra: { chars: 'pwd' },
@@ -523,8 +507,8 @@ test('Recovery Exception: write_stdin carrying the literal text "pwd" is NOT the
   assert.equal(r.verdict, 'deny', r.out);
 });
 
-test('Recovery Exception: evil.exec_command (attacker prefix before the dot) is NOT eligible', () => {
-  const r = runHandoff({
+test('Recovery Exception: evil.exec_command (attacker prefix before the dot) is NOT eligible', (t) => {
+  const r = runHandoff(t, {
     sessionId: 'consumer-evil',
     toolName: 'evil.exec_command',
     payloadExtra: { command: 'pwd' },
@@ -533,8 +517,8 @@ test('Recovery Exception: evil.exec_command (attacker prefix before the dot) is 
   assert.equal(r.verdict, 'deny', r.out);
 });
 
-test('Recovery Exception: the real bypass command is allowed even under an open deny-set', () => {
-  const r = runHandoff({
+test('Recovery Exception: the real bypass command is allowed even under an open deny-set', (t) => {
+  const r = runHandoff(t, {
     sessionId: 'consumer-recovery',
     toolName: 'exec_command',
     payloadExtra: { command: `${REAL_NODE} ${REAL_RECOVERY_CLI} bypass --session consumer-recovery --write` },
@@ -543,8 +527,8 @@ test('Recovery Exception: the real bypass command is allowed even under an open 
   assert.equal(r.verdict, 'allow', r.out);
 });
 
-test('Recovery Exception: functions.exec_command via recipient_name/cmd field also matches', () => {
-  const r = runHandoff({
+test('Recovery Exception: functions.exec_command via recipient_name/cmd field also matches', (t) => {
+  const r = runHandoff(t, {
     sessionId: 'consumer-recovery-alias',
     rawInput: JSON.stringify({
       recipient_name: 'functions.exec_command',
@@ -556,8 +540,8 @@ test('Recovery Exception: functions.exec_command via recipient_name/cmd field al
   assert.equal(r.verdict, 'allow', r.out);
 });
 
-test('Recovery Exception: a decoy that merely resembles the recovery command is still denied', () => {
-  const r = runHandoff({
+test('Recovery Exception: a decoy that merely resembles the recovery command is still denied', (t) => {
+  const r = runHandoff(t, {
     sessionId: 'consumer-recovery-decoy',
     toolName: 'exec_command',
     payloadExtra: {
@@ -568,8 +552,8 @@ test('Recovery Exception: a decoy that merely resembles the recovery command is 
   assert.equal(r.verdict, 'deny', r.out);
 });
 
-test('Recovery Exception: --session naming a DIFFERENT session than this one is denied', () => {
-  const r = runHandoff({
+test('Recovery Exception: --session naming a DIFFERENT session than this one is denied', (t) => {
+  const r = runHandoff(t, {
     sessionId: 'consumer-recovery-other',
     toolName: 'exec_command',
     payloadExtra: { command: `${REAL_NODE} ${REAL_RECOVERY_CLI} bypass --session some-other-session --write` },
@@ -578,8 +562,8 @@ test('Recovery Exception: --session naming a DIFFERENT session than this one is 
   assert.equal(r.verdict, 'deny', r.out);
 });
 
-test('a multi_tool_use.parallel envelope carrying an eligible nested exec is NOT the Recovery Exception at the top level', () => {
-  const r = runHandoff({
+test('a multi_tool_use.parallel envelope carrying an eligible nested exec is NOT the Recovery Exception at the top level', (t) => {
+  const r = runHandoff(t, {
     sessionId: 'consumer-parallel-recovery',
     toolName: 'multi_tool_use.parallel',
     payloadExtra: {
@@ -595,8 +579,8 @@ test('a multi_tool_use.parallel envelope carrying an eligible nested exec is NOT
   assert.equal(r.verdict, 'deny', r.out);
 });
 
-test('deny diagnostic includes the literal, copy-pasteable recovery command for the resolved session', () => {
-  const r = runHandoff({
+test('deny diagnostic includes the literal, copy-pasteable recovery command for the resolved session', (t) => {
+  const r = runHandoff(t, {
     sessionId: 'consumer-diag',
     seedDeny: seedForeignDeny('denier-diag'),
   });
@@ -613,8 +597,8 @@ test('deny diagnostic includes the literal, copy-pasteable recovery command for 
 // not authorized against that record either. Only D1/D2 (this session's own
 // re-entry/denier status, with no open record left to check) are genuinely
 // cleared by a fresh id.
-test('D2 alone (consumed self-record, no open record left): the message correctly recommends a fresh session as something that actually works', () => {
-  const r = runHandoff({
+test('D2 alone (consumed self-record, no open record left): the message correctly recommends a fresh session as something that actually works', (t) => {
+  const r = runHandoff(t, {
     sessionId: 'denier-sticky-fresh',
     seedDeny: (root) => {
       seedForeignDeny('denier-sticky-fresh')(root);
@@ -640,8 +624,8 @@ test('D2 alone (consumed self-record, no open record left): the message correctl
   assert.doesNotMatch(r.out, /hits the same deny/, 'must not claim fresh session fails when it genuinely works');
 });
 
-test('D3 (foreign open deny): the message does not overclaim that a fresh session escapes it', () => {
-  const r = runHandoff({
+test('D3 (foreign open deny): the message does not overclaim that a fresh session escapes it', (t) => {
+  const r = runHandoff(t, {
     sessionId: 'consumer-ordering',
     seedDeny: seedForeignDeny('denier-ordering'),
   });
@@ -653,93 +637,85 @@ test('D3 (foreign open deny): the message does not overclaim that a fresh sessio
   assert.match(r.out, /DIFFERENT session/, 'resume must say it needs a different session than this one');
 });
 
-test('an incomplete transcript scan restricts an ordinary mutation but never pwd', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-codex-handoff-truncated-'));
+test('an incomplete transcript scan restricts an ordinary mutation but never pwd', (t) => {
+  const dir = tmp(t, 'adlc-codex-handoff-truncated-');
+  mkdirSync(join(dir, '.adlc'), { recursive: true });
+  mkdirSync(join(dir, 'src'), { recursive: true });
+  writeFileSync(join(dir, 'src', 'app.mjs'), 'export {}\n');
+  const line = JSON.stringify({ type: 'assistant', content: [{ type: 'tool_use', name: 'apply_patch' }] });
+  const transcriptPath = join(dir, 'oversized.jsonl');
+  // 9 MiB of padding pushes the file past MAX_ACTIVE_CONTEXT_BYTES (8 MiB).
+  writeFileSync(transcriptPath, `${line}\n${line}\n${'x'.repeat(9 * 1024 * 1024)}`);
+
+  const applyPatchEnv = {
+    ...process.env,
+    NODE_PATH: [join(REPO_ROOT, 'node_modules'), process.env.NODE_PATH].filter(Boolean).join(':'),
+  };
+
+  const applyPatchPayload = JSON.stringify({
+    tool_name: 'apply_patch',
+    session_id: 'consumer-truncated-apply',
+    transcript_path: transcriptPath,
+    input: '*** Update File: src/app.mjs\n@@\n-export {}\n+export const x = 1\n',
+  });
+  let applyOut = '';
+  let applyStatus = 0;
   try {
-    mkdirSync(join(dir, '.adlc'), { recursive: true });
-    mkdirSync(join(dir, 'src'), { recursive: true });
-    writeFileSync(join(dir, 'src', 'app.mjs'), 'export {}\n');
-    const line = JSON.stringify({ type: 'assistant', content: [{ type: 'tool_use', name: 'apply_patch' }] });
-    const transcriptPath = join(dir, 'oversized.jsonl');
-    // 9 MiB of padding pushes the file past MAX_ACTIVE_CONTEXT_BYTES (8 MiB).
-    writeFileSync(transcriptPath, `${line}\n${line}\n${'x'.repeat(9 * 1024 * 1024)}`);
-
-    const applyPatchEnv = {
-      ...process.env,
-      NODE_PATH: [join(REPO_ROOT, 'node_modules'), process.env.NODE_PATH].filter(Boolean).join(':'),
-    };
-
-    const applyPatchPayload = JSON.stringify({
-      tool_name: 'apply_patch',
-      session_id: 'consumer-truncated-apply',
-      transcript_path: transcriptPath,
-      input: '*** Update File: src/app.mjs\n@@\n-export {}\n+export const x = 1\n',
-    });
-    let applyOut = '';
-    let applyStatus = 0;
-    try {
-      runHook([HOOK], { input: applyPatchPayload, encoding: 'utf8', cwd: dir, env: applyPatchEnv, stdio: ['pipe', 'pipe', 'pipe'] });
-    } catch (e) {
-      applyOut = e.stderr ?? '';
-      applyStatus = e.status ?? 1;
-    }
-    assert.equal(applyStatus, 2, applyOut);
-    assert.match(applyOut, /incomplete_scan_lower_bound/);
-
-    const pwdPayload = JSON.stringify({
-      tool_name: 'exec_command',
-      session_id: 'consumer-truncated-pwd',
-      transcript_path: transcriptPath,
-      command: 'pwd',
-    });
-    let pwdStatus = 0;
-    try {
-      runHook([HOOK], { input: pwdPayload, encoding: 'utf8', cwd: dir, env: applyPatchEnv, stdio: ['pipe', 'pipe', 'pipe'] });
-    } catch (e) {
-      pwdStatus = e.status ?? 1;
-    }
-    assert.equal(pwdStatus, 0);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+    runHook([HOOK], { input: applyPatchPayload, encoding: 'utf8', cwd: dir, env: applyPatchEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+  } catch (e) {
+    applyOut = e.stderr ?? '';
+    applyStatus = e.status ?? 1;
   }
+  assert.equal(applyStatus, 2, applyOut);
+  assert.match(applyOut, /incomplete_scan_lower_bound/);
+
+  const pwdPayload = JSON.stringify({
+    tool_name: 'exec_command',
+    session_id: 'consumer-truncated-pwd',
+    transcript_path: transcriptPath,
+    command: 'pwd',
+  });
+  let pwdStatus = 0;
+  try {
+    runHook([HOOK], { input: pwdPayload, encoding: 'utf8', cwd: dir, env: applyPatchEnv, stdio: ['pipe', 'pipe', 'pipe'] });
+  } catch (e) {
+    pwdStatus = e.status ?? 1;
+  }
+  assert.equal(pwdStatus, 0);
 });
 
-test('a fresh session under the old 256 KiB MAX_SCAN_BYTES ceiling now allows ordinary mutations', () => {
+test('a fresh session under the old 256 KiB MAX_SCAN_BYTES ceiling now allows ordinary mutations', (t) => {
   // Deliberately sized between the OLD 256 KiB ceiling and the new 8 MiB one —
   // this is the exact regression the hotfix exists to close (AC0 bullet 2).
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-codex-handoff-largebaseline-'));
-  try {
-    mkdirSync(join(dir, '.adlc'), { recursive: true });
-    mkdirSync(join(dir, 'src'), { recursive: true });
-    writeFileSync(join(dir, 'src', 'app.mjs'), 'export {}\n');
-    const line = JSON.stringify({ type: 'assistant', content: [{ type: 'tool_use', name: 'apply_patch' }] });
-    const transcriptPath = join(dir, 'large.jsonl');
-    writeFileSync(transcriptPath, `${line}\n${line}\n${'x'.repeat(400 * 1024)}`);
+  const dir = tmp(t, 'adlc-codex-handoff-largebaseline-');
+  mkdirSync(join(dir, '.adlc'), { recursive: true });
+  mkdirSync(join(dir, 'src'), { recursive: true });
+  writeFileSync(join(dir, 'src', 'app.mjs'), 'export {}\n');
+  const line = JSON.stringify({ type: 'assistant', content: [{ type: 'tool_use', name: 'apply_patch' }] });
+  const transcriptPath = join(dir, 'large.jsonl');
+  writeFileSync(transcriptPath, `${line}\n${line}\n${'x'.repeat(400 * 1024)}`);
 
-    const payload = JSON.stringify({
-      tool_name: 'apply_patch',
-      session_id: 'consumer-large-baseline',
-      transcript_path: transcriptPath,
-      input: '*** Update File: src/app.mjs\n@@\n-export {}\n+export const x = 1\n',
+  const payload = JSON.stringify({
+    tool_name: 'apply_patch',
+    session_id: 'consumer-large-baseline',
+    transcript_path: transcriptPath,
+    input: '*** Update File: src/app.mjs\n@@\n-export {}\n+export const x = 1\n',
+  });
+  let status = 0;
+  let out = '';
+  try {
+    runHook([HOOK], {
+      input: payload,
+      encoding: 'utf8',
+      cwd: dir,
+      env: { ...process.env, NODE_PATH: [join(REPO_ROOT, 'node_modules'), process.env.NODE_PATH].filter(Boolean).join(':') },
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
-    let status = 0;
-    let out = '';
-    try {
-      runHook([HOOK], {
-        input: payload,
-        encoding: 'utf8',
-        cwd: dir,
-        env: { ...process.env, NODE_PATH: [join(REPO_ROOT, 'node_modules'), process.env.NODE_PATH].filter(Boolean).join(':') },
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-    } catch (e) {
-      out = e.stderr ?? '';
-      status = e.status ?? 1;
-    }
-    assert.equal(status, 0, out);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+  } catch (e) {
+    out = e.stderr ?? '';
+    status = e.status ?? 1;
   }
+  assert.equal(status, 0, out);
 });
 
 test('Recovery Exception check happens BEFORE package load, not after (source order pin)', () => {

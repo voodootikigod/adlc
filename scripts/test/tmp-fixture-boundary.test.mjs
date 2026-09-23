@@ -45,13 +45,6 @@ const ALLOWLIST = new Set([
   'packages/fleet/test/status.test.mjs',
   'packages/fleet/test/synthetic-home-bwrap.test.mjs',
 
-  'plugins/adlc-codex/hooks/test/build-gate-space-path.test.mjs',
-  'plugins/adlc-codex/hooks/test/build-gate.test.mjs',
-  'plugins/adlc-codex/hooks/test/handoff-deny.test.mjs',
-  'plugins/adlc-codex/hooks/test/handoff-resolve-global-e2e.test.mjs',
-  'plugins/adlc-codex/hooks/test/handoff-secret-scrub.test.mjs',
-  'plugins/adlc-copilot/hooks/test/build-gate-space-path.test.mjs',
-  'plugins/adlc-copilot/hooks/test/isMain-space-path.test.mjs',
   'plugins/adlc-cursor/test/build-gate.test.mjs',
   'plugins/adlc-cursor/test/mcp-roots-proxy-lifecycle.test.mjs',
   'plugins/adlc-cursor/test/mcp-wrapper.test.mjs',
