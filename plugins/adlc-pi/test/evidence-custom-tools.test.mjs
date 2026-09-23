@@ -4,10 +4,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, symlinkSync, chmodSync, existsSync,
+  mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, chmodSync, existsSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 import { checkCustomTool, extractToolPaths } from '../lib/rails-checker.mjs';
 import { operativeMarkerSet, scanOperativeDelta, mergeViolations } from '../lib/reactive-gate.mjs';
 import { recordGateEvent } from '../lib/evidence.mjs';
@@ -26,8 +26,8 @@ const TICKET = {
   rails: ['test/contracts/**'],
 };
 
-function makeRepo({ tickets = [TICKET], current = 'T1' } = {}) {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-ev-')));
+function makeRepo(t, { tickets = [TICKET], current = 'T1' } = {}) {
+  const root = tmp(t, 'pi-evid-ct-');
   mkdirSync(join(root, '.adlc'), { recursive: true });
   writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets }, null, 2));
   if (current !== null) writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: current }));
@@ -76,129 +76,114 @@ const call = (toolName, input, id = 'c1') => ({ type: 'tool_call', toolName, too
 // a failing ledger
 // =========================================================================
 
-test('AC1: a rail deny records a session entry AND a chain-valid manifest line', async () => {
-  const root = makeRepo();
-  try {
-    const { pi, ctx } = await boot(root);
-    const denied = await pi.handlers.tool_call(call('write', { path: 'test/contracts/auth.test.ts', content: 'x' }), ctx);
-    assert.equal(denied.block, true);
+test('AC1: a rail deny records a session entry AND a chain-valid manifest line', async (t) => {
+  const root = makeRepo(t);
+  const { pi, ctx } = await boot(root);
+  const denied = await pi.handlers.tool_call(call('write', { path: 'test/contracts/auth.test.ts', content: 'x' }), ctx);
+  assert.equal(denied.block, true);
 
-    assert.equal(pi.entries.length, 1, 'session evidence entry appended');
-    assert.equal(pi.entries[0].customType, 'adlc-gate-event');
-    assert.equal(pi.entries[0].data.type, 'rail-deny');
+  assert.equal(pi.entries.length, 1, 'session evidence entry appended');
+  assert.equal(pi.entries[0].customType, 'adlc-gate-event');
+  assert.equal(pi.entries[0].data.type, 'rail-deny');
 
-    const manifest = readFileSync(join(root, '.adlc', 'manifest.jsonl'), 'utf8');
-    assert.match(manifest, /pi-rail-deny/);
-    // The mirror must be CHAIN-VALID (raw appends would corrupt the ledger).
-    const verdict = verify(join(root, '.adlc'), { key: null });
-    assert.equal(verdict.valid, true, `manifest chain must verify: ${JSON.stringify(verdict)}`);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  const manifest = readFileSync(join(root, '.adlc', 'manifest.jsonl'), 'utf8');
+  assert.match(manifest, /pi-rail-deny/);
+  // The mirror must be CHAIN-VALID (raw appends would corrupt the ledger).
+  const verdict = verify(join(root, '.adlc'), { key: null });
+  assert.equal(verdict.valid, true, `manifest chain must verify: ${JSON.stringify(verdict)}`);
 });
 
-test('AC1: suppression revert records evidence; a failing ledger does not stop the revert', async () => {
-  const root = makeRepo();
-  try {
-    const { pi, ctx } = await boot(root);
-    await pi.handlers.tool_call(call('write', { path: 'src/a.ts', content: 'x' }, 'w1'), ctx);
-    writeFileSync(join(root, 'src', 'a.ts'), `// ${TS_IGNORE}\nbad();\n`);
-    // Break the ledger AFTER the tool call so only the evidence write fails.
-    chmodSync(join(root, '.adlc'), 0o555);
-    const result = await pi.handlers.tool_result({ type: 'tool_result', toolName: 'write', toolCallId: 'w1', input: {}, content: [], isError: false }, ctx);
-    chmodSync(join(root, '.adlc'), 0o755);
+test('AC1: suppression revert records evidence; a failing ledger does not stop the revert', async (t) => {
+  const root = makeRepo(t);
+  const { pi, ctx } = await boot(root);
+  await pi.handlers.tool_call(call('write', { path: 'src/a.ts', content: 'x' }, 'w1'), ctx);
+  writeFileSync(join(root, 'src', 'a.ts'), `// ${TS_IGNORE}\nbad();\n`);
+  // Ensure cleanup succeeds even if intermediate assertions throw while read-only.
+  t.after(() => { try { chmodSync(join(root, '.adlc'), 0o755); } catch {} });
+  // Break the ledger AFTER the tool call so only the evidence write fails.
+  chmodSync(join(root, '.adlc'), 0o555);
+  const result = await pi.handlers.tool_result({ type: 'tool_result', toolName: 'write', toolCallId: 'w1', input: {}, content: [], isError: false }, ctx);
+  chmodSync(join(root, '.adlc'), 0o755);
 
-    assert.equal(result.isError, true, 'revert verdict unaffected by ledger failure');
-    assert.equal(existsSync(join(root, 'src', 'a.ts')), false, 'snapshot restore still happened (file did not pre-exist)');
-    assert.equal(pi.entries.some((e) => e.data.type === 'suppression-revert'), true, 'session entry still recorded');
-    assert.ok(ctx.notices.some((n) => n.l === 'warning' && /evidence write failed/.test(n.m)), 'ledger failure degraded to a warning');
-  } finally {
-    chmodSync(join(root, '.adlc'), 0o755);
-    rmSync(root, { recursive: true, force: true });
-  }
+  assert.equal(result.isError, true, 'revert verdict unaffected by ledger failure');
+  assert.equal(existsSync(join(root, 'src', 'a.ts')), false, 'snapshot restore still happened (file did not pre-exist)');
+  assert.equal(pi.entries.some((e) => e.data.type === 'suppression-revert'), true, 'session entry still recorded');
+  assert.ok(ctx.notices.some((n) => n.l === 'warning' && /evidence write failed/.test(n.m)), 'ledger failure degraded to a warning');
 });
 
 // =========================================================================
 // AC2/AC3 — custom-tool coverage
 // =========================================================================
 
-test('AC2: synthetic third-party write tool against a rail is denied; in-scope not blocked; no-path tool recorded unvetted', async () => {
-  const root = makeRepo();
-  try {
-    const { pi, ctx } = await boot(root);
+test('AC2: synthetic third-party write tool against a rail is denied; in-scope not blocked; no-path tool recorded unvetted', async (t) => {
+  const root = makeRepo(t);
+  const { pi, ctx } = await boot(root);
 
-    const denied = await pi.handlers.tool_call(call('write_file', { file: 'test/contracts/auth.test.ts', contents: 'x' }), ctx);
-    assert.equal(denied.block, true);
-    assert.match(denied.reason, /frozen rail/);
+  const denied = await pi.handlers.tool_call(call('write_file', { file: 'test/contracts/auth.test.ts', contents: 'x' }), ctx);
+  assert.equal(denied.block, true);
+  assert.match(denied.reason, /frozen rail/);
 
-    const allowed = await pi.handlers.tool_call(call('write_file', { file: 'src/ok.ts', contents: 'x' }, 'c2'), ctx);
-    assert.equal(allowed, undefined);
+  const allowed = await pi.handlers.tool_call(call('write_file', { file: 'src/ok.ts', contents: 'x' }, 'c2'), ctx);
+  assert.equal(allowed, undefined);
 
-    const unvetted = await pi.handlers.tool_call(call('run_linter', {}, 'c3'), ctx);
-    assert.equal(unvetted, undefined, 'no-path unknown tool is allowed');
-    assert.equal(pi.entries.filter((e) => e.data.type === 'unvetted-tool' && e.data.tool === 'run_linter').length, 1);
+  const unvetted = await pi.handlers.tool_call(call('run_linter', {}, 'c3'), ctx);
+  assert.equal(unvetted, undefined, 'no-path unknown tool is allowed');
+  assert.equal(pi.entries.filter((e) => e.data.type === 'unvetted-tool' && e.data.tool === 'run_linter').length, 1);
 
-    // once per tool name per session
-    await pi.handlers.tool_call(call('run_linter', {}, 'c4'), ctx);
-    assert.equal(pi.entries.filter((e) => e.data.type === 'unvetted-tool').length, 1);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  // once per tool name per session
+  await pi.handlers.tool_call(call('run_linter', {}, 'c4'), ctx);
+  assert.equal(pi.entries.filter((e) => e.data.type === 'unvetted-tool').length, 1);
 });
 
-test('AC3: symlink through a custom tool path arg is resolved and denied', async () => {
-  const root = makeRepo();
-  try {
-    symlinkSync(join(root, 'test', 'contracts', 'auth.test.ts'), join(root, 'src', 'alias.ts'));
-    const { pi, ctx } = await boot(root);
-    const denied = await pi.handlers.tool_call(call('write_file', { path: 'src/alias.ts' }), ctx);
-    assert.equal(denied.block, true);
-    assert.match(denied.reason, /frozen rail/);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+test('AC3: symlink through a custom tool path arg is resolved and denied', async (t) => {
+  const root = makeRepo(t);
+  symlinkSync(join(root, 'test', 'contracts', 'auth.test.ts'), join(root, 'src', 'alias.ts'));
+  const { pi, ctx } = await boot(root);
+  const denied = await pi.handlers.tool_call(call('write_file', { path: 'src/alias.ts' }), ctx);
+  assert.equal(denied.block, true);
+  assert.match(denied.reason, /frozen rail/);
 });
 
-test('extractToolPaths: path keys, arrays, and repo-resolving strings; prose ignored', () => {
-  const root = makeRepo();
-  try {
-    writeFileSync(join(root, 'src', 'real.ts'), 'x\n');
-    const paths = extractToolPaths(
-      { file: 'a.ts', targets: undefined, path: 'b.ts', note: 'just prose here', existing: 'src/real.ts', missing: 'src/none.ts' },
-      root
-    );
-    assert.ok(paths.includes('a.ts'));
-    assert.ok(paths.includes('b.ts'));
-    assert.ok(paths.includes('src/real.ts'), 'repo-resolving string collected');
-    assert.ok(!paths.includes('just prose here'));
-    assert.ok(!paths.includes('src/none.ts'), 'non-existing non-key string ignored');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+test('extractToolPaths: path keys, arrays, and repo-resolving strings; prose ignored', (t) => {
+  const root = makeRepo(t);
+  writeFileSync(join(root, 'src', 'real.ts'), 'x\n');
+  const paths = extractToolPaths(
+    { file: 'a.ts', targets: undefined, path: 'b.ts', note: 'just prose here', existing: 'src/real.ts', missing: 'src/none.ts' },
+    root
+  );
+  assert.ok(paths.includes('a.ts'));
+  assert.ok(paths.includes('b.ts'));
+  assert.ok(paths.includes('src/real.ts'), 'repo-resolving string collected');
+  assert.ok(!paths.includes('just prose here'));
+  assert.ok(!paths.includes('src/none.ts'), 'non-existing non-key string ignored');
 });
 
-test('checkCustomTool: read-only built-ins are vetted allows', () => {
-  const root = makeRepo();
-  try {
-    const verdict = checkCustomTool('grep', { path: 'test/contracts/auth.test.ts' }, TICKET, root);
-    assert.equal(verdict.decision, 'allow');
-    assert.equal(verdict.unvetted, undefined);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+test('checkCustomTool: read-only built-ins are vetted allows', (t) => {
+  const root = makeRepo(t);
+  const verdict = checkCustomTool('grep', { path: 'test/contracts/auth.test.ts' }, TICKET, root);
+  assert.equal(verdict.decision, 'allow');
+  assert.equal(verdict.unvetted, undefined);
 });
 
 // =========================================================================
 // AC4 — user_bash advisory
 // =========================================================================
 
-test('AC4: rail-mutating user_bash warns + records, never blocks; read-only stays silent', async () => {
-  const root = makeRepo();
-  try {
-    const { pi, ctx } = await boot(root);
-    const result = await pi.handlers.user_bash(
-      { type: 'user_bash', command: 'echo x > test/contracts/auth.test.ts', excludeFromContext: false, cwd: root },
-      ctx
-    );
-    assert.equal(result, undefined, 'human commands are never blocked');
-    assert.ok(ctx.notices.some((n) => n.l === 'warning' && /frozen rail/.test(n.m)));
-    assert.equal(pi.entries.filter((e) => e.data.type === 'user-bash-rail-override').length, 1);
+test('AC4: rail-mutating user_bash warns + records, never blocks; read-only stays silent', async (t) => {
+  const root = makeRepo(t);
+  const { pi, ctx } = await boot(root);
+  const result = await pi.handlers.user_bash(
+    { type: 'user_bash', command: 'echo x > test/contracts/auth.test.ts', excludeFromContext: false, cwd: root },
+    ctx
+  );
+  assert.equal(result, undefined, 'human commands are never blocked');
+  assert.ok(ctx.notices.some((n) => n.l === 'warning' && /frozen rail/.test(n.m)));
+  assert.equal(pi.entries.filter((e) => e.data.type === 'user-bash-rail-override').length, 1);
 
-    const before = pi.entries.length;
-    await pi.handlers.user_bash({ type: 'user_bash', command: 'git status', excludeFromContext: false, cwd: root }, ctx);
-    await pi.handlers.user_bash({ type: 'user_bash', command: 'npm run build', excludeFromContext: false, cwd: root }, ctx);
-    assert.equal(pi.entries.length, before, 'read-only and non-rail commands record nothing');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  const before = pi.entries.length;
+  await pi.handlers.user_bash({ type: 'user_bash', command: 'git status', excludeFromContext: false, cwd: root }, ctx);
+  await pi.handlers.user_bash({ type: 'user_bash', command: 'npm run build', excludeFromContext: false, cwd: root }, ctx);
+  assert.equal(pi.entries.length, before, 'read-only and non-rail commands record nothing');
 });
 
 // =========================================================================
@@ -219,25 +204,23 @@ test('AC5: marker relocated out of a fenced .mdx block is flagged; the reverse m
   assert.equal(reverse.length, 0, 'operative→inert move is never flagged');
 });
 
-test('AC5 (wiring): relocation caught through the real write gate even though the line multiset is unchanged', async () => {
-  const root = makeRepo();
+test('AC5 (wiring): relocation caught through the real write gate even though the line multiset is unchanged', async (t) => {
+  const root = makeRepo(t);
   const markerLine = `// ${TS_IGNORE} sample`;
   try {
     writeFileSync(join(root, 'docs') , '', { flag: 'wx' }); // ensure parent creation below
   } catch { /* dir path created next */ }
   rmSync(join(root, 'docs'), { force: true });
   mkdirSync(join(root, 'docs'), { recursive: true });
-  try {
-    const target = join(root, 'docs', 'page.mdx');
-    writeFileSync(target, `intro\n\`\`\`ts\n${markerLine}\n\`\`\`\nrest\n`);
-    const { pi, ctx } = await boot(root);
-    await pi.handlers.tool_call(call('edit', { path: 'docs/page.mdx', edits: [] }, 'e1'), ctx);
-    writeFileSync(target, `${markerLine}\nintro\n\`\`\`ts\n\`\`\`\nrest\n`);
-    const result = await pi.handlers.tool_result({ type: 'tool_result', toolName: 'edit', toolCallId: 'e1', input: {}, content: [], isError: false }, ctx);
-    assert.equal(result.isError, true, 'relocation must fail the gate');
-    assert.match(result.content[0].text, /GATE FAILED/);
-    assert.equal(readFileSync(target, 'utf8'), `intro\n\`\`\`ts\n${markerLine}\n\`\`\`\nrest\n`, 'reverted to pre-tool snapshot');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  const target = join(root, 'docs', 'page.mdx');
+  writeFileSync(target, `intro\n\`\`\`ts\n${markerLine}\n\`\`\`\nrest\n`);
+  const { pi, ctx } = await boot(root);
+  await pi.handlers.tool_call(call('edit', { path: 'docs/page.mdx', edits: [] }, 'e1'), ctx);
+  writeFileSync(target, `${markerLine}\nintro\n\`\`\`ts\n\`\`\`\nrest\n`);
+  const result = await pi.handlers.tool_result({ type: 'tool_result', toolName: 'edit', toolCallId: 'e1', input: {}, content: [], isError: false }, ctx);
+  assert.equal(result.isError, true, 'relocation must fail the gate');
+  assert.match(result.content[0].text, /GATE FAILED/);
+  assert.equal(readFileSync(target, 'utf8'), `intro\n\`\`\`ts\n${markerLine}\n\`\`\`\nrest\n`, 'reverted to pre-tool snapshot');
 });
 
 test('F1 regression: a PRE-EXISTING operative marker plus unrelated added lines is NOT flagged (no over-reversion)', () => {
@@ -247,44 +230,38 @@ test('F1 regression: a PRE-EXISTING operative marker plus unrelated added lines 
   assert.equal(delta.length, 0, 'the before.has(marker) guard must suppress pre-existing operative markers');
 });
 
-test('F1 regression (wiring): appending clean lines to a file that already carries a marker passes the gate', async () => {
-  const root = makeRepo();
-  try {
-    const target = join(root, 'src', 'legacy.ts');
-    writeFileSync(target, `// ${TS_IGNORE}\nold();\n`);
-    const { pi, ctx } = await boot(root);
-    await pi.handlers.tool_call(call('edit', { path: 'src/legacy.ts', edits: [] }, 'e9'), ctx);
-    writeFileSync(target, `// ${TS_IGNORE}\nold();\nnewClean();\n`);
-    const result = await pi.handlers.tool_result({ type: 'tool_result', toolName: 'edit', toolCallId: 'e9', input: {}, content: [], isError: false }, ctx);
-    assert.equal(result, undefined, 'legit append must not be reverted');
-    assert.equal(readFileSync(target, 'utf8'), `// ${TS_IGNORE}\nold();\nnewClean();\n`);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+test('F1 regression (wiring): appending clean lines to a file that already carries a marker passes the gate', async (t) => {
+  const root = makeRepo(t);
+  const target = join(root, 'src', 'legacy.ts');
+  writeFileSync(target, `// ${TS_IGNORE}\nold();\n`);
+  const { pi, ctx } = await boot(root);
+  await pi.handlers.tool_call(call('edit', { path: 'src/legacy.ts', edits: [] }, 'e9'), ctx);
+  writeFileSync(target, `// ${TS_IGNORE}\nold();\nnewClean();\n`);
+  const result = await pi.handlers.tool_result({ type: 'tool_result', toolName: 'edit', toolCallId: 'e9', input: {}, content: [], isError: false }, ctx);
+  assert.equal(result, undefined, 'legit append must not be reverted');
+  assert.equal(readFileSync(target, 'utf8'), `// ${TS_IGNORE}\nold();\nnewClean();\n`);
 });
 
-test('F2 regression: opaque and expansion rail-resets by the human are advised + recorded', async () => {
-  const root = makeRepo();
-  try {
-    const { pi, ctx } = await boot(root);
-    await pi.handlers.user_bash({ type: 'user_bash', command: 'git checkout -- test/contracts/auth.test.ts', excludeFromContext: false, cwd: root }, ctx);
-    await pi.handlers.user_bash({ type: 'user_bash', command: 'echo x > $RAIL_FILE', excludeFromContext: false, cwd: root }, ctx);
-    assert.equal(pi.entries.filter((e) => e.data.type === 'user-bash-rail-override').length, 2, 'opaque + expansion mutations both audited');
-    // non-mutating unverifiable command stays silent (no advisory spam)
-    const before = pi.entries.length;
-    await pi.handlers.user_bash({ type: 'user_bash', command: 'npm run build', excludeFromContext: false, cwd: root }, ctx);
-    assert.equal(pi.entries.length, before);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+test('F2 regression: opaque and expansion rail-resets by the human are advised + recorded', async (t) => {
+  const root = makeRepo(t);
+  const { pi, ctx } = await boot(root);
+  await pi.handlers.user_bash({ type: 'user_bash', command: 'git checkout -- test/contracts/auth.test.ts', excludeFromContext: false, cwd: root }, ctx);
+  await pi.handlers.user_bash({ type: 'user_bash', command: 'echo x > $RAIL_FILE', excludeFromContext: false, cwd: root }, ctx);
+  assert.equal(pi.entries.filter((e) => e.data.type === 'user-bash-rail-override').length, 2, 'opaque + expansion mutations both audited');
+  // non-mutating unverifiable command stays silent (no advisory spam)
+  const before = pi.entries.length;
+  await pi.handlers.user_bash({ type: 'user_bash', command: 'npm run build', excludeFromContext: false, cwd: root }, ctx);
+  assert.equal(pi.entries.length, before);
 });
 
-test('F3 regression: one level of nested tool input is extracted and rail-checked', async () => {
-  const root = makeRepo();
-  try {
-    const { pi, ctx } = await boot(root);
-    const denied = await pi.handlers.tool_call(call('patcher', { opts: { path: 'test/contracts/auth.test.ts' } }, 'n1'), ctx);
-    assert.equal(denied.block, true, 'nested path must be rail-checked');
-    const paths = extractToolPaths({ opts: { file: 'a.ts' }, deep: { more: { path: 'b.ts' } } }, root);
-    assert.ok(paths.includes('a.ts'));
-    assert.ok(!paths.includes('b.ts'), 'recursion is bounded to one level (CI backstop beyond)');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+test('F3 regression: one level of nested tool input is extracted and rail-checked', async (t) => {
+  const root = makeRepo(t);
+  const { pi, ctx } = await boot(root);
+  const denied = await pi.handlers.tool_call(call('patcher', { opts: { path: 'test/contracts/auth.test.ts' } }, 'n1'), ctx);
+  assert.equal(denied.block, true, 'nested path must be rail-checked');
+  const paths = extractToolPaths({ opts: { file: 'a.ts' }, deep: { more: { path: 'b.ts' } } }, root);
+  assert.ok(paths.includes('a.ts'));
+  assert.ok(!paths.includes('b.ts'), 'recursion is bounded to one level (CI backstop beyond)');
 });
 
 test('operativeMarkerSet: .md prose exempt; code files fully operative', () => {
@@ -301,18 +278,16 @@ test('mergeViolations dedupes by file+marker', () => {
 });
 
 // recordGateEvent unit: both sinks fed
-test('recordGateEvent writes both sinks and degrades per-sink', () => {
-  const root = makeRepo();
-  try {
-    const pi = fakePi();
-    const ctx = fakeCtx(root);
-    recordGateEvent({ pi, ctx, root, ticketId: 'T1', type: 'shell-deny', detail: { reason: 'r' } });
-    assert.equal(pi.entries.length, 1);
-    assert.match(readFileSync(join(root, '.adlc', 'manifest.jsonl'), 'utf8'), /pi-shell-deny/);
+test('recordGateEvent writes both sinks and degrades per-sink', (t) => {
+  const root = makeRepo(t);
+  const pi = fakePi();
+  const ctx = fakeCtx(root);
+  recordGateEvent({ pi, ctx, root, ticketId: 'T1', type: 'shell-deny', detail: { reason: 'r' } });
+  assert.equal(pi.entries.length, 1);
+  assert.match(readFileSync(join(root, '.adlc', 'manifest.jsonl'), 'utf8'), /pi-shell-deny/);
 
-    // session sink broken → warning, manifest still written
-    const brokenPi = { ...fakePi(), appendEntry() { throw new Error('boom'); } };
-    recordGateEvent({ pi: brokenPi, ctx, root, ticketId: 'T1', type: 'shell-deny', detail: {} });
-    assert.ok(ctx.notices.some((n) => /session evidence write failed/.test(n.m)));
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  // session sink broken → warning, manifest still written
+  const brokenPi = { ...fakePi(), appendEntry() { throw new Error('boom'); } };
+  recordGateEvent({ pi: brokenPi, ctx, root, ticketId: 'T1', type: 'shell-deny', detail: {} });
+  assert.ok(ctx.notices.some((n) => /session evidence write failed/.test(n.m)));
 });
