@@ -7,30 +7,20 @@ import { EventEmitter, once } from "node:events";
 import {
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
-import { after, test } from "node:test";
+import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { tmp } from "@adlc/core/test-kit";
 import { runRootsProxy } from "../lib/mcp-roots-proxy.mjs";
 import { retireChildProcess } from "../lib/mcp-proxy-runtime.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const WRAPPER = join(HERE, "..", "bin", "adlc-mcp-wrapper.mjs");
-
-function tmp(prefix) {
-  return mkdtempSync(join(tmpdir(), prefix));
-}
-
-function cleanup(path) {
-  rmSync(path, { recursive: true, force: true });
-}
 
 async function waitForProcessExit(pid, timeoutMs = 500) {
   const started = Date.now();
@@ -48,21 +38,8 @@ async function waitForProcessExit(pid, timeoutMs = 500) {
   assert.fail(`process ${pid} remained alive after ${timeoutMs}ms`);
 }
 
-// Every subprocess launch gets its own state dir; remove them all once the
-// file finishes so repeated runs do not accumulate empty dirs under tmpdir().
-const stateDirs = new Set();
-after(() => {
-  for (const dir of stateDirs) cleanup(dir);
-});
-
-function stateDir() {
-  const dir = tmp("adlc-mcp-state-");
-  stateDirs.add(dir);
-  return dir;
-}
-
-function adlcRepo() {
-  const root = tmp("adlc-mcp-lifecycle-");
+function adlcRepo(t) {
+  const root = tmp(t, "cursor-mcp-lifecycle-");
   mkdirSync(join(root, ".adlc"), { recursive: true });
   writeFileSync(
     join(root, ".adlc", "tickets.json"),
@@ -128,16 +105,22 @@ ${
   return fakeCli;
 }
 
-function launch(env) {
-  return spawn(process.execPath, [WRAPPER], {
+function launch(t, env) {
+  const child = spawn(process.execPath, [WRAPPER], {
     cwd: join(HERE, ".."),
     env: {
       ...process.env,
-      ADLC_CURSOR_STATE_DIR: stateDir(),
+      ADLC_CURSOR_STATE_DIR: tmp(t, "cursor-mcp-state-"),
       ...env,
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
+  if (t?.after) {
+    t.after(() => {
+      if (!child.killed) child.kill("SIGKILL");
+    });
+  }
+  return child;
 }
 
 function collect(child) {
@@ -365,42 +348,38 @@ test("custom-stream runs do not attach global signal listeners", async () => {
   );
 });
 
-test("initialize ordering: roots/list waits for initialized, early tools queue", async () => {
-  const root = adlcRepo();
-  const child = launch({ ADLC_CLI_BIN: writeFakeCli(root) });
+test("initialize ordering: roots/list waits for initialized, early tools queue", async (t) => {
+  const root = adlcRepo(t);
+  const child = launch(t, { ADLC_CLI_BIN: writeFakeCli(root) });
   const out = collect(child);
-  try {
-    sendInitialize(child);
-    send(child, { jsonrpc: "2.0", id: 10, method: "tools/list", params: {} });
-    await out.waitFor((s) => s.includes('"id":1'));
-    assert.ok(out.reply(1).result, "initialize must be answered");
-    assert.equal(
-      latestRootsRequest(out),
-      undefined,
-      "roots/list must not precede initialized",
-    );
-    assert.equal(
-      out.reply(10),
-      undefined,
-      "early tools/list must queue, not fail",
-    );
+  sendInitialize(child);
+  send(child, { jsonrpc: "2.0", id: 10, method: "tools/list", params: {} });
+  await out.waitFor((s) => s.includes('"id":1'));
+  assert.ok(out.reply(1).result, "initialize must be answered");
+  assert.equal(
+    latestRootsRequest(out),
+    undefined,
+    "roots/list must not precede initialized",
+  );
+  assert.equal(
+    out.reply(10),
+    undefined,
+    "early tools/list must queue, not fail",
+  );
 
-    send(child, {
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-      params: {},
-    });
-    await out.waitFor((s) => s.includes("roots/list"));
-    send(child, {
-      jsonrpc: "2.0",
-      id: latestRootsRequest(out).id,
-      result: { roots: [{ uri: root }] },
-    });
-    await out.waitFor((s) => s.includes('"id":10') && s.includes("adlc_gate"));
-  } finally {
-    child.kill();
-    cleanup(root);
-  }
+  send(child, {
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {},
+  });
+  await out.waitFor((s) => s.includes("roots/list"));
+  send(child, {
+    jsonrpc: "2.0",
+    id: latestRootsRequest(out).id,
+    result: { roots: [{ uri: root }] },
+  });
+  await out.waitFor((s) => s.includes('"id":10') && s.includes("adlc_gate"));
+  child.kill();
 });
 
 test("pre-initialized wait expires queued Roots-capable client calls", async () => {
@@ -408,41 +387,38 @@ test("pre-initialized wait expires queued Roots-capable client calls", async () 
     preInitializedTimeoutMs: 20,
     spawnImpl: () => fakeChild(),
   });
-  try {
-    proxy.send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { capabilities: { roots: { listChanged: true } } },
-    });
-    proxy.send({ jsonrpc: "2.0", id: 10, method: "tools/list", params: {} });
+  proxy.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { capabilities: { roots: { listChanged: true } } },
+  });
+  proxy.send({ jsonrpc: "2.0", id: 10, method: "tools/list", params: {} });
 
-    await proxy.waitFor(() =>
-      proxy.messages().some((message) => message.id === 10),
-    );
-    const timedOut = proxy.messages().find((message) => message.id === 10);
-    assert.match(
-      timedOut.error.message,
-      /did not send notifications\/initialized within 20ms/,
-    );
-    assert.equal(
-      proxy.messages().some((message) => message.method === "roots/list"),
-      false,
-      "MCP forbids roots/list before notifications/initialized",
-    );
+  await proxy.waitFor(() =>
+    proxy.messages().some((message) => message.id === 10),
+  );
+  const timedOut = proxy.messages().find((message) => message.id === 10);
+  assert.match(
+    timedOut.error.message,
+    /did not send notifications\/initialized within 20ms/,
+  );
+  assert.equal(
+    proxy.messages().some((message) => message.method === "roots/list"),
+    false,
+    "MCP forbids roots/list before notifications/initialized",
+  );
 
-    proxy.send({ jsonrpc: "2.0", id: 11, method: "tools/list", params: {} });
-    await proxy.waitFor(() =>
-      proxy.messages().some((message) => message.id === 11),
-    );
-    assert.match(
-      proxy.messages().find((message) => message.id === 11).error.message,
-      /did not send notifications\/initialized within 20ms/,
-    );
-  } finally {
-    proxy.input.end();
-    await proxy.running;
-  }
+  proxy.send({ jsonrpc: "2.0", id: 11, method: "tools/list", params: {} });
+  await proxy.waitFor(() =>
+    proxy.messages().some((message) => message.id === 11),
+  );
+  assert.match(
+    proxy.messages().find((message) => message.id === 11).error.message,
+    /did not send notifications\/initialized within 20ms/,
+  );
+  proxy.input.end();
+  await proxy.running;
 });
 
 test("pre-initialized wait expires queued Roots-incapable client calls", async () => {
@@ -450,116 +426,105 @@ test("pre-initialized wait expires queued Roots-incapable client calls", async (
     preInitializedTimeoutMs: 20,
     spawnImpl: () => fakeChild(),
   });
-  try {
-    proxy.send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { capabilities: {} },
-    });
-    proxy.send({ jsonrpc: "2.0", id: 10, method: "tools/list", params: {} });
+  proxy.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { capabilities: {} },
+  });
+  proxy.send({ jsonrpc: "2.0", id: 10, method: "tools/list", params: {} });
 
-    await proxy.waitFor(() =>
-      proxy.messages().some((message) => message.id === 10),
-    );
-    const timedOut = proxy.messages().find((message) => message.id === 10);
-    assert.match(
-      timedOut.error.message,
-      /did not send notifications\/initialized within 20ms/,
-    );
+  await proxy.waitFor(() =>
+    proxy.messages().some((message) => message.id === 10),
+  );
+  const timedOut = proxy.messages().find((message) => message.id === 10);
+  assert.match(
+    timedOut.error.message,
+    /did not send notifications\/initialized within 20ms/,
+  );
 
-    proxy.send({ jsonrpc: "2.0", id: 11, method: "tools/list", params: {} });
-    await proxy.waitFor(() =>
-      proxy.messages().some((message) => message.id === 11),
-    );
-    assert.match(
-      proxy.messages().find((message) => message.id === 11).error.message,
-      /did not send notifications\/initialized within 20ms/,
-    );
-  } finally {
-    proxy.input.end();
-    await proxy.running;
-  }
+  proxy.send({ jsonrpc: "2.0", id: 11, method: "tools/list", params: {} });
+  await proxy.waitFor(() =>
+    proxy.messages().some((message) => message.id === 11),
+  );
+  assert.match(
+    proxy.messages().find((message) => message.id === 11).error.message,
+    /did not send notifications\/initialized within 20ms/,
+  );
+  proxy.input.end();
+  await proxy.running;
 });
 
-test("roots/list JSON-RPC error drains every queued tool request", async () => {
-  const root = adlcRepo();
-  const child = launch({ ADLC_CLI_BIN: writeFakeCli(root) });
+test("roots/list JSON-RPC error drains every queued tool request", async (t) => {
+  const root = adlcRepo(t);
+  const child = launch(t, { ADLC_CLI_BIN: writeFakeCli(root) });
   const out = collect(child);
-  try {
-    sendInitialize(child);
-    send(child, { jsonrpc: "2.0", id: 11, method: "tools/list", params: {} });
-    send(child, {
-      jsonrpc: "2.0",
-      id: 12,
-      method: "tools/call",
-      params: { name: "adlc_gate" },
-    });
-    send(child, {
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-      params: {},
-    });
-    await out.waitFor((s) => s.includes("roots/list"));
-    send(child, {
-      jsonrpc: "2.0",
-      id: latestRootsRequest(out).id,
-      error: { code: -32603, message: "Cursor Roots failed" },
-    });
-    await out.waitFor((s) => s.includes('"id":11') && s.includes('"id":12'));
-    for (const id of [11, 12]) {
-      assert.equal(out.reply(id).error.code, -32603);
-      assert.match(out.reply(id).error.message, /roots\/list failed/);
-    }
-  } finally {
-    child.kill();
-    cleanup(root);
+  sendInitialize(child);
+  send(child, { jsonrpc: "2.0", id: 11, method: "tools/list", params: {} });
+  send(child, {
+    jsonrpc: "2.0",
+    id: 12,
+    method: "tools/call",
+    params: { name: "adlc_gate" },
+  });
+  send(child, {
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {},
+  });
+  await out.waitFor((s) => s.includes("roots/list"));
+  send(child, {
+    jsonrpc: "2.0",
+    id: latestRootsRequest(out).id,
+    error: { code: -32603, message: "Cursor Roots failed" },
+  });
+  await out.waitFor((s) => s.includes('"id":11') && s.includes('"id":12'));
+  for (const id of [11, 12]) {
+    assert.equal(out.reply(id).error.code, -32603);
+    assert.match(out.reply(id).error.message, /roots\/list failed/);
   }
+  child.kill();
 });
 
-test("a synchronous child-spawn failure fails queued client calls", async () => {
-  const root = adlcRepo();
+test("a synchronous child-spawn failure fails queued client calls", async (t) => {
+  const root = adlcRepo(t);
   const proxy = launchInProcess({
     spawnImpl: () => {
       throw new Error("injected spawn failure");
     },
   });
-  try {
-    proxy.send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { capabilities: { roots: { listChanged: true } } },
-    });
-    proxy.send({ jsonrpc: "2.0", id: 10, method: "tools/list", params: {} });
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-      params: {},
-    });
-    await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
-    proxy.send({
-      jsonrpc: "2.0",
-      id: latestRootsRequest({ messages: proxy.messages }).id,
-      result: { roots: [{ uri: root }] },
-    });
-    await proxy.waitFor(() =>
-      proxy.messages().some((message) => message.id === 10),
-    );
-    const reply = proxy.messages().find((message) => message.id === 10);
-    assert.match(
-      reply.error.message,
-      /failed to spawn: injected spawn failure/,
-    );
-  } finally {
-    proxy.input.end();
-    await proxy.running;
-    cleanup(root);
-  }
+  proxy.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { capabilities: { roots: { listChanged: true } } },
+  });
+  proxy.send({ jsonrpc: "2.0", id: 10, method: "tools/list", params: {} });
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {},
+  });
+  await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
+  proxy.send({
+    jsonrpc: "2.0",
+    id: latestRootsRequest({ messages: proxy.messages }).id,
+    result: { roots: [{ uri: root }] },
+  });
+  await proxy.waitFor(() =>
+    proxy.messages().some((message) => message.id === 10),
+  );
+  const reply = proxy.messages().find((message) => message.id === 10);
+  assert.match(
+    reply.error.message,
+    /failed to spawn: injected spawn failure/,
+  );
+  proxy.input.end();
+  await proxy.running;
 });
 
-test("child exit waits for buffered stdout before failing in-flight calls", async () => {
-  const root = adlcRepo();
+test("child exit waits for buffered stdout before failing in-flight calls", async (t) => {
+  const root = adlcRepo(t);
   let child;
   const received = [];
   const proxy = launchInProcess({
@@ -585,88 +550,84 @@ test("child exit waits for buffered stdout before failing in-flight calls", asyn
       return child;
     },
   });
-  try {
-    proxy.send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { capabilities: { roots: {} } },
-    });
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-      params: {},
-    });
-    await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
-    proxy.send({
-      jsonrpc: "2.0",
-      id: latestRootsRequest({ messages: proxy.messages }).id,
-      result: { roots: [{ uri: root }] },
-    });
-    await proxy.waitFor(() =>
-      received.some((message) => message.method === "initialize"),
-    );
+  proxy.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { capabilities: { roots: {} } },
+  });
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {},
+  });
+  await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
+  proxy.send({
+    jsonrpc: "2.0",
+    id: latestRootsRequest({ messages: proxy.messages }).id,
+    result: { roots: [{ uri: root }] },
+  });
+  await proxy.waitFor(() =>
+    received.some((message) => message.method === "initialize"),
+  );
 
-    proxy.send({ jsonrpc: "2.0", id: 10, method: "tools/list", params: {} });
-    await proxy.waitFor(() =>
-      received.some((message) => message.method === "tools/list"),
-    );
-    proxy.send({ jsonrpc: "2.0", id: 12, method: "tools/list", params: {} });
-    await proxy.waitFor(() =>
-      received.filter((message) => message.method === "tools/list").length === 2,
-    );
-    const forwardedRequest = received.find(
-      (message) => message.method === "tools/list",
-    );
-    child.stdin.end();
-    child.exitCode = 0;
-    child.emit("exit", 0, null);
-    proxy.send({ jsonrpc: "2.0", id: 11, method: "tools/list", params: {} });
-    await proxy.waitFor(() =>
-      proxy.messages().some((message) => message.id === 11),
-    );
-    assert.match(
-      proxy.messages().find((message) => message.id === 11).error.message,
-      /not bound to a consumer root/,
-    );
-    child.stdin.emit("error", new Error("late fixture stdin error"));
-    child.stdout.write(
-      JSON.stringify({
+  proxy.send({ jsonrpc: "2.0", id: 10, method: "tools/list", params: {} });
+  await proxy.waitFor(() =>
+    received.some((message) => message.method === "tools/list"),
+  );
+  proxy.send({ jsonrpc: "2.0", id: 12, method: "tools/list", params: {} });
+  await proxy.waitFor(() =>
+    received.filter((message) => message.method === "tools/list").length === 2,
+  );
+  const forwardedRequest = received.find(
+    (message) => message.method === "tools/list",
+  );
+  child.stdin.end();
+  child.exitCode = 0;
+  child.emit("exit", 0, null);
+  proxy.send({ jsonrpc: "2.0", id: 11, method: "tools/list", params: {} });
+  await proxy.waitFor(() =>
+    proxy.messages().some((message) => message.id === 11),
+  );
+  assert.match(
+    proxy.messages().find((message) => message.id === 11).error.message,
+    /not bound to a consumer root/,
+  );
+  child.stdin.emit("error", new Error("late fixture stdin error"));
+  child.stdout.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: forwardedRequest.id,
+      result: { tools: [{ name: "adlc_gate" }] },
+    }) + "\n",
+  );
+  child.stdout.end();
+  child.emit("close", 0, null);
+
+  await proxy.waitFor(() =>
+    proxy.messages().some((message) => message.id === 10) &&
+    proxy.messages().some((message) => message.id === 12),
+  );
+  assert.deepEqual(
+    proxy.messages().filter((message) => message.id === 10),
+    [
+      {
         jsonrpc: "2.0",
-        id: forwardedRequest.id,
+        id: 10,
         result: { tools: [{ name: "adlc_gate" }] },
-      }) + "\n",
-    );
-    child.stdout.end();
-    child.emit("close", 0, null);
-
-    await proxy.waitFor(() =>
-      proxy.messages().some((message) => message.id === 10) &&
-      proxy.messages().some((message) => message.id === 12),
-    );
-    assert.deepEqual(
-      proxy.messages().filter((message) => message.id === 10),
-      [
-        {
-          jsonrpc: "2.0",
-          id: 10,
-          result: { tools: [{ name: "adlc_gate" }] },
-        },
-      ],
-    );
-    assert.match(
-      proxy.messages().find((message) => message.id === 12).error.message,
-      /child failed.*late fixture stdin error/,
-    );
-  } finally {
-    proxy.input.end();
-    await proxy.running;
-    cleanup(root);
-  }
+      },
+    ],
+  );
+  assert.match(
+    proxy.messages().find((message) => message.id === 12).error.message,
+    /child failed.*late fixture stdin error/,
+  );
+  proxy.input.end();
+  await proxy.running;
 });
 
-test("child stdin errors fail in-flight calls without leaving the child bound", async () => {
-  const root = adlcRepo();
+test("child stdin errors fail in-flight calls without leaving the child bound", async (t) => {
+  const root = adlcRepo(t);
   let child;
   const received = [];
   const proxy = launchInProcess({
@@ -694,59 +655,55 @@ test("child stdin errors fail in-flight calls without leaving the child bound", 
       return child;
     },
   });
-  try {
-    proxy.send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { capabilities: { roots: {} } },
-    });
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-      params: {},
-    });
-    await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
-    proxy.send({
-      jsonrpc: "2.0",
-      id: latestRootsRequest({ messages: proxy.messages }).id,
-      result: { roots: [{ uri: root }] },
-    });
-    await proxy.waitFor(() =>
-      received.some((message) => message.method === "initialize"),
-    );
+  proxy.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { capabilities: { roots: {} } },
+  });
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {},
+  });
+  await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
+  proxy.send({
+    jsonrpc: "2.0",
+    id: latestRootsRequest({ messages: proxy.messages }).id,
+    result: { roots: [{ uri: root }] },
+  });
+  await proxy.waitFor(() =>
+    received.some((message) => message.method === "initialize"),
+  );
 
-    proxy.send({ jsonrpc: "2.0", id: 10, method: "tools/list", params: {} });
-    await proxy.waitFor(() =>
-      received.some((message) => message.method === "tools/list"),
-    );
-    child.stdin.emit("error", new Error("fixture stdin closed"));
+  proxy.send({ jsonrpc: "2.0", id: 10, method: "tools/list", params: {} });
+  await proxy.waitFor(() =>
+    received.some((message) => message.method === "tools/list"),
+  );
+  child.stdin.emit("error", new Error("fixture stdin closed"));
 
-    await proxy.waitFor(() =>
-      proxy.messages().some((message) => message.id === 10),
-    );
-    assert.match(
-      proxy.messages().find((message) => message.id === 10).error.message,
-      /child stdin failed: fixture stdin closed/,
-    );
+  await proxy.waitFor(() =>
+    proxy.messages().some((message) => message.id === 10),
+  );
+  assert.match(
+    proxy.messages().find((message) => message.id === 10).error.message,
+    /child stdin failed: fixture stdin closed/,
+  );
 
-    proxy.send({ jsonrpc: "2.0", id: 11, method: "tools/list", params: {} });
-    await proxy.waitFor(() =>
-      proxy.messages().some((message) => message.id === 11),
-    );
-    assert.match(
-      proxy.messages().find((message) => message.id === 11).error.message,
-      /not bound to a consumer root/,
-    );
-  } finally {
-    proxy.input.end();
-    await proxy.running;
-    cleanup(root);
-  }
+  proxy.send({ jsonrpc: "2.0", id: 11, method: "tools/list", params: {} });
+  await proxy.waitFor(() =>
+    proxy.messages().some((message) => message.id === 11),
+  );
+  assert.match(
+    proxy.messages().find((message) => message.id === 11).error.message,
+    /not bound to a consumer root/,
+  );
+  proxy.input.end();
+  await proxy.running;
 });
 
-test("child handshake queues colliding client ids until private initialization completes", async () => {
-  const root = adlcRepo();
+test("child handshake queues colliding client ids until private initialization completes", async (t) => {
+  const root = adlcRepo(t);
   let child;
   const received = [];
   const proxy = launchInProcess({
@@ -761,93 +718,89 @@ test("child handshake queues colliding client ids until private initialization c
       return child;
     },
   });
-  try {
-    proxy.send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { capabilities: { roots: {} } },
-    });
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-      params: {},
-    });
-    await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
-    proxy.send({
-      jsonrpc: "2.0",
-      id: latestRootsRequest({ messages: proxy.messages }).id,
-      result: { roots: [{ uri: root }] },
-    });
-    await proxy.waitFor(() => received.length === 1);
-    const privateId = received[0].id;
-    const clientIds = ["__adlc_child_user_request", privateId];
+  proxy.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { capabilities: { roots: {} } },
+  });
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {},
+  });
+  await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
+  proxy.send({
+    jsonrpc: "2.0",
+    id: latestRootsRequest({ messages: proxy.messages }).id,
+    result: { roots: [{ uri: root }] },
+  });
+  await proxy.waitFor(() => received.length === 1);
+  const privateId = received[0].id;
+  const clientIds = ["__adlc_child_user_request", privateId];
 
-    for (const id of clientIds) {
-      proxy.send({ jsonrpc: "2.0", id, method: "tools/list", params: {} });
-    }
-    assert.equal(
-      received.length,
-      1,
-      "client calls must queue until the child handshake replies",
-    );
+  for (const id of clientIds) {
+    proxy.send({ jsonrpc: "2.0", id, method: "tools/list", params: {} });
+  }
+  assert.equal(
+    received.length,
+    1,
+    "client calls must queue until the child handshake replies",
+  );
 
+  child.stdout.write(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: privateId,
+      result: { capabilities: {} },
+    }) + "\n",
+  );
+  await proxy.waitFor(
+    () =>
+      received.filter((message) => message.method === "tools/list").length ===
+      2,
+  );
+  assert.deepEqual(
+    received
+      .filter((message) => message.method === "tools/list")
+      .map((message) => message.id),
+    ["__adlc_proxy_to_child_1", "__adlc_proxy_to_child_2"],
+  );
+
+  for (const id of received
+    .filter((message) => message.method === "tools/list")
+    .map((message) => message.id)) {
     child.stdout.write(
       JSON.stringify({
         jsonrpc: "2.0",
-        id: privateId,
-        result: { capabilities: {} },
+        id,
+        result: { tools: [{ name: "adlc_gate" }] },
       }) + "\n",
     );
-    await proxy.waitFor(
-      () =>
-        received.filter((message) => message.method === "tools/list").length ===
-        2,
-    );
+  }
+  await proxy.waitFor(() =>
+    clientIds.every((id) =>
+      proxy.messages().some((message) => message.id === id),
+    ),
+  );
+  for (const id of clientIds) {
     assert.deepEqual(
-      received
-        .filter((message) => message.method === "tools/list")
-        .map((message) => message.id),
-      ["__adlc_proxy_to_child_1", "__adlc_proxy_to_child_2"],
-    );
-
-    for (const id of received
-      .filter((message) => message.method === "tools/list")
-      .map((message) => message.id)) {
-      child.stdout.write(
-        JSON.stringify({
+      proxy.messages().filter((message) => message.id === id),
+      [
+        {
           jsonrpc: "2.0",
           id,
           result: { tools: [{ name: "adlc_gate" }] },
-        }) + "\n",
-      );
-    }
-    await proxy.waitFor(() =>
-      clientIds.every((id) =>
-        proxy.messages().some((message) => message.id === id),
-      ),
+        },
+      ],
     );
-    for (const id of clientIds) {
-      assert.deepEqual(
-        proxy.messages().filter((message) => message.id === id),
-        [
-          {
-            jsonrpc: "2.0",
-            id,
-            result: { tools: [{ name: "adlc_gate" }] },
-          },
-        ],
-      );
-    }
-  } finally {
-    proxy.input.end();
-    await proxy.running;
-    cleanup(root);
   }
+  proxy.input.end();
+  await proxy.running;
 });
 
-test("test-only host-env fallback requires direct proxy injection", async () => {
-  const root = adlcRepo();
+test("test-only host-env fallback requires direct proxy injection", async (t) => {
+  const root = adlcRepo(t);
   const received = [];
   const proxy = launchInProcess({
     allowHostEnvFallback: true,
@@ -877,35 +830,31 @@ test("test-only host-env fallback requires direct proxy injection", async () => 
       return child;
     },
   });
-  try {
-    proxy.send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { capabilities: {} },
-    });
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-      params: {},
-    });
-    proxy.send({ jsonrpc: "2.0", id: 10, method: "tools/list", params: {} });
-    await proxy.waitFor(() =>
-      received.some((message) => message.method === "tools/list"),
-    );
-    assert.deepEqual(
-      proxy.messages().filter((message) => message.id === 10),
-      [{ jsonrpc: "2.0", id: 10, result: { tools: [] } }],
-    );
-  } finally {
-    proxy.input.end();
-    await proxy.running;
-    cleanup(root);
-  }
+  proxy.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { capabilities: {} },
+  });
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {},
+  });
+  proxy.send({ jsonrpc: "2.0", id: 10, method: "tools/list", params: {} });
+  await proxy.waitFor(() =>
+    received.some((message) => message.method === "tools/list"),
+  );
+  assert.deepEqual(
+    proxy.messages().filter((message) => message.id === 10),
+    [{ jsonrpc: "2.0", id: 10, result: { tools: [] } }],
+  );
+  proxy.input.end();
+  await proxy.running;
 });
 
-test("child handshake timeout fails queued calls and never forwards a late reply", async () => {
-  const root = adlcRepo();
+test("child handshake timeout fails queued calls and never forwards a late reply", async (t) => {
+  const root = adlcRepo(t);
   let child;
   const received = [];
   const proxy = launchInProcess({
@@ -925,80 +874,76 @@ test("child handshake timeout fails queued calls and never forwards a late reply
       return child;
     },
   });
-  try {
-    proxy.send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { capabilities: { roots: {} } },
-    });
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-      params: {},
-    });
-    await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
-    proxy.send({
-      jsonrpc: "2.0",
-      id: latestRootsRequest({ messages: proxy.messages }).id,
-      result: { roots: [{ uri: root }] },
-    });
-    await proxy.waitFor(() => received.length === 1);
-    const privateId = received[0].id;
+  proxy.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { capabilities: { roots: {} } },
+  });
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {},
+  });
+  await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
+  proxy.send({
+    jsonrpc: "2.0",
+    id: latestRootsRequest({ messages: proxy.messages }).id,
+    result: { roots: [{ uri: root }] },
+  });
+  await proxy.waitFor(() => received.length === 1);
+  const privateId = received[0].id;
 
-    proxy.send({ jsonrpc: "2.0", id: 10, method: "tools/list", params: {} });
-    await proxy.waitFor(() =>
-      proxy.messages().some((message) => message.id === 10),
-    );
-    assert.deepEqual(
-      proxy.messages().filter((message) => message.id === 10),
-      [
-        {
-          jsonrpc: "2.0",
-          id: 10,
-          error: {
-            code: -32001,
-            message: "ADLC MCP child initialization timed out after 20ms",
-          },
+  proxy.send({ jsonrpc: "2.0", id: 10, method: "tools/list", params: {} });
+  await proxy.waitFor(() =>
+    proxy.messages().some((message) => message.id === 10),
+  );
+  assert.deepEqual(
+    proxy.messages().filter((message) => message.id === 10),
+    [
+      {
+        jsonrpc: "2.0",
+        id: 10,
+        error: {
+          code: -32001,
+          message: "ADLC MCP child initialization timed out after 20ms",
         },
-      ],
-    );
-    assert.equal(
-      received.length,
-      1,
-      "queued request must not reach silent child",
-    );
+      },
+    ],
+  );
+  assert.equal(
+    received.length,
+    1,
+    "queued request must not reach silent child",
+  );
 
-    child.stdout.write(
-      `${JSON.stringify({ jsonrpc: "2.0", id: privateId, result: { capabilities: {} } })}\n`,
-    );
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(
-      received.some(
-        (message) => message.method === "notifications/initialized",
-      ),
-      false,
-      "late handshake must not bind the retired child",
-    );
-    assert.deepEqual(
-      proxy.messages().filter((message) => message.id === 10),
-      [
-        {
-          jsonrpc: "2.0",
-          id: 10,
-          error: {
-            code: -32001,
-            message: "ADLC MCP child initialization timed out after 20ms",
-          },
+  child.stdout.write(
+    `${JSON.stringify({ jsonrpc: "2.0", id: privateId, result: { capabilities: {} } })}\n`,
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    received.some(
+      (message) => message.method === "notifications/initialized",
+    ),
+    false,
+    "late handshake must not bind the retired child",
+  );
+  assert.deepEqual(
+    proxy.messages().filter((message) => message.id === 10),
+    [
+      {
+        jsonrpc: "2.0",
+        id: 10,
+        error: {
+          code: -32001,
+          message: "ADLC MCP child initialization timed out after 20ms",
         },
-      ],
-      "late child traffic must not produce a second client response",
-    );
-  } finally {
-    proxy.input.end();
-    await proxy.running;
-    cleanup(root);
-  }
+      },
+    ],
+    "late child traffic must not produce a second client response",
+  );
+  proxy.input.end();
+  await proxy.running;
 });
 
 test("roots/list response timeout fails queued calls without leaving them queued", async () => {
@@ -1006,35 +951,32 @@ test("roots/list response timeout fails queued calls without leaving them queued
     rootsResponseTimeoutMs: 20,
     spawnImpl: () => fakeChild(),
   });
-  try {
-    proxy.send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { capabilities: { roots: { listChanged: true } } },
-    });
-    proxy.send({ jsonrpc: "2.0", id: 11, method: "tools/list", params: {} });
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-      params: {},
-    });
-    await proxy.waitFor(() =>
-      proxy.messages().some((message) => message.id === 11),
-    );
-    const timedOut = proxy.messages().find((message) => message.id === 11);
-    assert.match(timedOut.error.message, /roots\/list timed out after 20ms/);
+  proxy.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { capabilities: { roots: { listChanged: true } } },
+  });
+  proxy.send({ jsonrpc: "2.0", id: 11, method: "tools/list", params: {} });
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {},
+  });
+  await proxy.waitFor(() =>
+    proxy.messages().some((message) => message.id === 11),
+  );
+  const timedOut = proxy.messages().find((message) => message.id === 11);
+  assert.match(timedOut.error.message, /roots\/list timed out after 20ms/);
 
-    proxy.send({ jsonrpc: "2.0", id: 12, method: "tools/list", params: {} });
-    await proxy.waitFor(() =>
-      proxy.messages().some((message) => message.id === 12),
-    );
-    const rejected = proxy.messages().find((message) => message.id === 12);
-    assert.match(rejected.error.message, /not bound/);
-  } finally {
-    proxy.input.end();
-    await proxy.running;
-  }
+  proxy.send({ jsonrpc: "2.0", id: 12, method: "tools/list", params: {} });
+  await proxy.waitFor(() =>
+    proxy.messages().some((message) => message.id === 12),
+  );
+  const rejected = proxy.messages().find((message) => message.id === 12);
+  assert.match(rejected.error.message, /not bound/);
+  proxy.input.end();
+  await proxy.running;
 });
 
 test("a Roots-incapable client ignores list_changed without leaving calls binding", async () => {
@@ -1045,127 +987,116 @@ test("a Roots-incapable client ignores list_changed without leaving calls bindin
       return fakeChild();
     },
   });
-  try {
-    proxy.send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { capabilities: {} },
-    });
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-      params: {},
-    });
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/roots/list_changed",
-      params: {},
-    });
-    proxy.send({ jsonrpc: "2.0", id: 13, method: "tools/list", params: {} });
-    await proxy.waitFor(() =>
-      proxy.messages().some((message) => message.id === 13),
-    );
-    const reply = proxy.messages().find((message) => message.id === 13);
-    assert.match(reply.error.message, /not bound/);
-    assert.equal(spawnCount, 0);
-  } finally {
-    proxy.input.end();
-    await proxy.running;
-  }
+  proxy.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { capabilities: {} },
+  });
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {},
+  });
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/roots/list_changed",
+    params: {},
+  });
+  proxy.send({ jsonrpc: "2.0", id: 13, method: "tools/list", params: {} });
+  await proxy.waitFor(() =>
+    proxy.messages().some((message) => message.id === 13),
+  );
+  const reply = proxy.messages().find((message) => message.id === 13);
+  assert.match(reply.error.message, /not bound/);
+  assert.equal(spawnCount, 0);
+  proxy.input.end();
+  await proxy.running;
 });
 
-test("list_changed fails queued and in-flight requests, ignoring stale Roots replies", async () => {
-  const root = adlcRepo();
-  const child = launch({ ADLC_CLI_BIN: writeFakeCli(root) });
+test("list_changed fails queued and in-flight requests, ignoring stale Roots replies", async (t) => {
+  const root = adlcRepo(t);
+  const child = launch(t, { ADLC_CLI_BIN: writeFakeCli(root) });
   const out = collect(child);
-  try {
-    sendInitialize(child, { initialized: true });
-    await out.waitFor((s) => s.includes("roots/list"));
-    const firstRoots = latestRootsRequest(out);
-    send(child, { jsonrpc: "2.0", id: 20, method: "tools/list", params: {} });
-    send(child, {
-      jsonrpc: "2.0",
-      method: "notifications/roots/list_changed",
-      params: {},
-    });
-    await out.waitFor((s) => s.includes('"id":20'));
-    const secondRoots = latestRootsRequest(out);
-    assert.notEqual(
-      secondRoots.id,
-      firstRoots.id,
-      "rebind must use a fresh request id",
-    );
-    assert.match(out.reply(20).error.message, /roots changed/);
+  sendInitialize(child, { initialized: true });
+  await out.waitFor((s) => s.includes("roots/list"));
+  const firstRoots = latestRootsRequest(out);
+  send(child, { jsonrpc: "2.0", id: 20, method: "tools/list", params: {} });
+  send(child, {
+    jsonrpc: "2.0",
+    method: "notifications/roots/list_changed",
+    params: {},
+  });
+  await out.waitFor((s) => s.includes('"id":20'));
+  const secondRoots = latestRootsRequest(out);
+  assert.notEqual(
+    secondRoots.id,
+    firstRoots.id,
+    "rebind must use a fresh request id",
+  );
+  assert.match(out.reply(20).error.message, /roots changed/);
 
-    // A late answer to the retired request must not bind.
-    send(child, {
-      jsonrpc: "2.0",
-      id: firstRoots.id,
-      result: { roots: [{ uri: root }] },
-    });
-    send(child, { jsonrpc: "2.0", id: 22, method: "tools/list", params: {} });
-    await out.wait(75);
-    assert.equal(out.reply(22), undefined, "stale Roots reply must not bind");
+  // A late answer to the retired request must not bind.
+  send(child, {
+    jsonrpc: "2.0",
+    id: firstRoots.id,
+    result: { roots: [{ uri: root }] },
+  });
+  send(child, { jsonrpc: "2.0", id: 22, method: "tools/list", params: {} });
+  await out.wait(75);
+  assert.equal(out.reply(22), undefined, "stale Roots reply must not bind");
 
-    send(child, {
-      jsonrpc: "2.0",
-      id: secondRoots.id,
-      result: { roots: [{ uri: root }] },
-    });
-    await out.waitFor((s) => s.includes('"id":22') && s.includes("adlc_gate"));
+  send(child, {
+    jsonrpc: "2.0",
+    id: secondRoots.id,
+    result: { roots: [{ uri: root }] },
+  });
+  await out.waitFor((s) => s.includes('"id":22') && s.includes("adlc_gate"));
 
-    send(child, {
-      jsonrpc: "2.0",
-      id: 21,
-      method: "tools/call",
-      params: { name: "adlc_gate" },
-    });
-    send(child, {
-      jsonrpc: "2.0",
-      method: "notifications/roots/list_changed",
-      params: {},
-    });
-    await out.waitFor((s) => s.includes('"id":21'));
-    assert.match(out.reply(21).error.message, /roots changed/);
-    assert.equal(
-      out.messages().filter((m) => m.id === 22).length,
-      1,
-      "a completed child request must leave in-flight tracking",
-    );
-    assert.notEqual(latestRootsRequest(out).id, secondRoots.id);
-  } finally {
-    child.kill();
-    cleanup(root);
-  }
+  send(child, {
+    jsonrpc: "2.0",
+    id: 21,
+    method: "tools/call",
+    params: { name: "adlc_gate" },
+  });
+  send(child, {
+    jsonrpc: "2.0",
+    method: "notifications/roots/list_changed",
+    params: {},
+  });
+  await out.waitFor((s) => s.includes('"id":21'));
+  assert.match(out.reply(21).error.message, /roots changed/);
+  assert.equal(
+    out.messages().filter((m) => m.id === 22).length,
+    1,
+    "a completed child request must leave in-flight tracking",
+  );
+  assert.notEqual(latestRootsRequest(out).id, secondRoots.id);
+  child.kill();
 });
 
-test("a malformed Root beside a valid Root refuses binding", async () => {
-  const ambient = adlcRepo();
-  const child = launch({
+test("a malformed Root beside a valid Root refuses binding", async (t) => {
+  const ambient = adlcRepo(t);
+  const child = launch(t, {
     ADLC_CLI_BIN: writeFakeCli(ambient),
     CURSOR_PROJECT_DIR: ambient,
   });
   const out = collect(child);
-  try {
-    sendInitialize(child, { initialized: true });
-    send(child, { jsonrpc: "2.0", id: 30, method: "tools/list", params: {} });
-    await out.waitFor((s) => s.includes("roots/list"));
-    send(child, {
-      jsonrpc: "2.0",
-      id: latestRootsRequest(out).id,
-      result: { roots: [{ uri: ambient }, { uri: "relative/path" }] },
-    });
-    await out.waitFor((s) => s.includes('"id":30'));
-    assert.match(out.reply(30).error.message, /INVALID_ROOTS/);
-  } finally {
-    child.kill();
-    cleanup(ambient);
-  }
+  sendInitialize(child, { initialized: true });
+  send(child, { jsonrpc: "2.0", id: 30, method: "tools/list", params: {} });
+  await out.waitFor((s) => s.includes("roots/list"));
+  send(child, {
+    jsonrpc: "2.0",
+    id: latestRootsRequest(out).id,
+    result: { roots: [{ uri: ambient }, { uri: "relative/path" }] },
+  });
+  await out.waitFor((s) => s.includes('"id":30'));
+  assert.match(out.reply(30).error.message, /INVALID_ROOTS/);
+  child.kill();
 });
 
-test("rapid Roots rebind notifications never overlap child processes", async () => {
-  const root = adlcRepo();
+test("rapid Roots rebind notifications never overlap child processes", async (t) => {
+  const root = adlcRepo(t);
   const spawnStates = [];
   const liveChildren = new Set();
   let spawnCount = 0;
@@ -1182,117 +1113,104 @@ test("rapid Roots rebind notifications never overlap child processes", async () 
   });
   const rootsRequests = () =>
     proxy.messages().filter((message) => message.method === "roots/list");
-  try {
-    proxy.send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { capabilities: { roots: { listChanged: true } } },
-    });
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-      params: {},
-    });
-    await proxy.waitFor(() => rootsRequests().length === 1);
-    proxy.send({
-      jsonrpc: "2.0",
-      id: rootsRequests()[0].id,
-      result: { roots: [{ uri: root }] },
-    });
-    await proxy.waitFor(() => spawnCount === 1);
+  proxy.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { capabilities: { roots: { listChanged: true } } },
+  });
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {},
+  });
+  await proxy.waitFor(() => rootsRequests().length === 1);
+  proxy.send({
+    jsonrpc: "2.0",
+    id: rootsRequests()[0].id,
+    result: { roots: [{ uri: root }] },
+  });
+  await proxy.waitFor(() => spawnCount === 1);
 
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/roots/list_changed",
-      params: {},
-    });
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/roots/list_changed",
-      params: {},
-    });
-    await proxy.waitFor(() => rootsRequests().length === 2);
-    proxy.send({
-      jsonrpc: "2.0",
-      id: rootsRequests()[1].id,
-      result: { roots: [{ uri: root }] },
-    });
-    await proxy.waitFor(() => spawnCount === 2);
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/roots/list_changed",
+    params: {},
+  });
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/roots/list_changed",
+    params: {},
+  });
+  await proxy.waitFor(() => rootsRequests().length === 2);
+  proxy.send({
+    jsonrpc: "2.0",
+    id: rootsRequests()[1].id,
+    result: { roots: [{ uri: root }] },
+  });
+  await proxy.waitFor(() => spawnCount === 2);
 
-    assert.equal(
-      spawnStates[1],
-      0,
-      "successor must spawn only after the first child exits",
-    );
-  } finally {
-    proxy.input.end();
-    await proxy.running;
-    cleanup(root);
-  }
+  assert.equal(
+    spawnStates[1],
+    0,
+    "successor must spawn only after the first child exits",
+  );
+  proxy.input.end();
+  await proxy.running;
 });
 
-test("a real Root is not made ambiguous by an ambient CURSOR_PROJECT_DIR", async () => {
-  const rootA = adlcRepo();
-  const rootB = adlcRepo();
-  const child = launch({
+test("a real Root is not made ambiguous by an ambient CURSOR_PROJECT_DIR", async (t) => {
+  const rootA = adlcRepo(t);
+  const rootB = adlcRepo(t);
+  const child = launch(t, {
     ADLC_CLI_BIN: writeFakeCli(rootA),
     CURSOR_PROJECT_DIR: rootB,
   });
   const out = collect(child);
-  try {
-    sendInitialize(child, { initialized: true });
-    send(child, { jsonrpc: "2.0", id: 31, method: "tools/list", params: {} });
-    await out.waitFor((s) => s.includes("roots/list"));
-    send(child, {
-      jsonrpc: "2.0",
-      id: latestRootsRequest(out).id,
-      result: { roots: [{ uri: rootA }] },
-    });
-    await out.waitFor(
-      (s) => s.includes('"id":31') && s.includes("adlc_prosecute"),
-    );
-  } finally {
-    child.kill();
-    cleanup(rootA);
-    cleanup(rootB);
-  }
+  sendInitialize(child, { initialized: true });
+  send(child, { jsonrpc: "2.0", id: 31, method: "tools/list", params: {} });
+  await out.waitFor((s) => s.includes("roots/list"));
+  send(child, {
+    jsonrpc: "2.0",
+    id: latestRootsRequest(out).id,
+    result: { roots: [{ uri: rootA }] },
+  });
+  await out.waitFor(
+    (s) => s.includes('"id":31') && s.includes("adlc_prosecute"),
+  );
+  child.kill();
 });
 
-test("a client id with the child handshake prefix receives its tool reply", async () => {
-  const root = adlcRepo();
-  const child = launch({ ADLC_CLI_BIN: writeFakeCli(root) });
+test("a client id with the child handshake prefix receives its tool reply", async (t) => {
+  const root = adlcRepo(t);
+  const child = launch(t, { ADLC_CLI_BIN: writeFakeCli(root) });
   const out = collect(child);
   const requestId = "__adlc_child_user_request";
-  try {
-    sendInitialize(child, { initialized: true });
-    await out.waitFor((s) => s.includes("roots/list"));
-    send(child, {
-      jsonrpc: "2.0",
-      id: latestRootsRequest(out).id,
-      result: { roots: [{ uri: root }] },
-    });
-    send(child, {
-      jsonrpc: "2.0",
-      id: requestId,
-      method: "tools/list",
-      params: {},
-    });
-    await out.waitFor(
-      (s) => s.includes(`"id":"${requestId}"`) && s.includes("adlc_gate"),
-    );
-    assert.ok(
-      out.reply(requestId)?.result?.tools,
-      "the client response must not be mistaken for a child handshake",
-    );
-  } finally {
-    child.kill();
-    cleanup(root);
-  }
+  sendInitialize(child, { initialized: true });
+  await out.waitFor((s) => s.includes("roots/list"));
+  send(child, {
+    jsonrpc: "2.0",
+    id: latestRootsRequest(out).id,
+    result: { roots: [{ uri: root }] },
+  });
+  send(child, {
+    jsonrpc: "2.0",
+    id: requestId,
+    method: "tools/list",
+    params: {},
+  });
+  await out.waitFor(
+    (s) => s.includes(`"id":"${requestId}"`) && s.includes("adlc_gate"),
+  );
+  assert.ok(
+    out.reply(requestId)?.result?.tools,
+    "the client response must not be mistaken for a child handshake",
+  );
+  child.kill();
 });
 
-test("a child request id beginning with the Roots prefix receives its response once", async () => {
-  const root = adlcRepo();
+test("a child request id beginning with the Roots prefix receives its response once", async (t) => {
+  const root = adlcRepo(t);
   const childMessages = [];
   let child;
   const requestId = "__adlc_roots_list_child_ping";
@@ -1302,75 +1220,71 @@ test("a child request id beginning with the Roots prefix receives its response o
       return child;
     },
   });
-  try {
-    proxy.send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { capabilities: { roots: {} } },
-    });
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-      params: {},
-    });
-    await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
-    proxy.send({
-      jsonrpc: "2.0",
-      id: latestRootsRequest({ messages: proxy.messages }).id,
-      result: { roots: [{ uri: root }] },
-    });
-    await proxy.waitFor(() =>
-      childMessages.some(
-        (message) => message.method === "notifications/initialized",
-      ),
-    );
+  proxy.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { capabilities: { roots: {} } },
+  });
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {},
+  });
+  await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
+  proxy.send({
+    jsonrpc: "2.0",
+    id: latestRootsRequest({ messages: proxy.messages }).id,
+    result: { roots: [{ uri: root }] },
+  });
+  await proxy.waitFor(() =>
+    childMessages.some(
+      (message) => message.method === "notifications/initialized",
+    ),
+  );
 
-    child.stdout.write(
-      `${JSON.stringify({ jsonrpc: "2.0", id: requestId, method: "ping", params: {} })}\n`,
-    );
-    await proxy.waitFor(() =>
-      proxy
-        .messages()
-        .some(
-          (message) => message.id !== requestId && message.method === "ping",
-        ),
-    );
-    const forwardedRequest = proxy
+  child.stdout.write(
+    `${JSON.stringify({ jsonrpc: "2.0", id: requestId, method: "ping", params: {} })}\n`,
+  );
+  await proxy.waitFor(() =>
+    proxy
       .messages()
-      .find((message) => message.method === "ping");
-    proxy.send({
-      jsonrpc: "2.0",
-      id: forwardedRequest.id,
-      result: { pong: true },
-    });
-    await proxy.waitFor(() =>
-      childMessages.some(
-        (message) => message.id === requestId && message.result?.pong,
+      .some(
+        (message) => message.id !== requestId && message.method === "ping",
       ),
-    );
+  );
+  const forwardedRequest = proxy
+    .messages()
+    .find((message) => message.method === "ping");
+  proxy.send({
+    jsonrpc: "2.0",
+    id: forwardedRequest.id,
+    result: { pong: true },
+  });
+  await proxy.waitFor(() =>
+    childMessages.some(
+      (message) => message.id === requestId && message.result?.pong,
+    ),
+  );
 
-    assert.equal(
-      childMessages.filter(
-        (message) => message.id === requestId && message.result?.pong,
-      ).length,
-      1,
-    );
-    assert.equal(
-      proxy.messages().filter((message) => message.id === forwardedRequest.id)
-        .length,
-      1,
-      "the client response is forwarded to the child, never swallowed or answered",
-    );
-  } finally {
-    proxy.input.end();
-    await proxy.running;
-    cleanup(root);
-  }
+  assert.equal(
+    childMessages.filter(
+      (message) => message.id === requestId && message.result?.pong,
+    ).length,
+    1,
+  );
+  assert.equal(
+    proxy.messages().filter((message) => message.id === forwardedRequest.id)
+      .length,
+    1,
+    "the client response is forwarded to the child, never swallowed or answered",
+  );
+  proxy.input.end();
+  await proxy.running;
 });
 
-test("a child request reusing a completed Roots id is remapped and restored", async () => {
-  const root = adlcRepo();
+test("a child request reusing a completed Roots id is remapped and restored", async (t) => {
+  const root = adlcRepo(t);
   const childMessages = [];
   let child;
   const proxy = launchInProcess({
@@ -1379,107 +1293,103 @@ test("a child request reusing a completed Roots id is remapped and restored", as
       return child;
     },
   });
-  try {
-    proxy.send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { capabilities: { roots: {} } },
-    });
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-      params: {},
-    });
-    await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
-    const completedRoots = latestRootsRequest({ messages: proxy.messages });
-    proxy.send({
-      jsonrpc: "2.0",
-      id: completedRoots.id,
-      result: { roots: [{ uri: root }] },
-    });
-    await proxy.waitFor(() =>
-      childMessages.some(
-        (message) => message.method === "notifications/initialized",
-      ),
-    );
+  proxy.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { capabilities: { roots: {} } },
+  });
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {},
+  });
+  await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
+  const completedRoots = latestRootsRequest({ messages: proxy.messages });
+  proxy.send({
+    jsonrpc: "2.0",
+    id: completedRoots.id,
+    result: { roots: [{ uri: root }] },
+  });
+  await proxy.waitFor(() =>
+    childMessages.some(
+      (message) => message.method === "notifications/initialized",
+    ),
+  );
 
-    child.stdout.write(
-      `${JSON.stringify({ jsonrpc: "2.0", id: completedRoots.id, method: "ping", params: {} })}\n`,
-    );
-    await proxy.waitFor(() =>
-      proxy
-        .messages()
-        .some(
-          (message) =>
-            message.method === "ping" && message.id !== completedRoots.id,
-        ),
-    );
-    const resultRequest = proxy
+  child.stdout.write(
+    `${JSON.stringify({ jsonrpc: "2.0", id: completedRoots.id, method: "ping", params: {} })}\n`,
+  );
+  await proxy.waitFor(() =>
+    proxy
       .messages()
-      .find((message) => message.method === "ping");
-    assert.notEqual(resultRequest.id, completedRoots.id);
-    proxy.send({
-      jsonrpc: "2.0",
-      id: resultRequest.id,
-      result: { pong: true },
-    });
-    await proxy.waitFor(() =>
-      childMessages.some(
+      .some(
         (message) =>
-          message.id === completedRoots.id && message.result?.pong === true,
+          message.method === "ping" && message.id !== completedRoots.id,
       ),
-    );
+  );
+  const resultRequest = proxy
+    .messages()
+    .find((message) => message.method === "ping");
+  assert.notEqual(resultRequest.id, completedRoots.id);
+  proxy.send({
+    jsonrpc: "2.0",
+    id: resultRequest.id,
+    result: { pong: true },
+  });
+  await proxy.waitFor(() =>
+    childMessages.some(
+      (message) =>
+        message.id === completedRoots.id && message.result?.pong === true,
+    ),
+  );
 
-    child.stdout.write(
-      `${JSON.stringify({ jsonrpc: "2.0", id: completedRoots.id, method: "ping", params: {} })}\n`,
-    );
-    await proxy.waitFor(
-      () =>
-        proxy.messages().filter((message) => message.method === "ping")
-          .length === 2,
-    );
-    const errorRequest = proxy
-      .messages()
-      .filter((message) => message.method === "ping")
-      .at(-1);
-    assert.notEqual(errorRequest.id, completedRoots.id);
-    assert.notEqual(errorRequest.id, resultRequest.id);
-    proxy.send({
-      jsonrpc: "2.0",
-      id: errorRequest.id,
-      error: { code: -32603, message: "injected error" },
-    });
-    await proxy.waitFor(() =>
-      childMessages.some(
-        (message) =>
-          message.id === completedRoots.id &&
-          message.error?.message === "injected error",
-      ),
-    );
-    assert.equal(
-      childMessages.filter(
-        (message) => message.id === completedRoots.id && message.result?.pong,
-      ).length,
-      1,
-    );
-    assert.equal(
-      childMessages.filter(
-        (message) =>
-          message.id === completedRoots.id &&
-          message.error?.message === "injected error",
-      ).length,
-      1,
-    );
-  } finally {
-    proxy.input.end();
-    await proxy.running;
-    cleanup(root);
-  }
+  child.stdout.write(
+    `${JSON.stringify({ jsonrpc: "2.0", id: completedRoots.id, method: "ping", params: {} })}\n`,
+  );
+  await proxy.waitFor(
+    () =>
+      proxy.messages().filter((message) => message.method === "ping")
+        .length === 2,
+  );
+  const errorRequest = proxy
+    .messages()
+    .filter((message) => message.method === "ping")
+    .at(-1);
+  assert.notEqual(errorRequest.id, completedRoots.id);
+  assert.notEqual(errorRequest.id, resultRequest.id);
+  proxy.send({
+    jsonrpc: "2.0",
+    id: errorRequest.id,
+    error: { code: -32603, message: "injected error" },
+  });
+  await proxy.waitFor(() =>
+    childMessages.some(
+      (message) =>
+        message.id === completedRoots.id &&
+        message.error?.message === "injected error",
+    ),
+  );
+  assert.equal(
+    childMessages.filter(
+      (message) => message.id === completedRoots.id && message.result?.pong,
+    ).length,
+    1,
+  );
+  assert.equal(
+    childMessages.filter(
+      (message) =>
+        message.id === completedRoots.id &&
+        message.error?.message === "injected error",
+    ).length,
+    1,
+  );
+  proxy.input.end();
+  await proxy.running;
 });
 
-test("rebind clears remapped child requests before binding a successor", async () => {
-  const root = adlcRepo();
+test("rebind clears remapped child requests before binding a successor", async (t) => {
+  const root = adlcRepo(t);
   const children = [];
   const receivedByChild = [];
   const proxy = launchInProcess({
@@ -1493,131 +1403,127 @@ test("rebind clears remapped child requests before binding a successor", async (
   });
   const rootsRequests = () =>
     proxy.messages().filter((message) => message.method === "roots/list");
-  try {
-    proxy.send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { capabilities: { roots: { listChanged: true } } },
-    });
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-      params: {},
-    });
-    await proxy.waitFor(() => rootsRequests().length === 1);
-    const firstRoots = rootsRequests()[0];
-    proxy.send({
-      jsonrpc: "2.0",
-      id: firstRoots.id,
-      result: { roots: [{ uri: root }] },
-    });
-    await proxy.waitFor(() =>
-      receivedByChild[0]?.some(
-        (message) => message.method === "notifications/initialized",
-      ),
-    );
+  proxy.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { capabilities: { roots: { listChanged: true } } },
+  });
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {},
+  });
+  await proxy.waitFor(() => rootsRequests().length === 1);
+  const firstRoots = rootsRequests()[0];
+  proxy.send({
+    jsonrpc: "2.0",
+    id: firstRoots.id,
+    result: { roots: [{ uri: root }] },
+  });
+  await proxy.waitFor(() =>
+    receivedByChild[0]?.some(
+      (message) => message.method === "notifications/initialized",
+    ),
+  );
 
-    children[0].stdout.write(
-      `${JSON.stringify({ jsonrpc: "2.0", id: firstRoots.id, method: "ping", params: {} })}\n`,
-    );
-    await proxy.waitFor(() =>
-      proxy
-        .messages()
-        .some(
-          (message) =>
-            message.method === "ping" && message.id !== firstRoots.id,
-        ),
-    );
-    const retiredRequest = proxy
+  children[0].stdout.write(
+    `${JSON.stringify({ jsonrpc: "2.0", id: firstRoots.id, method: "ping", params: {} })}\n`,
+  );
+  await proxy.waitFor(() =>
+    proxy
       .messages()
-      .find((message) => message.method === "ping");
-
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/roots/list_changed",
-      params: {},
-    });
-    await proxy.waitFor(() => rootsRequests().length === 2);
-    proxy.send({
-      jsonrpc: "2.0",
-      id: retiredRequest.id,
-      result: { pong: true },
-    });
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(
-      receivedByChild[0].some(
-        (message) => message.id === firstRoots.id && message.result?.pong,
-      ),
-      false,
-      "a response for a retired mapping must not reach its retired child",
-    );
-
-    const secondRoots = rootsRequests()[1];
-    proxy.send({
-      jsonrpc: "2.0",
-      id: secondRoots.id,
-      result: { roots: [{ uri: root }] },
-    });
-    await proxy.waitFor(() =>
-      receivedByChild[1]?.some(
-        (message) => message.method === "notifications/initialized",
-      ),
-    );
-    const successorMessageCount = receivedByChild[1].length;
-    proxy.send({
-      jsonrpc: "2.0",
-      id: firstRoots.id,
-      result: { roots: [{ uri: root }] },
-    });
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(
-      receivedByChild[1].length,
-      successorMessageCount,
-      "a stale Roots response must not bind or reach the successor",
-    );
-
-    children[1].stdout.write(
-      `${JSON.stringify({ jsonrpc: "2.0", id: firstRoots.id, method: "ping", params: {} })}\n`,
-    );
-    await proxy.waitFor(
-      () =>
-        proxy.messages().filter((message) => message.method === "ping")
-          .length === 2,
-    );
-    const successorRequest = proxy
-      .messages()
-      .filter((message) => message.method === "ping")
-      .at(-1);
-    assert.notEqual(successorRequest.id, firstRoots.id);
-    assert.notEqual(successorRequest.id, retiredRequest.id);
-    proxy.send({
-      jsonrpc: "2.0",
-      id: successorRequest.id,
-      result: { pong: "successor" },
-    });
-    await proxy.waitFor(() =>
-      receivedByChild[1].some(
+      .some(
         (message) =>
-          message.id === firstRoots.id && message.result?.pong === "successor",
+          message.method === "ping" && message.id !== firstRoots.id,
       ),
-    );
-    assert.equal(
-      receivedByChild[1].filter(
-        (message) =>
-          message.id === firstRoots.id && message.result?.pong === "successor",
-      ).length,
-      1,
-    );
-  } finally {
-    proxy.input.end();
-    await proxy.running;
-    cleanup(root);
-  }
+  );
+  const retiredRequest = proxy
+    .messages()
+    .find((message) => message.method === "ping");
+
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/roots/list_changed",
+    params: {},
+  });
+  await proxy.waitFor(() => rootsRequests().length === 2);
+  proxy.send({
+    jsonrpc: "2.0",
+    id: retiredRequest.id,
+    result: { pong: true },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    receivedByChild[0].some(
+      (message) => message.id === firstRoots.id && message.result?.pong,
+    ),
+    false,
+    "a response for a retired mapping must not reach its retired child",
+  );
+
+  const secondRoots = rootsRequests()[1];
+  proxy.send({
+    jsonrpc: "2.0",
+    id: secondRoots.id,
+    result: { roots: [{ uri: root }] },
+  });
+  await proxy.waitFor(() =>
+    receivedByChild[1]?.some(
+      (message) => message.method === "notifications/initialized",
+    ),
+  );
+  const successorMessageCount = receivedByChild[1].length;
+  proxy.send({
+    jsonrpc: "2.0",
+    id: firstRoots.id,
+    result: { roots: [{ uri: root }] },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    receivedByChild[1].length,
+    successorMessageCount,
+    "a stale Roots response must not bind or reach the successor",
+  );
+
+  children[1].stdout.write(
+    `${JSON.stringify({ jsonrpc: "2.0", id: firstRoots.id, method: "ping", params: {} })}\n`,
+  );
+  await proxy.waitFor(
+    () =>
+      proxy.messages().filter((message) => message.method === "ping")
+        .length === 2,
+  );
+  const successorRequest = proxy
+    .messages()
+    .filter((message) => message.method === "ping")
+    .at(-1);
+  assert.notEqual(successorRequest.id, firstRoots.id);
+  assert.notEqual(successorRequest.id, retiredRequest.id);
+  proxy.send({
+    jsonrpc: "2.0",
+    id: successorRequest.id,
+    result: { pong: "successor" },
+  });
+  await proxy.waitFor(() =>
+    receivedByChild[1].some(
+      (message) =>
+        message.id === firstRoots.id && message.result?.pong === "successor",
+    ),
+  );
+  assert.equal(
+    receivedByChild[1].filter(
+      (message) =>
+        message.id === firstRoots.id && message.result?.pong === "successor",
+    ).length,
+    1,
+  );
+  proxy.input.end();
+  await proxy.running;
 });
 
-test("rebind drops retired child responses and stale Roots replies without disturbing the successor", async () => {
-  const root = adlcRepo();
+test("rebind drops retired child responses and stale Roots replies without disturbing the successor", async (t) => {
+  const root = adlcRepo(t);
   const children = [];
   const receivedByChild = [];
   const requestId = "__adlc_roots_list_child_ping";
@@ -1632,113 +1538,109 @@ test("rebind drops retired child responses and stale Roots replies without distu
   });
   const rootsRequests = () =>
     proxy.messages().filter((message) => message.method === "roots/list");
-  try {
-    proxy.send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { capabilities: { roots: { listChanged: true } } },
-    });
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-      params: {},
-    });
-    await proxy.waitFor(() => rootsRequests().length === 1);
-    const firstRoots = rootsRequests()[0];
-    proxy.send({
-      jsonrpc: "2.0",
-      id: firstRoots.id,
-      result: { roots: [{ uri: root }] },
-    });
-    await proxy.waitFor(() =>
-      receivedByChild[0]?.some(
-        (message) => message.method === "notifications/initialized",
-      ),
-    );
+  proxy.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { capabilities: { roots: { listChanged: true } } },
+  });
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {},
+  });
+  await proxy.waitFor(() => rootsRequests().length === 1);
+  const firstRoots = rootsRequests()[0];
+  proxy.send({
+    jsonrpc: "2.0",
+    id: firstRoots.id,
+    result: { roots: [{ uri: root }] },
+  });
+  await proxy.waitFor(() =>
+    receivedByChild[0]?.some(
+      (message) => message.method === "notifications/initialized",
+    ),
+  );
 
-    children[0].stdout.write(
-      `${JSON.stringify({ jsonrpc: "2.0", id: requestId, method: "ping", params: {} })}\n`,
-    );
-    await proxy.waitFor(() =>
-      proxy
-        .messages()
-        .some(
-          (message) => message.id !== requestId && message.method === "ping",
-        ),
-    );
-    const forwardedRequest = proxy
+  children[0].stdout.write(
+    `${JSON.stringify({ jsonrpc: "2.0", id: requestId, method: "ping", params: {} })}\n`,
+  );
+  await proxy.waitFor(() =>
+    proxy
       .messages()
-      .find((message) => message.method === "ping");
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/roots/list_changed",
-      params: {},
-    });
-    await proxy.waitFor(() => rootsRequests().length === 2);
-    const secondRoots = rootsRequests()[1];
-
-    proxy.send({
-      jsonrpc: "2.0",
-      id: forwardedRequest.id,
-      result: { pong: true },
-    });
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(
-      proxy.messages().filter((message) => message.id === forwardedRequest.id)
-        .length,
-      1,
-      "a response to a retired child request must not receive a synthetic error",
-    );
-
-    proxy.send({
-      jsonrpc: "2.0",
-      id: secondRoots.id,
-      result: { roots: [{ uri: root }] },
-    });
-    await proxy.waitFor(() =>
-      receivedByChild[1]?.some(
-        (message) => message.method === "notifications/initialized",
+      .some(
+        (message) => message.id !== requestId && message.method === "ping",
       ),
-    );
-    const successorMessageCount = receivedByChild[1].length;
-    proxy.send({
-      jsonrpc: "2.0",
-      id: firstRoots.id,
-      result: { roots: [{ uri: root }] },
-    });
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(children.length, 2, "a stale Roots reply must not rebind");
-    assert.equal(
-      receivedByChild[1].length,
-      successorMessageCount,
-      "a stale Roots reply must not reach the successor",
-    );
+  );
+  const forwardedRequest = proxy
+    .messages()
+    .find((message) => message.method === "ping");
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/roots/list_changed",
+    params: {},
+  });
+  await proxy.waitFor(() => rootsRequests().length === 2);
+  const secondRoots = rootsRequests()[1];
 
-    proxy.send({ jsonrpc: "2.0", id: 99, method: "tools/list", params: {} });
-    await proxy.waitFor(() =>
-      proxy.messages().some((message) => message.id === 99 && message.result),
-    );
-    assert.deepEqual(
-      proxy.messages().filter((message) => message.id === 99),
-      [{ jsonrpc: "2.0", id: 99, result: { tools: [] } }],
-    );
-    assert.equal(
-      receivedByChild[1].some(
-        (message) => message.id === requestId && message.result?.pong,
-      ),
-      false,
-      "the successor must not receive the retired child's response",
-    );
-  } finally {
-    proxy.input.end();
-    await proxy.running;
-    cleanup(root);
-  }
+  proxy.send({
+    jsonrpc: "2.0",
+    id: forwardedRequest.id,
+    result: { pong: true },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    proxy.messages().filter((message) => message.id === forwardedRequest.id)
+      .length,
+    1,
+    "a response to a retired child request must not receive a synthetic error",
+  );
+
+  proxy.send({
+    jsonrpc: "2.0",
+    id: secondRoots.id,
+    result: { roots: [{ uri: root }] },
+  });
+  await proxy.waitFor(() =>
+    receivedByChild[1]?.some(
+      (message) => message.method === "notifications/initialized",
+    ),
+  );
+  const successorMessageCount = receivedByChild[1].length;
+  proxy.send({
+    jsonrpc: "2.0",
+    id: firstRoots.id,
+    result: { roots: [{ uri: root }] },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(children.length, 2, "a stale Roots reply must not rebind");
+  assert.equal(
+    receivedByChild[1].length,
+    successorMessageCount,
+    "a stale Roots reply must not reach the successor",
+  );
+
+  proxy.send({ jsonrpc: "2.0", id: 99, method: "tools/list", params: {} });
+  await proxy.waitFor(() =>
+    proxy.messages().some((message) => message.id === 99 && message.result),
+  );
+  assert.deepEqual(
+    proxy.messages().filter((message) => message.id === 99),
+    [{ jsonrpc: "2.0", id: 99, result: { tools: [] } }],
+  );
+  assert.equal(
+    receivedByChild[1].some(
+      (message) => message.id === requestId && message.result?.pong,
+    ),
+    false,
+    "the successor must not receive the retired child's response",
+  );
+  proxy.input.end();
+  await proxy.running;
 });
 
-test("a live silent child times out queued calls without overlap or orphaning", async () => {
-  const root = adlcRepo();
+test("a live silent child times out queued calls without overlap or orphaning", async (t) => {
+  const root = adlcRepo(t);
   let childExit;
   // Take the pid from the spawned process, not from a file the child writes:
   // the proxy retires it 50ms + 20ms after spawn, and under CI load node
@@ -1763,51 +1665,47 @@ test("a live silent child times out queued calls without overlap or orphaning", 
       return child;
     },
   });
-  try {
-    proxy.send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { capabilities: { roots: {} } },
-    });
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-      params: {},
-    });
-    await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
-    proxy.send({ jsonrpc: "2.0", id: 10, method: "tools/list", params: {} });
-    proxy.send({
-      jsonrpc: "2.0",
-      id: latestRootsRequest({ messages: proxy.messages }).id,
-      result: { roots: [{ uri: root }] },
-    });
-    await proxy.waitFor(() =>
-      proxy.messages().some((message) => message.id === 10),
-    );
-    assert.equal(Number.isInteger(childPid), true, "the child must have spawned");
-    const timedOut = proxy.messages().find((message) => message.id === 10);
-    assert.equal(timedOut.error.code, -32001);
-    assert.match(timedOut.error.message, /initialization timed out after 50ms/);
-    await childExit;
-    assert.equal(
-      spawnCount,
-      1,
-      "a timed-out child must not overlap a successor",
-    );
-    await waitForProcessExit(childPid);
-  } finally {
-    proxy.input.end();
-    await proxy.running;
-    cleanup(root);
-  }
+  proxy.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { capabilities: { roots: {} } },
+  });
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {},
+  });
+  await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
+  proxy.send({ jsonrpc: "2.0", id: 10, method: "tools/list", params: {} });
+  proxy.send({
+    jsonrpc: "2.0",
+    id: latestRootsRequest({ messages: proxy.messages }).id,
+    result: { roots: [{ uri: root }] },
+  });
+  await proxy.waitFor(() =>
+    proxy.messages().some((message) => message.id === 10),
+  );
+  assert.equal(Number.isInteger(childPid), true, "the child must have spawned");
+  const timedOut = proxy.messages().find((message) => message.id === 10);
+  assert.equal(timedOut.error.code, -32001);
+  assert.match(timedOut.error.message, /initialization timed out after 50ms/);
+  await childExit;
+  assert.equal(
+    spawnCount,
+    1,
+    "a timed-out child must not overlap a successor",
+  );
+  await waitForProcessExit(childPid);
+  proxy.input.end();
+  await proxy.running;
 });
 
-test("child initialize error uses bounded retirement before wrapper shutdown", async () => {
-  const root = adlcRepo();
+test("child initialize error uses bounded retirement before wrapper shutdown", async (t) => {
+  const root = adlcRepo(t);
   const pidFile = join(root, "error-child.pid");
   const sigtermFile = join(root, "error-child-sigterm");
-  const child = launch({
+  const child = launch(t, {
     ADLC_CLI_BIN: writeFakeCli(root, {
       initialize: "error",
       ignoreSigterm: true,
@@ -1816,87 +1714,79 @@ test("child initialize error uses bounded retirement before wrapper shutdown", a
     }),
   });
   const out = collect(child);
-  try {
-    sendInitialize(child, { initialized: true });
-    send(child, { jsonrpc: "2.0", id: 10, method: "tools/list", params: {} });
-    await out.waitFor((stdout) => stdout.includes("roots/list"));
-    send(child, {
-      jsonrpc: "2.0",
-      id: latestRootsRequest(out).id,
-      result: { roots: [{ uri: root }] },
-    });
-    await out.waitFor(
-      (stdout, stderr) =>
-        stdout.includes('"id":10') &&
-        stderr.includes("injected child initialize failure") &&
-        existsSync(pidFile),
-    );
-    const childPid = readChildPid(pidFile);
-    assert.equal(out.reply(10).error.code, -32603);
-    assert.match(out.reply(10).error.message, /initialization failed/);
+  sendInitialize(child, { initialized: true });
+  send(child, { jsonrpc: "2.0", id: 10, method: "tools/list", params: {} });
+  await out.waitFor((stdout) => stdout.includes("roots/list"));
+  send(child, {
+    jsonrpc: "2.0",
+    id: latestRootsRequest(out).id,
+    result: { roots: [{ uri: root }] },
+  });
+  await out.waitFor(
+    (stdout, stderr) =>
+      stdout.includes('"id":10') &&
+      stderr.includes("injected child initialize failure") &&
+      existsSync(pidFile),
+  );
+  const childPid = readChildPid(pidFile);
+  assert.equal(out.reply(10).error.code, -32603);
+  assert.match(out.reply(10).error.message, /initialization failed/);
 
-    child.kill("SIGTERM");
-    await Promise.race([
-      once(child, "exit"),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("wrapper did not exit")), 2000),
-      ),
-    ]);
-    assert.equal(
-      existsSync(sigtermFile),
-      true,
-      "retirement must signal the child",
-    );
-    assert.throws(() => process.kill(childPid, 0), { code: "ESRCH" });
-  } finally {
-    if (!child.killed) {
-      child.kill("SIGKILL");
-    }
-    cleanup(root);
+  child.kill("SIGTERM");
+  await Promise.race([
+    once(child, "exit"),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("wrapper did not exit")), 2000),
+    ),
+  ]);
+  assert.equal(
+    existsSync(sigtermFile),
+    true,
+    "retirement must signal the child",
+  );
+  assert.throws(() => process.kill(childPid, 0), { code: "ESRCH" });
+  if (!child.killed) {
+    child.kill("SIGKILL");
   }
 });
 
-test("SIGTERM retires a SIGTERM-ignoring child through the SIGKILL fallback", async () => {
-  const root = adlcRepo();
+test("SIGTERM retires a SIGTERM-ignoring child through the SIGKILL fallback", async (t) => {
+  const root = adlcRepo(t);
   const pidFile = join(root, "child.pid");
-  const child = launch({
+  const child = launch(t, {
     ADLC_CLI_BIN: writeFakeCli(root, { ignoreSigterm: true, pidFile }),
   });
   const out = collect(child);
-  try {
-    sendInitialize(child, { initialized: true });
-    await out.waitFor((s) => s.includes("roots/list"));
-    send(child, {
-      jsonrpc: "2.0",
-      id: latestRootsRequest(out).id,
-      result: { roots: [{ uri: root }] },
-    });
-    await out.waitFor(() => existsSync(pidFile));
-    const serverPid = readChildPid(pidFile);
+  sendInitialize(child, { initialized: true });
+  await out.waitFor((s) => s.includes("roots/list"));
+  send(child, {
+    jsonrpc: "2.0",
+    id: latestRootsRequest(out).id,
+    result: { roots: [{ uri: root }] },
+  });
+  await out.waitFor(() => existsSync(pidFile));
+  const serverPid = readChildPid(pidFile);
 
-    child.kill("SIGTERM");
-    await Promise.race([
-      once(child, "exit"),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("wrapper did not exit")), 2000),
-      ),
-    ]);
-    assert.throws(
-      () => process.kill(serverPid, 0),
-      { code: "ESRCH" },
-      "the child mcp-server must not outlive the wrapper",
-    );
-  } finally {
-    if (!child.killed) child.kill("SIGKILL");
-    cleanup(root);
-  }
+  child.kill("SIGTERM");
+  await Promise.race([
+    once(child, "exit"),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("wrapper did not exit")), 2000),
+    ),
+  ]);
+  assert.throws(
+    () => process.kill(serverPid, 0),
+    { code: "ESRCH" },
+    "the child mcp-server must not outlive the wrapper",
+  );
+  if (!child.killed) child.kill("SIGKILL");
 });
 
-test("SIGTERM during serialized rebind waits for a SIGTERM-ignoring child to die", async () => {
-  const root = adlcRepo();
+test("SIGTERM during serialized rebind waits for a SIGTERM-ignoring child to die", async (t) => {
+  const root = adlcRepo(t);
   const pidFile = join(root, "child.pid");
   const retirementStarted = join(root, "child-sigterm");
-  const child = launch({
+  const child = launch(t, {
     ADLC_CLI_BIN: writeFakeCli(root, {
       ignoreSigterm: true,
       pidFile,
@@ -1904,43 +1794,39 @@ test("SIGTERM during serialized rebind waits for a SIGTERM-ignoring child to die
     }),
   });
   const out = collect(child);
-  try {
-    sendInitialize(child, { initialized: true });
-    await out.waitFor((s) => s.includes("roots/list"));
-    send(child, {
-      jsonrpc: "2.0",
-      id: latestRootsRequest(out).id,
-      result: { roots: [{ uri: root }] },
-    });
-    await out.waitFor(() => existsSync(pidFile));
-    const serverPid = readChildPid(pidFile);
+  sendInitialize(child, { initialized: true });
+  await out.waitFor((s) => s.includes("roots/list"));
+  send(child, {
+    jsonrpc: "2.0",
+    id: latestRootsRequest(out).id,
+    result: { roots: [{ uri: root }] },
+  });
+  await out.waitFor(() => existsSync(pidFile));
+  const serverPid = readChildPid(pidFile);
 
-    send(child, {
-      jsonrpc: "2.0",
-      method: "notifications/roots/list_changed",
-      params: {},
-    });
-    await out.waitFor(() => existsSync(retirementStarted));
-    child.kill("SIGTERM");
-    await Promise.race([
-      once(child, "exit"),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("wrapper did not exit")), 2000),
-      ),
-    ]);
-    assert.throws(
-      () => process.kill(serverPid, 0),
-      { code: "ESRCH" },
-      "the retiring child mcp-server must not outlive the wrapper",
-    );
-  } finally {
-    if (!child.killed) child.kill("SIGKILL");
-    cleanup(root);
-  }
+  send(child, {
+    jsonrpc: "2.0",
+    method: "notifications/roots/list_changed",
+    params: {},
+  });
+  await out.waitFor(() => existsSync(retirementStarted));
+  child.kill("SIGTERM");
+  await Promise.race([
+    once(child, "exit"),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("wrapper did not exit")), 2000),
+    ),
+  ]);
+  assert.throws(
+    () => process.kill(serverPid, 0),
+    { code: "ESRCH" },
+    "the retiring child mcp-server must not outlive the wrapper",
+  );
+  if (!child.killed) child.kill("SIGKILL");
 });
 
-test("bidirectional requests with the same id are translated independently", async () => {
-  const root = adlcRepo();
+test("bidirectional requests with the same id are translated independently", async (t) => {
+  const root = adlcRepo(t);
   const childMessages = [];
   let child;
   const proxy = launchInProcess({
@@ -1949,159 +1835,151 @@ test("bidirectional requests with the same id are translated independently", asy
       return child;
     },
   });
-  try {
-    proxy.send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { capabilities: { roots: {} } },
-    });
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-      params: {},
-    });
-    await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
-    proxy.send({
-      jsonrpc: "2.0",
-      id: latestRootsRequest({ messages: proxy.messages }).id,
-      result: { roots: [{ uri: root }] },
-    });
-    await proxy.waitFor(() =>
-      childMessages.some(
-        (message) => message.method === "notifications/initialized",
-      ),
-    );
-
-    proxy.send({
-      jsonrpc: "2.0",
-      id: "same",
-      method: "tools/call",
-      params: {},
-    });
-    child.stdout.write(
-      `${JSON.stringify({ jsonrpc: "2.0", id: "same", method: "client/ping", params: {} })}\n`,
-    );
-    await proxy.waitFor(
-      () =>
-        childMessages.some((message) => message.method === "tools/call") &&
-        proxy.messages().some((message) => message.method === "client/ping"),
-    );
-
-    const clientRequest = childMessages.find(
-      (message) => message.method === "tools/call",
-    );
-    const childRequest = proxy
-      .messages()
-      .find((message) => message.method === "client/ping");
-    assert.notEqual(clientRequest.id, "same");
-    assert.notEqual(childRequest.id, "same");
-    assert.notEqual(clientRequest.id, childRequest.id);
-
-    child.stdout.write(
-      `${JSON.stringify({ jsonrpc: "2.0", id: clientRequest.id, error: { code: -32603, message: "child error" } })}\n`,
-    );
-    proxy.send({
-      jsonrpc: "2.0",
-      id: childRequest.id,
-      result: { pong: true },
-    });
-    await proxy.waitFor(
-      () =>
-        proxy
-          .messages()
-          .some(
-            (message) =>
-              message.id === "same" && message.error?.message === "child error",
-          ) &&
-        childMessages.some(
-          (message) => message.id === "same" && message.result?.pong,
-        ),
-    );
-  } finally {
-    proxy.input.end();
-    await proxy.running;
-    cleanup(root);
-  }
-});
-
-test("distinct child requests cannot cross-talk when a proxy-looking id collides", async () => {
-  const root = adlcRepo();
-  const childMessages = [];
-  let child;
-  const proxy = launchInProcess({
-    spawnImpl: () => {
-      child = responsiveFakeChild(childMessages);
-      return child;
-    },
+  proxy.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { capabilities: { roots: {} } },
   });
-  try {
-    proxy.send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { capabilities: { roots: {} } },
-    });
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-      params: {},
-    });
-    await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
-    proxy.send({
-      jsonrpc: "2.0",
-      id: latestRootsRequest({ messages: proxy.messages }).id,
-      result: { roots: [{ uri: root }] },
-    });
-    await proxy.waitFor(() =>
-      childMessages.some(
-        (message) => message.method === "notifications/initialized",
-      ),
-    );
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {},
+  });
+  await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
+  proxy.send({
+    jsonrpc: "2.0",
+    id: latestRootsRequest({ messages: proxy.messages }).id,
+    result: { roots: [{ uri: root }] },
+  });
+  await proxy.waitFor(() =>
+    childMessages.some(
+      (message) => message.method === "notifications/initialized",
+    ),
+  );
 
-    child.stdout.write(
-      `${JSON.stringify({ jsonrpc: "2.0", id: "__adlc_child_request_1_1", method: "alpha", params: {} })}\n`,
-    );
-    child.stdout.write(
-      `${JSON.stringify({ jsonrpc: "2.0", id: "__adlc_proxy_to_client_1", method: "beta", params: {} })}\n`,
-    );
-    await proxy.waitFor(
-      () =>
-        proxy.messages().filter((message) => message.method === "alpha")
-          .length === 1 &&
-        proxy.messages().filter((message) => message.method === "beta")
-          .length === 1,
-    );
+  proxy.send({
+    jsonrpc: "2.0",
+    id: "same",
+    method: "tools/call",
+    params: {},
+  });
+  child.stdout.write(
+    `${JSON.stringify({ jsonrpc: "2.0", id: "same", method: "client/ping", params: {} })}\n`,
+  );
+  await proxy.waitFor(
+    () =>
+      childMessages.some((message) => message.method === "tools/call") &&
+      proxy.messages().some((message) => message.method === "client/ping"),
+  );
 
-    const alpha = proxy
-      .messages()
-      .find((message) => message.method === "alpha");
-    const beta = proxy.messages().find((message) => message.method === "beta");
-    assert.notEqual(alpha.id, beta.id);
-    proxy.send({ jsonrpc: "2.0", id: alpha.id, result: { reply: "alpha" } });
-    proxy.send({ jsonrpc: "2.0", id: beta.id, result: { reply: "beta" } });
-    await proxy.waitFor(
-      () =>
-        childMessages.some(
+  const clientRequest = childMessages.find(
+    (message) => message.method === "tools/call",
+  );
+  const childRequest = proxy
+    .messages()
+    .find((message) => message.method === "client/ping");
+  assert.notEqual(clientRequest.id, "same");
+  assert.notEqual(childRequest.id, "same");
+  assert.notEqual(clientRequest.id, childRequest.id);
+
+  child.stdout.write(
+    `${JSON.stringify({ jsonrpc: "2.0", id: clientRequest.id, error: { code: -32603, message: "child error" } })}\n`,
+  );
+  proxy.send({
+    jsonrpc: "2.0",
+    id: childRequest.id,
+    result: { pong: true },
+  });
+  await proxy.waitFor(
+    () =>
+      proxy
+        .messages()
+        .some(
           (message) =>
-            message.id === "__adlc_child_request_1_1" &&
-            message.result?.reply === "alpha",
+            message.id === "same" && message.error?.message === "child error",
         ) &&
-        childMessages.some(
-          (message) =>
-            message.id === "__adlc_proxy_to_client_1" &&
-            message.result?.reply === "beta",
-        ),
-    );
-  } finally {
-    proxy.input.end();
-    await proxy.running;
-    cleanup(root);
-  }
+      childMessages.some(
+        (message) => message.id === "same" && message.result?.pong,
+      ),
+  );
+  proxy.input.end();
+  await proxy.running;
 });
 
-test("a future Roots-looking child id cannot consume a rebind response", async () => {
-  const root = adlcRepo();
+test("distinct child requests cannot cross-talk when a proxy-looking id collides", async (t) => {
+  const root = adlcRepo(t);
+  const childMessages = [];
+  let child;
+  const proxy = launchInProcess({
+    spawnImpl: () => {
+      child = responsiveFakeChild(childMessages);
+      return child;
+    },
+  });
+  proxy.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { capabilities: { roots: {} } },
+  });
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {},
+  });
+  await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
+  proxy.send({
+    jsonrpc: "2.0",
+    id: latestRootsRequest({ messages: proxy.messages }).id,
+    result: { roots: [{ uri: root }] },
+  });
+  await proxy.waitFor(() =>
+    childMessages.some(
+      (message) => message.method === "notifications/initialized",
+    ),
+  );
+
+  child.stdout.write(
+    `${JSON.stringify({ jsonrpc: "2.0", id: "__adlc_child_request_1_1", method: "alpha", params: {} })}\n`,
+  );
+  child.stdout.write(
+    `${JSON.stringify({ jsonrpc: "2.0", id: "__adlc_proxy_to_client_1", method: "beta", params: {} })}\n`,
+  );
+  await proxy.waitFor(
+    () =>
+      proxy.messages().filter((message) => message.method === "alpha")
+        .length === 1 &&
+      proxy.messages().filter((message) => message.method === "beta")
+        .length === 1,
+  );
+
+  const alpha = proxy
+    .messages()
+    .find((message) => message.method === "alpha");
+  const beta = proxy.messages().find((message) => message.method === "beta");
+  assert.notEqual(alpha.id, beta.id);
+  proxy.send({ jsonrpc: "2.0", id: alpha.id, result: { reply: "alpha" } });
+  proxy.send({ jsonrpc: "2.0", id: beta.id, result: { reply: "beta" } });
+  await proxy.waitFor(
+    () =>
+      childMessages.some(
+        (message) =>
+          message.id === "__adlc_child_request_1_1" &&
+          message.result?.reply === "alpha",
+      ) &&
+      childMessages.some(
+        (message) =>
+          message.id === "__adlc_proxy_to_client_1" &&
+          message.result?.reply === "beta",
+      ),
+  );
+  proxy.input.end();
+  await proxy.running;
+});
+
+test("a future Roots-looking child id cannot consume a rebind response", async (t) => {
+  const root = adlcRepo(t);
   const children = [];
   const receivedByChild = [];
   const proxy = launchInProcess({
@@ -2115,80 +1993,76 @@ test("a future Roots-looking child id cannot consume a rebind response", async (
   });
   const rootsRequests = () =>
     proxy.messages().filter((message) => message.method === "roots/list");
-  try {
-    proxy.send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { capabilities: { roots: { listChanged: true } } },
-    });
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-      params: {},
-    });
-    await proxy.waitFor(() => rootsRequests().length === 1);
-    proxy.send({
-      jsonrpc: "2.0",
-      id: rootsRequests()[0].id,
-      result: { roots: [{ uri: root }] },
-    });
-    await proxy.waitFor(() =>
-      receivedByChild[0].some(
-        (message) => message.method === "notifications/initialized",
-      ),
-    );
+  proxy.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { capabilities: { roots: { listChanged: true } } },
+  });
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {},
+  });
+  await proxy.waitFor(() => rootsRequests().length === 1);
+  proxy.send({
+    jsonrpc: "2.0",
+    id: rootsRequests()[0].id,
+    result: { roots: [{ uri: root }] },
+  });
+  await proxy.waitFor(() =>
+    receivedByChild[0].some(
+      (message) => message.method === "notifications/initialized",
+    ),
+  );
 
-    const futureRootsId = "__adlc_roots_list_2_2";
-    children[0].stdout.write(
-      `${JSON.stringify({ jsonrpc: "2.0", id: futureRootsId, method: "child/ping", params: {} })}\n`,
-    );
-    await proxy.waitFor(() =>
-      proxy.messages().some((message) => message.method === "child/ping"),
-    );
-    const remappedRequest = proxy
-      .messages()
-      .find((message) => message.method === "child/ping");
-    assert.notEqual(remappedRequest.id, futureRootsId);
+  const futureRootsId = "__adlc_roots_list_2_2";
+  children[0].stdout.write(
+    `${JSON.stringify({ jsonrpc: "2.0", id: futureRootsId, method: "child/ping", params: {} })}\n`,
+  );
+  await proxy.waitFor(() =>
+    proxy.messages().some((message) => message.method === "child/ping"),
+  );
+  const remappedRequest = proxy
+    .messages()
+    .find((message) => message.method === "child/ping");
+  assert.notEqual(remappedRequest.id, futureRootsId);
 
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/roots/list_changed",
-      params: {},
-    });
-    await proxy.waitFor(() => rootsRequests().length === 2);
-    assert.equal(rootsRequests()[1].id, futureRootsId);
-    proxy.send({
-      jsonrpc: "2.0",
-      id: remappedRequest.id,
-      result: { delayed: true },
-    });
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(
-      children.length,
-      1,
-      "a response to a retired mapping must not bind a successor",
-    );
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/roots/list_changed",
+    params: {},
+  });
+  await proxy.waitFor(() => rootsRequests().length === 2);
+  assert.equal(rootsRequests()[1].id, futureRootsId);
+  proxy.send({
+    jsonrpc: "2.0",
+    id: remappedRequest.id,
+    result: { delayed: true },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    children.length,
+    1,
+    "a response to a retired mapping must not bind a successor",
+  );
 
-    proxy.send({
-      jsonrpc: "2.0",
-      id: futureRootsId,
-      result: { roots: [{ uri: root }] },
-    });
-    await proxy.waitFor(() =>
-      receivedByChild[1]?.some(
-        (message) => message.method === "notifications/initialized",
-      ),
-    );
-  } finally {
-    proxy.input.end();
-    await proxy.running;
-    cleanup(root);
-  }
+  proxy.send({
+    jsonrpc: "2.0",
+    id: futureRootsId,
+    result: { roots: [{ uri: root }] },
+  });
+  await proxy.waitFor(() =>
+    receivedByChild[1]?.some(
+      (message) => message.method === "notifications/initialized",
+    ),
+  );
+  proxy.input.end();
+  await proxy.running;
 });
 
-test("duplicate responses after a completed mapping are dropped", async () => {
-  const root = adlcRepo();
+test("duplicate responses after a completed mapping are dropped", async (t) => {
+  const root = adlcRepo(t);
   const childMessages = [];
   let child;
   const proxy = launchInProcess({
@@ -2197,81 +2071,77 @@ test("duplicate responses after a completed mapping are dropped", async () => {
       return child;
     },
   });
-  try {
-    proxy.send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { capabilities: { roots: {} } },
-    });
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-      params: {},
-    });
-    await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
-    proxy.send({
-      jsonrpc: "2.0",
-      id: latestRootsRequest({ messages: proxy.messages }).id,
-      result: { roots: [{ uri: root }] },
-    });
-    await proxy.waitFor(() =>
-      childMessages.some(
-        (message) => message.method === "notifications/initialized",
-      ),
-    );
+  proxy.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { capabilities: { roots: {} } },
+  });
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {},
+  });
+  await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
+  proxy.send({
+    jsonrpc: "2.0",
+    id: latestRootsRequest({ messages: proxy.messages }).id,
+    result: { roots: [{ uri: root }] },
+  });
+  await proxy.waitFor(() =>
+    childMessages.some(
+      (message) => message.method === "notifications/initialized",
+    ),
+  );
 
-    child.stdout.write(
-      `${JSON.stringify({ jsonrpc: "2.0", id: "first", method: "child/first", params: {} })}\n`,
-    );
-    await proxy.waitFor(() =>
-      proxy.messages().some((message) => message.method === "child/first"),
-    );
-    const first = proxy
-      .messages()
-      .find((message) => message.method === "child/first");
-    proxy.send({ jsonrpc: "2.0", id: first.id, result: { reply: "first" } });
-    await proxy.waitFor(() =>
-      childMessages.some(
-        (message) =>
-          message.id === "first" && message.result?.reply === "first",
-      ),
-    );
+  child.stdout.write(
+    `${JSON.stringify({ jsonrpc: "2.0", id: "first", method: "child/first", params: {} })}\n`,
+  );
+  await proxy.waitFor(() =>
+    proxy.messages().some((message) => message.method === "child/first"),
+  );
+  const first = proxy
+    .messages()
+    .find((message) => message.method === "child/first");
+  proxy.send({ jsonrpc: "2.0", id: first.id, result: { reply: "first" } });
+  await proxy.waitFor(() =>
+    childMessages.some(
+      (message) =>
+        message.id === "first" && message.result?.reply === "first",
+    ),
+  );
 
-    child.stdout.write(
-      `${JSON.stringify({ jsonrpc: "2.0", id: "second", method: "child/second", params: {} })}\n`,
-    );
-    await proxy.waitFor(() =>
-      proxy.messages().some((message) => message.method === "child/second"),
-    );
-    const second = proxy
-      .messages()
-      .find((message) => message.method === "child/second");
-    proxy.send({ jsonrpc: "2.0", id: first.id, result: { stale: true } });
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(
-      childMessages.some(
-        (message) => message.id === "second" && message.result?.stale,
-      ),
-      false,
-    );
+  child.stdout.write(
+    `${JSON.stringify({ jsonrpc: "2.0", id: "second", method: "child/second", params: {} })}\n`,
+  );
+  await proxy.waitFor(() =>
+    proxy.messages().some((message) => message.method === "child/second"),
+  );
+  const second = proxy
+    .messages()
+    .find((message) => message.method === "child/second");
+  proxy.send({ jsonrpc: "2.0", id: first.id, result: { stale: true } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    childMessages.some(
+      (message) => message.id === "second" && message.result?.stale,
+    ),
+    false,
+  );
 
-    proxy.send({ jsonrpc: "2.0", id: second.id, result: { reply: "second" } });
-    await proxy.waitFor(() =>
-      childMessages.some(
-        (message) =>
-          message.id === "second" && message.result?.reply === "second",
-      ),
-    );
-  } finally {
-    proxy.input.end();
-    await proxy.running;
-    cleanup(root);
-  }
+  proxy.send({ jsonrpc: "2.0", id: second.id, result: { reply: "second" } });
+  await proxy.waitFor(() =>
+    childMessages.some(
+      (message) =>
+        message.id === "second" && message.result?.reply === "second",
+    ),
+  );
+  proxy.input.end();
+  await proxy.running;
 });
 
-test("a request using an active child-facing proxy id is translated as a request", async () => {
-  const root = adlcRepo();
+test("a request using an active child-facing proxy id is translated as a request", async (t) => {
+  const root = adlcRepo(t);
   const childMessages = [];
   let child;
   const proxy = launchInProcess({
@@ -2295,84 +2165,80 @@ test("a request using an active child-facing proxy id is translated as a request
       return child;
     },
   });
-  try {
-    proxy.send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { capabilities: { roots: {} } },
-    });
-    proxy.send({
-      jsonrpc: "2.0",
-      method: "notifications/initialized",
-      params: {},
-    });
-    await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
-    proxy.send({
-      jsonrpc: "2.0",
-      id: latestRootsRequest({ messages: proxy.messages }).id,
-      result: { roots: [{ uri: root }] },
-    });
-    await proxy.waitFor(() =>
-      childMessages.some(
-        (message) => message.method === "notifications/initialized",
-      ),
-    );
+  proxy.send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { capabilities: { roots: {} } },
+  });
+  proxy.send({
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {},
+  });
+  await proxy.waitFor(() => latestRootsRequest({ messages: proxy.messages }));
+  proxy.send({
+    jsonrpc: "2.0",
+    id: latestRootsRequest({ messages: proxy.messages }).id,
+    result: { roots: [{ uri: root }] },
+  });
+  await proxy.waitFor(() =>
+    childMessages.some(
+      (message) => message.method === "notifications/initialized",
+    ),
+  );
 
-    proxy.send({
-      jsonrpc: "2.0",
-      id: "original",
-      method: "tools/list",
-      params: {},
-    });
-    await proxy.waitFor(() =>
-      childMessages.some((message) => message.method === "tools/list"),
-    );
-    const first = childMessages.find(
-      (message) => message.method === "tools/list",
-    );
-    proxy.send({
-      jsonrpc: "2.0",
-      id: first.id,
-      method: "tools/list",
-      params: {},
-    });
-    await proxy.waitFor(
-      () =>
-        childMessages.filter((message) => message.method === "tools/list")
-          .length === 2,
-    );
-    const second = childMessages
-      .filter((message) => message.method === "tools/list")
-      .at(-1);
-    assert.notEqual(second.id, first.id);
+  proxy.send({
+    jsonrpc: "2.0",
+    id: "original",
+    method: "tools/list",
+    params: {},
+  });
+  await proxy.waitFor(() =>
+    childMessages.some((message) => message.method === "tools/list"),
+  );
+  const first = childMessages.find(
+    (message) => message.method === "tools/list",
+  );
+  proxy.send({
+    jsonrpc: "2.0",
+    id: first.id,
+    method: "tools/list",
+    params: {},
+  });
+  await proxy.waitFor(
+    () =>
+      childMessages.filter((message) => message.method === "tools/list")
+        .length === 2,
+  );
+  const second = childMessages
+    .filter((message) => message.method === "tools/list")
+    .at(-1);
+  assert.notEqual(second.id, first.id);
 
-    child.stdout.write(
-      `${JSON.stringify({ jsonrpc: "2.0", id: second.id, result: { tools: ["second"] } })}\n`,
-    );
-    child.stdout.write(
-      `${JSON.stringify({ jsonrpc: "2.0", id: first.id, result: { tools: ["first"] } })}\n`,
-    );
-    await proxy.waitFor(
-      () =>
-        proxy
-          .messages()
-          .some(
-            (message) =>
-              message.id === first.id &&
-              message.result?.tools?.[0] === "second",
-          ) &&
-        proxy
-          .messages()
-          .some(
-            (message) =>
-              message.id === "original" &&
-              message.result?.tools?.[0] === "first",
-          ),
-    );
-  } finally {
-    proxy.input.end();
-    await proxy.running;
-    cleanup(root);
-  }
+  child.stdout.write(
+    `${JSON.stringify({ jsonrpc: "2.0", id: second.id, result: { tools: ["second"] } })}\n`,
+  );
+  child.stdout.write(
+    `${JSON.stringify({ jsonrpc: "2.0", id: first.id, result: { tools: ["first"] } })}\n`,
+  );
+  await proxy.waitFor(
+    () =>
+      proxy
+        .messages()
+        .some(
+          (message) =>
+            message.id === first.id &&
+            message.result?.tools?.[0] === "second",
+        ) &&
+      proxy
+        .messages()
+        .some(
+          (message) =>
+            message.id === "original" &&
+            message.result?.tools?.[0] === "first",
+        ),
+  );
+  proxy.input.end();
+  await proxy.running;
 });

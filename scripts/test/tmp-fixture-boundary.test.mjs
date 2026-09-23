@@ -45,10 +45,6 @@ const ALLOWLIST = new Set([
   'packages/fleet/test/status.test.mjs',
   'packages/fleet/test/synthetic-home-bwrap.test.mjs',
 
-  'plugins/adlc-cursor/test/build-gate.test.mjs',
-  'plugins/adlc-cursor/test/mcp-roots-proxy-lifecycle.test.mjs',
-  'plugins/adlc-cursor/test/mcp-wrapper.test.mjs',
-  'plugins/adlc-cursor/test/session-start.test.mjs',
   'plugins/adlc-pi/test/build-gate-flail.test.mjs',
   'plugins/adlc-pi/test/classifier-single-source.test.mjs',
   'plugins/adlc-pi/test/commands.test.mjs',
