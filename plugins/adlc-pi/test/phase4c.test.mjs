@@ -10,10 +10,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, realpathSync,
+  mkdirSync, writeFileSync, readFileSync, existsSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 import { createExtension } from '../lib/extension.mjs';
 import { buildRollbackCandidates } from '../lib/rollback.mjs';
 import { buildShutdownEvidence } from '../lib/shutdown.mjs';
@@ -24,8 +24,8 @@ const T1 = {
   scope: ['src/**'], rails: ['test/contracts/**'], edges: [], duration: 1, category: 'feature',
 };
 
-function makeRepo({ current = 'T1' } = {}) {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-t28-')));
+function makeRepo(t, { current = 'T1' } = {}) {
+  const root = tmp(t, 'pi-phase4c-');
   mkdirSync(join(root, '.adlc'), { recursive: true });
   writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [T1] }, null, 2));
   if (current !== null) {
@@ -123,92 +123,82 @@ function writePacket(root, { before = '.adlc/before.json', after = '.adlc/after.
   return '.adlc/packet.json';
 }
 
-test('AC1: /adlc-accept happy path (confirm=true) runs behavior-diff AND accept, then notifies the acceptance', async () => {
-  const root = makeRepo();
-  try {
-    const { pi } = await boot(root, { exec: acceptExec });
-    const packetArg = writePacket(root);
-    const ctx = fakeCtx(root, { confirm: () => true });
+test('AC1: /adlc-accept happy path (confirm=true) runs behavior-diff AND accept, then notifies the acceptance', async (t) => {
+  const root = makeRepo(t);
+  const { pi } = await boot(root, { exec: acceptExec });
+  const packetArg = writePacket(root);
+  const ctx = fakeCtx(root, { confirm: () => true });
 
-    await pi.commands['adlc-accept'].handler(packetArg, ctx);
+  await pi.commands['adlc-accept'].handler(packetArg, ctx);
 
-    const verbs = pi.execCalls.map((c) => c.args[0]);
-    assert.ok(verbs.includes('behavior-diff'), 'behavior-diff compare ran');
-    assert.ok(verbs.includes('accept'), 'accept ran');
-    const acceptCall = pi.execCalls.find((c) => c.args[0] === 'accept');
-    assert.deepEqual(
-      acceptCall.args.slice(0, 5),
-      ['accept', '--ticket', 'T1', '--packet', packetArg],
-      'accept invoked with the resolved ticket + packet'
-    );
-    assert.ok(acceptCall.args.includes('--json'), 'accept requested --json');
-    assert.ok(ctx.notices.some((n) => n.level === 'info' && /recorded P6 acceptance for ticket T1/.test(n.msg)));
-    // The confirm summary carried the behavior-diff verdict.
-    assert.ok(ctx.calls.confirm === 1, 'confirm surfaced exactly once');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  const verbs = pi.execCalls.map((c) => c.args[0]);
+  assert.ok(verbs.includes('behavior-diff'), 'behavior-diff compare ran');
+  assert.ok(verbs.includes('accept'), 'accept ran');
+  const acceptCall = pi.execCalls.find((c) => c.args[0] === 'accept');
+  assert.deepEqual(
+    acceptCall.args.slice(0, 5),
+    ['accept', '--ticket', 'T1', '--packet', packetArg],
+    'accept invoked with the resolved ticket + packet'
+  );
+  assert.ok(acceptCall.args.includes('--json'), 'accept requested --json');
+  assert.ok(ctx.notices.some((n) => n.level === 'info' && /recorded P6 acceptance for ticket T1/.test(n.msg)));
+  // The confirm summary carried the behavior-diff verdict.
+  assert.ok(ctx.calls.confirm === 1, 'confirm surfaced exactly once');
 });
 
-test('AC1: /adlc-accept with confirm=false runs behavior-diff but NOT accept and records nothing', async () => {
-  const root = makeRepo();
-  try {
-    const { pi } = await boot(root, { exec: acceptExec });
-    const packetArg = writePacket(root);
-    const ctx = fakeCtx(root, { confirm: () => false });
+test('AC1: /adlc-accept with confirm=false runs behavior-diff but NOT accept and records nothing', async (t) => {
+  const root = makeRepo(t);
+  const { pi } = await boot(root, { exec: acceptExec });
+  const packetArg = writePacket(root);
+  const ctx = fakeCtx(root, { confirm: () => false });
 
-    await pi.commands['adlc-accept'].handler(packetArg, ctx);
+  await pi.commands['adlc-accept'].handler(packetArg, ctx);
 
-    const verbs = pi.execCalls.map((c) => c.args[0]);
-    assert.ok(verbs.includes('behavior-diff'), 'behavior-diff ran (feeds the confirm summary)');
-    assert.ok(!verbs.includes('accept'), 'accept did NOT run after decline');
-    assert.ok(ctx.notices.some((n) => /declined — nothing recorded/.test(n.msg)));
-    assert.equal(existsSync(join(root, '.adlc', 'manifest.jsonl')), false, 'no evidence recorded on decline');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  const verbs = pi.execCalls.map((c) => c.args[0]);
+  assert.ok(verbs.includes('behavior-diff'), 'behavior-diff ran (feeds the confirm summary)');
+  assert.ok(!verbs.includes('accept'), 'accept did NOT run after decline');
+  assert.ok(ctx.notices.some((n) => /declined — nothing recorded/.test(n.msg)));
+  assert.equal(existsSync(join(root, '.adlc', 'manifest.jsonl')), false, 'no evidence recorded on decline');
 });
 
-test('AC1: /adlc-accept on a missing packet path errors with no dialog and no exec', async () => {
-  const root = makeRepo();
-  try {
-    const { pi } = await boot(root, { exec: acceptExec });
-    const ctx = fakeCtx(root, { confirm: () => true });
+test('AC1: /adlc-accept on a missing packet path errors with no dialog and no exec', async (t) => {
+  const root = makeRepo(t);
+  const { pi } = await boot(root, { exec: acceptExec });
+  const ctx = fakeCtx(root, { confirm: () => true });
 
-    await pi.commands['adlc-accept'].handler('.adlc/nope.json', ctx);
+  await pi.commands['adlc-accept'].handler('.adlc/nope.json', ctx);
 
-    assert.equal(ctx.calls.confirm, 0, 'no dialog opened for a missing packet');
-    assert.equal(pi.execCalls.length, 0, 'no CLI invoked for a missing packet');
-    assert.ok(ctx.notices.some((n) => n.level === 'error' && /cannot read acceptance packet/.test(n.msg)));
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  assert.equal(ctx.calls.confirm, 0, 'no dialog opened for a missing packet');
+  assert.equal(pi.execCalls.length, 0, 'no CLI invoked for a missing packet');
+  assert.ok(ctx.notices.some((n) => n.level === 'error' && /cannot read acceptance packet/.test(n.msg)));
 });
 
-test('AC1: /adlc-accept with a packet but no before/after skips behavior-diff and still accepts on approve', async () => {
-  const root = makeRepo();
-  try {
-    const { pi } = await boot(root, { exec: acceptExec });
-    const packetArg = writePacket(root, { withCaptures: false });
-    const ctx = fakeCtx(root, { confirm: () => true });
+test('AC1: /adlc-accept with a packet but no before/after skips behavior-diff and still accepts on approve', async (t) => {
+  const root = makeRepo(t);
+  const { pi } = await boot(root, { exec: acceptExec });
+  const packetArg = writePacket(root, { withCaptures: false });
+  const ctx = fakeCtx(root, { confirm: () => true });
 
-    await pi.commands['adlc-accept'].handler(packetArg, ctx);
+  await pi.commands['adlc-accept'].handler(packetArg, ctx);
 
-    const verbs = pi.execCalls.map((c) => c.args[0]);
-    assert.ok(!verbs.includes('behavior-diff'), 'behavior-diff skipped without captures');
-    assert.ok(verbs.includes('accept'), 'accept still ran on approve');
-    const acceptCall = pi.execCalls.find((c) => c.args[0] === 'accept');
-    assert.ok(!acceptCall.args.includes('--before'), 'no --before passed without captures');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  const verbs = pi.execCalls.map((c) => c.args[0]);
+  assert.ok(!verbs.includes('behavior-diff'), 'behavior-diff skipped without captures');
+  assert.ok(verbs.includes('accept'), 'accept still ran on approve');
+  const acceptCall = pi.execCalls.find((c) => c.args[0] === 'accept');
+  assert.ok(!acceptCall.args.includes('--before'), 'no --before passed without captures');
 });
 
-test('AC1: /adlc-accept in non-TUI mode notifies and aborts without running any CLI', async () => {
-  const root = makeRepo();
-  try {
-    const { pi } = await boot(root, { exec: acceptExec });
-    const packetArg = writePacket(root);
-    const ctx = fakeCtx(root, { hasUI: false });
+test('AC1: /adlc-accept in non-TUI mode notifies and aborts without running any CLI', async (t) => {
+  const root = makeRepo(t);
+  const { pi } = await boot(root, { exec: acceptExec });
+  const packetArg = writePacket(root);
+  const ctx = fakeCtx(root, { hasUI: false });
 
-    await pi.commands['adlc-accept'].handler(packetArg, ctx);
+  await pi.commands['adlc-accept'].handler(packetArg, ctx);
 
-    assert.equal(pi.execCalls.length, 0, 'no CLI run without a UI to confirm');
-    assert.equal(ctx.calls.confirm, 0);
-    assert.ok(ctx.notices.some((n) => /requires interactive confirmation/.test(n.msg)));
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  assert.equal(pi.execCalls.length, 0, 'no CLI run without a UI to confirm');
+  assert.equal(ctx.calls.confirm, 0);
+  assert.ok(ctx.notices.some((n) => /requires interactive confirmation/.test(n.msg)));
 });
 
 // =========================================================================
@@ -236,47 +226,41 @@ test('buildShutdownEvidence: denies after the last pass are unresolved; a later 
   assert.equal(buildShutdownEvidence({ entries: [], ticketId: 'T1' }), null, 'no events → nothing');
 });
 
-test('AC2: session_shutdown with unresolved denies appends a chain-valid manifest entry', async () => {
-  const root = makeRepo({ current: 'T1' });
-  try {
-    const { pi } = await boot(root);
-    const branch = [msg('m1', 'user', 'go'), gateEvent('g1', 'rail-deny', { path: 'test/contracts/x.ts', reason: 'frozen rail' })];
-    const ctx = fakeCtx(root, { sessionManager: { getBranch: () => branch } });
+test('AC2: session_shutdown with unresolved denies appends a chain-valid manifest entry', async (t) => {
+  const root = makeRepo(t, { current: 'T1' });
+  const { pi } = await boot(root);
+  const branch = [msg('m1', 'user', 'go'), gateEvent('g1', 'rail-deny', { path: 'test/contracts/x.ts', reason: 'frozen rail' })];
+  const ctx = fakeCtx(root, { sessionManager: { getBranch: () => branch } });
 
-    await pi.handlers.session_shutdown({ type: 'session_shutdown', reason: 'quit' }, ctx);
+  await pi.handlers.session_shutdown({ type: 'session_shutdown', reason: 'quit' }, ctx);
 
-    const manifestPath = join(root, '.adlc', 'manifest.jsonl');
-    assert.ok(existsSync(manifestPath), 'manifest written on unresolved shutdown');
-    assert.match(readFileSync(manifestPath, 'utf8'), /pi-session-shutdown-open-ticket/);
-    const verdict = verify(join(root, '.adlc'), { key: null });
-    assert.equal(verdict.valid, true, `manifest chain must verify: ${JSON.stringify(verdict)}`);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  const manifestPath = join(root, '.adlc', 'manifest.jsonl');
+  assert.ok(existsSync(manifestPath), 'manifest written on unresolved shutdown');
+  assert.match(readFileSync(manifestPath, 'utf8'), /pi-session-shutdown-open-ticket/);
+  const verdict = verify(join(root, '.adlc'), { key: null });
+  assert.equal(verdict.valid, true, `manifest chain must verify: ${JSON.stringify(verdict)}`);
 });
 
-test('AC2: session_shutdown on a clean session appends nothing', async () => {
-  const root = makeRepo({ current: 'T1' });
-  try {
-    const { pi } = await boot(root);
-    const branch = [gateEvent('g1', 'rail-deny'), gateEvent('g2', 'adlc-gate-run', { code: 0 })];
-    const ctx = fakeCtx(root, { sessionManager: { getBranch: () => branch } });
+test('AC2: session_shutdown on a clean session appends nothing', async (t) => {
+  const root = makeRepo(t, { current: 'T1' });
+  const { pi } = await boot(root);
+  const branch = [gateEvent('g1', 'rail-deny'), gateEvent('g2', 'adlc-gate-run', { code: 0 })];
+  const ctx = fakeCtx(root, { sessionManager: { getBranch: () => branch } });
 
-    await pi.handlers.session_shutdown({ type: 'session_shutdown', reason: 'quit' }, ctx);
+  await pi.handlers.session_shutdown({ type: 'session_shutdown', reason: 'quit' }, ctx);
 
-    assert.equal(existsSync(join(root, '.adlc', 'manifest.jsonl')), false, 'no entry for a cleared session');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  assert.equal(existsSync(join(root, '.adlc', 'manifest.jsonl')), false, 'no entry for a cleared session');
 });
 
-test('AC2: session_shutdown with no active ticket appends nothing', async () => {
-  const root = makeRepo({ current: null });
-  try {
-    const { pi } = await boot(root);
-    const branch = [gateEvent('g1', 'rail-deny')];
-    const ctx = fakeCtx(root, { sessionManager: { getBranch: () => branch } });
+test('AC2: session_shutdown with no active ticket appends nothing', async (t) => {
+  const root = makeRepo(t, { current: null });
+  const { pi } = await boot(root);
+  const branch = [gateEvent('g1', 'rail-deny')];
+  const ctx = fakeCtx(root, { sessionManager: { getBranch: () => branch } });
 
-    await pi.handlers.session_shutdown({ type: 'session_shutdown', reason: 'quit' }, ctx);
+  await pi.handlers.session_shutdown({ type: 'session_shutdown', reason: 'quit' }, ctx);
 
-    assert.equal(existsSync(join(root, '.adlc', 'manifest.jsonl')), false, 'no ticket → no capture');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  assert.equal(existsSync(join(root, '.adlc', 'manifest.jsonl')), false, 'no ticket → no capture');
 });
 
 // =========================================================================
@@ -370,51 +354,45 @@ test('buildRollbackCandidates: message entries newest-first, pre-failure entries
   assert.deepEqual(cands.map((c) => c.id), ['m2', 'm3', 'm1'], 'preferred first, then newest-first');
 });
 
-test('AC3: /adlc-rollback surfaces a select and forks the chosen entry, recording evidence', async () => {
-  const root = makeRepo({ current: 'T1' });
-  try {
-    const { pi } = await boot(root);
-    const branch = [msg('m1', 'user', 'start'), msg('m2', 'assistant', 'edit'), gateEvent('g1', 'rail-deny', { path: 'x' })];
-    let offered = null;
-    const ctx = fakeCtx(root, {
-      sessionManager: { getBranch: () => branch },
-      select: (_title, options) => { offered = options; return options[0]; },
-    });
+test('AC3: /adlc-rollback surfaces a select and forks the chosen entry, recording evidence', async (t) => {
+  const root = makeRepo(t, { current: 'T1' });
+  const { pi } = await boot(root);
+  const branch = [msg('m1', 'user', 'start'), msg('m2', 'assistant', 'edit'), gateEvent('g1', 'rail-deny', { path: 'x' })];
+  let offered = null;
+  const ctx = fakeCtx(root, {
+    sessionManager: { getBranch: () => branch },
+    select: (_title, options) => { offered = options; return options[0]; },
+  });
 
-    await pi.commands['adlc-rollback'].handler('', ctx);
+  await pi.commands['adlc-rollback'].handler('', ctx);
 
-    assert.equal(ctx.calls.select, 1, 'select surfaced');
-    assert.ok(offered.length >= 1 && /before rail-deny/.test(offered[0]), 'digest labels offered');
-    assert.equal(ctx.calls.fork, 1, 'fork called once');
-    assert.equal(ctx.forkArgs[0].entryId, 'm2', 'forked the pre-failure entry');
-    assert.match(readFileSync(join(root, '.adlc', 'manifest.jsonl'), 'utf8'), /pi-adlc-rollback/);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  assert.equal(ctx.calls.select, 1, 'select surfaced');
+  assert.ok(offered.length >= 1 && /before rail-deny/.test(offered[0]), 'digest labels offered');
+  assert.equal(ctx.calls.fork, 1, 'fork called once');
+  assert.equal(ctx.forkArgs[0].entryId, 'm2', 'forked the pre-failure entry');
+  assert.match(readFileSync(join(root, '.adlc', 'manifest.jsonl'), 'utf8'), /pi-adlc-rollback/);
 });
 
-test('AC3: /adlc-rollback with select returning undefined forks nothing', async () => {
-  const root = makeRepo({ current: 'T1' });
-  try {
-    const { pi } = await boot(root);
-    const branch = [msg('m1', 'user', 'start'), msg('m2', 'assistant', 'edit')];
-    const ctx = fakeCtx(root, { sessionManager: { getBranch: () => branch }, select: () => undefined });
+test('AC3: /adlc-rollback with select returning undefined forks nothing', async (t) => {
+  const root = makeRepo(t, { current: 'T1' });
+  const { pi } = await boot(root);
+  const branch = [msg('m1', 'user', 'start'), msg('m2', 'assistant', 'edit')];
+  const ctx = fakeCtx(root, { sessionManager: { getBranch: () => branch }, select: () => undefined });
 
-    await pi.commands['adlc-rollback'].handler('', ctx);
+  await pi.commands['adlc-rollback'].handler('', ctx);
 
-    assert.equal(ctx.calls.fork, 0, 'no fork on cancel');
-    assert.ok(ctx.notices.some((n) => /cancelled/.test(n.msg)));
-    assert.equal(existsSync(join(root, '.adlc', 'manifest.jsonl')), false, 'nothing recorded on cancel');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  assert.equal(ctx.calls.fork, 0, 'no fork on cancel');
+  assert.ok(ctx.notices.some((n) => /cancelled/.test(n.msg)));
+  assert.equal(existsSync(join(root, '.adlc', 'manifest.jsonl')), false, 'nothing recorded on cancel');
 });
 
-test('AC3: /adlc-rollback degrades to a notify when the sessionManager lacks getBranch', async () => {
-  const root = makeRepo({ current: 'T1' });
-  try {
-    const { pi } = await boot(root);
-    const ctx = fakeCtx(root, { sessionManager: {} });
+test('AC3: /adlc-rollback degrades to a notify when the sessionManager lacks getBranch', async (t) => {
+  const root = makeRepo(t, { current: 'T1' });
+  const { pi } = await boot(root);
+  const ctx = fakeCtx(root, { sessionManager: {} });
 
-    await pi.commands['adlc-rollback'].handler('', ctx);
+  await pi.commands['adlc-rollback'].handler('', ctx);
 
-    assert.equal(ctx.calls.fork, 0, 'no fork when the API is unavailable');
-    assert.ok(ctx.notices.some((n) => n.level === 'warning' && /rollback unavailable/.test(n.msg)));
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  assert.equal(ctx.calls.fork, 0, 'no fork when the API is unavailable');
+  assert.ok(ctx.notices.some((n) => n.level === 'warning' && /rollback unavailable/.test(n.msg)));
 });

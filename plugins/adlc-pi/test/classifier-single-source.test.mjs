@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync, lstatSync, statSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readdirSync, readFileSync, lstatSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmp } from '@adlc/core/test-kit';
 
 // Guard for #307 (T73): pi must enforce shell rails through the ONE canonical
 // classifier in @adlc/core (single source of truth, ADR-0004), never a local
@@ -35,53 +35,49 @@ const NAMES = ['shellHas' + 'Mutation', 'hasUnquotedFile' + 'Redirect', 'classif
 // -------------------------------------------------------------------------
 // Layer 1 — behavioral: the live path denies the pre-#290 redirect bypass.
 // -------------------------------------------------------------------------
-test('live checkShellCommand denies the #290 redirect bypass into a frozen rail (#307 AC2/AC4)', async () => {
+test('live checkShellCommand denies the #290 redirect bypass into a frozen rail (#307 AC2/AC4)', async (t) => {
   const { checkShellCommand } = await import('../lib/rails-checker.mjs');
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-307-')));
-  try {
-    mkdirSync(join(root, 'guard'), { recursive: true });
-    writeFileSync(join(root, 'guard', 'rail.txt'), 'frozen\n');
-    const ticket = { id: 'T-307-guard', title: 'guard', body: '', scope: ['**'], rails: ['guard/**'] };
-    const rail = 'guard/rail.txt';
+  const root = tmp(t, 'pi-class-ss-');
+  mkdirSync(join(root, 'guard'), { recursive: true });
+  writeFileSync(join(root, 'guard', 'rail.txt'), 'frozen\n');
+  const ticket = { id: 'T-307-guard', title: 'guard', body: '', scope: ['**'], rails: ['guard/**'] };
+  const rail = 'guard/rail.txt';
 
-    // These use a read-only-ALLOWLISTED prefix (`cat`), so a classifier missing
-    // the #290 fix classifies them read-only and ALLOWS them. Each flips
-    // allow->deny exactly on `hasUnquotedFileRedirect` — genuinely load-bearing
-    // for pi's live path (the echo case below is NOT: echo is not allowlisted,
-    // so its SPACED redirect is caught by the legacy whitespace-anchored regex
-    // and denied via the rail-hit branch regardless of #290).
-    const mustDeny290 = [
-      `cat x>${rail}`,     // no space before >  (the exact pre-#290 bypass)
-      `cat x>"${rail}"`,   // quoted no-space target
-      `cat x>>${rail}`,    // no-space APPEND (the s[i+1] === '>' branch of the fix)
-    ];
-    for (const cmd of mustDeny290) {
-      assert.equal(
-        checkShellCommand(cmd, ticket, root).decision,
-        'deny',
-        `#290 fix must DENY a no-space redirect into a frozen rail: ${cmd}`,
-      );
-    }
-
-    // Sanity: a non-allowlisted prefix writing to a rail is denied too — here via
-    // the rail-hit branch (the spaced redirect trips the legacy whitespace-
-    // anchored regex, so this holds independent of #290). Kept only as a sanity
-    // check; it is NOT load-bearing for the #290 fix.
+  // These use a read-only-ALLOWLISTED prefix (`cat`), so a classifier missing
+  // the #290 fix classifies them read-only and ALLOWS them. Each flips
+  // allow->deny exactly on `hasUnquotedFileRedirect` — genuinely load-bearing
+  // for pi's live path (the echo case below is NOT: echo is not allowlisted,
+  // so its SPACED redirect is caught by the legacy whitespace-anchored regex
+  // and denied via the rail-hit branch regardless of #290).
+  const mustDeny290 = [
+    `cat x>${rail}`,     // no space before >  (the exact pre-#290 bypass)
+    `cat x>"${rail}"`,   // quoted no-space target
+    `cat x>>${rail}`,    // no-space APPEND (the s[i+1] === '>' branch of the fix)
+  ];
+  for (const cmd of mustDeny290) {
     assert.equal(
-      checkShellCommand(`echo hi > ${rail}`, ticket, root).decision,
+      checkShellCommand(cmd, ticket, root).decision,
       'deny',
-      'any recognized write to a frozen rail must be denied',
+      `#290 fix must DENY a no-space redirect into a frozen rail: ${cmd}`,
     );
-
-    // Negative control: a quoted '>' in a read-only grep is NOT a redirect.
-    assert.equal(
-      checkShellCommand(`grep '>' ${rail}`, ticket, root).decision,
-      'allow',
-      'a quoted > in a read-only command must not be treated as a redirect',
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
   }
+
+  // Sanity: a non-allowlisted prefix writing to a rail is denied too — here via
+  // the rail-hit branch (the spaced redirect trips the legacy whitespace-
+  // anchored regex, so this holds independent of #290). Kept only as a sanity
+  // check; it is NOT load-bearing for the #290 fix.
+  assert.equal(
+    checkShellCommand(`echo hi > ${rail}`, ticket, root).decision,
+    'deny',
+    'any recognized write to a frozen rail must be denied',
+  );
+
+  // Negative control: a quoted '>' in a read-only grep is NOT a redirect.
+  assert.equal(
+    checkShellCommand(`grep '>' ${rail}`, ticket, root).decision,
+    'allow',
+    'a quoted > in a read-only command must not be treated as a redirect',
+  );
 });
 
 // -------------------------------------------------------------------------

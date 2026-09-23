@@ -45,11 +45,6 @@ const ALLOWLIST = new Set([
   'packages/fleet/test/status.test.mjs',
   'packages/fleet/test/synthetic-home-bwrap.test.mjs',
 
-  'plugins/adlc-pi/test/classifier-single-source.test.mjs',
-  'plugins/adlc-pi/test/compaction.test.mjs',
-  'plugins/adlc-pi/test/evidence-custom-tools.test.mjs',
-  'plugins/adlc-pi/test/phase4c.test.mjs',
-  'plugins/adlc-pi/test/widget-wiring.test.mjs',
   'scripts/test/ceremony-drift-exit.test.mjs',
   'scripts/test/check-reviewer-directed-comments.test.mjs',
   'scripts/test/rails-guard-ci.test.mjs',

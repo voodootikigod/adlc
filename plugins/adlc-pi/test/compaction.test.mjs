@@ -4,9 +4,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 import {
   buildCompactionDigest,
   extractGateEvents,
@@ -164,49 +164,46 @@ test('readSessionEntries: prefers getBranch, falls back to getEntries, tolerates
 // from the session's own recorded gate events (fake sessionManager).
 // =========================================================================
 
-test('AC4 e2e: session_compact on the extension sends a nextTurn digest built from recorded gate events', async () => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-compact-')));
+test('AC4 e2e: session_compact on the extension sends a nextTurn digest built from recorded gate events', async (t) => {
+  const root = tmp(t, 'pi-compact-');
   mkdirSync(join(root, '.adlc'), { recursive: true });
   writeFileSync(
     join(root, '.adlc', 'tickets.json'),
     JSON.stringify({ tickets: [{ id: 'T1', title: 'x', body: 'b', scope: ['src/**'], rails: ['test/contracts/**'] }] }, null, 2)
   );
   writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
-  try {
-    const handlers = {};
-    const sent = [];
-    // The session records entries via appendEntry; the fake sessionManager
-    // replays them to getBranch() so the re-assertion reads real recorded state.
-    const sessionEntries = [];
-    const pi = {
-      on(name, fn) { handlers[name] = fn; },
-      registerCommand() {},
-      registerMessageRenderer() {},
-      registerTool() {},
-      appendEntry(customType, data) { sessionEntries.push({ type: 'custom', id: String(sessionEntries.length), parentId: null, timestamp: '', customType, data }); },
-      sendMessage(message, options) { sent.push({ message, options }); },
-      async exec() { return { stdout: '', stderr: '', code: 0 }; },
-    };
-    createExtension({ env: {} })(pi);
-    const ctx = { cwd: root, ui: { setStatus() {}, notify() {} }, sessionManager: { getBranch: () => sessionEntries } };
-    await handlers.session_start({ type: 'session_start' }, ctx);
 
-    // Record a rail-deny into the session by driving a blocked write.
-    await handlers.tool_call(
-      { type: 'tool_call', toolName: 'write', toolCallId: 'w1', input: { path: 'test/contracts/frozen.test.ts', content: 'x' } },
-      ctx
-    );
-    assert.ok(sessionEntries.some((e) => e.customType === 'adlc-gate-event' && e.data.type === 'rail-deny'), 'a rail-deny was recorded');
+  const handlers = {};
+  const sent = [];
+  // The session records entries via appendEntry; the fake sessionManager
+  // replays them to getBranch() so the re-assertion reads real recorded state.
+  const sessionEntries = [];
+  const pi = {
+    on(name, fn) { handlers[name] = fn; },
+    registerCommand() {},
+    registerMessageRenderer() {},
+    registerTool() {},
+    appendEntry(customType, data) { sessionEntries.push({ type: 'custom', id: String(sessionEntries.length), parentId: null, timestamp: '', customType, data }); },
+    sendMessage(message, options) { sent.push({ message, options }); },
+    async exec() { return { stdout: '', stderr: '', code: 0 }; },
+  };
+  createExtension({ env: {} })(pi);
+  const ctx = { cwd: root, ui: { setStatus() {}, notify() {} }, sessionManager: { getBranch: () => sessionEntries } };
+  await handlers.session_start({ type: 'session_start' }, ctx);
 
-    assert.equal(typeof handlers.session_compact, 'function', 'session_compact handler registered');
-    await handlers.session_compact({ type: 'session_compact', reason: 'threshold' }, ctx);
+  // Record a rail-deny into the session by driving a blocked write.
+  await handlers.tool_call(
+    { type: 'tool_call', toolName: 'write', toolCallId: 'w1', input: { path: 'test/contracts/frozen.test.ts', content: 'x' } },
+    ctx
+  );
+  assert.ok(sessionEntries.some((e) => e.customType === 'adlc-gate-event' && e.data.type === 'rail-deny'), 'a rail-deny was recorded');
 
-    const reassertion = sent.filter((s) => s.message.customType === 'adlc-state-reassertion');
-    assert.equal(reassertion.length, 1, 'exactly one re-assertion digest');
-    assert.equal(reassertion[0].options.deliverAs, 'nextTurn');
-    assert.match(reassertion[0].message.content, /rail-deny test\/contracts\/frozen.test.ts/);
-    assert.match(reassertion[0].message.content, /Active ticket: T1/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  assert.equal(typeof handlers.session_compact, 'function', 'session_compact handler registered');
+  await handlers.session_compact({ type: 'session_compact', reason: 'threshold' }, ctx);
+
+  const reassertion = sent.filter((s) => s.message.customType === 'adlc-state-reassertion');
+  assert.equal(reassertion.length, 1, 'exactly one re-assertion digest');
+  assert.equal(reassertion[0].options.deliverAs, 'nextTurn');
+  assert.match(reassertion[0].message.content, /rail-deny test\/contracts\/frozen.test.ts/);
+  assert.match(reassertion[0].message.content, /Active ticket: T1/);
 });
