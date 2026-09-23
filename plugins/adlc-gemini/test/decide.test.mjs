@@ -1,19 +1,25 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, symlinkSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 import { decide, canonicalizeExisting } from '../hooks/adlc-rails-guard.mjs';
 import { checkRail } from '../rails-checker.mjs';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
 
 const ENF = { ADLC_P4_ENFORCEMENT: '1' };
 
-function adlcRepo({ rails = [], id = 'T1' } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'agy-dec-'));
+function adlcRepo(t, { rails = [], id = 'T1' } = {}) {
+  let ctx = t;
+  let opts = { rails, id };
+  if (t && typeof t.after !== 'function') {
+    opts = t;
+    ctx = null;
+  }
+  const root = tmp(ctx, 'gemini-decide-');
   mkdirSync(join(root, '.adlc'), { recursive: true });
-  writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id, title: 't', body: 'b', scope: ['src/**'], rails }] }));
-  writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id }));
+  writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: opts.id || 'T1', title: 't', body: 'b', scope: ['src/**'], rails: opts.rails || [] }] }));
+  writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: opts.id || 'T1' }));
   mkdirSync(join(root, 'src'), { recursive: true });
   return root;
 }
@@ -34,22 +40,22 @@ test('read-only tool (view_file) allowed under enforcement', () => {
 test('shell tool (run_command) allowed in-session', () => {
   assert.equal(call('run_command', { CommandLine: 'echo hi > /x' }).allow_tool, true);
 });
-test('G2: write with ABSOLUTE path in non-ADLC repo allowed under enforcement', () => {
-  const root = mkdtempSync(join(tmpdir(), 'agy-noadlc-'));
+test('G2: write with ABSOLUTE path in non-ADLC repo allowed under enforcement', (t) => {
+  const root = tmp(t, 'gemini-decide-');
   assert.equal(call('write_to_file', { TargetFile: join(root, 'a.js') }).allow_tool, true);
 });
-test('rail hit: mutating write to a frozen rail denied', () => {
-  const root = adlcRepo({ rails: ['src/frozen.js'] });
+test('rail hit: mutating write to a frozen rail denied', (t) => {
+  const root = adlcRepo(t, { rails: ['src/frozen.js'] });
   const v = call('write_to_file', { TargetFile: join(root, 'src', 'frozen.js') });
   assert.equal(v.allow_tool, false);
   assert.match(v.deny_reason, /frozen rail/i);
 });
-test('non-rail write in ADLC repo allowed', () => {
-  const root = adlcRepo({ rails: ['src/frozen.js'] });
+test('non-rail write in ADLC repo allowed', (t) => {
+  const root = adlcRepo(t, { rails: ['src/frozen.js'] });
   assert.equal(call('write_to_file', { TargetFile: join(root, 'src', 'ok.js') }).allow_tool, true);
 });
-test('sharded store enforces rails and freezes its shards', () => {
-  const root = mkdtempSync(join(tmpdir(), 'agy-sharded-'));
+test('sharded store enforces rails and freezes its shards', (t) => {
+  const root = tmp(t, 'gemini-decide-');
   const store = join(root, '.adlc/tickets');
   mkdirSync(join(root, 'src'), { recursive: true });
   mkdirSync(store, { recursive: true });
@@ -70,8 +76,8 @@ test('H2: name-mutating tool with unknown path key (no path) denied under enforc
   const v = call('write_to_file', { DirectoryPath: '/repo/src' }); // key not in PATH_KEYS
   assert.equal(v.allow_tool, false);
 });
-test('enforcement OFF is a no-op allow even on a rail', () => {
-  const root = adlcRepo({ rails: ['src/frozen.js'] });
+test('enforcement OFF is a no-op allow even on a rail', (t) => {
+  const root = adlcRepo(t, { rails: ['src/frozen.js'] });
   assert.equal(call('write_to_file', { TargetFile: join(root, 'src', 'frozen.js') }, {}).allow_tool, true);
 });
 
@@ -107,60 +113,57 @@ for (const [label, payload] of [['{}', {}], ['{toolCall:{}}', { toolCall: {} }],
   });
 }
 
-test('decide(): write to .adlc/.session-secret is denied as a frozen rail', () => {
-  const root = adlcRepo();
+test('decide(): write to .adlc/.session-secret is denied as a frozen rail', (t) => {
+  const root = adlcRepo(t);
   const v = call('write_to_file', { TargetFile: join(root, '.adlc/.session-secret') });
   assert.equal(v.allow_tool, false);
   assert.equal(v.decision, 'deny');
   assert.match(v.deny_reason, /frozen rail/);
 });
 
-test('checkRail: denies a .env.local.bak-style path via the .env.local* wildcard rail', () => {
+test('checkRail: denies a .env.local.bak-style path via the .env.local* wildcard rail', (t) => {
   // checkRail is TRUST_ROOT_RAILS's direct consumer (via railPreconditions), called
   // here in isolation from decide()'s separate isTrustRootOrSecretPath regex check
   // (which also matches any '.env.local' substring) — so this pins the rails-glob
   // wildcard specifically, not overlapping protection.
-  const root = adlcRepo();
+  const root = adlcRepo(t);
   const res = checkRail({ filePath: join(root, '.env.local.bak'), tool: 'write_to_file', root, env: ENF });
   assert.equal(res.decision, 'deny');
   assert.match(res.reason, /frozen rail ".*\.env\.local\*"/);
 });
 
-test('decide(): nested path object on unclassified tool targeting frozen rail is denied', () => {
-  const root = adlcRepo();
+test('decide(): nested path object on unclassified tool targeting frozen rail is denied', (t) => {
+  const root = adlcRepo(t);
   const v = call('custom_mutator', { target: { path: join(root, '.adlc/tickets.json') } });
   assert.equal(v.allow_tool, false);
   assert.equal(v.decision, 'deny');
   assert.match(v.deny_reason, /frozen rail/);
 });
 
-test('decide(): relative workspacePaths ["."] with relative frozen rail target is denied under enforcement', () => {
-  const root = adlcRepo({ rails: ['src/frozen.js'] });
+test('decide(): relative workspacePaths ["."] with relative frozen rail target is denied under enforcement', (t) => {
+  const root = adlcRepo(t, { rails: ['src/frozen.js'] });
   const origCwd = process.cwd();
-  try {
-    process.chdir(root);
-    const v1 = decide({
-      workspacePaths: ['.'],
-      toolCall: { name: 'write_to_file', args: { TargetFile: '.adlc/tickets.json' } },
-    }, { env: ENF });
-    assert.equal(v1.allow_tool, false);
-    assert.equal(v1.decision, 'deny');
-    assert.match(v1.deny_reason, /frozen rail/);
+  t.after(() => { process.chdir(origCwd); });
+  process.chdir(root);
+  const v1 = decide({
+    workspacePaths: ['.'],
+    toolCall: { name: 'write_to_file', args: { TargetFile: '.adlc/tickets.json' } },
+  }, { env: ENF });
+  assert.equal(v1.allow_tool, false);
+  assert.equal(v1.decision, 'deny');
+  assert.match(v1.deny_reason, /frozen rail/);
 
-    const v2 = decide({
-      workspacePaths: ['.'],
-      toolCall: { name: 'write_to_file', args: { TargetFile: 'src/frozen.js' } },
-    }, { env: ENF });
-    assert.equal(v2.allow_tool, false);
-    assert.equal(v2.decision, 'deny');
-    assert.match(v2.deny_reason, /frozen rail/);
-  } finally {
-    process.chdir(origCwd);
-  }
+  const v2 = decide({
+    workspacePaths: ['.'],
+    toolCall: { name: 'write_to_file', args: { TargetFile: 'src/frozen.js' } },
+  }, { env: ENF });
+  assert.equal(v2.allow_tool, false);
+  assert.equal(v2.decision, 'deny');
+  assert.match(v2.deny_reason, /frozen rail/);
 });
 
-test('decide(): unclassified code executors with code/script args fail closed under enforcement', () => {
-  const root = adlcRepo({ rails: ['src/frozen.js'] });
+test('decide(): unclassified code executors with code/script args fail closed under enforcement', (t) => {
+  const root = adlcRepo(t, { rails: ['src/frozen.js'] });
 
   // python_exec with code payload
   const v1 = decide({
@@ -278,64 +281,56 @@ test('decide(): unclassified code executors with code/script args fail closed un
   assert.match(v13.deny_reason, /shell modification of ticket store or trust-root rails/);
 });
 
-test('decide(): shell tool carrying both trust-root secret CommandLine AND benign TargetFile is denied under enforcement', () => {
-  const root = mkdtempSync(join(tmpdir(), 'adlc-decide-cmd-target-'));
+test('decide(): shell tool carrying both trust-root secret CommandLine AND benign TargetFile is denied under enforcement', (t) => {
+  const root = tmp(t, 'gemini-decide-');
   const ENF = { ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' };
-  try {
-    const res = decide({
-      workspacePaths: [root],
-      toolCall: {
-        name: 'bash',
-        args: {
-          CommandLine: 'cat ~/.config/adlc/secrets/.auth-key',
-          TargetFile: 'notes.txt',
-        },
+  const res = decide({
+    workspacePaths: [root],
+    toolCall: {
+      name: 'bash',
+      args: {
+        CommandLine: 'cat ~/.config/adlc/secrets/.auth-key',
+        TargetFile: 'notes.txt',
       },
-    }, { env: ENF });
-    assert.equal(res.allow_tool, false);
-    assert.equal(res.decision, 'deny');
-    assert.match(res.deny_reason, /shell modification of ticket store or trust-root rails|strictly prohibited/i);
-  } finally {
-    try { rmSync(root, { recursive: true, force: true }); } catch {}
-  }
+    },
+  }, { env: ENF });
+  assert.equal(res.allow_tool, false);
+  assert.equal(res.decision, 'deny');
+  assert.match(res.deny_reason, /shell modification of ticket store or trust-root rails|strictly prohibited/i);
 });
 
-test('decide(): shell command reading master key or trust-root secret is denied even with ADLC_P4_ENFORCEMENT unset', () => {
-  const root = mkdtempSync(join(tmpdir(), 'adlc-decide-advisory-secret-'));
+test('decide(): shell command reading master key or trust-root secret is denied even with ADLC_P4_ENFORCEMENT unset', (t) => {
+  const root = tmp(t, 'gemini-decide-');
   const ADVISORY_ENV = { ADLC_TEST_MODE: '1' }; // No ADLC_P4_ENFORCEMENT
-  try {
-    const res = decide({
-      workspacePaths: [root],
-      toolCall: {
-        name: 'run_command',
-        args: {
-          CommandLine: 'cat ~/.config/adlc/secrets/.auth-key',
-        },
+  const res = decide({
+    workspacePaths: [root],
+    toolCall: {
+      name: 'run_command',
+      args: {
+        CommandLine: 'cat ~/.config/adlc/secrets/.auth-key',
       },
-    }, { env: ADVISORY_ENV });
-    assert.equal(res.allow_tool, false);
-    assert.equal(res.decision, 'deny');
-    assert.match(res.deny_reason, /shell modification of ticket store or trust-root rails|strictly prohibited/i);
+    },
+  }, { env: ADVISORY_ENV });
+  assert.equal(res.allow_tool, false);
+  assert.equal(res.decision, 'deny');
+  assert.match(res.deny_reason, /shell modification of ticket store or trust-root rails|strictly prohibited/i);
 
-    const res2 = decide({
-      workspacePaths: [root],
-      toolCall: {
-        name: 'run_command',
-        args: {
-          CommandLine: 'cat .adlc/.session-secret',
-        },
+  const res2 = decide({
+    workspacePaths: [root],
+    toolCall: {
+      name: 'run_command',
+      args: {
+        CommandLine: 'cat .adlc/.session-secret',
       },
-    }, { env: ADVISORY_ENV });
-    assert.equal(res2.allow_tool, false);
-    assert.equal(res2.decision, 'deny');
-    assert.match(res2.deny_reason, /shell modification of ticket store or trust-root rails|strictly prohibited/i);
-  } finally {
-    try { rmSync(root, { recursive: true, force: true }); } catch {}
-  }
+    },
+  }, { env: ADVISORY_ENV });
+  assert.equal(res2.allow_tool, false);
+  assert.equal(res2.decision, 'deny');
+  assert.match(res2.deny_reason, /shell modification of ticket store or trust-root rails|strictly prohibited/i);
 });
 
-test('decide(): shell command with relative symlink under non-default Cwd targeting secret is denied', () => {
-  const root = mkdtempSync(join(tmpdir(), 'adlc-decide-cwd-symlink-'));
+test('decide(): shell command with relative symlink under non-default Cwd targeting secret is denied', (t) => {
+  const root = tmp(t, 'gemini-decide-');
   const subDir = join(root, 'nested', 'subdir');
   mkdirSync(subDir, { recursive: true });
   const fakeSecretsDir = join(root, 'fake-home', '.config', 'adlc', 'secrets');
@@ -347,65 +342,53 @@ test('decide(): shell command with relative symlink under non-default Cwd target
   symlinkSync(fakeAuthKey, symlinkPath);
 
   const env = { ADLC_HOME_DIR: join(root, 'fake-home'), ADLC_TEST_MODE: '1' };
-  try {
-    const res = decide({
-      workspacePaths: [root],
-      toolCall: {
-        name: 'run_command',
-        args: {
-          CommandLine: 'cat secret-link',
-          Cwd: subDir,
-        },
+  const res = decide({
+    workspacePaths: [root],
+    toolCall: {
+      name: 'run_command',
+      args: {
+        CommandLine: 'cat secret-link',
+        Cwd: subDir,
       },
-    }, { env });
-    assert.equal(res.allow_tool, false);
-    assert.equal(res.decision, 'deny');
-    assert.match(res.deny_reason, /secret|strictly prohibited|symlink/i);
-  } finally {
-    try { rmSync(root, { recursive: true, force: true }); } catch {}
-  }
+    },
+  }, { env });
+  assert.equal(res.allow_tool, false);
+  assert.equal(res.decision, 'deny');
+  assert.match(res.deny_reason, /secret|strictly prohibited|symlink/i);
 });
 
-test('decide(): shell command with wildcard .master-k?y is denied', () => {
-  const root = mkdtempSync(join(tmpdir(), 'adlc-decide-wildcard-'));
-  try {
-    const res = decide({
-      workspacePaths: [root],
-      toolCall: {
-        name: 'run_command',
-        args: {
-          CommandLine: 'cat .master-k?y',
-        },
+test('decide(): shell command with wildcard .master-k?y is denied', (t) => {
+  const root = tmp(t, 'gemini-decide-');
+  const res = decide({
+    workspacePaths: [root],
+    toolCall: {
+      name: 'run_command',
+      args: {
+        CommandLine: 'cat .master-k?y',
       },
-    }, { env: { ADLC_TEST_MODE: '1' } });
-    assert.equal(res.allow_tool, false);
-    assert.equal(res.decision, 'deny');
-  } finally {
-    try { rmSync(root, { recursive: true, force: true }); } catch {}
-  }
+    },
+  }, { env: { ADLC_TEST_MODE: '1' } });
+  assert.equal(res.allow_tool, false);
+  assert.equal(res.decision, 'deny');
 });
 
-test('decide(): shell tool with array-valued command argument is denied for secret access', () => {
-  const root = mkdtempSync(join(tmpdir(), 'adlc-decide-array-cmd-'));
-  try {
-    const res = decide({
-      workspacePaths: [root],
-      toolCall: {
-        name: 'run_command',
-        args: {
-          cmd: ['cat', '~/.config/adlc/secrets/.auth-key'],
-        },
+test('decide(): shell tool with array-valued command argument is denied for secret access', (t) => {
+  const root = tmp(t, 'gemini-decide-');
+  const res = decide({
+    workspacePaths: [root],
+    toolCall: {
+      name: 'run_command',
+      args: {
+        cmd: ['cat', '~/.config/adlc/secrets/.auth-key'],
       },
-    }, { env: { ADLC_TEST_MODE: '1' } });
-    assert.equal(res.allow_tool, false);
-    assert.equal(res.decision, 'deny');
-  } finally {
-    try { rmSync(root, { recursive: true, force: true }); } catch {}
-  }
+    },
+  }, { env: { ADLC_TEST_MODE: '1' } });
+  assert.equal(res.allow_tool, false);
+  assert.equal(res.decision, 'deny');
 });
 
-test('decide(): extractCwdFromArgs prioritizes top-level Cwd over decoy nested dir', () => {
-  const root = mkdtempSync(join(tmpdir(), 'adlc-decide-decoy-cwd-'));
+test('decide(): extractCwdFromArgs prioritizes top-level Cwd over decoy nested dir', (t) => {
+  const root = tmp(t, 'gemini-decide-');
   const fakeSecretsDir = join(root, 'fake-home', '.config', 'adlc', 'secrets');
   mkdirSync(fakeSecretsDir, { recursive: true });
   const fakeAuthKey = join(fakeSecretsDir, '.auth-key');
@@ -415,170 +398,141 @@ test('decide(): extractCwdFromArgs prioritizes top-level Cwd over decoy nested d
   symlinkSync(fakeAuthKey, symlinkPath);
 
   const env = { ADLC_HOME_DIR: join(root, 'fake-home'), ADLC_TEST_MODE: '1' };
-  try {
-    const res = decide({
-      workspacePaths: [root],
-      toolCall: {
-        name: 'run_command',
-        args: {
-          CommandLine: 'cat decoy-secret-link',
-          Cwd: root,
-          decoy: { dir: '/tmp/empty-decoy-dir' },
-        },
+  const res = decide({
+    workspacePaths: [root],
+    toolCall: {
+      name: 'run_command',
+      args: {
+        CommandLine: 'cat decoy-secret-link',
+        Cwd: root,
+        decoy: { dir: '/tmp/empty-decoy-dir' },
       },
-    }, { env });
-    assert.equal(res.allow_tool, false);
-    assert.equal(res.decision, 'deny');
-    assert.match(res.deny_reason, /secret|strictly prohibited|symlink/i);
-  } finally {
-    try { rmSync(root, { recursive: true, force: true }); } catch {}
-  }
+    },
+  }, { env });
+  assert.equal(res.allow_tool, false);
+  assert.equal(res.decision, 'deny');
+  assert.match(res.deny_reason, /secret|strictly prohibited|symlink/i);
 });
 
-test('decide(): structured write targeting node binary is denied as trust root violation', () => {
-  const root = mkdtempSync(join(tmpdir(), 'adlc-decide-node-target-'));
-  try {
-    const res = decide({
-      workspacePaths: [root],
-      toolCall: {
-        name: 'write_to_file',
-        args: {
-          TargetFile: process.execPath,
-          CodeContent: '#!/bin/sh\necho "fake node"\nexit 0\n',
-        },
+test('decide(): structured write targeting node binary is denied as trust root violation', (t) => {
+  const root = tmp(t, 'gemini-decide-');
+  const res = decide({
+    workspacePaths: [root],
+    toolCall: {
+      name: 'write_to_file',
+      args: {
+        TargetFile: process.execPath,
+        CodeContent: '#!/bin/sh\necho "fake node"\nexit 0\n',
       },
-    }, { env: { ADLC_TEST_MODE: '1' } });
-    assert.equal(res.allow_tool, false);
-    assert.equal(res.decision, 'deny');
-    assert.match(res.deny_reason, /strictly prohibited|trust-root/i);
-  } finally {
-    try { rmSync(root, { recursive: true, force: true }); } catch {}
-  }
+    },
+  }, { env: { ADLC_TEST_MODE: '1' } });
+  assert.equal(res.allow_tool, false);
+  assert.equal(res.decision, 'deny');
+  assert.match(res.deny_reason, /strictly prohibited|trust-root/i);
 });
 
-test('decide(): shell command with bare .. (e.g. cd ..) is denied under enforcement', () => {
-  const root = mkdtempSync(join(tmpdir(), 'adlc-decide-bare-dotdot-'));
-  try {
-    const res = decide({
-      workspacePaths: [root],
-      toolCall: {
-        name: 'run_command',
-        args: {
-          CommandLine: 'cd ..; ls',
-        },
+test('decide(): shell command with bare .. (e.g. cd ..) is denied under enforcement', (t) => {
+  const root = tmp(t, 'gemini-decide-');
+  const res = decide({
+    workspacePaths: [root],
+    toolCall: {
+      name: 'run_command',
+      args: {
+        CommandLine: 'cd ..; ls',
       },
-    }, { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' } });
-    assert.equal(res.allow_tool, false);
-    assert.equal(res.decision, 'deny');
-    assert.match(res.deny_reason, /outside workspace|escapes/i);
-  } finally {
-    try { rmSync(root, { recursive: true, force: true }); } catch {}
-  }
+    },
+  }, { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' } });
+  assert.equal(res.allow_tool, false);
+  assert.equal(res.decision, 'deny');
+  assert.match(res.deny_reason, /outside workspace|escapes/i);
 });
 
-test('decide(): shell command with absolute path outside workspace is denied under containment check', () => {
-  const root = mkdtempSync(join(tmpdir(), 'adlc-decide-containment-'));
-  try {
-    const res = decide({
-      workspacePaths: [root],
-      toolCall: {
-        name: 'run_command',
-        args: {
-          CommandLine: 'cat /opt/secrets/prod.env',
-          Cwd: root,
-        },
+test('decide(): shell command with absolute path outside workspace is denied under containment check', (t) => {
+  const root = tmp(t, 'gemini-decide-');
+  const res = decide({
+    workspacePaths: [root],
+    toolCall: {
+      name: 'run_command',
+      args: {
+        CommandLine: 'cat /opt/secrets/prod.env',
+        Cwd: root,
       },
-    }, { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' } });
-    assert.equal(res.allow_tool, false);
-    assert.equal(res.decision, 'deny');
-    assert.match(res.deny_reason, /outside workspace/i);
-  } finally {
-    try { rmSync(root, { recursive: true, force: true }); } catch {}
-  }
+    },
+  }, { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' } });
+  assert.equal(res.allow_tool, false);
+  assert.equal(res.decision, 'deny');
+  assert.match(res.deny_reason, /outside workspace/i);
 });
 
-test('decide(): structured write targeting node_modules/.bin/mocha or test runner configs is denied as trust root violation', () => {
-  const root = mkdtempSync(join(tmpdir(), 'adlc-decide-mocha-target-'));
-  try {
-    const res1 = decide({
-      workspacePaths: [root],
-      toolCall: {
-        name: 'write_to_file',
-        args: {
-          TargetFile: join(root, 'node_modules/.bin/mocha'),
-          CodeContent: '#!/bin/sh\nexit 0\n',
-        },
+test('decide(): structured write targeting node_modules/.bin/mocha or test runner configs is denied as trust root violation', (t) => {
+  const root = tmp(t, 'gemini-decide-');
+  const res1 = decide({
+    workspacePaths: [root],
+    toolCall: {
+      name: 'write_to_file',
+      args: {
+        TargetFile: join(root, 'node_modules/.bin/mocha'),
+        CodeContent: '#!/bin/sh\nexit 0\n',
       },
-    }, { env: { ADLC_TEST_MODE: '1' } });
-    assert.equal(res1.allow_tool, false);
-    assert.equal(res1.decision, 'deny');
-    assert.match(res1.deny_reason, /strictly prohibited|trust-root/i);
+    },
+  }, { env: { ADLC_TEST_MODE: '1' } });
+  assert.equal(res1.allow_tool, false);
+  assert.equal(res1.decision, 'deny');
+  assert.match(res1.deny_reason, /strictly prohibited|trust-root/i);
 
-    const res2 = decide({
-      workspacePaths: [root],
-      toolCall: {
-        name: 'write_to_file',
-        args: {
-          TargetFile: join(root, '.mocharc.json'),
-          CodeContent: '{"timeout": 1000}\n',
-        },
+  const res2 = decide({
+    workspacePaths: [root],
+    toolCall: {
+      name: 'write_to_file',
+      args: {
+        TargetFile: join(root, '.mocharc.json'),
+        CodeContent: '{"timeout": 1000}\n',
       },
-    }, { env: { ADLC_TEST_MODE: '1' } });
-    assert.equal(res2.allow_tool, false);
-    assert.equal(res2.decision, 'deny');
-    assert.match(res2.deny_reason, /strictly prohibited|trust-root/i);
-  } finally {
-    try { rmSync(root, { recursive: true, force: true }); } catch {}
-  }
+    },
+  }, { env: { ADLC_TEST_MODE: '1' } });
+  assert.equal(res2.allow_tool, false);
+  assert.equal(res2.decision, 'deny');
+  assert.match(res2.deny_reason, /strictly prohibited|trust-root/i);
 });
 
-test('checkRail: denies write to absolute out-of-repo ADLC_TICKET_STORE path on its own', () => {
-  const root = mkdtempSync(join(tmpdir(), 'adlc-cr-repo-'));
-  const externalDir = mkdtempSync(join(tmpdir(), 'adlc-cr-external-'));
+test('checkRail: denies write to absolute out-of-repo ADLC_TICKET_STORE path on its own', (t) => {
+  const root = tmp(t, 'gemini-decide-');
+  const externalDir = tmp(t, 'gemini-decide-');
   const extStore = join(externalDir, 'tickets.json');
   writeFileSync(extStore, JSON.stringify({
     version: 1,
     activeTicket: 'T-EXT',
     tickets: [{ id: 'T-EXT', title: 'External Ticket', status: 'open', rails: ['src/frozen/**'] }],
   }));
-  try {
-    const res = checkRail({
-      filePath: extStore,
-      tool: 'write_to_file',
-      toolArgs: { TargetFile: extStore },
-      root,
-      env: { ADLC_TICKET_STORE: extStore, ADLC_TICKET: 'T-EXT', ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' },
-    });
-    assert.equal(res.decision, 'deny');
-    assert.match(res.reason, /frozen rail/i);
-  } finally {
-    try { rmSync(root, { recursive: true, force: true }); } catch {}
-    try { rmSync(externalDir, { recursive: true, force: true }); } catch {}
-  }
+  const res = checkRail({
+    filePath: extStore,
+    tool: 'write_to_file',
+    toolArgs: { TargetFile: extStore },
+    root,
+    env: { ADLC_TICKET_STORE: extStore, ADLC_TICKET: 'T-EXT', ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' },
+  });
+  assert.equal(res.decision, 'deny');
+  assert.match(res.reason, /frozen rail/i);
 });
 
-test('decide: PURE_READS tool carrying write-target or command args degrades to other and is denied if targeting frozen rail', () => {
-  const root = adlcRepo({ rails: ['frozen.txt'], id: 'T1' });
-  try {
-    const res = decide({
-      workspacePaths: [root],
-      toolCall: {
-        name: 'view_file',
-        args: {
-          TargetFile: join(root, 'frozen.txt'),
-        },
+test('decide: PURE_READS tool carrying write-target or command args degrades to other and is denied if targeting frozen rail', (t) => {
+  const root = adlcRepo(t, { rails: ['frozen.txt'], id: 'T1' });
+  const res = decide({
+    workspacePaths: [root],
+    toolCall: {
+      name: 'view_file',
+      args: {
+        TargetFile: join(root, 'frozen.txt'),
       },
-    }, { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' } });
-    assert.equal(res.allow_tool, false);
-    assert.equal(res.decision, 'deny');
-    assert.match(res.deny_reason, /frozen rail/i);
-  } finally {
-    try { rmSync(root, { recursive: true, force: true }); } catch {}
-  }
+    },
+  }, { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' } });
+  assert.equal(res.allow_tool, false);
+  assert.equal(res.decision, 'deny');
+  assert.match(res.deny_reason, /frozen rail/i);
 });
 
-test('checkBuildGate and decide: under ADLC_P4_ENFORCEMENT=1 with transcript containing prior shell calls', () => {
-  const root = adlcRepo({ rails: ['frozen.txt'], id: 'T1' });
+test('checkBuildGate and decide: under ADLC_P4_ENFORCEMENT=1 with transcript containing prior shell calls', (t) => {
+  const root = adlcRepo(t, { rails: ['frozen.txt'], id: 'T1' });
   const transcriptFile = join(root, 'transcript.jsonl');
   writeFileSync(transcriptFile, [
     JSON.stringify({
@@ -587,23 +541,19 @@ test('checkBuildGate and decide: under ADLC_P4_ENFORCEMENT=1 with transcript con
       exit_code: 0,
     }),
   ].join('\n') + '\n');
-  try {
-    const res = decide({
-      workspacePaths: [root],
-      transcriptPath: transcriptFile,
-      conversationId: 'test-session-shell-trans',
-      toolCall: {
-        name: 'run_command',
-        args: {
-          CommandLine: 'ls',
-          Cwd: root,
-        },
+  const res = decide({
+    workspacePaths: [root],
+    transcriptPath: transcriptFile,
+    conversationId: 'test-session-shell-trans',
+    toolCall: {
+      name: 'run_command',
+      args: {
+        CommandLine: 'ls',
+        Cwd: root,
       },
-    }, { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' } });
-    assert.equal(res.allow_tool, true);
-  } finally {
-    try { rmSync(root, { recursive: true, force: true }); } catch {}
-  }
+    },
+  }, { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' } });
+  assert.equal(res.allow_tool, true);
 });
 
 test('canonicalizeExisting: falsy and non-string input is returned unchanged, without attempting resolution', () => {
@@ -614,19 +564,15 @@ test('canonicalizeExisting: falsy and non-string input is returned unchanged, wi
   assert.equal(canonicalizeExisting(''), '');
 });
 
-test('canonicalizeExisting: an existing symlinked path resolves through the symlink', () => {
-  const root = mkdtempSync(join(tmpdir(), 'agy-canon-'));
-  try {
-    const real = join(root, 'real-target');
-    mkdirSync(real, { recursive: true });
-    const link = join(root, 'link-to-real');
-    symlinkSync(real, link);
-    const resolved = canonicalizeExisting(link);
-    assert.equal(resolved, realpathSync(link));
-    assert.notEqual(resolved, link);
-  } finally {
-    try { rmSync(root, { recursive: true, force: true }); } catch {}
-  }
+test('canonicalizeExisting: an existing symlinked path resolves through the symlink', (t) => {
+  const root = tmp(t, 'gemini-decide-');
+  const real = join(root, 'real-target');
+  mkdirSync(real, { recursive: true });
+  const link = join(root, 'link-to-real');
+  symlinkSync(real, link);
+  const resolved = canonicalizeExisting(link);
+  assert.equal(resolved, realpathSync(link));
+  assert.notEqual(resolved, link);
 });
 
 
