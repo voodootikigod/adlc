@@ -11,10 +11,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, cpSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, cpSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmp } from '@adlc/core/test-kit';
 import { runHook } from './helpers/run-hook.mjs';
 
 const HOOKS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -31,7 +31,7 @@ function setupHighRiskDegradedRepo(root) {
   return transcriptPath;
 }
 
-test('adlc-build-gate.mjs still enforces (denies) a high-risk degraded session when its OWN install path contains a space', () => {
+test('adlc-build-gate.mjs still enforces (denies) a high-risk degraded session when its OWN install path contains a space', (t) => {
   // Copy the whole hooks directory (not just the one file) — the hook
   // imports several sibling modules at its own relative paths.
   //
@@ -44,44 +44,39 @@ test('adlc-build-gate.mjs still enforces (denies) a high-risk degraded session w
   // failure this repo's own prior sessions have hit before. Resolving the
   // base once, then adding the space segment UNDER the resolved path, keeps
   // both sides of the real isMain comparison consistent.
-  const spaceBase = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-build-gate-space-base-')));
+  const spaceBase = tmp(t, 'adlc-build-gate-space-base-');
   const spaceRoot = join(spaceBase, 'adlc build gate space');
   mkdirSync(spaceRoot, { recursive: true });
-  const repoRoot = mkdtempSync(join(tmpdir(), 'adlc-build-gate-space-repo-'));
+  const repoRoot = tmp(t, 'adlc-build-gate-space-repo-');
+  const hooksCopy = join(spaceRoot, 'hooks');
+  cpSync(HOOKS_DIR, hooksCopy, { recursive: true });
+  const hookCopyPath = join(hooksCopy, 'adlc-build-gate.mjs');
+
+  const transcriptPath = setupHighRiskDegradedRepo(repoRoot);
+
+  const env = {
+    ...process.env,
+    NODE_PATH: [join(REPO_ROOT, 'node_modules'), process.env.NODE_PATH].filter(Boolean).join(':'),
+  };
+  const payload = { tool_name: 'apply_patch', transcript_path: transcriptPath, file_path: join(repoRoot, 'src', 'app.mjs') };
+
+  let status = 0;
+  let stderr = '';
   try {
-    const hooksCopy = join(spaceRoot, 'hooks');
-    cpSync(HOOKS_DIR, hooksCopy, { recursive: true });
-    const hookCopyPath = join(hooksCopy, 'adlc-build-gate.mjs');
-
-    const transcriptPath = setupHighRiskDegradedRepo(repoRoot);
-
-    const env = {
-      ...process.env,
-      NODE_PATH: [join(REPO_ROOT, 'node_modules'), process.env.NODE_PATH].filter(Boolean).join(':'),
-    };
-    const payload = { tool_name: 'apply_patch', transcript_path: transcriptPath, file_path: join(repoRoot, 'src', 'app.mjs') };
-
-    let status = 0;
-    let stderr = '';
-    try {
-      runHook([hookCopyPath], {
-        input: JSON.stringify(payload),
-        encoding: 'utf8',
-        cwd: repoRoot,
-        env,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-    } catch (e) {
-      status = e.status ?? 1;
-      stderr = e.stderr ?? '';
-    }
-
-    // A high-risk ticket at HARD_DEPTH (50 tool calls, well past the 40
-    // threshold) MUST be denied (status 2). Before the fix, main() silently
-    // never ran from a space-containing path and the process exited 0.
-    assert.equal(status, 2, `expected deny (status 2) from a space-containing install path, got status=${status} stderr=${stderr}`);
-  } finally {
-    rmSync(spaceBase, { recursive: true, force: true });
-    rmSync(repoRoot, { recursive: true, force: true });
+    runHook([hookCopyPath], {
+      input: JSON.stringify(payload),
+      encoding: 'utf8',
+      cwd: repoRoot,
+      env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch (e) {
+    status = e.status ?? 1;
+    stderr = e.stderr ?? '';
   }
+
+  // A high-risk ticket at HARD_DEPTH (50 tool calls, well past the 40
+  // threshold) MUST be denied (status 2). Before the fix, main() silently
+  // never ran from a space-containing path and the process exited 0.
+  assert.equal(status, 2, `expected deny (status 2) from a space-containing install path, got status=${status} stderr=${stderr}`);
 });

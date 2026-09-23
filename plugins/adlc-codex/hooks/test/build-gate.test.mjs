@@ -6,10 +6,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, symlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, symlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmp } from '@adlc/core/test-kit';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-build-gate.mjs');
 
@@ -26,13 +26,16 @@ const REAL_ADLC_SCRIPT = join(
   dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..',
   'node_modules', '@adlc', 'cli', 'bin', 'adlc.mjs',
 );
-const TRUSTED_BIN_DIR = mkdtempSync(join(tmpdir(), 'adlc-build-gate-trusted-bin-'));
-symlinkSync(REAL_ADLC_SCRIPT, join(TRUSTED_BIN_DIR, 'adlc'));
 
-function withAdlcOnPath(fn) {
+function withAdlcOnPath(t, fn) {
+  const trustedBinDir = tmp(t, 'adlc-build-gate-trusted-bin-');
+  symlinkSync(REAL_ADLC_SCRIPT, join(trustedBinDir, 'adlc'));
   const prev = process.env.PATH;
-  process.env.PATH = `${TRUSTED_BIN_DIR}:${prev ?? ''}`;
-  try { return fn(); } finally { process.env.PATH = prev; }
+  process.env.PATH = `${trustedBinDir}:${prev ?? ''}`;
+  t.after(() => {
+    process.env.PATH = prev;
+  });
+  return fn();
 }
 
 import {
@@ -217,15 +220,11 @@ test('MAX_SCAN_BYTES is exactly 8 MiB, matching DEFAULT_BYTES_THRESHOLD (Round-9
   assert.ok(scanBytes >= 8 * 1024 * 1024, 'scan window must be at least the byte threshold');
 });
 
-function withTempTranscript(content, fn) {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-build-gate-'));
+function withTempTranscript(t, content, fn) {
+  const dir = tmp(t, 'adlc-build-gate-');
   const path = join(dir, 'transcript.jsonl');
   writeFileSync(path, content);
-  try {
-    return fn(path, dir);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  return fn(path, dir);
 }
 
 test('decide: normal-risk ticket is always allowed, no transcript needed', () => {
@@ -233,25 +232,25 @@ test('decide: normal-risk ticket is always allowed, no transcript needed', () =>
   assert.equal(result.decision, 'allow');
 });
 
-test('decide: high-risk ticket in a shallow session is allowed', () => {
-  withTempTranscript('a couple of tool calls\n"type":"tool_use"\n', (path) => {
+test('decide: high-risk ticket in a shallow session is allowed', (t) => {
+  withTempTranscript(t, 'a couple of tool calls\n"type":"tool_use"\n', (path) => {
     const result = decide({ ticket: { id: 'T2', risk: 'high' }, transcriptPath: path, bypassRequested: false });
     assert.equal(result.decision, 'allow');
   });
 });
 
-test('decide: high-risk ticket in a degraded (deep) session is denied', () => {
+test('decide: high-risk ticket in a degraded (deep) session is denied', (t) => {
   const deep = Array.from({ length: 50 }, () => '"type": "tool_use"').join('\n');
-  withTempTranscript(deep, (path) => {
+  withTempTranscript(t, deep, (path) => {
     const result = decide({ ticket: { id: 'T2', risk: 'high' }, transcriptPath: path, bypassRequested: false });
     assert.equal(result.decision, 'deny');
     assert.match(result.reason, /ADLC_BUILD_GATE_BYPASS/);
   });
 });
 
-test('decide: high-risk + degraded + bypass requested returns pending-bypass, not a silent allow', () => {
+test('decide: high-risk + degraded + bypass requested returns pending-bypass, not a silent allow', (t) => {
   const deep = Array.from({ length: 50 }, () => '"type": "tool_use"').join('\n');
-  withTempTranscript(deep, (path) => {
+  withTempTranscript(t, deep, (path) => {
     const result = decide({ ticket: { id: 'T2', risk: 'high' }, transcriptPath: path, bypassRequested: true });
     assert.equal(result.decision, 'pending-bypass');
     assert.equal(typeof result.depth, 'number');
@@ -269,7 +268,7 @@ test('decide: high-risk ticket with unreadable transcript_path fails closed (den
   assert.equal(result.decision, 'deny');
 });
 
-test('decide: deep tool-call history EARLY in a transcript, pushed out of the old 256 KiB window by later padding, is still denied (Round-9 regression)', () => {
+test('decide: deep tool-call history EARLY in a transcript, pushed out of the old 256 KiB window by later padding, is still denied (Round-9 regression)', (t) => {
   // Round-9 review: DEFAULT_BYTES_THRESHOLD was recalibrated to 8 MiB, but if
   // the depth-counting SCAN WINDOW had stayed at the old 256 KiB, a
   // transcript sized between 256 KiB and 8 MiB with its real tool-call depth
@@ -281,34 +280,26 @@ test('decide: deep tool-call history EARLY in a transcript, pushed out of the ol
   // (under the new 8 MiB byte threshold, over the OLD 256 KiB window).
   const deep = Array.from({ length: 50 }, () => '"type": "tool_use"').join('\n');
   const padding = 'x'.repeat(500 * 1024);
-  withTempTranscript(`${deep}\n${padding}`, (path) => {
+  withTempTranscript(t, `${deep}\n${padding}`, (path) => {
     const result = decide({ ticket: { id: 'T2', risk: 'high' }, transcriptPath: path, bypassRequested: false });
     assert.equal(result.decision, 'deny', `expected the early tool-call depth to still be counted; got: ${JSON.stringify(result)}`);
   });
 });
 
-test('recordBuildGateBypass writes a real build-gate-bypass entry to the gate-manifest', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-build-gate-manifest-'));
-  try {
-    mkdirSync(join(dir, '.adlc'), { recursive: true });
-    const ok = withAdlcOnPath(() => recordBuildGateBypass('T2', ['declared-risk-high'], 55, 300000, { cwd: dir }));
-    assert.equal(ok, true);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('recordBuildGateBypass writes a real build-gate-bypass entry to the gate-manifest', (t) => {
+  const dir = tmp(t, 'adlc-build-gate-manifest-');
+  mkdirSync(join(dir, '.adlc'), { recursive: true });
+  const ok = withAdlcOnPath(t, () => recordBuildGateBypass('T2', ['declared-risk-high'], 55, 300000, { cwd: dir }));
+  assert.equal(ok, true);
 });
 
-test('recordBuildGateBypass returns false (never throws) when the adlc CLI cannot write', () => {
+test('recordBuildGateBypass returns false (never throws) when the adlc CLI cannot write', (t) => {
   // A cwd with no writable .adlc parent (a file where a directory is expected)
   // simulates an unrecordable override — must report false, not throw. The PATH
   // shim matters here too: without a resolvable adlc this passes VACUOUSLY via
   // spawn-ENOENT instead of exercising the real cannot-write branch it names.
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-build-gate-fail-'));
-  try {
-    writeFileSync(join(dir, '.adlc'), 'not a directory'); // .adlc is a FILE, not writable as a dir
-    const ok = withAdlcOnPath(() => recordBuildGateBypass('T2', ['declared-risk-high'], 55, 300000, { cwd: dir }));
-    assert.equal(ok, false);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const dir = tmp(t, 'adlc-build-gate-fail-');
+  writeFileSync(join(dir, '.adlc'), 'not a directory'); // .adlc is a FILE, not writable as a dir
+  const ok = withAdlcOnPath(t, () => recordBuildGateBypass('T2', ['declared-risk-high'], 55, 300000, { cwd: dir }));
+  assert.equal(ok, false);
 });
