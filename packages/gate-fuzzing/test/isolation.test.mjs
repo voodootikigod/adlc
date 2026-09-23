@@ -17,10 +17,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync, writeFileSync, readdirSync } from 'node:fs';
+import { rmSync, existsSync, writeFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { tmp, gitRepo } from '@adlc/core/test-kit';
 
 import { detectSandbox } from '../lib/sandbox.mjs';
 import { makeProvisionFn } from '../lib/provision.mjs';
@@ -30,20 +31,11 @@ import { classifyCandidate } from '../lib/classify.mjs';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-function makeSourceRepo() {
-  const root = mkdtempSync(join(tmpdir(), 'gf-src-repo-'));
-  const g = (args) => {
-    const r = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', ...args], {
-      cwd: root, encoding: 'utf8', stdio: 'pipe',
-    });
-    if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
-  };
-  g(['init', '-q']);
-  g(['config', 'user.email', 'test@example.com']);
-  g(['config', 'user.name', 'Test']);
+function makeSourceRepo(t) {
+  const { dir: root, git } = gitRepo(t, { prefix: 'gf-src-repo-' });
   writeFileSync(join(root, 'rail.txt'), 'frozen content\n');
-  g(['add', '-A']);
-  g(['commit', '-q', '-m', 'init']);
+  git('add', '-A');
+  git('commit', '-q', '-m', 'init');
   return root;
 }
 
@@ -56,10 +48,11 @@ const sandboxType = detectSandbox();
 
 // ── test 1: hostile setup/witness is confined to the clone ──────────────────────
 
-test('candidate setup writing a sentinel cannot escape to source repo / cwd; clone is cleaned up', async () => {
-  const sourceRepo = makeSourceRepo();
+test('candidate setup writing a sentinel cannot escape to source repo / cwd; clone is cleaned up', async (t) => {
+  const sourceRepo = makeSourceRepo(t);
   const escapePath = join(sourceRepo, 'PWNED');           // absolute escape target
   const sentinelRel = 'PWNED';                            // relative (cwd) target
+  t.after(() => destroyCwdSentinel(sentinelRel));
 
   // Candidate diff touches the rail; setup tries to plant a sentinel both at the
   // source repo (absolute escape) and at the clone cwd (relative).
@@ -100,51 +93,46 @@ test('candidate setup writing a sentinel cannot escape to source repo / cwd; clo
     baselineRef: 'HEAD',
   });
 
-  try {
-    if (!sandboxType) {
-      // REFUSE path: provisionClone must throw (no sandbox, not unsafe) rather
-      // than silently executing the hostile setup. provisionFn surfaces .error.
-      return await assertRefuseWithoutSandbox(provisionFn, candidate, sourceRepo, escapePath);
-    }
-
-    // Sandbox available: drive the real provision + classify lifecycle directly
-    // (one candidate, one round) so the hostile commands actually run sandboxed.
-    const before = countLeftoverClones();
-    const provisioned = await provisionFn(candidate);
-    let cloneDir = provisioned.cloneDir;
-    try {
-      assert.ok(cloneDir, 'a clone dir must have been created');
-      // The clone existed during the run.
-      // (setup already ran inside provisionClone)
-    } finally {
-      provisioned.destroy();
-    }
-
-    // The sentinel must NOT have escaped to the source repo (absolute path).
-    assert.ok(
-      !existsSync(escapePath),
-      `SECURITY FAILURE: hostile write escaped the sandbox to ${escapePath}`,
-    );
-    // The sentinel must NOT appear in the test process cwd (relative path).
-    assert.ok(
-      !existsSync(join(process.cwd(), sentinelRel)),
-      'SECURITY FAILURE: hostile write landed in the test cwd',
-    );
-    // The clone dir must be gone (destroy ran).
-    assert.ok(!existsSync(cloneDir), 'clone dir must be removed after destroy()');
-    // No net new leftover clones.
-    const after = countLeftoverClones();
-    assert.ok(after <= before, `leftover clone dirs: before=${before} after=${after}`);
-  } finally {
-    destroyCwdSentinel(sentinelRel);
-    rmSync(sourceRepo, { recursive: true, force: true });
+  if (!sandboxType) {
+    // REFUSE path: provisionClone must throw (no sandbox, not unsafe) rather
+    // than silently executing the hostile setup. provisionFn surfaces .error.
+    return await assertRefuseWithoutSandbox(provisionFn, candidate, sourceRepo, escapePath);
   }
+
+  // Sandbox available: drive the real provision + classify lifecycle directly
+  // (one candidate, one round) so the hostile commands actually run sandboxed.
+  const before = countLeftoverClones();
+  const provisioned = await provisionFn(candidate);
+  let cloneDir = provisioned.cloneDir;
+  try {
+    assert.ok(cloneDir, 'a clone dir must have been created');
+    // The clone existed during the run.
+    // (setup already ran inside provisionClone)
+  } finally {
+    provisioned.destroy();
+  }
+
+  // The sentinel must NOT have escaped to the source repo (absolute path).
+  assert.ok(
+    !existsSync(escapePath),
+    `SECURITY FAILURE: hostile write escaped the sandbox to ${escapePath}`,
+  );
+  // The sentinel must NOT appear in the test process cwd (relative path).
+  assert.ok(
+    !existsSync(join(process.cwd(), sentinelRel)),
+    'SECURITY FAILURE: hostile write landed in the test cwd',
+  );
+  // The clone dir must be gone (destroy ran).
+  assert.ok(!existsSync(cloneDir), 'clone dir must be removed after destroy()');
+  // No net new leftover clones.
+  const after = countLeftoverClones();
+  assert.ok(after <= before, `leftover clone dirs: before=${before} after=${after}`);
 });
 
 // ── test 2: refuse-without-sandbox is explicit (not a silent cwd run) ────────────
 
-test('no sandbox binary → provisionClone REFUSES to run candidate setup (no silent cwd execution)', () => {
-  const sourceRepo = makeSourceRepo();
+test('no sandbox binary → provisionClone REFUSES to run candidate setup (no silent cwd execution)', (t) => {
+  const sourceRepo = makeSourceRepo(t);
   const escapePath = join(sourceRepo, 'PWNED-REFUSE');
   const candidate = {
     target: 'g',
@@ -154,35 +142,31 @@ test('no sandbox binary → provisionClone REFUSES to run candidate setup (no si
     witnessProposal: { cmd: 'node', args: ['-e', 'process.exit(1)'] },
   };
 
-  try {
-    // Force the no-sandbox branch by passing sandboxType=null and unsafe=false.
-    assert.throws(
-      () => provisionClone(candidate, {
-        repoRoot: sourceRepo,
-        sandboxType: null,
-        unsafeNoSandbox: false,
-      }),
-      /No OS sandbox binary/i,
-      'must refuse to run candidate setup without a sandbox',
-    );
-    // The hostile setup must NOT have run.
-    assert.ok(!existsSync(escapePath), 'refuse path must not execute hostile setup');
-  } finally {
-    rmSync(sourceRepo, { recursive: true, force: true });
-  }
+  // Force the no-sandbox branch by passing sandboxType=null and unsafe=false.
+  assert.throws(
+    () => provisionClone(candidate, {
+      repoRoot: sourceRepo,
+      sandboxType: null,
+      unsafeNoSandbox: false,
+    }),
+    /No OS sandbox binary/i,
+    'must refuse to run candidate setup without a sandbox',
+  );
+  // The hostile setup must NOT have run.
+  assert.ok(!existsSync(escapePath), 'refuse path must not execute hostile setup');
 });
 
 // ── test 3: clone is always destroyed even when classify throws ─────────────────
 
-test('clone is destroyed even when classify throws mid-run (finally cleanup)', async () => {
-  const sourceRepo = makeSourceRepo();
+test('clone is destroyed even when classify throws mid-run (finally cleanup)', async (t) => {
+  const sourceRepo = makeSourceRepo(t);
   let capturedCloneDir = null;
 
   const provisionFn = async (cand) => {
     if (!sandboxType) {
       // Without sandbox, simulate provision with a throwaway dir to test the
       // finally-destroy contract deterministically.
-      const dir = mkdtempSync(join(tmpdir(), 'gf-clone-'));
+      const dir = tmp(t, 'gf-clone-');
       capturedCloneDir = dir;
       return { cloneDir: dir, runGateFn: () => ({ exitCode: 0 }), runWitnessFn: () => ({ status: 0, timedOut: false }), oracleFn: () => ({ independent: false, source: 'unwitnessed' }), destroy: () => destroyClone(dir) };
     }
@@ -205,21 +189,16 @@ test('clone is destroyed even when classify throws mid-run (finally cleanup)', a
     witnessProposal: { cmd: 'node', args: ['-e', 'process.exit(1)'] }, setup: [],
   }) }];
 
-  try {
-    await assert.rejects(
-      runLoop(
-        [{ name: 'g', surface: ['**'], claims: ['freeze-integrity'], run: ['node', '-e', 'process.exit(0)'] }],
-        { dir: sourceRepo },
-        { fanFn, classifyFn: throwingClassify, provisionFn, maxRounds: 1, dryRounds: 1, tokenBudget: 1e9, maxFailRate: 0.9, n: 1 },
-      ),
-      /boom/,
-    );
-    assert.ok(capturedCloneDir, 'a clone dir should have been provisioned');
-    assert.ok(!existsSync(capturedCloneDir), 'clone must be destroyed even when classify throws');
-  } finally {
-    if (capturedCloneDir) destroyClone(capturedCloneDir);
-    rmSync(sourceRepo, { recursive: true, force: true });
-  }
+  await assert.rejects(
+    runLoop(
+      [{ name: 'g', surface: ['**'], claims: ['freeze-integrity'], run: ['node', '-e', 'process.exit(0)'] }],
+      { dir: sourceRepo },
+      { fanFn, classifyFn: throwingClassify, provisionFn, maxRounds: 1, dryRounds: 1, tokenBudget: 1e9, maxFailRate: 0.9, n: 1 },
+    ),
+    /boom/,
+  );
+  assert.ok(capturedCloneDir, 'a clone dir should have been provisioned');
+  assert.ok(!existsSync(capturedCloneDir), 'clone must be destroyed even when classify throws');
 });
 
 // ── shared helpers ──────────────────────────────────────────────────────────────

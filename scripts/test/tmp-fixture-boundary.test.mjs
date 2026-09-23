@@ -44,10 +44,6 @@ const ALLOWLIST = new Set([
   'packages/fleet/test/status-schema.test.mjs',
   'packages/fleet/test/status.test.mjs',
   'packages/fleet/test/synthetic-home-bwrap.test.mjs',
-  'packages/gate-fuzzing/test/isolation.test.mjs',
-  'packages/hollow-test/test/hollow-test.test.mjs',
-  'packages/hollow-test/test/unit.test.mjs',
-  'packages/quartermaster/test/registry-isolation.test.mjs',
 
   'plugins/adlc-claude-code/hooks/test/handoff-continuation-start.test.mjs',
   'plugins/adlc-claude-code/hooks/test/handoff-resolve-global.test.mjs',

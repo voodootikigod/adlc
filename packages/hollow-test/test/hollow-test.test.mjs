@@ -1,11 +1,10 @@
 // hollow-test/test/hollow-test.test.mjs
-// CLI integration tests. Uses mkdtempSync scratch git repos with real
+// CLI integration tests. Uses @adlc/core/test-kit scratch git repos with real
 // node:test test files. No network, no API keys.
 
-import { describe, it, before, after } from 'node:test';
+import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  mkdtempSync,
   rmSync,
   writeFileSync,
   readFileSync,
@@ -13,10 +12,10 @@ import {
   symlinkSync,
   existsSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { symlinkSync as linkSync, lstatSync } from 'node:fs';
+import { tmp, gitRepo } from '@adlc/core/test-kit';
 
 // ── git helpers ──────────────────────────────────────────────────────────────
 
@@ -302,13 +301,9 @@ function runCli(args, cwd) {
 describe('CLI: strong tests (all mutants killed)', () => {
   let dir;
 
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-strong-'));
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-strong-');
     createStrongTestRepo(dir);
-  });
-
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
   });
 
   it('exits 0 when all mutants are killed', () => {
@@ -367,13 +362,9 @@ describe('CLI: strong tests (all mutants killed)', () => {
 describe('CLI: weak tests (survivors detected)', () => {
   let dir;
 
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-weak-'));
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-weak-');
     createWeakTestRepo(dir);
-  });
-
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
   });
 
   it('exits 2 when mutants survive', () => {
@@ -413,18 +404,14 @@ describe('CLI: weak tests (survivors detected)', () => {
 describe('CLI: dirty tree rejection', () => {
   let dir;
 
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-dirty-'));
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-dirty-');
     initRepo(dir);
     mkdirSync(join(dir, 'src'));
     writeFileSync(join(dir, 'src', 'x.mjs'), 'export const x = 1;\n');
     git(['add', '-A'], dir);
     git(['commit', '-m', 'init'], dir);
     writeFileSync(join(dir, 'src', 'x.mjs'), 'export const x = 2;\n'); // dirty
-  });
-
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
   });
 
   it('exits 1 with dirty tree', () => {
@@ -445,14 +432,10 @@ describe('CLI: dirty tree rejection', () => {
 describe('CLI: red baseline rejection', () => {
   let dir;
 
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-redbase-'));
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-redbase-');
     // A normal strong repo gives us a real diff with mutable targets.
     createStrongTestRepo(dir);
-  });
-
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
   });
 
   it('exits 1 (baseline not green), NOT 0, when --test-cmd is always-failing', () => {
@@ -494,8 +477,8 @@ describe('CLI: red baseline rejection', () => {
 describe('CLI: default base fails closed', () => {
   let dir;
 
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-nobase-'));
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-nobase-');
     initRepo(dir);
     // Rename the only branch off any trunk candidate so resolveBase() → null.
     git(['branch', '-m', 'main', 'feature-only'], dir);
@@ -519,10 +502,6 @@ describe('CLI: default base fails closed', () => {
     commitAll(dir, 'init');
   });
 
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
-
   it('exits 1 when no --base and no trunk to resolve a base from', () => {
     const result = runCli(
       ['--test-cmd', 'node --test test/*.test.mjs'],
@@ -543,13 +522,9 @@ describe('CLI: default base fails closed', () => {
 describe('CLI: test-only diff has nothing to mutate', () => {
   let dir;
 
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-railsonly-'));
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-railsonly-');
     createRailsAuthoringRepo(dir);
-  });
-
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
   });
 
   it('exits 1 (operational error), NOT 0, when the diff contains only test files', () => {
@@ -596,8 +571,8 @@ describe('CLI: test-only diff has nothing to mutate', () => {
 describe('CLI: an explicit --target outside the source allow-list is refused', () => {
   let dir;
 
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-badtarget-'));
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-badtarget-');
     createRailsAuthoringRepo(dir);
     writeFileSync(join(dir, 'src', 'app.py'), 'def f():\n    return 1\n');
     writeFileSync(join(dir, 'src', 'style.css'), '.a { opacity: 0; }\n');
@@ -606,10 +581,6 @@ describe('CLI: an explicit --target outside the source allow-list is refused', (
     // an unrelated reason and mask what this case is actually asserting.
     git(['add', '-A'], dir);
     git(['commit', '-qm', 'add unsupported-language fixtures'], dir);
-  });
-
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
   });
 
   for (const target of ['src/app.py', 'src/style.css']) {
@@ -645,13 +616,9 @@ describe('CLI: an explicit --target outside the source allow-list is refused', (
 describe('CLI: explicit targets still bypass test-path exclusion', () => {
   let dir;
 
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-testtarget-'));
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-testtarget-');
     createRailsAuthoringRepo(dir);
-  });
-
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
   });
 
   it('mutates a --target under test/ rather than refusing it', () => {
@@ -677,8 +644,8 @@ describe('CLI: explicit targets still bypass test-path exclusion', () => {
 describe('CLI: --rails matching a mix of source and non-source', () => {
   let dir;
 
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-mixedrails-'));
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-mixedrails-');
     createRailsAuthoringRepo(dir);
     writeFileSync(join(dir, 'schema.json'), '{"a":1}\n');
     writeFileSync(join(dir, 'ticket.json'), JSON.stringify({
@@ -686,10 +653,6 @@ describe('CLI: --rails matching a mix of source and non-source', () => {
     }));
     git(['add', '-A'], dir);
     git(['commit', '-qm', 'mixed rails fixture'], dir);
-  });
-
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
   });
 
   it('mutates the source rail and does not fail over the dropped JSON', () => {
@@ -720,16 +683,12 @@ describe('CLI: --rails matching a mix of source and non-source', () => {
 describe('CLI: --test-glob reclassifies a source file as a test', () => {
   let dir;
 
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-testglob-'));
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-testglob-');
     createRailsAuthoringRepo(dir);
     writeFileSync(join(dir, 'src', 'alpha.mjs'), 'export const a = (x) => x > 0;\n');
     git(['add', '-A'], dir);
     git(['commit', '-qm', 'add alpha'], dir);
-  });
-
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
   });
 
   it('mutates the file normally without the declaration', () => {
@@ -778,8 +737,8 @@ describe('CLI: --test-glob reclassifies a source file as a test', () => {
 describe('CLI: --source-glob rescues a diff-derived file named like a test', () => {
   let dir;
 
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-sourceglob-'));
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-sourceglob-');
     createRailsAuthoringRepo(dir);
     // Sole content of the final commit, so `--base HEAD~1` yields a diff whose
     // only candidate is this file — nothing else can keep the run alive.
@@ -787,10 +746,6 @@ describe('CLI: --source-glob rescues a diff-derived file named like a test', () 
       'export const ok = (x) => x > 0;\n');
     git(['add', '-A'], dir);
     git(['commit', '-qm', 'add hyphen-named production file'], dir);
-  });
-
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
   });
 
   it('is excluded by naming convention without the declaration', () => {
@@ -883,13 +838,9 @@ function createMultilineReturnRepo(dir) {
 describe('CLI: a syntactically invalid mutant is not a kill', () => {
   let dir;
 
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-invalid-'));
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-invalid-');
     createMultilineReturnRepo(dir);
-  });
-
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
   });
 
   it('marks the unparseable null-return mutant invalid rather than killed', () => {
@@ -944,8 +895,8 @@ describe('CLI: a syntactically invalid mutant is not a kill', () => {
 describe('CLI: an explicit target with only invalid mutants is not masked', () => {
   let dir;
 
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-perfile-'));
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-perfile-');
     createMultilineReturnRepo(dir);
     // Touch shape.mjs's RETURN line so it is diff-derived, and so the only
     // changed line there is the one whose mutation cannot parse. (Mutation is
@@ -970,10 +921,6 @@ describe('CLI: an explicit target with only invalid mutants is not masked', () =
       '',
     ].join('\n'));
     commitAll(dir, 'add a plainly mutable file');
-  });
-
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
   });
 
   it('fails even though the other file produced a killed mutant', () => {
@@ -1012,13 +959,9 @@ describe('CLI: an explicit target with only invalid mutants is not masked', () =
 describe('CLI: --target mutates a file outside the diff', () => {
   let dir;
 
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-target-'));
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-target-');
     createRailsAuthoringRepo(dir);
-  });
-
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
   });
 
   it('mutates src/guarded.mjs (unchanged in the diff) and the rails kill it', () => {
@@ -1077,13 +1020,9 @@ describe('CLI: --target mutates a file outside the diff', () => {
 describe('CLI: --target with a nonexistent file fails closed', () => {
   let dir;
 
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-target-missing-'));
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-target-missing-');
     createRailsAuthoringRepo(dir);
-  });
-
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
   });
 
   it('exits 1 (NOT 0) with a clear error, not a vacuous 0/0/0 JSON pass', () => {
@@ -1115,8 +1054,8 @@ describe('CLI: --target with a nonexistent file fails closed', () => {
 describe('CLI: --target pointing at a file with no mutable content fails closed', () => {
   let dir;
 
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-target-decoy-'));
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-target-decoy-');
     createRailsAuthoringRepo(dir);
     // A decoy file with zero mutable lines — the critical-severity repro:
     // an explicit target that exists and is readable but can never generate
@@ -1128,10 +1067,6 @@ describe('CLI: --target pointing at a file with no mutable content fails closed'
     ].join('\n'));
     git(['add', '-A'], dir);
     git(['commit', '-m', 'add decoy file'], dir);
-  });
-
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
   });
 
   it('exits 1 (NOT 0) instead of falling through to the empty-results pass', () => {
@@ -1158,8 +1093,8 @@ describe('CLI: --target pointing at a file with no mutable content fails closed'
 describe('CLI: --max budget cannot silently starve an explicit --target', () => {
   let dir;
 
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-target-budget-'));
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-target-budget-');
     initRepo(dir);
     mkdirSync(join(dir, 'src'));
     mkdirSync(join(dir, 'test'));
@@ -1204,10 +1139,6 @@ describe('CLI: --max budget cannot silently starve an explicit --target', () => 
     ].join('\n'));
 
     commitAll(dir, 'add three diff files (tested)');
-  });
-
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
   });
 
   it('reserves budget for the explicit target instead of silently zeroing its quota', () => {
@@ -1262,21 +1193,17 @@ describe('CLI: --rails reads declared rail globs from a ticket file', () => {
   let dir;
   let ticketPath;
 
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-rails-flag-'));
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-rails-flag-');
     createRailsAuthoringRepo(dir);
     // Kept OUTSIDE the repo (a separate tmp dir) — the ticket file is metadata
     // about the build, not a tracked repo file; writing it inside `dir` would
     // dirty the working tree and trip the dirty-tree guard.
-    const ticketDir = mkdtempSync(join(tmpdir(), 'hollow-ticket-'));
+    const ticketDir = tmp(t, 'hollow-ticket-');
     ticketPath = join(ticketDir, 'ticket.json');
     writeFileSync(ticketPath, JSON.stringify({
       tickets: [{ id: 'T1', title: 'characterize guarded.mjs', rails: ['src/guarded.mjs'] }],
     }));
-  });
-
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
   });
 
   it('expands the ticket-declared rails glob to a mutation target and passes', () => {
@@ -1312,8 +1239,8 @@ describe('CLI: --rails matches correctly when invoked from a non-root cwd', () =
   let subDir;
   let ticketPath;
 
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-rails-subdir-'));
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-rails-subdir-');
     initRepo(dir);
     subDir = join(dir, 'pkgs', 'sub');
     mkdirSync(join(subDir, 'src'), { recursive: true });
@@ -1344,7 +1271,7 @@ describe('CLI: --rails matches correctly when invoked from a non-root cwd', () =
     ].join('\n'));
     commitAll(dir, 'add rails for nested guarded.mjs (test-only diff)');
 
-    const ticketDir = mkdtempSync(join(tmpdir(), 'hollow-ticket-subdir-'));
+    const ticketDir = tmp(t, 'hollow-ticket-subdir-');
     ticketPath = join(ticketDir, 'ticket.json');
     writeFileSync(ticketPath, JSON.stringify({
       tickets: [{
@@ -1353,10 +1280,6 @@ describe('CLI: --rails matches correctly when invoked from a non-root cwd', () =
         rails: ['pkgs/sub/src/guarded.mjs'],
       }],
     }));
-  });
-
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
   });
 
   it('expands a repo-root-relative rails glob even when cwd is a subdirectory of the repo', () => {
@@ -1395,19 +1318,17 @@ describe('CLI: --target rejects a path that escapes the repo root', () => {
   let dir;
   let outsideFile;
 
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-target-escape-'));
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-target-escape-');
     createRailsAuthoringRepo(dir);
     // A file that exists on disk OUTSIDE the repo, so a successful escape
     // would be readable (proving the containment check, not a coincidental
     // ENOENT) if it were not rejected first.
     outsideFile = join(dir, '..', 'outside-secret.mjs');
     writeFileSync(outsideFile, 'export const secret = 1;\n');
-  });
-
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
-    rmSync(outsideFile, { force: true });
+    t.after(() => {
+      rmSync(outsideFile, { force: true });
+    });
   });
 
   it('exits 1 (NOT 0) for a relative --target that resolves above the repo root', () => {
@@ -1485,15 +1406,15 @@ describe('CLI: --target/--rails reject a symlink that escapes the repo root', ()
     '',
   ].join('\n');
 
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-target-symlink-'));
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-target-symlink-');
     createRailsAuthoringRepo(dir);
 
     // A real, mutable file OUTSIDE the repo entirely (a separate temp dir,
     // not just above `dir`) — content chosen so a successful escape would
     // actually generate and apply mutants, proving read+mutate rather than a
     // coincidental ENOENT or a comment-only false negative.
-    outsideDir = mkdtempSync(join(tmpdir(), 'hollow-outside-'));
+    outsideDir = tmp(t, 'hollow-outside-');
     outsideFile = join(outsideDir, 'secret.mjs');
     writeFileSync(outsideFile, outsideContent);
 
@@ -1515,7 +1436,7 @@ describe('CLI: --target/--rails reject a symlink that escapes the repo root', ()
     symlinkSync(outsideFile, join(dir, 'escape-link-file.mjs'));
     commitAll(dir, 'add symlinks pointing outside the repo');
 
-    const ticketDir = mkdtempSync(join(tmpdir(), 'hollow-symlink-ticket-'));
+    const ticketDir = tmp(t, 'hollow-symlink-ticket-');
     ticketPath = join(ticketDir, 'ticket.json');
     writeFileSync(ticketPath, JSON.stringify({
       tickets: [{
@@ -1524,11 +1445,6 @@ describe('CLI: --target/--rails reject a symlink that escapes the repo root', ()
         rails: ['escape-link-file.mjs'],
       }],
     }));
-  });
-
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
-    rmSync(outsideDir, { recursive: true, force: true });
   });
 
   it('exits 1 (NOT 0) for a --target path through a symlink that escapes the repo root', () => {
@@ -1601,13 +1517,9 @@ describe('CLI: --target/--rails reject a symlink that escapes the repo root', ()
 describe('CLI: --target on a file that also appears in the diff mutates the whole file', () => {
   let dir;
 
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-target-overlap-'));
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-target-overlap-');
     createOverlapRepo(dir);
-  });
-
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
   });
 
   it('diff-only run (no --target): untested() sits outside the diff-changed lines and is never mutated', () => {
@@ -1777,12 +1689,11 @@ const inflightPathFor = (dir) => resolve(dir, git(['rev-parse', '--git-dir'], di
 describe('CLI: a mutant stranded by an unhandleable kill is recovered by the next run', () => {
   let dir;
   let counter;
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-recover-'));
-    counter = join(mkdtempSync(join(tmpdir(), 'hollow-count-')), 'trials');
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-recover-');
+    counter = join(tmp(t, 'hollow-count-'), 'trials');
     createSlowRepo(dir, counter);
   });
-  after(() => { rmSync(dir, { recursive: true, force: true }); });
 
   it('restores the file instead of blaming the user for a dirty tree', async () => {
     const child = startCli(dir, counter);
@@ -1807,12 +1718,11 @@ describe('CLI: a mutant stranded by an unhandleable kill is recovered by the nex
 describe('CLI: recovery refuses to overwrite work that is not the mutant', () => {
   let dir;
   let counter;
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-conflict-'));
-    counter = join(mkdtempSync(join(tmpdir(), 'hollow-count-')), 'trials');
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-conflict-');
+    counter = join(tmp(t, 'hollow-count-'), 'trials');
     createSlowRepo(dir, counter);
   });
-  after(() => { rmSync(dir, { recursive: true, force: true }); });
 
   it('leaves a file the developer has since edited exactly as they left it', async () => {
     const child = startCli(dir, counter);
@@ -1865,12 +1775,11 @@ describe('CLI: recovery refuses to overwrite work that is not the mutant', () =>
 describe('CLI: in-flight record location and lifecycle', () => {
   let dir;
   let counter;
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-marker-'));
-    counter = join(mkdtempSync(join(tmpdir(), 'hollow-count-')), 'trials');
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-marker-');
+    counter = join(tmp(t, 'hollow-count-'), 'trials');
     createSlowRepo(dir, counter);
   });
-  after(() => { rmSync(dir, { recursive: true, force: true }); });
 
   it('writes the record inside the git dir, where git can never see it', async () => {
     const child = startCli(dir, counter);
@@ -1910,9 +1819,9 @@ describe('CLI: an interrupted run on a SYMLINKED source is still recovered', () 
   // whose source tree uses a symlink.
   let dir;
   let counter;
-  before(() => {
-    dir = mkdtempSync(join(tmpdir(), 'hollow-symrec-'));
-    counter = join(mkdtempSync(join(tmpdir(), 'hollow-count-')), 'trials');
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-symrec-');
+    counter = join(tmp(t, 'hollow-count-'), 'trials');
     initRepo(dir);
     mkdirSync(join(dir, 'src'));
     mkdirSync(join(dir, 'versions'));
@@ -1950,7 +1859,6 @@ describe('CLI: an interrupted run on a SYMLINKED source is still recovered', () 
       `${readFileSync(join(dir, 'test', 'alias.test.mjs'), 'utf8')}\ntest('extra', () => {});\n`);
     commitAll(dir, 'test-only change');
   });
-  after(() => { rmSync(dir, { recursive: true, force: true }); });
 
   it('restores the link target and leaves the link itself intact', async () => {
     // This repo's suite lives at test/alias.test.mjs, so it needs its own command
