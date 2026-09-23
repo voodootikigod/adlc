@@ -5,9 +5,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 import { makeGateExecute, registerGateTool, tokenizeArgs } from '../lib/gate-tool.mjs';
 import { checkGateArgv, GATE_NAMES, RAILS_SAFE_GATES } from '../lib/gate-policy.mjs';
 import { recordGateEvent } from '../lib/evidence.mjs';
@@ -25,8 +25,8 @@ const TICKET = {
   rails: ['test/contracts/**', '.adlc/tickets.json'],
 };
 
-function makeRepo() {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-pi-gate-')));
+function makeRepo(t) {
+  const root = tmp(t, 'pi-gate-tool-');
   mkdirSync(join(root, '.adlc'), { recursive: true });
   writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [TICKET] }, null, 2));
   writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
@@ -49,85 +49,65 @@ const activeT1 = () => ({ ticketId: 'T1', ticket: TICKET, error: null });
 // AC1 — the rails-aware argv policy (rails-safe allow, non-safe deny, --*cmd deny)
 // =========================================================================
 
-test('AC1: a rails-safe gate (preflight) executes via the injected exec and returns parsed JSON + exit code', async () => {
-  const root = makeRepo();
-  try {
-    const exec = fakeExec({ stdout: JSON.stringify({ ok: true, ready: true }), stderr: '', code: 0 });
-    const execute = makeGateExecute({ getActive: activeT1, getCwd: () => root, exec });
-    const res = await execute('tc', { gate: 'preflight' }, undefined, undefined, {});
+test('AC1: a rails-safe gate (preflight) executes via the injected exec and returns parsed JSON + exit code', async (t) => {
+  const root = makeRepo(t);
+  const exec = fakeExec({ stdout: JSON.stringify({ ok: true, ready: true }), stderr: '', code: 0 });
+  const execute = makeGateExecute({ getActive: activeT1, getCwd: () => root, exec });
+  const res = await execute('tc', { gate: 'preflight' }, undefined, undefined, {});
 
-    assert.equal(res.isError, false);
-    assert.equal(res.details.gate, 'preflight');
-    assert.equal(res.details.code, 0);
-    assert.equal(res.details.pass, true);
-    assert.deepEqual(res.details.result, { ok: true, ready: true });
-    // --json is appended and the gate + argv are forwarded to exec.
-    assert.equal(exec.calls.length, 1);
-    assert.deepEqual(exec.calls[0].args, ['preflight', '--json']);
-    assert.equal(exec.calls[0].cmd, 'adlc');
-    assert.match(res.content[0].text, /PASS/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  assert.equal(res.isError, false);
+  assert.equal(res.details.gate, 'preflight');
+  assert.equal(res.details.code, 0);
+  assert.equal(res.details.pass, true);
+  assert.deepEqual(res.details.result, { ok: true, ready: true });
+  // --json is appended and the gate + argv are forwarded to exec.
+  assert.equal(exec.calls.length, 1);
+  assert.deepEqual(exec.calls[0].args, ['preflight', '--json']);
+  assert.equal(exec.calls[0].cmd, 'adlc');
+  assert.match(res.content[0].text, /PASS/);
 });
 
-test('AC1: a non-rails-safe gate (hollow-test) while a ticket is active is denied with the policy reason and never execs', async () => {
-  const root = makeRepo();
-  try {
-    const exec = fakeExec();
-    const execute = makeGateExecute({ getActive: activeT1, getCwd: () => root, exec });
-    const res = await execute('tc', { gate: 'hollow-test' }, undefined, undefined, {});
+test('AC1: a non-rails-safe gate (hollow-test) while a ticket is active is denied with the policy reason and never execs', async (t) => {
+  const root = makeRepo(t);
+  const exec = fakeExec();
+  const execute = makeGateExecute({ getActive: activeT1, getCwd: () => root, exec });
+  const res = await execute('tc', { gate: 'hollow-test' }, undefined, undefined, {});
 
-    assert.equal(res.isError, true, 'a policy deny is a refusal, not a passing result');
-    assert.equal(res.details.denied, true);
-    assert.match(res.details.reason, /derives or defaults its write targets/);
-    assert.equal(exec.calls.length, 0, 'a denied gate never runs');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  assert.equal(res.isError, true, 'a policy deny is a refusal, not a passing result');
+  assert.equal(res.details.denied, true);
+  assert.match(res.details.reason, /derives or defaults its write targets/);
+  assert.equal(exec.calls.length, 0, 'a denied gate never runs');
 });
 
-test('AC1: a --*cmd command-executor flag is denied for EVERY gate (even rails-safe)', async () => {
-  const root = makeRepo();
-  try {
-    const exec = fakeExec();
-    const execute = makeGateExecute({ getActive: activeT1, getCwd: () => root, exec });
-    // preflight is rails-safe, yet a --test-cmd hands it an arbitrary program.
-    const res = await execute('tc', { gate: 'preflight', args: `${TEST_CMD_FLAG} "npm test"` }, undefined, undefined, {});
-    assert.equal(res.isError, true);
-    assert.equal(res.details.denied, true);
-    assert.match(res.details.reason, /command-executor flag/);
-    assert.equal(exec.calls.length, 0);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('AC1: a --*cmd command-executor flag is denied for EVERY gate (even rails-safe)', async (t) => {
+  const root = makeRepo(t);
+  const exec = fakeExec();
+  const execute = makeGateExecute({ getActive: activeT1, getCwd: () => root, exec });
+  // preflight is rails-safe, yet a --test-cmd hands it an arbitrary program.
+  const res = await execute('tc', { gate: 'preflight', args: `${TEST_CMD_FLAG} "npm test"` }, undefined, undefined, {});
+  assert.equal(res.isError, true);
+  assert.equal(res.details.denied, true);
+  assert.match(res.details.reason, /command-executor flag/);
+  assert.equal(exec.calls.length, 0);
 });
 
-test('AC1: an argv token that resolves to a frozen rail is denied', async () => {
-  const root = makeRepo();
-  try {
-    const exec = fakeExec();
-    const execute = makeGateExecute({ getActive: activeT1, getCwd: () => root, exec });
-    const res = await execute('tc', { gate: 'rails-guard', args: '--tickets test/contracts/frozen.test.ts' }, undefined, undefined, {});
-    assert.equal(res.details.denied, true);
-    assert.match(res.details.reason, /frozen rail "test\/contracts\/\*\*"/);
-    assert.equal(exec.calls.length, 0);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('AC1: an argv token that resolves to a frozen rail is denied', async (t) => {
+  const root = makeRepo(t);
+  const exec = fakeExec();
+  const execute = makeGateExecute({ getActive: activeT1, getCwd: () => root, exec });
+  const res = await execute('tc', { gate: 'rails-guard', args: '--tickets test/contracts/frozen.test.ts' }, undefined, undefined, {});
+  assert.equal(res.details.denied, true);
+  assert.match(res.details.reason, /frozen rail "test\/contracts\/\*\*"/);
+  assert.equal(exec.calls.length, 0);
 });
 
-test('AC1: with NO active ticket, the policy does not apply — any gate runs freely', async () => {
-  const root = makeRepo();
-  try {
-    const exec = fakeExec({ stdout: '{}', stderr: '', code: 0 });
-    const execute = makeGateExecute({ getActive: () => ({ ticketId: null, ticket: null, error: null }), getCwd: () => root, exec });
-    const res = await execute('tc', { gate: 'hollow-test' }, undefined, undefined, {});
-    assert.equal(res.isError, false);
-    assert.equal(exec.calls.length, 1, 'no rails frozen ⇒ the derived-write gate runs');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('AC1: with NO active ticket, the policy does not apply — any gate runs freely', async (t) => {
+  const root = makeRepo(t);
+  const exec = fakeExec({ stdout: '{}', stderr: '', code: 0 });
+  const execute = makeGateExecute({ getActive: () => ({ ticketId: null, ticket: null, error: null }), getCwd: () => root, exec });
+  const res = await execute('tc', { gate: 'hollow-test' }, undefined, undefined, {});
+  assert.equal(res.isError, false);
+  assert.equal(exec.calls.length, 1, 'no rails frozen ⇒ the derived-write gate runs');
 });
 
 test('AC1: a broken enforcement context fails closed (throws)', async () => {
@@ -143,86 +123,70 @@ test('AC1: a broken enforcement context fails closed (throws)', async () => {
 // AC2 — exit 2 renders as a gate-fail RESULT; exec timeout throws
 // =========================================================================
 
-test('AC2: exit 2 renders as a gate-fail result (isError false) with parsed violations visible', async () => {
-  const root = makeRepo();
-  try {
-    const violations = [{ file: 'src/a.ts', rail: 'test/contracts/**' }];
-    const exec = fakeExec({ stdout: JSON.stringify({ ok: false, violations }), stderr: '', code: 2 });
-    const execute = makeGateExecute({ getActive: activeT1, getCwd: () => root, exec });
-    const res = await execute('tc', { gate: 'rails-guard' }, undefined, undefined, {});
+test('AC2: exit 2 renders as a gate-fail result (isError false) with parsed violations visible', async (t) => {
+  const root = makeRepo(t);
+  const violations = [{ file: 'src/a.ts', rail: 'test/contracts/**' }];
+  const exec = fakeExec({ stdout: JSON.stringify({ ok: false, violations }), stderr: '', code: 2 });
+  const execute = makeGateExecute({ getActive: activeT1, getCwd: () => root, exec });
+  const res = await execute('tc', { gate: 'rails-guard' }, undefined, undefined, {});
 
-    assert.equal(res.isError, false, 'a failing gate is a RESULT, not a tool error');
-    assert.equal(res.details.code, 2);
-    assert.equal(res.details.pass, false);
-    assert.deepEqual(res.details.result.violations, violations);
-    assert.match(res.content[0].text, /GATE FAILED/);
-    assert.match(res.content[0].text, /test\/contracts/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  assert.equal(res.isError, false, 'a failing gate is a RESULT, not a tool error');
+  assert.equal(res.details.code, 2);
+  assert.equal(res.details.pass, false);
+  assert.deepEqual(res.details.result.violations, violations);
+  assert.match(res.content[0].text, /GATE FAILED/);
+  assert.match(res.content[0].text, /test\/contracts/);
 });
 
-test('AC2: an exec timeout/failure is a TOOL ERROR (throws), not a gate result', async () => {
-  const root = makeRepo();
-  try {
-    const execute = makeGateExecute({
-      getActive: activeT1,
-      getCwd: () => root,
-      exec: async () => { throw new Error('ETIMEDOUT'); },
-    });
-    await assert.rejects(
-      () => execute('tc', { gate: 'preflight' }, undefined, undefined, {}),
-      /adlc_gate\(preflight\) failed to execute: ETIMEDOUT/
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('AC2: an exec timeout/failure is a TOOL ERROR (throws), not a gate result', async (t) => {
+  const root = makeRepo(t);
+  const execute = makeGateExecute({
+    getActive: activeT1,
+    getCwd: () => root,
+    exec: async () => { throw new Error('ETIMEDOUT'); },
+  });
+  await assert.rejects(
+    () => execute('tc', { gate: 'preflight' }, undefined, undefined, {}),
+    /adlc_gate\(preflight\) failed to execute: ETIMEDOUT/
+  );
 });
 
 // =========================================================================
 // AC3 — every run appends a chain-valid 'adlc-gate-run' evidence entry
 // =========================================================================
 
-test('AC3: a gate run appends an adlc-gate-run evidence entry (gate + exit code) to session and chained manifest', async () => {
-  const root = makeRepo();
-  try {
-    const entries = [];
-    const pi = { appendEntry(customType, data) { entries.push({ customType, data }); } };
-    // note wired exactly as extension.mjs wires it for tool events.
-    const note = (evt) => recordGateEvent({ pi, ctx: null, root, ticketId: 'T1', type: evt.type, detail: evt.detail });
-    const exec = fakeExec({ stdout: '{}', stderr: '', code: 2 });
-    const execute = makeGateExecute({ getActive: activeT1, getCwd: () => root, exec, note });
+test('AC3: a gate run appends an adlc-gate-run evidence entry (gate + exit code) to session and chained manifest', async (t) => {
+  const root = makeRepo(t);
+  const entries = [];
+  const pi = { appendEntry(customType, data) { entries.push({ customType, data }); } };
+  // note wired exactly as extension.mjs wires it for tool events.
+  const note = (evt) => recordGateEvent({ pi, ctx: null, root, ticketId: 'T1', type: evt.type, detail: evt.detail });
+  const exec = fakeExec({ stdout: '{}', stderr: '', code: 2 });
+  const execute = makeGateExecute({ getActive: activeT1, getCwd: () => root, exec, note });
 
-    await execute('tc', { gate: 'rails-guard' }, undefined, undefined, {});
+  await execute('tc', { gate: 'rails-guard' }, undefined, undefined, {});
 
-    const sessionEntry = entries.find((e) => e.customType === 'adlc-gate-event' && e.data.type === 'adlc-gate-run');
-    assert.ok(sessionEntry, 'a session adlc-gate-event of type adlc-gate-run was appended');
-    assert.equal(sessionEntry.data.gate, 'rails-guard');
-    assert.equal(sessionEntry.data.code, 2);
-    assert.equal(sessionEntry.data.ticketId, 'T1');
+  const sessionEntry = entries.find((e) => e.customType === 'adlc-gate-event' && e.data.type === 'adlc-gate-run');
+  assert.ok(sessionEntry, 'a session adlc-gate-event of type adlc-gate-run was appended');
+  assert.equal(sessionEntry.data.gate, 'rails-guard');
+  assert.equal(sessionEntry.data.code, 2);
+  assert.equal(sessionEntry.data.ticketId, 'T1');
 
-    // The mirrored manifest ledger stays hash-chain valid.
-    const verdict = verify(join(root, '.adlc'), { key: null });
-    assert.equal(verdict.valid, true, `manifest chain valid: ${JSON.stringify(verdict)}`);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  // The mirrored manifest ledger stays hash-chain valid.
+  const verdict = verify(join(root, '.adlc'), { key: null });
+  assert.equal(verdict.valid, true, `manifest chain valid: ${JSON.stringify(verdict)}`);
 });
 
-test('AC3: a policy-denied gate also records evidence (denied, no exit code) so the digest can re-assert it', async () => {
-  const root = makeRepo();
-  try {
-    const recorded = [];
-    const note = (evt) => recorded.push(evt);
-    const execute = makeGateExecute({ getActive: activeT1, getCwd: () => root, exec: fakeExec(), note });
-    await execute('tc', { gate: 'hollow-test' }, undefined, undefined, {});
-    assert.equal(recorded.length, 1);
-    assert.equal(recorded[0].type, 'adlc-gate-run');
-    assert.equal(recorded[0].detail.denied, true);
-    assert.equal(recorded[0].detail.code, undefined, 'a denied gate has no exit code');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('AC3: a policy-denied gate also records evidence (denied, no exit code) so the digest can re-assert it', async (t) => {
+  const root = makeRepo(t);
+  const recorded = [];
+  const note = (evt) => recorded.push(evt);
+  const execute = makeGateExecute({ getActive: activeT1, getCwd: () => root, exec: fakeExec(), note });
+  await execute('tc', { gate: 'hollow-test' }, undefined, undefined, {});
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0].type, 'adlc-gate-run');
+  assert.equal(recorded[0].detail.denied, true);
+  assert.equal(recorded[0].detail.code, undefined, 'a denied gate has no exit code');
 });
 
 // =========================================================================
