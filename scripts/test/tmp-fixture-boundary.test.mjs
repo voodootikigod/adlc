@@ -21,10 +21,6 @@ const SUITE_DIRECTORIES = new Set(['test', 'cli-test', 'adapter-test']);
  * that leaks is what this guard exists to stop.
  */
 const ALLOWLIST = new Set([
-  'packages/autopilot/test/helpers/gates-fixture.mjs',
-  'packages/autopilot/test/helpers/review-ctx.mjs',
-  'packages/autopilot/test/paths.test.mjs',
-  'packages/autopilot/test/tools.test.mjs',
   'packages/fleet/test/config.test.mjs',
   'packages/fleet/test/egress.test.mjs',
   'packages/fleet/test/extensions.test.mjs',

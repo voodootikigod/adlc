@@ -4,10 +4,10 @@
 
 import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, mkdirSync, realpathSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 import { resolveRepoRoot, autopilotPaths, EXCLUDE_ENTRIES, PathError } from '../lib/paths.mjs';
 import { withMutation } from '../lib/mutations.mjs';
 
@@ -29,21 +29,19 @@ export function ac24_derivedPathsAreAbsoluteUnderRoot() {
 }
 test('AC24: ISSUE_WT, <ISSUE_WT>/.adlc and every run path are absolute under REPO_ROOT and built from validated numbers', ac24_derivedPathsAreAbsoluteUnderRoot);
 
-export async function ac24_linkedWorktreeRefused() {
-  const root = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), 'ap-paths-')));
-  try {
-    const main = join(root, 'main'); mkdirSync(main);
-    gitRun(['init', '-q', '-b', 'main'], { cwd: main }); gitRun(['config', 'gc.auto', '0'], { cwd: main }); gitRun(['config', 'gc.autoDetach', 'false'], { cwd: main });
-    gitRun(['commit', '-q', '--allow-empty', '-m', 'base'], { cwd: main });
-    const linked = join(root, 'linked');
-    gitRun(['worktree', 'add', '-q', '-b', 'x', linked, 'main'], { cwd: main });
-    assert.equal(resolveRepoRoot({ cwd: main, git: gitRun }), main);
-    assert.equal(resolveRepoRoot({ cwd: join(main), git: gitRun }), main);
-    let err = null;
-    try { resolveRepoRoot({ cwd: linked, git: gitRun }); } catch (e) { err = e; }
-    assert.ok(err instanceof PathError); assert.equal(err.code, 'not-main-worktree'); assert.equal(err.exitCode, 1);
-    await withMutation('paths.allowLinkedWorktree', () => { assert.equal(resolveRepoRoot({ cwd: linked, git: gitRun }), linked, 'seam: the linked worktree passes'); });
-  } finally { rmSync(root, { recursive: true, force: true }); }
+export async function ac24_linkedWorktreeRefused(t) {
+  const root = tmp(t, 'ap-paths-');
+  const main = join(root, 'main'); mkdirSync(main);
+  gitRun(['init', '-q', '-b', 'main'], { cwd: main }); gitRun(['config', 'gc.auto', '0'], { cwd: main }); gitRun(['config', 'gc.autoDetach', 'false'], { cwd: main });
+  gitRun(['commit', '-q', '--allow-empty', '-m', 'base'], { cwd: main });
+  const linked = join(root, 'linked');
+  gitRun(['worktree', 'add', '-q', '-b', 'x', linked, 'main'], { cwd: main });
+  assert.equal(resolveRepoRoot({ cwd: main, git: gitRun }), main);
+  assert.equal(resolveRepoRoot({ cwd: join(main), git: gitRun }), main);
+  let err = null;
+  try { resolveRepoRoot({ cwd: linked, git: gitRun }); } catch (e) { err = e; }
+  assert.ok(err instanceof PathError); assert.equal(err.code, 'not-main-worktree'); assert.equal(err.exitCode, 1);
+  await withMutation('paths.allowLinkedWorktree', () => { assert.equal(resolveRepoRoot({ cwd: linked, git: gitRun }), linked, 'seam: the linked worktree passes'); });
 }
 test('AC24: invoking from inside a linked worktree exits 1 not-main-worktree; the main worktree resolves', ac24_linkedWorktreeRefused);
 
