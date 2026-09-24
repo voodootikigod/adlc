@@ -8,7 +8,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildProsecuteTool, captureDiff, makeAgentPromptReader } from '../lib/prosecute-tool.mjs';
+import { buildProsecuteTool, captureDiff, makeAgentPromptReader, makeModelLedger } from '../lib/prosecute-tool.mjs';
+import { ALL_AGENTS } from '../lib/prosecutor.mjs';
 import { checkToolCall } from '../rails-checker.mjs';
 
 const PKG = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -17,14 +18,23 @@ const fakeSchema = {
 };
 const fenced = (obj) => '```json\n' + JSON.stringify(obj) + '\n```';
 
-// a session client whose child prompt replies are scripted by agent title
-function mockClient(reply) {
+const isVerifier = (req) => (req.body.agent ?? req.body.system ?? '').includes('verifier');
+
+// a session client whose child prompt replies are scripted by agent; `info`
+// optionally returns the model that answered (opencode's assistant message info);
+// `agents` is what the host reports as registered
+function mockClient(reply, info, agents = ALL_AGENTS) {
   const calls = { prompts: [] };
   return {
     calls,
+    app: { agents: async () => ({ data: agents.map((name) => ({ name })) }) },
     session: {
       create: async () => ({ data: { id: 'child' } }),
-      prompt: async (req) => { calls.prompts.push(req); return { data: { parts: [{ type: 'text', text: reply(req) }] } }; },
+      prompt: async (req) => {
+        calls.prompts.push(req);
+        const i = info?.(req);
+        return { data: { ...(i ? { info: i } : {}), parts: [{ type: 'text', text: reply(req) }] } };
+      },
       delete: async () => ({ data: true }),
     },
   };
@@ -58,8 +68,7 @@ test('execute: empty diff → reports nothing to prosecute (does not spawn lense
 test('execute: a real diff drives the deterministic loop and returns a structured verdict', async () => {
   // lenses find a bug; verifier confirms it
   const client = mockClient((req) => {
-    const sys = req.body.system ?? '';
-    if (sys.includes('verifier')) return fenced({ real: true, reason: 'reproduced' });
+    if (isVerifier(req)) return fenced({ real: true, reason: 'reproduced' });
     return fenced([{ title: 'planted-bug', severity: 'high', file: 'x.mjs' }]);
   });
   const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG, client, diffImpl: () => 'diff --git a/x b/x' });
@@ -99,8 +108,7 @@ test('execute: a bounded/incomplete run with zero findings is NO-SHIP (INCOMPLET
   // never converges → hits maxRounds; still zero confirmed → must NOT SHIP
   let n = 0;
   const client = mockClient((req) => {
-    const sys = req.body.system ?? '';
-    if (sys.includes('verifier')) return fenced({ real: false }); // everything refuted → zero confirmed
+    if (isVerifier(req)) return fenced({ real: false }); // everything refuted → zero confirmed
     n += 1;
     return fenced([{ title: `ephemeral-${n}`, severity: 'low', file: 'x' }]); // new finding every round → never dry
   });
@@ -109,6 +117,52 @@ test('execute: a bounded/incomplete run with zero findings is NO-SHIP (INCOMPLET
   assert.equal(r.metadata.confirmed, 0);
   assert.ok(r.metadata.hitBound, 'the run hit a bound');
   assert.match(r.metadata.verdict, /NO-SHIP.*INCOMPLETE/);
+});
+
+// ---- per-lens models ----
+const lensModel = (req) => ({ providerID: 'vercel', modelID: `vmc/adlc-${req.body.agent ?? 'session'}` });
+
+test('execute: every lens and the verifier prompt AS their agent and report the model that answered', async () => {
+  const client = mockClient((req) => (isVerifier(req) ? fenced({ real: true }) : fenced([{ title: 'bug', severity: 'high', file: 'x' }])), lensModel);
+  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG, client, diffImpl: () => 'diff x' });
+  const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
+  const named = new Set(client.calls.prompts.map((p) => p.body.agent));
+  for (const a of ALL_AGENTS) assert.ok(named.has(a), `${a} prompted as its own agent`);
+  for (const p of client.calls.prompts) assert.equal('system' in p.body, false, 'no duplicated charter');
+  for (const a of ALL_AGENTS) assert.deepEqual(r.metadata.models[a], [`vercel/vmc/adlc-${a}`]);
+  assert.deepEqual(r.metadata.sessionModelAgents, []);
+  assert.equal(r.metadata.singleModel, false);
+  assert.match(r.output, /Reviewer models:/);
+  assert.match(r.output, /prosecutor-security: vercel\/vmc\/adlc-prosecutor-security/);
+  assert.doesNotMatch(r.output, /single-model review/);
+});
+
+test('execute: reviewers that all answer on one model are labelled single-model, not cross-model', async () => {
+  const client = mockClient(() => fenced([]), () => ({ providerID: 'anthropic', modelID: 'claude-opus-5' }));
+  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG, client, diffImpl: () => 'diff x' });
+  const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
+  assert.equal(r.metadata.singleModel, true);
+  assert.match(r.output, /fresh-context, single-model review \(not cross-model\)/);
+});
+
+test('execute: an unregistered lens agent runs on the session model and is surfaced, not hidden', async () => {
+  const client = mockClient(() => fenced([]), lensModel, ALL_AGENTS.filter((a) => a !== 'prosecutor-tests'));
+  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG, client, diffImpl: () => 'diff x' });
+  const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
+  assert.deepEqual(r.metadata.sessionModelAgents, ['prosecutor-tests']);
+  assert.deepEqual(r.metadata.models['prosecutor-tests'], ['vercel/vmc/adlc-session']);
+  assert.match(r.output, /prosecutor-tests: vercel\/vmc\/adlc-session \(session model: agent not registered\)/);
+});
+
+test('makeModelLedger: unknown models do not count toward single-model; one reviewer is never "single-model"', () => {
+  const unknownOnly = makeModelLedger();
+  unknownOnly.record({ agent: 'a', model: null, agentModel: true });
+  unknownOnly.record({ agent: 'b', model: null, agentModel: true });
+  assert.equal(unknownOnly.summary().singleModel, false);
+  assert.deepEqual(unknownOnly.summary().models, { a: ['unknown'], b: ['unknown'] });
+  const one = makeModelLedger();
+  one.record({ agent: 'a', model: 'x/y', agentModel: true });
+  assert.equal(one.summary().singleModel, false);
 });
 
 test('makeAgentPromptReader reads the packaged agent prompt; "" for an unknown agent', () => {

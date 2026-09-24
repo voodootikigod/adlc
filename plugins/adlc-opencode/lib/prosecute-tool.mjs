@@ -20,6 +20,50 @@ export function makeAgentPromptReader(pkgRoot) {
 }
 
 /**
+ * Collect which model answered each lens/verifier call (fed by makeLensAsk's
+ * `onResolved`). `summary()` returns the per-agent models, the agents that ran
+ * on the session model because they are not registered, and whether every
+ * reviewer answered on one model — a fresh-context but NOT cross-model review.
+ */
+export function makeModelLedger() {
+  const byAgent = new Map();
+  return {
+    record({ agent, model, agentModel }) {
+      const key = agent ?? '(unnamed)';
+      const entry = byAgent.get(key) ?? { models: new Set(), sessionModel: false };
+      entry.models.add(model ?? 'unknown');
+      if (!agentModel) {
+        entry.sessionModel = true;
+      }
+      byAgent.set(key, entry);
+    },
+    summary() {
+      const models = Object.fromEntries([...byAgent].map(([agent, e]) => [agent, [...e.models].sort()]));
+      const sessionModelAgents = [...byAgent].filter(([, e]) => e.sessionModel).map(([agent]) => agent).sort();
+      const known = new Set(Object.values(models).flat().filter((m) => m !== 'unknown'));
+      const singleModel = byAgent.size > 1 && known.size === 1;
+      return { models, sessionModelAgents, singleModel };
+    },
+  };
+}
+
+function modelLines({ models, sessionModelAgents, singleModel }) {
+  const agents = Object.keys(models);
+  if (!agents.length) {
+    return [];
+  }
+  const lines = ['\nReviewer models:'];
+  for (const agent of agents) {
+    const note = sessionModelAgents.includes(agent) ? ' (session model: agent not registered)' : '';
+    lines.push(`- ${agent}: ${models[agent].join(', ')}${note}`);
+  }
+  if (singleModel) {
+    lines.push('Every reviewer answered on the same model: fresh-context, single-model review (not cross-model).');
+  }
+  return lines;
+}
+
+/**
  * The change under prosecution: `git diff <base>...HEAD`.
  * Returns { diff, error }. A git FAILURE (bad base ref, non-git cwd, buffer
  * overflow) sets error — the caller must NOT treat that as an empty diff (which
@@ -57,7 +101,8 @@ export function buildProsecuteTool(schema, { root = process.cwd(), pkgRoot, clie
       execute: async (a, ctx) => {
         const base = String(a?.base ?? 'main');
         const cwd = ctx?.directory ?? ctx?.worktree ?? root;
-        const ask = makeLensAsk(client, { parentID: ctx?.sessionID });
+        const ledger = makeModelLedger();
+        const ask = makeLensAsk(client, { parentID: ctx?.sessionID, onResolved: ledger.record });
         if (!ask) {
           return {
             title: 'adlc_prosecute: no session API',
@@ -93,12 +138,14 @@ export function buildProsecuteTool(schema, { root = process.cwd(), pkgRoot, clie
           : result.confirmed.length === 0
             ? 'SHIP (no confirmed findings)'
             : `NO-SHIP (${result.confirmed.length} confirmed)`;
+        const reviewers = ledger.summary();
         return {
           title: `adlc_prosecute: ${verdict}`,
           output: [
             `Deterministic P5 loop over ${LENSES.length} lenses + verifier.`,
             `Rounds: ${result.rounds}, child sessions: ${result.sessionsUsed}${result.hitBound ? `, stopped at bound: ${result.hitBound} (INCOMPLETE — not a converged pass)` : ''}.`,
             result.confirmed.length ? `\nConfirmed findings:\n${lines.join('\n')}` : (result.hitBound ? '\nNo confirmed findings yet, but the run did NOT converge.' : '\nNo findings survived verification.'),
+            ...modelLines(reviewers),
           ].join('\n'),
           metadata: {
             base, deterministic: true, verdict,
@@ -107,6 +154,9 @@ export function buildProsecuteTool(schema, { root = process.cwd(), pkgRoot, clie
             rounds: result.rounds,
             sessionsUsed: result.sessionsUsed,
             hitBound: result.hitBound,
+            models: reviewers.models,
+            sessionModelAgents: reviewers.sessionModelAgents,
+            singleModel: reviewers.singleModel,
           },
         };
       },
