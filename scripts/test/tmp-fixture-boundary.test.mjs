@@ -46,12 +46,9 @@ const ALLOWLIST = new Set([
   'packages/fleet/test/synthetic-home-bwrap.test.mjs',
 
   'scripts/test/ceremony-drift-exit.test.mjs',
-  'scripts/test/check-reviewer-directed-comments.test.mjs',
-  'scripts/test/rails-guard-ci.test.mjs',
   'scripts/test/release-audit-collect.test.mjs',
   'scripts/test/store-loader-bounded.test.mjs',
   'scripts/test/sync-herdr-mirror.test.mjs',
-  'scripts/test/toolkit-floor.test.mjs',
 ]);
 
 /** @param {string} name directory entry name */
