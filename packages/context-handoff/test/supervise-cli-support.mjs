@@ -20,10 +20,10 @@
 // none of them reads ADLC_CC_LIVE.
 
 import { execFile, execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmp } from '@adlc/core/test-kit';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const BIN = join(HERE, '..', 'bin', 'handoff.mjs');
@@ -105,8 +105,8 @@ if (idleMs > 0) setTimeout(() => process.exit(0), idleMs);
 else setInterval(() => {}, 1000);
 `;
 
-export function fixture() {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'handoff-supervise-')));
+export function fixture(t, prefix = 'handoff-supervise-cli-') {
+  const root = tmp(t, prefix);
   const home = join(root, 'home');
   mkdirSync(home, { recursive: true });
   const fake = join(root, 'fake-claude.mjs');

@@ -9,14 +9,13 @@ import assert from 'node:assert/strict';
 import {
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   renameSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 
 import { writeJsonAtomic, writeTextAtomic, writeTextExclusive } from '../lib/atomic-json.mjs';
 import { writeCapture } from '../lib/capture.mjs';
@@ -25,11 +24,11 @@ import { writeDenyRecord } from '../lib/deny-persist.mjs';
 import { writeResumeAuth } from '../lib/resume-auth.mjs';
 import { restoreIfOurs } from '../lib/rollback.mjs';
 
-const scratch = () => mkdtempSync(join(tmpdir(), 'adlc-ownership-'));
+const scratch = (t) => tmp(t, 'adlc-ownership-');
 const KEY = 'test-manifest-key';
 
-test('every writer returns the exact bytes it put on disk', () => {
-  const root = scratch();
+test('every writer returns the exact bytes it put on disk', (t) => {
+  const root = scratch(t);
 
   const text = writeTextAtomic(join(root, 'a.txt'), 'alpha\n');
   assert.equal(text.bytes, 'alpha\n');
@@ -73,8 +72,8 @@ test('every writer returns the exact bytes it put on disk', () => {
 // replacement in the old sample window amounts to) and the rollback must treat
 // the disk as foreign — conflict reported, replacement preserved, nothing
 // restored over it.
-test('a write diverted on its way to disk is foreign to the rollback', () => {
-  const root = scratch();
+test('a write diverted on its way to disk is foreign to the rollback', (t) => {
+  const root = scratch(t);
   const path = join(root, 'diverted.json');
   const divert = {
     mkdirSync,
@@ -95,8 +94,8 @@ test('a write diverted on its way to disk is foreign to the rollback', () => {
   assert.equal(readFileSync(path, 'utf8'), 'ours\ntampered\n');
 });
 
-test('the capture writer carries its own bytes the same way', () => {
-  const root = scratch();
+test('the capture writer carries its own bytes the same way', (t) => {
+  const root = scratch(t);
   const divert = {
     mkdirSync,
     existsSync,
@@ -114,8 +113,8 @@ test('the capture writer carries its own bytes the same way', () => {
   assert.ok(existsSync(wrote.path), 'the diverging capture is preserved');
 });
 
-test('the exclusive create claim carries its own bytes the same way', () => {
-  const root = scratch();
+test('the exclusive create claim carries its own bytes the same way', (t) => {
+  const root = scratch(t);
   const path = join(root, 'claimed.json');
   const divert = {
     mkdirSync,
