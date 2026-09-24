@@ -130,7 +130,8 @@ test('execute: every lens and the verifier prompt AS their agent and report the 
   for (const a of ALL_AGENTS) assert.ok(named.has(a), `${a} prompted as its own agent`);
   for (const p of client.calls.prompts) assert.equal('system' in p.body, false, 'no duplicated charter');
   for (const a of ALL_AGENTS) assert.deepEqual(r.metadata.models[a], [`vercel/vmc/adlc-${a}`]);
-  assert.deepEqual(r.metadata.sessionModelAgents, []);
+  assert.deepEqual(r.metadata.unregisteredAgents, []);
+  assert.equal(r.metadata.agentListUnavailable, false);
   assert.equal(r.metadata.singleModel, false);
   assert.match(r.output, /Reviewer models:/);
   assert.match(r.output, /prosecutor-security: vercel\/vmc\/adlc-prosecutor-security/);
@@ -149,17 +150,45 @@ test('execute: an unregistered lens agent runs on the session model and is surfa
   const client = mockClient(() => fenced([]), lensModel, ALL_AGENTS.filter((a) => a !== 'prosecutor-tests'));
   const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG, client, diffImpl: () => 'diff x' });
   const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
-  assert.deepEqual(r.metadata.sessionModelAgents, ['prosecutor-tests']);
+  assert.deepEqual(r.metadata.unregisteredAgents, ['prosecutor-tests']);
+  assert.equal(r.metadata.agentListUnavailable, false);
   assert.deepEqual(r.metadata.models['prosecutor-tests'], ['vercel/vmc/adlc-session']);
   assert.match(r.output, /prosecutor-tests: vercel\/vmc\/adlc-session \(session model: agent not registered\)/);
+  assert.doesNotMatch(r.output, /prosecutor-security: .*agent not registered/, 'only the missing agent is flagged');
+  assert.doesNotMatch(r.output, /Could not list OpenCode agents/);
 });
 
-test('makeModelLedger: unknown models do not count toward single-model; one reviewer is never "single-model"', () => {
+test('execute: a host that cannot list agents is reported as such — not blamed on missing agents', async () => {
+  const client = mockClient(() => fenced([]), lensModel);
+  client.app.agents = async () => { throw new Error('GET /agent 500'); };
+  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG, client, diffImpl: () => 'diff x' });
+  const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
+  assert.equal(r.metadata.agentListUnavailable, true);
+  assert.deepEqual(r.metadata.unregisteredAgents, []);
+  assert.match(r.output, /Could not list OpenCode agents, so every reviewer ran on the session model/);
+  assert.doesNotMatch(r.output, /agent not registered/);
+  for (const p of client.calls.prompts) assert.equal('agent' in p.body, false, 'no agent named without a listing');
+});
+
+test('makeModelLedger: single-model needs every reviewer on one KNOWN, identical model; one reviewer is never "single-model"', () => {
   const unknownOnly = makeModelLedger();
   unknownOnly.record({ agent: 'a', model: null, agentModel: true });
   unknownOnly.record({ agent: 'b', model: null, agentModel: true });
   assert.equal(unknownOnly.summary().singleModel, false);
   assert.deepEqual(unknownOnly.summary().models, { a: ['unknown'], b: ['unknown'] });
+  const mixed = makeModelLedger();
+  for (const agent of ['a', 'b', 'c']) mixed.record({ agent, model: 'anthropic/claude-opus-5', agentModel: true });
+  for (const agent of ['d', 'e', 'f']) mixed.record({ agent, model: null, agentModel: true });
+  assert.equal(mixed.summary().singleModel, false, 'unknown reviewers are not proof of one model');
+  const drifted = makeModelLedger();
+  drifted.record({ agent: 'a', model: 'x/y', agentModel: true });
+  drifted.record({ agent: 'a', model: 'x/z', agentModel: true });
+  drifted.record({ agent: 'b', model: 'x/y', agentModel: true });
+  assert.equal(drifted.summary().singleModel, false, 'a reviewer that answered on two models is not single-model');
+  const same = makeModelLedger();
+  same.record({ agent: 'a', model: 'x/y', agentModel: true });
+  same.record({ agent: 'b', model: 'x/y', agentModel: true });
+  assert.equal(same.summary().singleModel, true);
   const one = makeModelLedger();
   one.record({ agent: 'a', model: 'x/y', agentModel: true });
   assert.equal(one.summary().singleModel, false);

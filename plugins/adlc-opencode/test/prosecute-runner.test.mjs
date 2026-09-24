@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   runProsecution, lensToolsMap, LENS_READ_TOOLS, makeLensAsk,
-  parseFindings, parseVerdict, parseFenced, listRegisteredAgents, replyModel,
+  parseFindings, parseVerdict, parseFenced, listRegisteredAgents, replyModel, AGENT_LIST_TIMEOUT_MS,
 } from '../lib/prosecute-runner.mjs';
 import { LENSES, VERIFIER, ALL_AGENTS } from '../lib/prosecutor.mjs';
 import { READONLY_TOOLS } from '../rails-checker.mjs';
@@ -111,7 +111,7 @@ test('per-lens model: onResolved reports the model that answered and that the ag
   const client = lensClient(() => reply('ok', { providerID: 'vercel', modelID: 'vmc/adlc-prosecutor-security' }));
   const ask = makeLensAsk(client, { parentID: 'p', onResolved: (r) => seen.push(r) });
   await ask({ agent: 'prosecutor-security', system: 'S', prompt: 'x' });
-  assert.deepEqual(seen, [{ agent: 'prosecutor-security', model: 'vercel/vmc/adlc-prosecutor-security', agentModel: true }]);
+  assert.deepEqual(seen, [{ agent: 'prosecutor-security', model: 'vercel/vmc/adlc-prosecutor-security', agentModel: true, agentsListed: true }]);
 });
 
 test('per-lens model: an UNREGISTERED agent is never named; it runs once on the session model with the charter', async () => {
@@ -124,21 +124,35 @@ test('per-lens model: an UNREGISTERED agent is never named; it runs once on the 
   assert.equal('agent' in body, false, 'opencode reports an unknown agent only as a generic 500');
   assert.equal(body.system, 'LENS SYSTEM PROMPT');
   assert.equal(body.tools['*'], false, 'still write-disabled');
-  assert.deepEqual(seen, [{ agent: 'prosecutor-security', model: 'anthropic/claude-opus-5', agentModel: false }]);
+  assert.deepEqual(seen, [{ agent: 'prosecutor-security', model: 'anthropic/claude-opus-5', agentModel: false, agentsListed: true }]);
 });
 
-test('per-lens model: a host that cannot list agents keeps the session-model behavior (no agent named)', async () => {
+test('per-lens model: a host that cannot list agents keeps the session-model behavior and says so (agentsListed:false)', async () => {
   for (const client of [
     lensClient(() => reply('ok'), { listing: async () => { throw new Error('404'); } }),
     lensClient(() => reply('ok'), { listing: async () => ({ error: { name: 'UnknownError' } }) }),
     { ...lensClient(() => reply('ok')), app: undefined },
   ]) {
-    const ask = makeLensAsk(client, { parentID: 'p' });
+    const seen = [];
+    const ask = makeLensAsk(client, { parentID: 'p', onResolved: (r) => seen.push(r) });
     await ask({ agent: 'prosecutor-security', system: 'S', prompt: 'x' });
     const body = client.calls.prompts[0].body;
     assert.equal('agent' in body, false);
     assert.equal(body.system, 'S');
+    assert.equal(seen[0].agentsListed, false, 'the fallback is attributed to the listing, not to a missing agent');
+    assert.equal(seen[0].agentModel, false);
   }
+});
+
+test('per-lens model: a HUNG agent listing is bounded — the lens still runs, on the session model', async () => {
+  const seen = [];
+  const client = lensClient(() => reply('ok'), { listing: () => new Promise(() => {}) });
+  const ask = makeLensAsk(client, { parentID: 'p', agentListTimeoutMs: 20, onResolved: (r) => seen.push(r) });
+  const started = Date.now();
+  assert.equal(await ask({ agent: 'prosecutor-security', system: 'S', prompt: 'x' }), 'ok');
+  assert.ok(Date.now() - started < 2_000, 'did not wait on the hung listing');
+  assert.equal('agent' in client.calls.prompts[0].body, false);
+  assert.equal(seen[0].agentsListed, false);
 });
 
 test('per-lens model: the registered set is listed ONCE per ask, even across concurrent lenses', async () => {
@@ -161,6 +175,8 @@ test('listRegisteredAgents / replyModel read the opencode shapes', async () => {
   assert.deepEqual(await listRegisteredAgents({ app: { agents: async () => ({ data: [{ name: 'a' }, { name: 'b' }, {}] }) } }), new Set(['a', 'b']));
   assert.equal(await listRegisteredAgents({}), null);
   assert.equal(await listRegisteredAgents({ app: { agents: async () => ({ data: 'nope' }) } }), null);
+  assert.equal(await listRegisteredAgents({ app: { agents: () => new Promise(() => {}) } }, { timeoutMs: 10 }), null, 'hung listing → null');
+  assert.equal(AGENT_LIST_TIMEOUT_MS, 5_000);
   assert.equal(replyModel({ data: { info: { providerID: 'vercel', modelID: 'vmc/a' } } }), 'vercel/vmc/a');
   assert.equal(replyModel({ data: { parts: [] } }), null);
   assert.equal(replyModel({ data: { info: { providerID: 'vercel' } } }), null, 'a half-known model is not reported');

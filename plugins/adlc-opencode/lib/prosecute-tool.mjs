@@ -21,40 +21,49 @@ export function makeAgentPromptReader(pkgRoot) {
 
 /**
  * Collect which model answered each lens/verifier call (fed by makeLensAsk's
- * `onResolved`). `summary()` returns the per-agent models, the agents that ran
- * on the session model because they are not registered, and whether every
- * reviewer answered on one model — a fresh-context but NOT cross-model review.
+ * `onResolved`). `summary()` returns the per-agent models; the agents that ran
+ * on the session model because they are not registered (`unregisteredAgents`);
+ * `agentListUnavailable` when the host could not list agents, so every lens ran
+ * on the session model for that reason instead; and `singleModel` when every
+ * reviewer provably answered on one model — a fresh-context but NOT
+ * cross-model review. A reviewer whose model is unknown never counts as proof.
  */
 export function makeModelLedger() {
   const byAgent = new Map();
+  let agentListUnavailable = false;
   return {
-    record({ agent, model, agentModel }) {
+    record({ agent, model, agentModel, agentsListed = true }) {
       const key = agent ?? '(unnamed)';
-      const entry = byAgent.get(key) ?? { models: new Set(), sessionModel: false };
+      const entry = byAgent.get(key) ?? { models: new Set(), unregistered: false };
       entry.models.add(model ?? 'unknown');
-      if (!agentModel) {
-        entry.sessionModel = true;
+      if (!agentsListed) {
+        agentListUnavailable = true;
+      } else if (!agentModel) {
+        entry.unregistered = true;
       }
       byAgent.set(key, entry);
     },
     summary() {
       const models = Object.fromEntries([...byAgent].map(([agent, e]) => [agent, [...e.models].sort()]));
-      const sessionModelAgents = [...byAgent].filter(([, e]) => e.sessionModel).map(([agent]) => agent).sort();
-      const known = new Set(Object.values(models).flat().filter((m) => m !== 'unknown'));
-      const singleModel = byAgent.size > 1 && known.size === 1;
-      return { models, sessionModelAgents, singleModel };
+      const unregisteredAgents = [...byAgent].filter(([, e]) => e.unregistered).map(([agent]) => agent).sort();
+      const answered = Object.values(models).flat();
+      const singleModel = byAgent.size > 1 && !answered.includes('unknown') && new Set(answered).size === 1;
+      return { models, unregisteredAgents, agentListUnavailable, singleModel };
     },
   };
 }
 
-function modelLines({ models, sessionModelAgents, singleModel }) {
+function modelLines({ models, unregisteredAgents, agentListUnavailable, singleModel }) {
   const agents = Object.keys(models);
   if (!agents.length) {
     return [];
   }
   const lines = ['\nReviewer models:'];
+  if (agentListUnavailable) {
+    lines.push('Could not list OpenCode agents, so every reviewer ran on the session model (per-lens models not applied).');
+  }
   for (const agent of agents) {
-    const note = sessionModelAgents.includes(agent) ? ' (session model: agent not registered)' : '';
+    const note = unregisteredAgents.includes(agent) ? ' (session model: agent not registered)' : '';
     lines.push(`- ${agent}: ${models[agent].join(', ')}${note}`);
   }
   if (singleModel) {
@@ -155,7 +164,8 @@ export function buildProsecuteTool(schema, { root = process.cwd(), pkgRoot, clie
             sessionsUsed: result.sessionsUsed,
             hitBound: result.hitBound,
             models: reviewers.models,
-            sessionModelAgents: reviewers.sessionModelAgents,
+            unregisteredAgents: reviewers.unregisteredAgents,
+            agentListUnavailable: reviewers.agentListUnavailable,
             singleModel: reviewers.singleModel,
           },
         };
