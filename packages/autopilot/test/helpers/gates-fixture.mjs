@@ -4,10 +4,10 @@
 // `scripts/mutation-gate.mjs` run for real inside a sandboxed GATE_REPO.
 
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync, chmodSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { cpSync, existsSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync, chmodSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmp } from '@adlc/core/test-kit';
 
 export const REPO = realpathSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..'));
 
@@ -22,7 +22,7 @@ export function git(cwd, args, { input } = {}) {
   return execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], { cwd, env: GIT_ENV, encoding: 'utf8', input, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
 }
 
-export const scratch = (prefix) => realpathSync(mkdtempSync(join(realpathSync(tmpdir()), prefix)));
+export const scratch = (prefix, t = null) => realpathSync(tmp(t, prefix));
 
 /** Write files ({ path: text }); a null value deletes. */
 export function writeFiles(root, files) {
