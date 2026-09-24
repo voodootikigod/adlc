@@ -276,16 +276,16 @@ test('fetchIssues marks a deliberate skip, so the verdict can still name the gap
 // tree and assert what inventory actually returns, so dropping an extension or a
 // skipped directory changes an observable result.
 
-import { mkdtempSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join as joinPath } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 import { inventory } from '../release-audit-collect.mjs';
 
-function fixtureTree() {
+function fixtureTree(t) {
   // realpath: on macOS the temp dir is a symlink, and inventory reports paths
   // relative to `root` — comparing an unresolved root against resolved children
   // passes locally and fails on Linux CI, or the reverse.
-  const root = realpathSync(mkdtempSync(joinPath(tmpdir(), 'release-audit-inv-')));
+  const root = tmp(t, 'release-audit-inv-');
   mkdirSync(joinPath(root, 'unit'), { recursive: true });
   for (const name of ['a.mjs', 'b.cjs', 'c.js', 'd.ts', 'e.json', 'f.md']) {
     writeFileSync(joinPath(root, 'unit', name), 'x');
@@ -298,35 +298,35 @@ function fixtureTree() {
   return root;
 }
 
-test('inventory returns every source extension an agent is meant to read', () => {
-  const root = fixtureTree();
+test('inventory returns every source extension an agent is meant to read', (t) => {
+  const root = fixtureTree(t);
   const found = inventory('unit', { root }).map((f) => f.path).sort();
   assert.deepEqual(found, [
     'unit/a.mjs', 'unit/b.cjs', 'unit/c.js', 'unit/d.ts', 'unit/e.json', 'unit/f.md',
   ].sort());
 });
 
-test('inventory excludes files whose extension is not a source type', () => {
-  const root = fixtureTree();
+test('inventory excludes files whose extension is not a source type', (t) => {
+  const root = fixtureTree(t);
   const found = inventory('unit', { root }).map((f) => f.path);
   for (const excluded of ['unit/g.txt', 'unit/h.lock', 'unit/i']) {
     assert.ok(!found.includes(excluded), `${excluded} must not be shown to an agent`);
   }
 });
 
-test('inventory never descends into a skipped directory', () => {
+test('inventory never descends into a skipped directory', (t) => {
   // A vendored tree would swamp the agent's attention and is not the artifact
   // under audit, so each skipped directory must stay invisible even though it
   // contains a file of a source type.
-  const root = fixtureTree();
+  const root = fixtureTree(t);
   const found = inventory('unit', { root }).map((f) => f.path);
   for (const dir of ['node_modules', '.git', 'coverage', 'dist', '.worktrees']) {
     assert.ok(!found.some((f) => f.includes(`/${dir}/`)), `${dir} must be skipped entirely`);
   }
 });
 
-test('inventory reports each file size, so a unit prompt can state its real weight', () => {
-  const root = fixtureTree();
+test('inventory reports each file size, so a unit prompt can state its real weight', (t) => {
+  const root = fixtureTree(t);
   const entry = inventory('unit', { root }).find((f) => f.path === 'unit/a.mjs');
   assert.equal(entry.bytes, 1);
 });
