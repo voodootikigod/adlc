@@ -63,6 +63,7 @@ const result = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: '
 // AC3: the seeded defect surfaces and the loop terminates with a NO-SHIP verdict.
 if (result?.metadata?.deterministic !== true) fail('runner did not report a deterministic run');
 if (result.metadata.confirmed < 1) fail('the seeded defect did not survive to a confirmed finding');
+if (result.metadata.unverified !== 0) fail('the verifier did not verifiably confirm the seeded defect (kept only fail-closed)');
 if (!/NO-SHIP/.test(result.metadata.verdict)) fail(`expected NO-SHIP, got ${result.metadata.verdict}`);
 if (!/seeded-off-by-one/.test(result.output)) fail('the seeded finding is not in the report');
 if (result.metadata.rounds < 1 || result.metadata.hitBound === 'maxSessions') fail(`loop did not terminate cleanly (rounds=${result.metadata.rounds}, bound=${result.metadata.hitBound})`);

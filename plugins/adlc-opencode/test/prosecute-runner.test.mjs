@@ -163,6 +163,8 @@ test('listRegisteredAgents / replyModel read the opencode shapes', async () => {
   assert.equal(await listRegisteredAgents({ app: { agents: async () => ({ data: 'nope' }) } }), null);
   assert.equal(replyModel({ data: { info: { providerID: 'vercel', modelID: 'vmc/a' } } }), 'vercel/vmc/a');
   assert.equal(replyModel({ data: { parts: [] } }), null);
+  assert.equal(replyModel({ data: { info: { providerID: 'vercel' } } }), null, 'a half-known model is not reported');
+  assert.equal(replyModel({ data: { info: { modelID: 'vmc/a' } } }), null);
 });
 
 test('runProsecution names every lens and the verifier as its own agent (so each gets its own model)', async () => {
