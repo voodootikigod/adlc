@@ -189,6 +189,11 @@ test('makeModelLedger: single-model needs every reviewer on one KNOWN, identical
   same.record({ agent: 'a', model: 'x/y', agentModel: true });
   same.record({ agent: 'b', model: 'x/y', agentModel: true });
   assert.equal(same.summary().singleModel, true);
+  assert.equal(same.summary().agentListUnavailable, false, 'a record without agentsListed means the listing worked');
+  const unlisted = makeModelLedger();
+  unlisted.record({ agent: 'a', model: 'x/y', agentModel: false, agentsListed: false });
+  assert.equal(unlisted.summary().agentListUnavailable, true);
+  assert.deepEqual(unlisted.summary().unregisteredAgents, [], 'a listing failure is not blamed on the agent');
   const one = makeModelLedger();
   one.record({ agent: 'a', model: 'x/y', agentModel: true });
   assert.equal(one.summary().singleModel, false);
