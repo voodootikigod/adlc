@@ -1,0 +1,15 @@
+{
+  "body": "Source: repo-bloat review (rev-tests finding 1 & 2, issue #1043). The scripts/test policy and rails suites (check-reviewer-directed-comments.test.mjs, rails-guard-ci.test.mjs, toolkit-floor.test.mjs) manually invoke mkdtempSync across 41 sites and manage removals via 57 try/finally blocks, and are allowlisted in scripts/test/tmp-fixture-boundary.test.mjs. With @adlc/core/test-kit (tmp), fixture directories automatically register cleanup via t.after when passed the test context t.\n\nNORMATIVE BEHAVIOUR.\n1. In scripts/test/check-reviewer-directed-comments.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update test declarations allocating temp repos to accept t from test(...).\n   - Replace mkdtempSync calls with tmp(t, prefix).\n   - Remove manual try { ... } finally { rmSync(repo, ...); } blocks, unindenting test bodies.\n2. In scripts/test/rails-guard-ci.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update test declarations allocating temp dirs to accept t.\n   - Replace mkdtempSync calls with tmp(t, prefix).\n   - Remove manual try/finally blocks, unindenting test bodies.\n3. In scripts/test/toolkit-floor.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update helper functions (makeShim, emptyPathDir, makeGlobalWriterInstall, makeUserPrefixInstall, makeShimLayout, makeFakeWorkspace) to accept t and allocate via tmp(t, prefix).\n   - Update tests to pass t to helpers and replace direct mkdtempSync calls with tmp(t, prefix).\n   - Remove manual try/finally cleanup blocks, unindenting test bodies.\n4. In scripts/test/tmp-fixture-boundary.test.mjs:\n   - Remove check-reviewer-directed-comments.test.mjs, rails-guard-ci.test.mjs, and toolkit-floor.test.mjs from the ALLOWLIST set.\n5. Verification:\n   - node --test scripts/test/check-reviewer-directed-comments.test.mjs scripts/test/rails-guard-ci.test.mjs scripts/test/toolkit-floor.test.mjs exits 0.\n   - node --test scripts/test/tmp-fixture-boundary.test.mjs exits 0.\n   - grep -c 'finally' scripts/test/check-reviewer-directed-comments.test.mjs scripts/test/rails-guard-ci.test.mjs scripts/test/toolkit-floor.test.mjs outputs 0, 0, 0.\n\nACCEPTANCE CRITERIA.\n- AC1 All 3 test files contain 0 finally blocks.\n- AC2 mkdtempSync is not called in any of the 3 test files.\n- AC3 None of the 3 test files appear in scripts/test/tmp-fixture-boundary.test.mjs ALLOWLIST.\n- AC4 node --test scripts/test/check-reviewer-directed-comments.test.mjs scripts/test/rails-guard-ci.test.mjs scripts/test/toolkit-floor.test.mjs exits 0.\n- AC5 node --test scripts/test/tmp-fixture-boundary.test.mjs exits 0.\n- AC6 adlc rails-guard exits 0.",
+  "category": "refactor",
+  "duration": 2,
+  "edges": [],
+  "id": "T-01M39NMXMNYCZRV8JZNFN2A7DA",
+  "rails": [],
+  "scope": [
+    "scripts/test/check-reviewer-directed-comments.test.mjs",
+    "scripts/test/rails-guard-ci.test.mjs",
+    "scripts/test/toolkit-floor.test.mjs",
+    "scripts/test/tmp-fixture-boundary.test.mjs"
+  ],
+  "title": "refactor(scripts): adopt @adlc/core/test-kit across policy and rails tests"
+}

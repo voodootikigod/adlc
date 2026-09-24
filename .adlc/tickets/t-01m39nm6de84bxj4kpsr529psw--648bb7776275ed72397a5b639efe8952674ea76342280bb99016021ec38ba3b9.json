@@ -1,0 +1,17 @@
+{
+  "body": "Source: repo-bloat review (rev-tests finding 1 & 2, issue #1043). The remaining context-handoff test suites and support helpers (recovery-exception.test.mjs, continue-cli-support.mjs, continue-ownership-bytes.test.mjs, doctor.test.mjs, supervise-cli-support.mjs) manually invoke mkdtempSync with uncleaned leaks or manual try/finally blocks, and are allowlisted in scripts/test/tmp-fixture-boundary.test.mjs. With @adlc/core/test-kit (tmp), fixture directories automatically register cleanup via t.after when passed the test context t.\n\nNORMATIVE BEHAVIOUR.\n1. In packages/context-handoff/adapter-test/recovery-exception.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update fixturePaths(t) to accept t and allocate dir via tmp(t, 'recovery-exception-').\n   - Update tests to accept t from test(...) and pass t to fixturePaths(t).\n2. In packages/context-handoff/test/continue-cli-support.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update fixture(t, prefix = 'handoff-continue-') to accept t and use tmp(t, prefix).\n3. In packages/context-handoff/test/continue-ownership-bytes.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update scratch(t) to accept t and allocate via tmp(t, 'adlc-ownership-').\n   - Update test declarations to accept t and pass to scratch(t).\n4. In packages/context-handoff/test/doctor.test.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update scratch(t) to accept t and use tmp(t, 'handoff-doctor-').\n   - Update test declarations to accept t and pass to scratch(t).\n   - Remove manual try/finally blocks, unindenting test bodies.\n5. In packages/context-handoff/test/supervise-cli-support.mjs:\n   - Import { tmp } from '@adlc/core/test-kit'.\n   - Update fixture(t, prefix = 'handoff-supervise-') to accept t and allocate root via tmp(t, prefix).\n6. In scripts/test/tmp-fixture-boundary.test.mjs:\n   - Remove all 5 packages/context-handoff/* entries from the ALLOWLIST set (completely eradicates packages/context-handoff from allowlist).\n7. Verification:\n   - npm test -w packages/context-handoff exits 0.\n   - node --test scripts/test/tmp-fixture-boundary.test.mjs exits 0.\n   - grep -c 'finally' packages/context-handoff/test/doctor.test.mjs returns 0.\n\nACCEPTANCE CRITERIA.\n- AC1 All 5 context-handoff test files contain 0 finally blocks.\n- AC2 mkdtempSync is not called in any of the 5 context-handoff test files.\n- AC3 grep -E 'packages/context-handoff/' scripts/test/tmp-fixture-boundary.test.mjs returns nothing.\n- AC4 npm test -w packages/context-handoff exits 0.\n- AC5 node --test scripts/test/tmp-fixture-boundary.test.mjs exits 0.\n- AC6 adlc rails-guard exits 0.",
+  "category": "refactor",
+  "duration": 2,
+  "edges": [],
+  "id": "T-01M39NM6DE84BXJ4KPSR529PSW",
+  "rails": [],
+  "scope": [
+    "packages/context-handoff/adapter-test/recovery-exception.test.mjs",
+    "packages/context-handoff/test/continue-cli-support.mjs",
+    "packages/context-handoff/test/continue-ownership-bytes.test.mjs",
+    "packages/context-handoff/test/doctor.test.mjs",
+    "packages/context-handoff/test/supervise-cli-support.mjs",
+    "scripts/test/tmp-fixture-boundary.test.mjs"
+  ],
+  "title": "refactor(context-handoff): adopt @adlc/core/test-kit across remaining context-handoff tests"
+}
