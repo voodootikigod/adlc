@@ -215,10 +215,22 @@ Resolved 2026-07-09 (T33 / Phase 4b): **deterministic P5 runner.** The native
 protocol in FIRST-PARTY code (`lib/prosecute-runner.mjs` `runProsecution`, over
 the tested `@adlc/core` helpers), not by prose-instructing the model to
 orchestrate. Each lens and the verifier run in an isolated child session
-(`client.session.create({parentID})` + `session.prompt`) carrying the agent's
-prompt as a per-call `system` override and a **fail-closed read-only `tools`
-allowlist**. That map is `{ "*": false, <read-only tools>: true }` — the
-wildcard-deny-first shape opencode's own `explore`/`compaction` agents use:
+(`client.session.create({parentID})` + `session.prompt`) that prompts **as its
+own agent** (`agent: "prosecutor-<lens>"`) and carries a **fail-closed read-only
+`tools` allowlist**. Naming the agent makes opencode resolve that lens's
+configured `model` — agent frontmatter or `opencode.json`
+`agent.<name>.model` — the same way its Task tool does, so each lens can run on a
+different model (a clean multi-model P5). A lens agent that is not registered is
+never named: its call runs on the session model with the agent's prompt as a
+`system` override. The registered set comes from `client.app.agents()` once per
+run, because opencode reports an unknown agent only as a generic 500; a host that
+cannot list agents keeps every lens on the session model. A lens whose own model
+fails is never retried on the session model, so it cannot silently switch model
+family. The tool reports which model answered each
+lens, which lenses ran on the session model, and labels a run where every
+reviewer answered on one model as single-model (not cross-model). The `tools`
+map is `{ "*": false, <read-only tools>: true }` — the wildcard-deny-first
+shape opencode's own `explore`/`compaction` agents use:
 opencode compiles the map to permission rules (`findLast` wins), so `"*": false`
 denies everything and only the read-only tools re-allow themselves. Any unlisted
 tool — `edit`/`write`/`apply_patch`, the `task` sub-agent spawner, MCP tools, or
