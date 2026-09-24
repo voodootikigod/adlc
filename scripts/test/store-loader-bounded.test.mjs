@@ -6,10 +6,10 @@
 // rails) and open an enforcement hole.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync, readSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 
 import {
   loadTicketStoreReadOnly,
@@ -18,10 +18,6 @@ import {
   addBounded,
   ticketFilename,
 } from '../ticket-readers/read-only-loader.mjs';
-
-function tmp() {
-  return mkdtempSync(join(tmpdir(), 'adlc-store-dos-'));
-}
 
 /** A minimal valid directory store: `.store.json` manifest + one well-formed shard. */
 function directoryStore(root, ticket = { id: 'T1', title: 'Fixture' }) {
@@ -34,14 +30,14 @@ function directoryStore(root, ticket = { id: 'T1', title: 'Fixture' }) {
 
 // ---- readStoreFileBounded (file read) ----
 
-test('readStoreFileBounded refuses a non-regular file (a directory) instead of reading it', () => {
-  const root = tmp();
+test('readStoreFileBounded refuses a non-regular file (a directory) instead of reading it', (t) => {
+  const root = tmp(t, 'adlc-store-dos-');
   mkdirSync(join(root, 'adir'));
   assert.throws(() => readStoreFileBounded(join(root, 'adir')), /not a regular file/);
 });
 
-test('readStoreFileBounded refuses a file over the byte cap (never slurps it)', () => {
-  const root = tmp();
+test('readStoreFileBounded refuses a file over the byte cap (never slurps it)', (t) => {
+  const root = tmp(t, 'adlc-store-dos-');
   const p = join(root, 'big.json');
   writeFileSync(p, 'x'.repeat(100));
   assert.throws(() => readStoreFileBounded(p, 10), /exceeds the 10-byte read cap/);
@@ -49,15 +45,15 @@ test('readStoreFileBounded refuses a file over the byte cap (never slurps it)', 
   assert.equal(readStoreFileBounded(p, 1000), 'x'.repeat(100));
 });
 
-test('readStoreFileBounded does not block on a FIFO (POSIX)', { skip: process.platform === 'win32' }, () => {
-  const root = tmp();
+test('readStoreFileBounded does not block on a FIFO (POSIX)', { skip: process.platform === 'win32' }, (t) => {
+  const root = tmp(t, 'adlc-store-dos-');
   const p = join(root, 'fifo');
   execFileSync('mkfifo', [p]);
   assert.throws(() => readStoreFileBounded(p), /not a regular file/); // returns, never hangs
 });
 
-test('readStoreFileBounded accumulates POSIX short reads — never truncates a large file', () => {
-  const root = tmp();
+test('readStoreFileBounded accumulates POSIX short reads — never truncates a large file', (t) => {
+  const root = tmp(t, 'adlc-store-dos-');
   const p = join(root, 'big.json');
   const content = 'x'.repeat(5000);
   writeFileSync(p, content);
@@ -70,8 +66,8 @@ test('readStoreFileBounded accumulates POSIX short reads — never truncates a l
 
 // ---- readdirEntriesBounded (directory read) ----
 
-test('readdirEntriesBounded fails CLOSED past the entry cap (does not truncate the store)', () => {
-  const root = tmp();
+test('readdirEntriesBounded fails CLOSED past the entry cap (does not truncate the store)', (t) => {
+  const root = tmp(t, 'adlc-store-dos-');
   const dir = join(root, 'many');
   mkdirSync(dir);
   for (let i = 0; i < 5; i += 1) writeFileSync(join(dir, `f${i}.json`), '{}');
@@ -96,16 +92,16 @@ test('addBounded fails CLOSED once the running total exceeds the aggregate cap',
 
 // ---- integration: loadTicketStoreReadOnly over a hostile store ----
 
-test('loadTicketStoreReadOnly does not block when .store.json is a FIFO (POSIX)', { skip: process.platform === 'win32' }, () => {
-  const root = tmp();
+test('loadTicketStoreReadOnly does not block when .store.json is a FIFO (POSIX)', { skip: process.platform === 'win32' }, (t) => {
+  const root = tmp(t, 'adlc-store-dos-');
   const dir = join(root, '.adlc', 'tickets');
   mkdirSync(dir, { recursive: true });
   execFileSync('mkfifo', [join(dir, '.store.json')]); // the manifest read had NO stat guard
   assert.throws(() => loadTicketStoreReadOnly({ root, env: {} })); // must throw, not hang
 });
 
-test('loadTicketStoreReadOnly still loads a well-formed directory store (no happy-path regression)', () => {
-  const root = tmp();
+test('loadTicketStoreReadOnly still loads a well-formed directory store (no happy-path regression)', (t) => {
+  const root = tmp(t, 'adlc-store-dos-');
   directoryStore(root, { id: 'T1', title: 'Fixture' });
   const snap = loadTicketStoreReadOnly({ root, env: {} });
   assert.equal(snap.tickets.length, 1);
