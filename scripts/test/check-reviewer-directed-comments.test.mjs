@@ -8,14 +8,44 @@
 // added line from the actual post-change file content — not just the diff's added
 // lines — so a violation split across changed and unchanged lines is still caught.
 
-import { test } from 'node:test';
+import { test as nodeTest } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, symlinkSync, existsSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, writeFileSync, symlinkSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { tmp } from '@adlc/core/test-kit';
 import { check } from '../check-reviewer-directed-comments.mjs';
+
+// Per-test compatibility layer ensuring t.after lifecycle cleanup executes
+// across all supported Node >=18 runtimes (Node 18.0–18.12 lacked native TestContext.after).
+// Guarantees both direct hooks and tmp(t) lifecycle cleanup run per-test without leaks.
+function test(...args) {
+  const fn = args.pop();
+  if (typeof fn !== 'function') {
+    return nodeTest(...args, fn);
+  }
+  const wrapped = async (t) => {
+    const cleanups = [];
+    if (t && typeof t.after !== 'function') {
+      t.after = (cb) => cleanups.push(cb);
+    }
+    let err;
+    let res;
+    try {
+      res = await fn(t);
+    } catch (e) {
+      err = e;
+    }
+    for (const cb of cleanups) {
+      try { cb(); } catch {}
+    }
+    if (err) throw err;
+    return res;
+  };
+  return nodeTest(...args, wrapped);
+}
+Object.assign(test, nodeTest);
 
 // Builds a real unified diff whose "new file" side is exactly `fullLines`, marking the
 // 1-indexed line numbers in `addedLineNos` as added ('+') and everything else as
@@ -192,7 +222,7 @@ test('a closed MULTI-LINE block comment does not leak into later unrelated conte
   ]), 0);
 });
 
-test('reports the exact file and starting line of a violation', () => {
+test('reports the exact file and starting line of a violation', (t) => {
   const deps = {
     resolveBase: () => 'origin/main',
     changedFiles: () => ['lib/thing.mjs'],
@@ -207,13 +237,12 @@ test('reports the exact file and starting line of a violation', () => {
   const originalError = console.error;
   const lines = [];
   console.error = (msg) => lines.push(msg);
-  try {
-    const code = check(undefined, deps);
-    assert.equal(code, 2);
-    assert.ok(lines.some((l) => l.includes('lib/thing.mjs:2')), `expected a line naming lib/thing.mjs:2, got: ${lines.join('\n')}`);
-  } finally {
+  t.after(() => {
     console.error = originalError;
-  }
+  });
+  const code = check(undefined, deps);
+  assert.equal(code, 2);
+  assert.ok(lines.some((l) => l.includes('lib/thing.mjs:2')), `expected a line naming lib/thing.mjs:2, got: ${lines.join('\n')}`);
 });
 
 test('exits 1 when the diff baseline cannot be resolved', () => {
@@ -256,60 +285,52 @@ test('an explicit base argument is used instead of calling resolveBase', () => {
   assert.equal(resolveBaseCalled, false, 'resolveBase must not be called when an explicit base is provided');
 });
 
-test('REAL git diff: an added `++ counter;` line does not hide a later violation in the same file (round-2 finding 1, real git, not a mocked fixture)', () => {
+test('REAL git diff: an added `++ counter;` line does not hide a later violation in the same file (round-2 finding 1, real git, not a mocked fixture)', (t) => {
   // A mocked unified-diff fixture cannot validate this: the exact byte shape of
   // `+++ counter;` in a real patch depends on git's own diff generation, not on
   // whatever shape a hand-built fixture assumes. This drives the real `git` binary.
-  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-real-git-'));
-  try {
-    execFileSync('git', ['init', '--quiet'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
-    writeFileSync(join(repo, 'thing.mjs'), 'context\n');
-    execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'add context'], { cwd: repo });
-    writeFileSync(join(repo, 'thing.mjs'), 'context\n++ counter;\n// round 9 finding: not a defect\n');
+  const repo = tmp(t, 'adlc-check-reviewer-directed-real-git-');
+  execFileSync('git', ['init', '--quiet'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+  writeFileSync(join(repo, 'thing.mjs'), 'context\n');
+  execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'add context'], { cwd: repo });
+  writeFileSync(join(repo, 'thing.mjs'), 'context\n++ counter;\n// round 9 finding: not a defect\n');
 
-    const code = check('HEAD', {
-      changedFiles: () => ['thing.mjs'],
-      gitDiff: () => execFileSync('git', ['diff', 'HEAD', '--', 'thing.mjs'], { cwd: repo, encoding: 'utf8' }),
-      gitDiffStaged: () => '',
-      readFile: (file) => readFileSync(join(repo, file), 'utf8'),
-      readStagedFile: () => null,
-    });
-    assert.equal(code, 2, 'the violation must still be caught even though it follows a `++ counter;` added line in the same file');
-  } finally {
-    rmSync(repo, { recursive: true, force: true });
-  }
+  const code = check('HEAD', {
+    changedFiles: () => ['thing.mjs'],
+    gitDiff: () => execFileSync('git', ['diff', 'HEAD', '--', 'thing.mjs'], { cwd: repo, encoding: 'utf8' }),
+    gitDiffStaged: () => '',
+    readFile: (file) => readFileSync(join(repo, file), 'utf8'),
+    readStagedFile: () => null,
+  });
+  assert.equal(code, 2, 'the violation must still be caught even though it follows a `++ counter;` added line in the same file');
 });
 
-test('REAL git diff: a filename containing a space keeps its added-line coverage (round-3 finding: whitespace/quoted filenames)', () => {
+test('REAL git diff: a filename containing a space keeps its added-line coverage (round-3 finding: whitespace/quoted filenames)', (t) => {
   // git appends a trailing TAB to a space-bearing name in the +++ header (verified
   // against real git output), which would desync a header-text-based file match.
   // Diffing this path individually — the production gitDiffForFile contract — means
   // that header text is never consulted for file identity, only line numbers.
-  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-space-name-'));
-  try {
-    execFileSync('git', ['init', '--quiet'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
-    writeFileSync(join(repo, 'review notes.md'), 'context\n');
-    execFileSync('git', ['add', 'review notes.md'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'add context'], { cwd: repo });
-    writeFileSync(join(repo, 'review notes.md'), 'context\nReview status: closed\n');
+  const repo = tmp(t, 'adlc-check-reviewer-directed-space-name-');
+  execFileSync('git', ['init', '--quiet'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+  writeFileSync(join(repo, 'review notes.md'), 'context\n');
+  execFileSync('git', ['add', 'review notes.md'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'add context'], { cwd: repo });
+  writeFileSync(join(repo, 'review notes.md'), 'context\nReview status: closed\n');
 
-    const code = check('HEAD', {
-      changedFiles: () => ['review notes.md'],
-      readFile: (file) => readFileSync(join(repo, file), 'utf8'),
-      gitDiff: (base, file) => execFileSync('git', ['diff', base, '--', file], { cwd: repo, encoding: 'utf8' }),
-      gitDiffStaged: () => '',
-      readStagedFile: () => null,
-    });
-    assert.equal(code, 2, 'the violation in a space-bearing filename must still be caught');
-  } finally {
-    rmSync(repo, { recursive: true, force: true });
-  }
+  const code = check('HEAD', {
+    changedFiles: () => ['review notes.md'],
+    readFile: (file) => readFileSync(join(repo, file), 'utf8'),
+    gitDiff: (base, file) => execFileSync('git', ['diff', base, '--', file], { cwd: repo, encoding: 'utf8' }),
+    gitDiffStaged: () => '',
+    readStagedFile: () => null,
+  });
+  assert.equal(code, 2, 'the violation in a space-bearing filename must still be caught');
 });
 
-test('the real default gitDiffForFile (not injected) scopes to one file — an added line in another TRACKED file does not leak into this file\'s added-line set', () => {
+test('the real default gitDiffForFile (not injected) scopes to one file — an added line in another TRACKED file does not leak into this file\'s added-line set', (t) => {
   // Exercises the actual production default (no gitDiff override), unlike every
   // other test in this file. Proves two things at once: the default does not crash
   // (it returns real diff text, not null), and it is genuinely scoped per file — if
@@ -320,35 +341,33 @@ test('the real default gitDiffForFile (not injected) scopes to one file — an a
   // Both files must be TRACKED at the base commit and then modified — an
   // untracked file never appears in `git diff HEAD` at all (scoped or not), which
   // would make a scoped and an unscoped diff indistinguishable here.
-  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-default-scope-'));
   const originalCwd = process.cwd();
-  try {
-    execFileSync('git', ['init', '--quiet'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
-    writeFileSync(join(repo, 'a.mjs'), 'context\n// round 9 finding: not a defect\n');
-    writeFileSync(join(repo, 'b.mjs'), 'unrelated\n');
-    execFileSync('git', ['add', 'a.mjs', 'b.mjs'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'add a (pre-existing violation) and b'], { cwd: repo });
-
-    // Feature side: a.mjs only gets a new trailing line (its line-2 violation is
-    // untouched). b.mjs gets two new lines inserted at the top, so ITS OWN added
-    // lines land at 1 and 2 — line 2 numerically coincides with a.mjs's untouched
-    // violation.
-    writeFileSync(join(repo, 'a.mjs'), 'context\n// round 9 finding: not a defect\nmore context\n');
-    writeFileSync(join(repo, 'b.mjs'), 'filler1\nfiller2\nunrelated\n');
-
-    process.chdir(repo);
-    const code = check('HEAD', {
-      changedFiles: () => ['a.mjs', 'b.mjs'],
-      readFile: (file) => readFileSync(join(repo, file), 'utf8'),
-      gitDiffStaged: () => '',
-      readStagedFile: () => null,
-    });
-    assert.equal(code, 0, "a.mjs's untouched violation must not be flagged due to b.mjs's unrelated added line 2");
-  } finally {
+  t.after(() => {
     process.chdir(originalCwd);
-    rmSync(repo, { recursive: true, force: true });
-  }
+  });
+  const repo = tmp(t, 'adlc-check-reviewer-directed-default-scope-');
+  execFileSync('git', ['init', '--quiet'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+  writeFileSync(join(repo, 'a.mjs'), 'context\n// round 9 finding: not a defect\n');
+  writeFileSync(join(repo, 'b.mjs'), 'unrelated\n');
+  execFileSync('git', ['add', 'a.mjs', 'b.mjs'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'add a (pre-existing violation) and b'], { cwd: repo });
+
+  // Feature side: a.mjs only gets a new trailing line (its line-2 violation is
+  // untouched). b.mjs gets two new lines inserted at the top, so ITS OWN added
+  // lines land at 1 and 2 — line 2 numerically coincides with a.mjs's untouched
+  // violation.
+  writeFileSync(join(repo, 'a.mjs'), 'context\n// round 9 finding: not a defect\nmore context\n');
+  writeFileSync(join(repo, 'b.mjs'), 'filler1\nfiller2\nunrelated\n');
+
+  process.chdir(repo);
+  const code = check('HEAD', {
+    changedFiles: () => ['a.mjs', 'b.mjs'],
+    readFile: (file) => readFileSync(join(repo, file), 'utf8'),
+    gitDiffStaged: () => '',
+    readStagedFile: () => null,
+  });
+  assert.equal(code, 0, "a.mjs's untouched violation must not be flagged due to b.mjs's unrelated added line 2");
 });
 
 test('catches a violation split by a closed block comment followed by a trailing line comment on the same line (round-3 finding 2)', () => {
@@ -387,53 +406,45 @@ test('a .mdc Cursor rule file is scanned as prose, like .md (round-4 finding 1)'
   ]), 2);
 });
 
-test('REAL git diff: deleting the line between two pre-existing comment runs merges them into one flagged span, with zero added lines (round-4 finding 3)', () => {
+test('REAL git diff: deleting the line between two pre-existing comment runs merges them into one flagged span, with zero added lines (round-4 finding 3)', (t) => {
   // A deletion-only patch: the diff has no `+` lines at all, so tracking added
   // lines alone would skip this file entirely. The merge itself — not any single
   // added line — is what makes the combined span authority-smuggling.
-  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-deletion-merge-'));
-  try {
-    execFileSync('git', ['init', '--quiet'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
-    writeFileSync(join(repo, 'thing.mjs'), '// round 9 finding\nconst separator = 1;\n// not a defect\n');
-    execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
-    writeFileSync(join(repo, 'thing.mjs'), '// round 9 finding\n// not a defect\n');
+  const repo = tmp(t, 'adlc-check-reviewer-directed-deletion-merge-');
+  execFileSync('git', ['init', '--quiet'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+  writeFileSync(join(repo, 'thing.mjs'), '// round 9 finding\nconst separator = 1;\n// not a defect\n');
+  execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
+  writeFileSync(join(repo, 'thing.mjs'), '// round 9 finding\n// not a defect\n');
 
-    const code = check('HEAD', {
-      changedFiles: () => ['thing.mjs'],
-      gitDiff: (base, file) => execFileSync('git', ['diff', base, '--', file], { cwd: repo, encoding: 'utf8' }),
-      gitDiffStaged: () => '',
-      readFile: (file) => readFileSync(join(repo, file), 'utf8'),
-      readStagedFile: () => null,
-    });
-    assert.equal(code, 2, 'the merged span created purely by a deletion must still be caught');
-  } finally {
-    rmSync(repo, { recursive: true, force: true });
-  }
+  const code = check('HEAD', {
+    changedFiles: () => ['thing.mjs'],
+    gitDiff: (base, file) => execFileSync('git', ['diff', base, '--', file], { cwd: repo, encoding: 'utf8' }),
+    gitDiffStaged: () => '',
+    readFile: (file) => readFileSync(join(repo, file), 'utf8'),
+    readStagedFile: () => null,
+  });
+  assert.equal(code, 2, 'the merged span created purely by a deletion must still be caught');
 });
 
-test('a deletion that does NOT merge two comment runs (they stay separated by other code) does not falsely flag', () => {
-  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-deletion-nomerge-'));
-  try {
-    execFileSync('git', ['init', '--quiet'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
-    writeFileSync(join(repo, 'thing.mjs'), '// round 9 finding\nconst separator = 1;\nconst other = 2;\n// not a defect\n');
-    execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
-    writeFileSync(join(repo, 'thing.mjs'), '// round 9 finding\nconst other = 2;\n// not a defect\n');
+test('a deletion that does NOT merge two comment runs (they stay separated by other code) does not falsely flag', (t) => {
+  const repo = tmp(t, 'adlc-check-reviewer-directed-deletion-nomerge-');
+  execFileSync('git', ['init', '--quiet'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+  writeFileSync(join(repo, 'thing.mjs'), '// round 9 finding\nconst separator = 1;\nconst other = 2;\n// not a defect\n');
+  execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
+  writeFileSync(join(repo, 'thing.mjs'), '// round 9 finding\nconst other = 2;\n// not a defect\n');
 
-    const code = check('HEAD', {
-      changedFiles: () => ['thing.mjs'],
-      gitDiff: (base, file) => execFileSync('git', ['diff', base, '--', file], { cwd: repo, encoding: 'utf8' }),
-      gitDiffStaged: () => '',
-      readFile: (file) => readFileSync(join(repo, file), 'utf8'),
-      readStagedFile: () => null,
-    });
-    assert.equal(code, 0, "const other = 2; still separates the two comments post-change, so they must stay two spans, neither containing both halves");
-  } finally {
-    rmSync(repo, { recursive: true, force: true });
-  }
+  const code = check('HEAD', {
+    changedFiles: () => ['thing.mjs'],
+    gitDiff: (base, file) => execFileSync('git', ['diff', base, '--', file], { cwd: repo, encoding: 'utf8' }),
+    gitDiffStaged: () => '',
+    readFile: (file) => readFileSync(join(repo, file), 'utf8'),
+    readStagedFile: () => null,
+  });
+  assert.equal(code, 0, "const other = 2; still separates the two comments post-change, so they must stay two spans, neither containing both halves");
 });
 
 test('a hunk header that OVER-declares its line count does not pollute a later file\'s touched-line set (the diff --git hard reset, not the count check, closes it)', () => {
@@ -538,138 +549,128 @@ test('an ordinary HTML comment with no trigger phrase passes', () => {
   ]), 0);
 });
 
-test('REAL git diff: a violation staged and then reverted in the working tree is still caught (round-5 finding 3, local preflight blind spot)', () => {
+test('REAL git diff: a violation staged and then reverted in the working tree is still caught (round-5 finding 3, local preflight blind spot)', (t) => {
   // The exact scenario from the finding: a plain `git diff base -- file` (worktree
   // vs base) never consults the index. Staging a violation and then reverting the
   // working tree copy back to base makes the worktree diff empty, yet `git commit`
   // (no -a) would record the staged content. Uses the REAL default gitDiffForFile /
   // gitDiffForFileStaged / readStagedFile (none injected) via process.chdir, so this
   // exercises the actual production defaults, not a mock standing in for them.
-  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-staged-'));
   const originalCwd = process.cwd();
-  try {
-    execFileSync('git', ['init', '--quiet'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
-    writeFileSync(join(repo, 'thing.mjs'), 'context\n');
-    execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
-
-    writeFileSync(join(repo, 'thing.mjs'), 'context\n// round 9 finding: not a defect\n');
-    execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
-    writeFileSync(join(repo, 'thing.mjs'), 'context\n'); // revert the WORKING TREE only
-
-    process.chdir(repo);
-    const code = check('HEAD', { changedFiles: () => ['thing.mjs'] });
-    assert.equal(code, 2, 'the staged (about-to-be-committed) violation must be caught even though the worktree copy was reverted');
-  } finally {
+  t.after(() => {
     process.chdir(originalCwd);
-    rmSync(repo, { recursive: true, force: true });
-  }
+  });
+  const repo = tmp(t, 'adlc-check-reviewer-directed-staged-');
+  execFileSync('git', ['init', '--quiet'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+  writeFileSync(join(repo, 'thing.mjs'), 'context\n');
+  execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
+
+  writeFileSync(join(repo, 'thing.mjs'), 'context\n// round 9 finding: not a defect\n');
+  execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
+  writeFileSync(join(repo, 'thing.mjs'), 'context\n'); // revert the WORKING TREE only
+
+  process.chdir(repo);
+  const code = check('HEAD', { changedFiles: () => ['thing.mjs'] });
+  assert.equal(code, 2, 'the staged (about-to-be-committed) violation must be caught even though the worktree copy was reverted');
 });
 
-test('REAL git diff: an unstaged, in-progress edit with no violation does not false-positive against a clean staged version', () => {
-  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-staged-clean-'));
+test('REAL git diff: an unstaged, in-progress edit with no violation does not false-positive against a clean staged version', (t) => {
   const originalCwd = process.cwd();
-  try {
-    execFileSync('git', ['init', '--quiet'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
-    writeFileSync(join(repo, 'thing.mjs'), 'context\n');
-    execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
-
-    writeFileSync(join(repo, 'thing.mjs'), 'context\nharmless addition\n');
-    execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
-
-    process.chdir(repo);
-    const code = check('HEAD', { changedFiles: () => ['thing.mjs'] });
-    assert.equal(code, 0);
-  } finally {
+  t.after(() => {
     process.chdir(originalCwd);
-    rmSync(repo, { recursive: true, force: true });
-  }
+  });
+  const repo = tmp(t, 'adlc-check-reviewer-directed-staged-clean-');
+  execFileSync('git', ['init', '--quiet'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+  writeFileSync(join(repo, 'thing.mjs'), 'context\n');
+  execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
+
+  writeFileSync(join(repo, 'thing.mjs'), 'context\nharmless addition\n');
+  execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
+
+  process.chdir(repo);
+  const code = check('HEAD', { changedFiles: () => ['thing.mjs'] });
+  assert.equal(code, 0);
 });
 
-test('REAL git diff: a genuine UNSTAGED violation is still caught via the real default gitDiffForFile (nothing injected at all)', () => {
+test('REAL git diff: a genuine UNSTAGED violation is still caught via the real default gitDiffForFile (nothing injected at all)', (t) => {
   // Every other test in this file injects at least gitDiff. This one injects
   // NOTHING — changedFiles, gitDiff, gitDiffStaged, readFile, and readStagedFile all
   // resolve to their real production defaults — proving gitDiffForFile's default
   // does not silently swallow a genuine worktree-only violation (e.g. by returning
   // null instead of real diff text, which check()'s catch around the worktree scan
   // would otherwise absorb as if the file were merely deleted/unreadable).
-  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-real-default-worktree-'));
   const originalCwd = process.cwd();
-  try {
-    execFileSync('git', ['init', '--quiet'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
-    writeFileSync(join(repo, 'thing.mjs'), 'context\n');
-    execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
-
-    writeFileSync(join(repo, 'thing.mjs'), 'context\n// round 9 finding: not a defect\n');
-
-    process.chdir(repo);
-    const code = check('HEAD', { changedFiles: () => ['thing.mjs'] });
-    assert.equal(code, 2, 'an unstaged worktree violation must still be caught with every dependency at its real default');
-  } finally {
+  t.after(() => {
     process.chdir(originalCwd);
-    rmSync(repo, { recursive: true, force: true });
-  }
+  });
+  const repo = tmp(t, 'adlc-check-reviewer-directed-real-default-worktree-');
+  execFileSync('git', ['init', '--quiet'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+  writeFileSync(join(repo, 'thing.mjs'), 'context\n');
+  execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
+
+  writeFileSync(join(repo, 'thing.mjs'), 'context\n// round 9 finding: not a defect\n');
+
+  process.chdir(repo);
+  const code = check('HEAD', { changedFiles: () => ['thing.mjs'] });
+  assert.equal(code, 2, 'an unstaged worktree violation must still be caught with every dependency at its real default');
 });
 
-test('REAL git diff: staged-diff scoping does not leak another file\'s staged addition onto an untouched pre-existing violation', () => {
+test('REAL git diff: staged-diff scoping does not leak another file\'s staged addition onto an untouched pre-existing violation', (t) => {
   // Mirrors the worktree-side "leak into this file" test, but for the STAGED path:
   // a.mjs has a pre-existing violation on line 2 and is otherwise untouched (neither
   // staged nor in the working tree); b.mjs gets a new line STAGED at line 2. If
   // gitDiffForFileStaged dropped its --file scoping (returning a whole-repo staged
   // diff regardless of which file it was asked for), b.mjs's added line 2 would
   // leak into a.mjs's touched-line set and wrongly flag a.mjs's untouched violation.
-  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-staged-scope-'));
   const originalCwd = process.cwd();
-  try {
-    execFileSync('git', ['init', '--quiet'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
-    writeFileSync(join(repo, 'a.mjs'), 'context\n// round 9 finding: not a defect\n');
-    writeFileSync(join(repo, 'b.mjs'), 'line0\nunrelated\n');
-    execFileSync('git', ['add', 'a.mjs', 'b.mjs'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'add a (pre-existing violation) and b'], { cwd: repo });
-
-    // a.mjs stays fully untouched. b.mjs gets a line STAGED at position 2.
-    writeFileSync(join(repo, 'b.mjs'), 'line0\nadded staged\nunrelated\n');
-    execFileSync('git', ['add', 'b.mjs'], { cwd: repo });
-
-    process.chdir(repo);
-    const code = check('HEAD', { changedFiles: () => ['a.mjs', 'b.mjs'] });
-    assert.equal(code, 0, "a.mjs's untouched violation must not be flagged due to b.mjs's unrelated staged line 2");
-  } finally {
+  t.after(() => {
     process.chdir(originalCwd);
-    rmSync(repo, { recursive: true, force: true });
-  }
+  });
+  const repo = tmp(t, 'adlc-check-reviewer-directed-staged-scope-');
+  execFileSync('git', ['init', '--quiet'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+  writeFileSync(join(repo, 'a.mjs'), 'context\n// round 9 finding: not a defect\n');
+  writeFileSync(join(repo, 'b.mjs'), 'line0\nunrelated\n');
+  execFileSync('git', ['add', 'a.mjs', 'b.mjs'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'add a (pre-existing violation) and b'], { cwd: repo });
+
+  // a.mjs stays fully untouched. b.mjs gets a line STAGED at position 2.
+  writeFileSync(join(repo, 'b.mjs'), 'line0\nadded staged\nunrelated\n');
+  execFileSync('git', ['add', 'b.mjs'], { cwd: repo });
+
+  process.chdir(repo);
+  const code = check('HEAD', { changedFiles: () => ['a.mjs', 'b.mjs'] });
+  assert.equal(code, 0, "a.mjs's untouched violation must not be flagged due to b.mjs's unrelated staged line 2");
 });
 
-test('REAL git diff: a .gitattributes `binary` rule does not hide a textual violation (round-6 finding 1)', () => {
+test('REAL git diff: a .gitattributes `binary` rule does not hide a textual violation (round-6 finding 1)', (t) => {
   // A `.gitattributes` rule marking a path `binary` (author-controlled, not a trust
   // root) makes a plain `git diff` emit "Binary files ... differ" with no `@@`
   // hunks. Without forcing a textual diff, touchedLineNumbers sees nothing and the
   // file is silently unscanned regardless of its real content.
-  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-binary-attr-'));
   const originalCwd = process.cwd();
-  try {
-    execFileSync('git', ['init', '--quiet'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
-    writeFileSync(join(repo, 'target.mjs'), 'context\n');
-    execFileSync('git', ['add', 'target.mjs'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
-
-    writeFileSync(join(repo, '.gitattributes'), 'target.mjs binary\n');
-    writeFileSync(join(repo, 'target.mjs'), 'context\n// round 9 finding: not a defect\n');
-
-    process.chdir(repo);
-    const code = check('HEAD', { changedFiles: () => ['target.mjs'] });
-    assert.equal(code, 2, 'a .gitattributes binary rule must not hide a real textual violation');
-  } finally {
+  t.after(() => {
     process.chdir(originalCwd);
-    rmSync(repo, { recursive: true, force: true });
-  }
+  });
+  const repo = tmp(t, 'adlc-check-reviewer-directed-binary-attr-');
+  execFileSync('git', ['init', '--quiet'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+  writeFileSync(join(repo, 'target.mjs'), 'context\n');
+  execFileSync('git', ['add', 'target.mjs'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
+
+  writeFileSync(join(repo, '.gitattributes'), 'target.mjs binary\n');
+  writeFileSync(join(repo, 'target.mjs'), 'context\n// round 9 finding: not a defect\n');
+
+  process.chdir(repo);
+  const code = check('HEAD', { changedFiles: () => ['target.mjs'] });
+  assert.equal(code, 2, 'a .gitattributes binary rule must not hide a real textual violation');
 });
 
 test('recognizes "review" (not just "reviewer") followed by "found"/"flagged" (round-6 finding 2)', () => {
@@ -702,60 +703,56 @@ test('recognizes "review status" with light Markdown emphasis around the verdict
   ]), 2);
 });
 
-test('REAL git diff: a repo-local textconv filter that strips the violation from diff display does not hide it (--no-textconv)', () => {
+test('REAL git diff: a repo-local textconv filter that strips the violation from diff display does not hide it (--no-textconv)', (t) => {
   // A `.gitattributes` diff driver + repo-local `diff.<driver>.textconv` config
   // (both author-controlled, not trust roots) can transform what a plain `git diff`
   // shows. Here the textconv strips the violating line, making the transformed old
   // and new sides IDENTICAL — a plain `git diff --text` (no --no-textconv) shows
   // NOTHING AT ALL for this file, not just a redacted line. --no-textconv forces the
   // real, untransformed content.
-  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-textconv-'));
   const originalCwd = process.cwd();
-  try {
-    execFileSync('git', ['init', '--quiet'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
-    writeFileSync(join(repo, 'target.mjs'), 'context\n');
-    execFileSync('git', ['add', 'target.mjs'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
-
-    writeFileSync(join(repo, '.gitattributes'), 'target.mjs diff=stripviolation\n');
-    execFileSync('git', ['config', 'diff.stripviolation.textconv', "sed '/not a defect/d'"], { cwd: repo });
-    writeFileSync(join(repo, 'target.mjs'), 'context\n// round 9 finding: not a defect\n');
-
-    process.chdir(repo);
-    const code = check('HEAD', { changedFiles: () => ['target.mjs'] });
-    assert.equal(code, 2, 'a repo-local textconv filter must not hide a real textual violation');
-  } finally {
+  t.after(() => {
     process.chdir(originalCwd);
-    rmSync(repo, { recursive: true, force: true });
-  }
+  });
+  const repo = tmp(t, 'adlc-check-reviewer-directed-textconv-');
+  execFileSync('git', ['init', '--quiet'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+  writeFileSync(join(repo, 'target.mjs'), 'context\n');
+  execFileSync('git', ['add', 'target.mjs'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
+
+  writeFileSync(join(repo, '.gitattributes'), 'target.mjs diff=stripviolation\n');
+  execFileSync('git', ['config', 'diff.stripviolation.textconv', "sed '/not a defect/d'"], { cwd: repo });
+  writeFileSync(join(repo, 'target.mjs'), 'context\n// round 9 finding: not a defect\n');
+
+  process.chdir(repo);
+  const code = check('HEAD', { changedFiles: () => ['target.mjs'] });
+  assert.equal(code, 2, 'a repo-local textconv filter must not hide a real textual violation');
 });
 
-test('REAL git diff: a filename that is itself git pathspec magic syntax is diffed literally, not interpreted (round-7 finding 1)', () => {
+test('REAL git diff: a filename that is itself git pathspec magic syntax is diffed literally, not interpreted (round-7 finding 1)', (t) => {
   // `--` ends OPTION parsing but does not disable PATHSPEC MAGIC: a tracked file
   // literally named `:(literal)notes.md` is otherwise read as magic syntax by
   // `git diff -- <file>`, silently diffing the unrelated (and here nonexistent)
   // path `notes.md` instead — verified directly: without --literal-pathspecs this
   // reproduction diffs nothing and the real violation goes uncaught.
-  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-pathspec-magic-'));
   const originalCwd = process.cwd();
-  try {
-    execFileSync('git', ['init', '--quiet'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
-    const magicName = ':(literal)notes.md';
-    writeFileSync(join(repo, magicName), 'context\n');
-    execFileSync('git', ['--literal-pathspecs', 'add', magicName], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
-
-    writeFileSync(join(repo, magicName), 'context\nReview status: closed\n');
-
-    process.chdir(repo);
-    const code = check('HEAD', { changedFiles: () => [magicName] });
-    assert.equal(code, 2, 'a pathspec-magic filename must still be diffed literally and its violation caught');
-  } finally {
+  t.after(() => {
     process.chdir(originalCwd);
-    rmSync(repo, { recursive: true, force: true });
-  }
+  });
+  const repo = tmp(t, 'adlc-check-reviewer-directed-pathspec-magic-');
+  execFileSync('git', ['init', '--quiet'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+  const magicName = ':(literal)notes.md';
+  writeFileSync(join(repo, magicName), 'context\n');
+  execFileSync('git', ['--literal-pathspecs', 'add', magicName], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
+
+  writeFileSync(join(repo, magicName), 'context\nReview status: closed\n');
+
+  process.chdir(repo);
+  const code = check('HEAD', { changedFiles: () => [magicName] });
+  assert.equal(code, 2, 'a pathspec-magic filename must still be diffed literally and its violation caught');
 });
 
 test('recognizes "invalid", "dismissed", "non-issue", "accepted risk", and "do not report/reopen" (round-8 finding 2)', () => {
@@ -770,40 +767,38 @@ test('recognizes "invalid", "dismissed", "non-issue", "accepted risk", and "do n
   }
 });
 
-test('REAL git diff: an edit in one paragraph of a prose file is not blocked by review/dismissal terminology in an unrelated, distant paragraph (round-8 finding 3)', () => {
+test('REAL git diff: an edit in one paragraph of a prose file is not blocked by review/dismissal terminology in an unrelated, distant paragraph (round-8 finding 3)', (t) => {
   // Before this fix, treatEveryLineAsComment marked every line — including blank
   // ones — as a comment, so commentSpans (which splits a run wherever isComment is
   // false) produced exactly ONE span for the whole document. An edit anywhere then
   // combined text from every paragraph, including "round 9 finding" in one
   // section and "false positives" in an entirely unrelated one.
-  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-prose-paragraph-'));
   const originalCwd = process.cwd();
-  try {
-    execFileSync('git', ['init', '--quiet'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
-    const base = [
-      '# History',
-      '',
-      'This project had a round 9 finding once.',
-      '',
-      '# Unrelated section',
-      '',
-      'We are reducing false positives in general.',
-      '',
-    ].join('\n');
-    writeFileSync(join(repo, 'doc.md'), base);
-    execFileSync('git', ['add', 'doc.md'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
-
-    writeFileSync(join(repo, 'doc.md'), `${base}\n# New section\nHarmless addition.\n`);
-
-    process.chdir(repo);
-    const code = check('HEAD', { changedFiles: () => ['doc.md'] });
-    assert.equal(code, 0, "an edit in a new, unrelated paragraph must not combine with distant sections' terminology");
-  } finally {
+  t.after(() => {
     process.chdir(originalCwd);
-    rmSync(repo, { recursive: true, force: true });
-  }
+  });
+  const repo = tmp(t, 'adlc-check-reviewer-directed-prose-paragraph-');
+  execFileSync('git', ['init', '--quiet'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+  const base = [
+    '# History',
+    '',
+    'This project had a round 9 finding once.',
+    '',
+    '# Unrelated section',
+    '',
+    'We are reducing false positives in general.',
+    '',
+  ].join('\n');
+  writeFileSync(join(repo, 'doc.md'), base);
+  execFileSync('git', ['add', 'doc.md'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
+
+  writeFileSync(join(repo, 'doc.md'), `${base}\n# New section\nHarmless addition.\n`);
+
+  process.chdir(repo);
+  const code = check('HEAD', { changedFiles: () => ['doc.md'] });
+  assert.equal(code, 0, "an edit in a new, unrelated paragraph must not combine with distant sections' terminology");
 });
 
 test('a genuine violation split across the SAME paragraph is still caught after paragraph segmentation', () => {
@@ -815,7 +810,7 @@ test('a genuine violation split across the SAME paragraph is still caught after 
   ]), 2);
 });
 
-test('REAL git diff: a string literal containing an unclosed-looking `/*` does not merge distant, unrelated comments into one giant span (self-discovered while fixing round-8 finding 2/3)', () => {
+test('REAL git diff: a string literal containing an unclosed-looking `/*` does not merge distant, unrelated comments into one giant span (self-discovered while fixing round-8 finding 2/3)', (t) => {
   // A glob-pattern string like 'src/critical/**' or a gitignore pattern like
   // '.adlc/*\n...' contains `/*` with no real closing `*/` anywhere nearby.
   // Before bounding the block-open lookahead, this opened a "block comment" that
@@ -823,33 +818,31 @@ test('REAL git diff: a string literal containing an unclosed-looking `/*` does n
   // the file — silently merging every comment in between into one span. Here a
   // review-reference near the top and an unrelated dismissal phrase 50+ lines
   // later must stay in separate, unmerged spans.
-  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-false-block-open-'));
   const originalCwd = process.cwd();
-  try {
-    execFileSync('git', ['init', '--quiet'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
-
-    const lines = [
-      "const rails = 'src/critical/**'; // an ordinary glob pattern, not a comment",
-      '// round 9 finding: a historical reference, standalone, no dismissal here',
-    ];
-    for (let i = 0; i < 50; i++) lines.push(`const filler${i} = ${i};`);
-    lines.push('// unrelated: not a defect, a wholly separate standalone comment');
-    const content = `${lines.join('\n')}\n`;
-
-    writeFileSync(join(repo, 'thing.mjs'), content);
-    execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
-
-    writeFileSync(repo + '/thing.mjs', `${content}const harmless = true;\n`);
-
-    process.chdir(repo);
-    const code = check('HEAD', { changedFiles: () => ['thing.mjs'] });
-    assert.equal(code, 0, 'the review-reference near the top and the dismissal phrase 50+ lines later must not merge into one false violation');
-  } finally {
+  t.after(() => {
     process.chdir(originalCwd);
-    rmSync(repo, { recursive: true, force: true });
-  }
+  });
+  const repo = tmp(t, 'adlc-check-reviewer-directed-false-block-open-');
+  execFileSync('git', ['init', '--quiet'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+
+  const lines = [
+    "const rails = 'src/critical/**'; // an ordinary glob pattern, not a comment",
+    '// round 9 finding: a historical reference, standalone, no dismissal here',
+  ];
+  for (let i = 0; i < 50; i++) lines.push(`const filler${i} = ${i};`);
+  lines.push('// unrelated: not a defect, a wholly separate standalone comment');
+  const content = `${lines.join('\n')}\n`;
+
+  writeFileSync(join(repo, 'thing.mjs'), content);
+  execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
+
+  writeFileSync(repo + '/thing.mjs', `${content}const harmless = true;\n`);
+
+  process.chdir(repo);
+  const code = check('HEAD', { changedFiles: () => ['thing.mjs'] });
+  assert.equal(code, 0, 'the review-reference near the top and the dismissal phrase 50+ lines later must not merge into one false violation');
 });
 
 test('a block comment longer than the old 40-line cutoff still catches a violation (round-9 finding 3)', () => {
@@ -866,7 +859,7 @@ test('a block comment longer than the old 40-line cutoff still catches a violati
   ]), 2);
 });
 
-test('REAL CLI: the direct-execution guard runs the gate when invoked from a path containing a space (round-9 finding 4)', () => {
+test('REAL CLI: the direct-execution guard runs the gate when invoked from a path containing a space (round-9 finding 4)', (t) => {
   // `import.meta.url === \`file://${process.argv[1]}\`` silently never matches
   // when the SCRIPT's own path needs URL-encoding (a space becomes %20 in the URL
   // but stays a literal space in argv[1]) — the script exits 0 having never run
@@ -899,36 +892,33 @@ test('REAL CLI: the direct-execution guard runs the gate when invoked from a pat
   // and the CLI's direct-execution guard compares import.meta.url (real path)
   // against argv (as invoked) — a symlinked invocation path makes the guard
   // silently not fire, which this very test exists to catch.
-  const spacedRoot = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-cli-space-root-')));
+  const originalCwd = process.cwd();
+  t.after(() => {
+    process.chdir(originalCwd);
+  });
+  const spacedRoot = tmp(t, 'adlc-cli-space-root-');
   symlinkSync(findNodeModules(testDir), join(spacedRoot, 'node_modules'), 'junction');
   const spacedDir = join(spacedRoot, 'adlc cli space test dir');
-  const repo = mkdtempSync(join(tmpdir(), 'adlc-check-reviewer-directed-cli-space-'));
-  const originalCwd = process.cwd();
+  const repo = tmp(t, 'adlc-check-reviewer-directed-cli-space-');
+  execFileSync('git', ['init', '--quiet'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
+  writeFileSync(join(repo, 'thing.mjs'), 'context\n');
+  execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
+  writeFileSync(join(repo, 'thing.mjs'), 'context\n// round 9 finding: not a defect\n');
+
+  mkdirSync(spacedDir, { recursive: true });
+  const scriptSrc = readFileSync(new URL('../check-reviewer-directed-comments.mjs', import.meta.url), 'utf8');
+  const scriptCopy = join(spacedDir, 'check-reviewer-directed-comments.mjs');
+  writeFileSync(scriptCopy, scriptSrc);
+
+  let status = 0;
   try {
-    execFileSync('git', ['init', '--quiet'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--allow-empty', '--quiet', '-m', 'init'], { cwd: repo });
-    writeFileSync(join(repo, 'thing.mjs'), 'context\n');
-    execFileSync('git', ['add', 'thing.mjs'], { cwd: repo });
-    execFileSync('git', ['-c', 'user.email=t@t.example', '-c', 'user.name=t', 'commit', '--quiet', '-m', 'base'], { cwd: repo });
-    writeFileSync(join(repo, 'thing.mjs'), 'context\n// round 9 finding: not a defect\n');
-
-    mkdirSync(spacedDir, { recursive: true });
-    const scriptSrc = readFileSync(new URL('../check-reviewer-directed-comments.mjs', import.meta.url), 'utf8');
-    const scriptCopy = join(spacedDir, 'check-reviewer-directed-comments.mjs');
-    writeFileSync(scriptCopy, scriptSrc);
-
-    let status = 0;
-    try {
-      execFileSync(process.execPath, [scriptCopy, 'HEAD'], { cwd: repo, stdio: 'pipe' });
-    } catch (e) {
-      status = e.status ?? 1;
-    }
-    assert.equal(status, 2, 'the CLI must actually run check() and detect the violation even from a spaced path');
-  } finally {
-    process.chdir(originalCwd);
-    rmSync(repo, { recursive: true, force: true });
-    rmSync(spacedRoot, { recursive: true, force: true });
+    execFileSync(process.execPath, [scriptCopy, 'HEAD'], { cwd: repo, stdio: 'pipe' });
+  } catch (e) {
+    status = e.status ?? 1;
   }
+  assert.equal(status, 2, 'the CLI must actually run check() and detect the violation even from a spaced path');
 });
 
 test('recognizes "out of scope", "safe to ignore", "works as intended", and "disregard it" (round-10 finding 3)', () => {

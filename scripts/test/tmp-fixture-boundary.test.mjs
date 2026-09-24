@@ -35,10 +35,6 @@ const ALLOWLIST = new Set([
   'packages/fleet/test/status-schema.test.mjs',
   'packages/fleet/test/status.test.mjs',
   'packages/fleet/test/synthetic-home-bwrap.test.mjs',
-
-  'scripts/test/check-reviewer-directed-comments.test.mjs',
-  'scripts/test/rails-guard-ci.test.mjs',
-  'scripts/test/toolkit-floor.test.mjs',
 ]);
 
 /** @param {string} name directory entry name */

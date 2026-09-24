@@ -6,14 +6,44 @@
 // PR that removes rails (or edits the ticket trust root) while touching a frozen
 // path is still rejected.
 
-import { test } from 'node:test';
+import { test as nodeTest } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync, renameSync, unlinkSync, symlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync, mkdirSync, rmSync, renameSync, unlinkSync, symlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { tmp } from '@adlc/core/test-kit';
 import { ACTIVE_MANIFEST, ARCHIVE_MANIFEST, prettyCanonicalJson, sha256, storeHash, ticketFilename } from '@adlc/tickets';
+
+// Per-test compatibility layer ensuring t.after lifecycle cleanup executes
+// across all supported Node >=18 runtimes (Node 18.0–18.12 lacked native TestContext.after).
+// Guarantees both direct hooks and tmp(t) lifecycle cleanup run per-test without leaks.
+function test(...args) {
+  const fn = args.pop();
+  if (typeof fn !== 'function') {
+    return nodeTest(...args, fn);
+  }
+  const wrapped = async (t) => {
+    const cleanups = [];
+    if (t && typeof t.after !== 'function') {
+      t.after = (cb) => cleanups.push(cb);
+    }
+    let err;
+    let res;
+    try {
+      res = await fn(t);
+    } catch (e) {
+      err = e;
+    }
+    for (const cb of cleanups) {
+      try { cb(); } catch {}
+    }
+    if (err) throw err;
+    return res;
+  };
+  return nodeTest(...args, wrapped);
+}
+Object.assign(test, nodeTest);
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'rails-guard-ci.mjs');
 
@@ -30,46 +60,43 @@ function git(cwd, args) {
  * `seedFiles` path, then apply `mutate(dir)` on a feature branch. Returns the
  * script's exit code when run with base=main.
  */
-function runScenario({ baseTickets, seedFiles, mutate, seedFileContents = {}, env = {} }) {
-  const dir = mkdtempSync(join(tmpdir(), 'rgci-'));
+function runScenario({ t, baseTickets, seedFiles, mutate, seedFileContents = {}, env = {} }) {
+  assert.ok(t, 'runScenario requires test context t');
+  const dir = tmp(t, 'rgci-');
+  git(dir, ['init', '-q', '-b', 'main']);
+  git(dir, ['config', 'user.email', 'a@b.c']);
+  git(dir, ['config', 'user.name', 'x']);
+  mkdirSync(join(dir, '.adlc'), { recursive: true });
   try {
-    git(dir, ['init', '-q', '-b', 'main']);
-    git(dir, ['config', 'user.email', 'a@b.c']);
-    git(dir, ['config', 'user.name', 'x']);
-    mkdirSync(join(dir, '.adlc'), { recursive: true });
-    try {
-      const parsedBaseTickets = JSON.parse(baseTickets);
-      for (const ticket of parsedBaseTickets.tickets ?? []) ticket.title ??= `${ticket.id} fixture`;
-      writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify(parsedBaseTickets));
-    } catch {
-      writeFileSync(join(dir, '.adlc', 'tickets.json'), baseTickets);
-    }
-    for (const f of seedFiles) {
-      mkdirSync(join(dir, dirname(f)), { recursive: true });
-      writeFileSync(join(dir, f), seedFileContents[f] ?? 'orig\n');
-    }
-    git(dir, ['add', '-A']);
-    git(dir, ['commit', '-qm', 'base']);
-    git(dir, ['checkout', '-q', '-b', 'feat']);
-    mutate(dir);
-    try {
-      const headPath = join(dir, '.adlc', 'tickets.json');
-      const parsedHeadTickets = JSON.parse(readFileSync(headPath, 'utf8'));
-      for (const ticket of parsedHeadTickets.tickets ?? []) ticket.title ??= `${ticket.id} fixture`;
-      writeFileSync(headPath, JSON.stringify(parsedHeadTickets));
-    } catch {
-      // Malformed/missing ticket-store attack fixtures must remain malformed.
-    }
-    git(dir, ['add', '-A']);
-    git(dir, ['commit', '-qm', 'change']);
-    try {
-      execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe', env: { ...process.env, RAILS_BASE: '', BASE_REF: '', ...env } });
-      return 0;
-    } catch (e) {
-      return e.status ?? 1;
-    }
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+    const parsedBaseTickets = JSON.parse(baseTickets);
+    for (const ticket of parsedBaseTickets.tickets ?? []) ticket.title ??= `${ticket.id} fixture`;
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify(parsedBaseTickets));
+  } catch {
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), baseTickets);
+  }
+  for (const f of seedFiles) {
+    mkdirSync(join(dir, dirname(f)), { recursive: true });
+    writeFileSync(join(dir, f), seedFileContents[f] ?? 'orig\n');
+  }
+  git(dir, ['add', '-A']);
+  git(dir, ['commit', '-qm', 'base']);
+  git(dir, ['checkout', '-q', '-b', 'feat']);
+  mutate(dir);
+  try {
+    const headPath = join(dir, '.adlc', 'tickets.json');
+    const parsedHeadTickets = JSON.parse(readFileSync(headPath, 'utf8'));
+    for (const ticket of parsedHeadTickets.tickets ?? []) ticket.title ??= `${ticket.id} fixture`;
+    writeFileSync(headPath, JSON.stringify(parsedHeadTickets));
+  } catch {
+    // Malformed/missing ticket-store attack fixtures must remain malformed.
+  }
+  git(dir, ['add', '-A']);
+  git(dir, ['commit', '-qm', 'change']);
+  try {
+    execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe', env: { ...process.env, RAILS_BASE: '', BASE_REF: '', ...env } });
+    return 0;
+  } catch (e) {
+    return e.status ?? 1;
   }
 }
 
@@ -92,107 +119,107 @@ const SIGNED_CONFIG = JSON.stringify({
   signers: { alice: { roles: ['builder'] } },
 });
 
-function runMigrationScenario({ mutateTicket = (ticket) => ticket, extraChange = false, evidence = 'valid', legacyArchive = false, injectArchive = false, manifestSymlink = false } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'rgci-migrate-'));
-  try {
-    git(dir, ['init', '-q', '-b', 'main']);
-    git(dir, ['config', 'user.email', 'a@b.c']);
-    git(dir, ['config', 'user.name', 'x']);
-    mkdirSync(join(dir, '.adlc'), { recursive: true });
-    const ticket = { id: 'T1', title: 'Migration fixture', rails: ['src/critical/**'] };
-    writeFileSync(join(dir, '.adlc/tickets.json'), JSON.stringify({ tickets: [ticket] }));
-    const archived = { id: 'OLD', title: 'Archived migration fixture', completed: true };
-    if (legacyArchive) writeFileSync(join(dir, '.adlc/tickets.archive.json'), JSON.stringify({ tickets: [archived] }));
-    writeFileSync(join(dir, '.gitignore'), '.adlc/*\n!.adlc/tickets.json\n');
-    git(dir, ['add', '-A']);
-    if (legacyArchive) git(dir, ['add', '-f', '.adlc/tickets.archive.json']);
-    git(dir, ['commit', '-qm', 'base']); git(dir, ['checkout', '-q', '-b', 'feat']);
-    rmSync(join(dir, '.adlc/tickets.json'));
-    mkdirSync(join(dir, '.adlc/tickets'), { recursive: true });
-    mkdirSync(join(dir, '.adlc/ticket-archive'), { recursive: true });
-    const next = mutateTicket(structuredClone(ticket));
-    writeFileSync(join(dir, '.adlc/tickets/.store.json'), prettyCanonicalJson(ACTIVE_MANIFEST));
-    writeFileSync(join(dir, '.adlc/tickets', ticketFilename(next.id)), prettyCanonicalJson(next));
-    writeFileSync(join(dir, '.adlc/ticket-archive/.store.json'), prettyCanonicalJson(ARCHIVE_MANIFEST));
-    if (legacyArchive) {
-      rmSync(join(dir, '.adlc/tickets.archive.json'));
-      writeFileSync(join(dir, '.adlc/ticket-archive', ticketFilename(archived.id)), prettyCanonicalJson(archived));
-    }
-    const injected = { id: 'INJECTED', title: 'Not present in the trusted base', completed: true };
-    if (injectArchive) writeFileSync(join(dir, '.adlc/ticket-archive', ticketFilename(injected.id)), prettyCanonicalJson(injected));
-    if (evidence !== 'missing') {
-      const hash = ['valid', 'recovered'].includes(evidence) ? storeHash([next]) : '0'.repeat(64);
-      const apply = {
-        seq: 1,
-        gate: 'ticket-migrate',
-        ts: '2026-07-13T00:00:00.000Z',
-        data: { operation: 'migrate', action: 'apply', transactionId: 'fixture-transaction', revision: null, ticketHash: null, storeHash: hash, archiveHash: storeHash(legacyArchive ? [archived] : injectArchive ? [injected] : []), bindingScope: 'store' },
-        files: {},
-        prev: null,
-      };
-      const entries = [apply];
-      if (evidence === 'recovered') entries.push({
-        seq: 2,
-        gate: 'ticket-migrate',
-        ts: '2026-07-13T00:01:00.000Z',
-        data: { ...apply.data, action: 'recover-complete' },
-        files: {},
-        prev: sha256(JSON.stringify(apply)),
-      });
-      writeFileSync(join(dir, '.adlc/manifest.jsonl'), `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`);
-    }
-    writeFileSync(join(dir, '.gitignore'), '.adlc/*\n!.adlc/tickets.json\n!.adlc/tickets/\n!.adlc/tickets/**\n!.adlc/ticket-archive/\n!.adlc/ticket-archive/**\n');
-    if (manifestSymlink) {
-      // #314 round 3: point the working-tree manifest at an allow-listed path (.gitignore)
-      // — the migration branch reads it via readFileSync and would follow the link to forged
-      // evidence. The lstat regular-file check must deny it.
-      rmSync(join(dir, '.adlc/manifest.jsonl'), { force: true });
-      symlinkSync('../.gitignore', join(dir, '.adlc/manifest.jsonl'));
-    }
-    if (extraChange) { mkdirSync(join(dir, 'src'), { recursive: true }); writeFileSync(join(dir, 'src/extra.mjs'), 'export {};\n'); }
-    git(dir, ['add', '-A']);
-    // The migration commits its evidence manifest (the diff-shape allow-list expects
-    // `.adlc/manifest.jsonl` in the diff); force past the fixture's `.adlc/*` gitignore so it
-    // is tracked, matching the real ceremony and the committed-content reader.
-    try { git(dir, ['add', '-f', '.adlc/manifest.jsonl']); } catch { /* evidence:'missing' — nothing to add */ }
-    git(dir, ['commit', '-qm', 'migrate']);
-    try { execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' }); return 0; }
-    catch (error) { return error.status ?? 1; }
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+function runMigrationScenario({ t, mutateTicket = (ticket) => ticket, extraChange = false, evidence = 'valid', legacyArchive = false, injectArchive = false, manifestSymlink = false } = {}) {
+  assert.ok(t, 'runMigrationScenario requires test context t');
+  const dir = tmp(t, 'rgci-migrate-');
+  git(dir, ['init', '-q', '-b', 'main']);
+  git(dir, ['config', 'user.email', 'a@b.c']);
+  git(dir, ['config', 'user.name', 'x']);
+  mkdirSync(join(dir, '.adlc'), { recursive: true });
+  const ticket = { id: 'T1', title: 'Migration fixture', rails: ['src/critical/**'] };
+  writeFileSync(join(dir, '.adlc/tickets.json'), JSON.stringify({ tickets: [ticket] }));
+  const archived = { id: 'OLD', title: 'Archived migration fixture', completed: true };
+  if (legacyArchive) writeFileSync(join(dir, '.adlc/tickets.archive.json'), JSON.stringify({ tickets: [archived] }));
+  writeFileSync(join(dir, '.gitignore'), '.adlc/*\n!.adlc/tickets.json\n');
+  git(dir, ['add', '-A']);
+  if (legacyArchive) git(dir, ['add', '-f', '.adlc/tickets.archive.json']);
+  git(dir, ['commit', '-qm', 'base']); git(dir, ['checkout', '-q', '-b', 'feat']);
+  rmSync(join(dir, '.adlc/tickets.json'));
+  mkdirSync(join(dir, '.adlc/tickets'), { recursive: true });
+  mkdirSync(join(dir, '.adlc/ticket-archive'), { recursive: true });
+  const next = mutateTicket(structuredClone(ticket));
+  writeFileSync(join(dir, '.adlc/tickets/.store.json'), prettyCanonicalJson(ACTIVE_MANIFEST));
+  writeFileSync(join(dir, '.adlc/tickets', ticketFilename(next.id)), prettyCanonicalJson(next));
+  writeFileSync(join(dir, '.adlc/ticket-archive/.store.json'), prettyCanonicalJson(ARCHIVE_MANIFEST));
+  if (legacyArchive) {
+    rmSync(join(dir, '.adlc/tickets.archive.json'));
+    writeFileSync(join(dir, '.adlc/ticket-archive', ticketFilename(archived.id)), prettyCanonicalJson(archived));
+  }
+  const injected = { id: 'INJECTED', title: 'Not present in the trusted base', completed: true };
+  if (injectArchive) writeFileSync(join(dir, '.adlc/ticket-archive', ticketFilename(injected.id)), prettyCanonicalJson(injected));
+  if (evidence !== 'missing') {
+    const hash = ['valid', 'recovered'].includes(evidence) ? storeHash([next]) : '0'.repeat(64);
+    const apply = {
+      seq: 1,
+      gate: 'ticket-migrate',
+      ts: '2026-07-13T00:00:00.000Z',
+      data: { operation: 'migrate', action: 'apply', transactionId: 'fixture-transaction', revision: null, ticketHash: null, storeHash: hash, archiveHash: storeHash(legacyArchive ? [archived] : injectArchive ? [injected] : []), bindingScope: 'store' },
+      files: {},
+      prev: null,
+    };
+    const entries = [apply];
+    if (evidence === 'recovered') entries.push({
+      seq: 2,
+      gate: 'ticket-migrate',
+      ts: '2026-07-13T00:01:00.000Z',
+      data: { ...apply.data, action: 'recover-complete' },
+      files: {},
+      prev: sha256(JSON.stringify(apply)),
+    });
+    writeFileSync(join(dir, '.adlc/manifest.jsonl'), `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`);
+  }
+  writeFileSync(join(dir, '.gitignore'), '.adlc/*\n!.adlc/tickets.json\n!.adlc/tickets/\n!.adlc/tickets/**\n!.adlc/ticket-archive/\n!.adlc/ticket-archive/**\n');
+  if (manifestSymlink) {
+    // #314 round 3: point the working-tree manifest at an allow-listed path (.gitignore)
+    // — the migration branch reads it via readFileSync and would follow the link to forged
+    // evidence. The lstat regular-file check must deny it.
+    rmSync(join(dir, '.adlc/manifest.jsonl'), { force: true });
+    symlinkSync('../.gitignore', join(dir, '.adlc/manifest.jsonl'));
+  }
+  if (extraChange) { mkdirSync(join(dir, 'src'), { recursive: true }); writeFileSync(join(dir, 'src/extra.mjs'), 'export {};\n'); }
+  git(dir, ['add', '-A']);
+  // The migration commits its evidence manifest (the diff-shape allow-list expects
+  // `.adlc/manifest.jsonl` in the diff); force past the fixture's `.adlc/*` gitignore so it
+  // is tracked, matching the real ceremony and the committed-content reader.
+  try { git(dir, ['add', '-f', '.adlc/manifest.jsonl']); } catch { /* evidence:'missing' — nothing to add */ }
+  git(dir, ['commit', '-qm', 'migrate']);
+  try { execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' }); return 0; }
+  catch (error) { return error.status ?? 1; }
 }
 
-test('legacy-to-directory migration with identical logical content is accepted', () => {
-  assert.equal(runMigrationScenario(), 0);
-  assert.equal(runMigrationScenario({ evidence: 'recovered' }), 0);
+test('legacy-to-directory migration with identical logical content is accepted', (t) => {
+  assert.equal(runMigrationScenario({ t }), 0);
+  assert.equal(runMigrationScenario({ t, evidence: 'recovered' }), 0);
 });
 
-test('legacy-to-directory migration that changes ticket content is denied', () => {
-  assert.equal(runMigrationScenario({ mutateTicket: (ticket) => ({ ...ticket, title: 'Changed' }) }), 2);
+test('legacy-to-directory migration that changes ticket content is denied', (t) => {
+  assert.equal(runMigrationScenario({ t, mutateTicket: (ticket) => ({ ...ticket, title: 'Changed' }) }), 2);
 });
 
-test('legacy-to-directory migration mixed with unrelated changes is denied', () => {
-  assert.equal(runMigrationScenario({ extraChange: true }), 2);
+test('legacy-to-directory migration mixed with unrelated changes is denied', (t) => {
+  assert.equal(runMigrationScenario({ t, extraChange: true }), 2);
 });
 
-test('legacy-to-directory migration requires hash-bound evidence', () => {
-  assert.equal(runMigrationScenario({ evidence: 'missing' }), 2);
-  assert.equal(runMigrationScenario({ evidence: 'invalid' }), 2);
+test('legacy-to-directory migration requires hash-bound evidence', (t) => {
+  assert.equal(runMigrationScenario({ t, evidence: 'missing' }), 2);
+  assert.equal(runMigrationScenario({ t, evidence: 'invalid' }), 2);
 });
 
-test('#314: a migration whose manifest is a SYMLINK is denied (working-tree type-confusion)', () => {
+test('#314: a migration whose manifest is a SYMLINK is denied (working-tree type-confusion)', (t) => {
   // The migration branch is the one path that reads the working-tree manifest. A symlink to
   // an allow-listed target (../.gitignore) passes the diff-shape allow-list, so the lstat
   // regular-file guard is what stops readFileSync from following the link to forged evidence.
-  assert.equal(runMigrationScenario({ manifestSymlink: true }), 2);
+  assert.equal(runMigrationScenario({ t, manifestSymlink: true }), 2);
 });
 
-test('legacy archive migration is accepted only with identical archived content', () => {
-  assert.equal(runMigrationScenario({ legacyArchive: true }), 0);
-  assert.equal(runMigrationScenario({ injectArchive: true }), 2);
+test('legacy archive migration is accepted only with identical archived content', (t) => {
+  assert.equal(runMigrationScenario({ t, legacyArchive: true }), 0);
+  assert.equal(runMigrationScenario({ t, injectArchive: true }), 2);
 });
 
-test('ATTACK: PR empties rails AND edits a formerly-frozen file → exit 2 (base rails enforced)', () => {
+test('ATTACK: PR empties rails AND edits a formerly-frozen file → exit 2 (base rails enforced)', (t) => {
   const code = runScenario({
+    t,
     baseTickets: RAILED,
     seedFiles: ['src/critical/auth.mjs'],
     mutate: (d) => {
@@ -203,8 +230,9 @@ test('ATTACK: PR empties rails AND edits a formerly-frozen file → exit 2 (base
   assert.equal(code, 2);
 });
 
-test('mutable state: PR adds a new ticket while preserving existing tickets → exit 0', () => {
+test('mutable state: PR adds a new ticket while preserving existing tickets → exit 0', (t) => {
   const code = runScenario({
+    t,
     baseTickets: RAILED,
     seedFiles: ['src/critical/auth.mjs'],
     mutate: (d) =>
@@ -213,8 +241,9 @@ test('mutable state: PR adds a new ticket while preserving existing tickets → 
   assert.equal(code, 0);
 });
 
-test('mutable state: PR removes a base rail from tickets → exit 2', () => {
+test('mutable state: PR removes a base rail from tickets → exit 2', (t) => {
   const code = runScenario({
+    t,
     baseTickets: RAILED,
     seedFiles: ['src/critical/auth.mjs'],
     mutate: (d) => writeFileSync(join(d, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] })),
@@ -222,8 +251,9 @@ test('mutable state: PR removes a base rail from tickets → exit 2', () => {
   assert.equal(code, 2);
 });
 
-test('mutable state: PR changes an existing ticket contract while preserving rails → exit 2', () => {
+test('mutable state: PR changes an existing ticket contract while preserving rails → exit 2', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', triageClass: 'Substantial', triageCommit: 'abc123', rails: ['src/critical/**'] }] }),
     seedFiles: ['src/critical/auth.mjs'],
     mutate: (d) =>
@@ -235,8 +265,9 @@ test('mutable state: PR changes an existing ticket contract while preserving rai
   assert.equal(code, 2);
 });
 
-test('trust root: PR edits .adlc/config.json while base rails exist → exit 2', () => {
+test('trust root: PR edits .adlc/config.json while base rails exist → exit 2', (t) => {
   const code = runScenario({
+    t,
     baseTickets: RAILED,
     seedFiles: ['src/critical/auth.mjs'],
     mutate: (d) => writeFileSync(join(d, '.adlc', 'config.json'), '{"securityMode":"unsigned-fallback"}\n'),
@@ -244,8 +275,9 @@ test('trust root: PR edits .adlc/config.json while base rails exist → exit 2',
   assert.equal(code, 2);
 });
 
-test('trust root: PR edits .adlc/admin.pub (admin recovery key) while base rails exist → exit 2', () => {
+test('trust root: PR edits .adlc/admin.pub (admin recovery key) while base rails exist → exit 2', (t) => {
   const code = runScenario({
+    t,
     baseTickets: RAILED,
     seedFiles: ['src/critical/auth.mjs', '.adlc/admin.pub'],
     seedFileContents: { '.adlc/admin.pub': 'ssh-ed25519 AAAAbase-fingerprint\n' },
@@ -254,8 +286,9 @@ test('trust root: PR edits .adlc/admin.pub (admin recovery key) while base rails
   assert.equal(code, 2);
 });
 
-test('trust root: PR edits .adlc/admin.pub even when no ticket rails exist → exit 2', () => {
+test('trust root: PR edits .adlc/admin.pub even when no ticket rails exist → exit 2', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
     seedFiles: ['.adlc/config.json', '.adlc/admin.pub', 'src/app.mjs'],
     seedFileContents: {
@@ -267,8 +300,9 @@ test('trust root: PR edits .adlc/admin.pub even when no ticket rails exist → e
   assert.equal(code, 2);
 });
 
-test('mutable state: PR creates manifest evidence when base has no manifest → exit 2', () => {
+test('mutable state: PR creates manifest evidence when base has no manifest → exit 2', (t) => {
   const code = runScenario({
+    t,
     baseTickets: RAILED,
     seedFiles: ['src/critical/auth.mjs'],
     mutate: (d) => writeFileSync(join(d, '.adlc', 'manifest.jsonl'), '{"evidence":"changed"}\n'),
@@ -276,8 +310,9 @@ test('mutable state: PR creates manifest evidence when base has no manifest → 
   assert.equal(code, 2);
 });
 
-test('mutable state: PR appends manifest evidence → exit 0', () => {
+test('mutable state: PR appends manifest evidence → exit 0', (t) => {
   const code = runScenario({
+    t,
     baseTickets: RAILED,
     seedFiles: ['src/critical/auth.mjs', '.adlc/manifest.jsonl'],
     seedFileContents: { '.adlc/manifest.jsonl': '{"seq":1}\n' },
@@ -286,8 +321,9 @@ test('mutable state: PR appends manifest evidence → exit 0', () => {
   assert.equal(code, 0);
 });
 
-test('mutable state: PR rewrites existing manifest evidence → exit 2', () => {
+test('mutable state: PR rewrites existing manifest evidence → exit 2', (t) => {
   const code = runScenario({
+    t,
     baseTickets: RAILED,
     seedFiles: ['src/critical/auth.mjs', '.adlc/manifest.jsonl'],
     seedFileContents: { '.adlc/manifest.jsonl': '{"seq":1}\n' },
@@ -296,109 +332,104 @@ test('mutable state: PR rewrites existing manifest evidence → exit 2', () => {
   assert.equal(code, 2);
 });
 
-test('#314: an untracked, gitignored .adlc/manifest.jsonl does NOT trigger a false deny (local == CI)', () => {
+test('#314: an untracked, gitignored .adlc/manifest.jsonl does NOT trigger a false deny (local == CI)', (t) => {
   // The manifest-evidence check must read the DIFF, not the filesystem. A gitignored,
   // untracked manifest — which every dev who has run the toolkit has locally — is not
   // introduced by the commit, so the local verdict must equal CI's clean-checkout
   // verdict for the same tree. Regression: this used to deny locally (existsSync) while
   // passing in CI, training people toward the session-lifetime ADLC_RAILS_BYPASS.
-  const dir = mkdtempSync(join(tmpdir(), 'rgci-314-'));
+  const dir = tmp(t, 'rgci-314-');
   const run = () => {
     try { execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' }); return 0; }
     catch (e) { return e.status ?? 1; }
   };
-  try {
-    git(dir, ['init', '-q', '-b', 'main']);
-    git(dir, ['config', 'user.email', 'a@b.c']);
-    git(dir, ['config', 'user.name', 'x']);
-    mkdirSync(join(dir, '.adlc'), { recursive: true });
-    writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1 fixture', rails: ['src/critical/**'] }] }));
-    // The manifest is gitignored exactly as in the real repo, so `git add -A` can never
-    // stage it — it stays untracked no matter what the toolkit writes.
-    writeFileSync(join(dir, '.gitignore'), '.adlc/*\n!.adlc/tickets.json\n');
-    mkdirSync(join(dir, 'src', 'critical'), { recursive: true });
-    writeFileSync(join(dir, 'src', 'critical', 'auth.mjs'), 'orig\n');
-    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'base']);
-    git(dir, ['checkout', '-q', '-b', 'feat']);
-    // A benign, non-rail change is the entire committed diff.
-    writeFileSync(join(dir, 'README.md'), 'work\n');
-    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'work']);
+  git(dir, ['init', '-q', '-b', 'main']);
+  git(dir, ['config', 'user.email', 'a@b.c']);
+  git(dir, ['config', 'user.name', 'x']);
+  mkdirSync(join(dir, '.adlc'), { recursive: true });
+  writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1 fixture', rails: ['src/critical/**'] }] }));
+  // The manifest is gitignored exactly as in the real repo, so `git add -A` can never
+  // stage it — it stays untracked no matter what the toolkit writes.
+  writeFileSync(join(dir, '.gitignore'), '.adlc/*\n!.adlc/tickets.json\n');
+  mkdirSync(join(dir, 'src', 'critical'), { recursive: true });
+  writeFileSync(join(dir, 'src', 'critical', 'auth.mjs'), 'orig\n');
+  git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'base']);
+  git(dir, ['checkout', '-q', '-b', 'feat']);
+  // A benign, non-rail change is the entire committed diff.
+  writeFileSync(join(dir, 'README.md'), 'work\n');
+  git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'work']);
 
-    // CI's view: clean checkout, no untracked manifest present.
-    assert.equal(run(), 0, 'CI (no untracked manifest) must pass');
+  // CI's view: clean checkout, no untracked manifest present.
+  assert.equal(run(), 0, 'CI (no untracked manifest) must pass');
 
-    // A developer's view of the SAME commit: the toolkit left a gitignored, untracked,
-    // non-empty manifest. It is in zero commits and not in the diff, so the verdict must
-    // be identical to CI's.
-    writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"seq":1,"gate":"x"}\n');
-    // sanity: the manifest really is gitignored and untracked
-    assert.throws(() => execFileSync('git', ['ls-files', '--error-unmatch', '.adlc/manifest.jsonl'], { cwd: dir, stdio: 'pipe' }));
-    assert.equal(run(), 0, 'local (untracked gitignored manifest present) must agree with CI');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  // A developer's view of the SAME commit: the toolkit left a gitignored, untracked,
+  // non-empty manifest. It is in zero commits and not in the diff, so the verdict must
+  // be identical to CI's.
+  writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"seq":1,"gate":"x"}\n');
+  // sanity: the manifest really is gitignored and untracked
+  assert.throws(() => execFileSync('git', ['ls-files', '--error-unmatch', '.adlc/manifest.jsonl'], { cwd: dir, stdio: 'pipe' }));
+  assert.equal(run(), 0, 'local (untracked gitignored manifest present) must agree with CI');
 });
 
-test('#314: a manifest committed as a SYMLINK is denied (type-confusion fail-closed)', () => {
+test('#314: a manifest committed as a SYMLINK is denied (type-confusion fail-closed)', (t) => {
   // git show returns a symlink's TARGET STRING, not the target's content — so a manifest
   // symlinked to a whitespace target would slip past a content-only `.trim()` check while
   // downstream readers that follow the link consume forged evidence. The committed-object
   // MODE check denies any non-regular manifest, restoring the deny the old readFileSync
   // (which followed the link) produced.
-  const dir = mkdtempSync(join(tmpdir(), 'rgci-314sym-'));
+  const dir = tmp(t, 'rgci-314sym-');
   const run = () => {
     try { execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' }); return 0; }
     catch (e) { return e.status ?? 1; }
   };
-  try {
-    git(dir, ['init', '-q', '-b', 'main']);
-    git(dir, ['config', 'user.email', 'a@b.c']); git(dir, ['config', 'user.name', 'x']);
-    mkdirSync(join(dir, '.adlc'), { recursive: true });
-    writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1 fixture', rails: ['src/critical/**'] }] }));
-    mkdirSync(join(dir, 'src', 'critical'), { recursive: true });
-    writeFileSync(join(dir, 'src', 'critical', 'auth.mjs'), 'orig\n');
-    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'base']);
-    git(dir, ['checkout', '-q', '-b', 'feat']);
-    // The manifest is a symlink whose target is whitespace, so `git show` → "  " → .trim()
-    // is empty (a content-only check would NOT deny). The mode is 120000, so we deny.
-    symlinkSync('  ', join(dir, '.adlc', 'manifest.jsonl'));
-    git(dir, ['add', '-f', '.adlc/manifest.jsonl']);
-    git(dir, ['commit', '-qm', 'symlink manifest']);
-    assert.equal(run(), 2, 'a symlink manifest must be denied, not read as empty');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  git(dir, ['init', '-q', '-b', 'main']);
+  git(dir, ['config', 'user.email', 'a@b.c']); git(dir, ['config', 'user.name', 'x']);
+  mkdirSync(join(dir, '.adlc'), { recursive: true });
+  writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1 fixture', rails: ['src/critical/**'] }] }));
+  mkdirSync(join(dir, 'src', 'critical'), { recursive: true });
+  writeFileSync(join(dir, 'src', 'critical', 'auth.mjs'), 'orig\n');
+  git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'base']);
+  git(dir, ['checkout', '-q', '-b', 'feat']);
+  // The manifest is a symlink whose target is whitespace, so `git show` → "  " → .trim()
+  // is empty (a content-only check would NOT deny). The mode is 120000, so we deny.
+  symlinkSync('  ', join(dir, '.adlc', 'manifest.jsonl'));
+  git(dir, ['add', '-f', '.adlc/manifest.jsonl']);
+  git(dir, ['commit', '-qm', 'symlink manifest']);
+  assert.equal(run(), 2, 'a symlink manifest must be denied, not read as empty');
 });
 
-test('#314: deleting a base-tracked manifest at HEAD denies as "absent at HEAD" (present flag)', () => {
+test('#314: deleting a base-tracked manifest at HEAD denies as "absent at HEAD" (present flag)', (t) => {
   // Base has a tracked manifest; the PR removes it. The gate must report it is ABSENT at
   // HEAD (the committed-presence flag), distinct from the append-only-violation reason —
   // pins that committedManifestAtHead() reports present:false when the manifest is untracked
   // at HEAD.
-  const dir = mkdtempSync(join(tmpdir(), 'rgci-314del-'));
-  try {
-    git(dir, ['init', '-q', '-b', 'main']);
-    git(dir, ['config', 'user.email', 'a@b.c']); git(dir, ['config', 'user.name', 'x']);
-    mkdirSync(join(dir, '.adlc'), { recursive: true });
-    writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1 fixture', rails: ['src/critical/**'] }] }));
-    writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"seq":1}\n');
-    mkdirSync(join(dir, 'src', 'critical'), { recursive: true });
-    writeFileSync(join(dir, 'src', 'critical', 'auth.mjs'), 'orig\n');
-    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'base']);
-    git(dir, ['checkout', '-q', '-b', 'feat']);
-    rmSync(join(dir, '.adlc', 'manifest.jsonl'));
-    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'delete manifest']);
-    let stderr = '';
-    let status = 0;
-    try { execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] }); }
-    catch (e) { status = e.status ?? 1; stderr = (e.stderr ?? '').toString(); }
-    assert.equal(status, 2);
-    assert.match(stderr, /absent at HEAD/);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  const dir = tmp(t, 'rgci-314del-');
+  git(dir, ['init', '-q', '-b', 'main']);
+  git(dir, ['config', 'user.email', 'a@b.c']); git(dir, ['config', 'user.name', 'x']);
+  mkdirSync(join(dir, '.adlc'), { recursive: true });
+  writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1 fixture', rails: ['src/critical/**'] }] }));
+  writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"seq":1}\n');
+  mkdirSync(join(dir, 'src', 'critical'), { recursive: true });
+  writeFileSync(join(dir, 'src', 'critical', 'auth.mjs'), 'orig\n');
+  git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'base']);
+  git(dir, ['checkout', '-q', '-b', 'feat']);
+  rmSync(join(dir, '.adlc', 'manifest.jsonl'));
+  git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'delete manifest']);
+  let stderr = '';
+  let status = 0;
+  try { execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] }); }
+  catch (e) { status = e.status ?? 1; stderr = (e.stderr ?? '').toString(); }
+  assert.equal(status, 2);
+  assert.match(stderr, /absent at HEAD/);
 });
 
-test('#314: replacing a base manifest with a SYMLINK at HEAD is denied (append-only type-confusion)', () => {
+test('#314: replacing a base manifest with a SYMLINK at HEAD is denied (append-only type-confusion)', (t) => {
   // Base has a real tracked manifest. A PR turns it into a symlink pointing at a decoy that
   // starts with the base content — so a working-tree readFileSync + startsWith would PASS,
   // then downstream readers follow the link to forged evidence. The committed-object mode
   // check denies the non-regular manifest before any content is trusted.
   const code = runScenario({
+    t,
     baseTickets: RAILED,
     seedFiles: ['src/critical/auth.mjs', '.adlc/manifest.jsonl'],
     seedFileContents: { '.adlc/manifest.jsonl': '{"seq":1}\n' },
@@ -411,83 +442,78 @@ test('#314: replacing a base manifest with a SYMLINK at HEAD is denied (append-o
   assert.equal(code, 2);
 });
 
-test('#314: the FIRST-BOOTSTRAP path also agrees local == CI for an untracked gitignored manifest', () => {
+test('#314: the FIRST-BOOTSTRAP path also agrees local == CI for an untracked gitignored manifest', (t) => {
   // When the base has no ticket store AND no config, the gate takes an early-exit path that
   // ALSO used existsSync/readFileSync — so the same local↔CI divergence lived there. A
   // tracked non-empty manifest add is still rejected; an untracked gitignored one is not.
-  const dir = mkdtempSync(join(tmpdir(), 'rgci-314boot-'));
+  const dir = tmp(t, 'rgci-314boot-');
   const run = () => {
     try { execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' }); return 0; }
     catch (e) { return e.status ?? 1; }
   };
-  try {
-    git(dir, ['init', '-q', '-b', 'main']);
-    git(dir, ['config', 'user.email', 'a@b.c']); git(dir, ['config', 'user.name', 'x']);
-    // TRUE first bootstrap: no .adlc tree at base at all.
-    writeFileSync(join(dir, '.gitignore'), '.adlc/*\n');
-    writeFileSync(join(dir, 'README.md'), 'base\n');
-    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'base']);
-    git(dir, ['checkout', '-q', '-b', 'feat']);
-    writeFileSync(join(dir, 'README.md'), 'work\n');
-    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'work']);
+  git(dir, ['init', '-q', '-b', 'main']);
+  git(dir, ['config', 'user.email', 'a@b.c']); git(dir, ['config', 'user.name', 'x']);
+  // TRUE first bootstrap: no .adlc tree at base at all.
+  writeFileSync(join(dir, '.gitignore'), '.adlc/*\n');
+  writeFileSync(join(dir, 'README.md'), 'base\n');
+  git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'base']);
+  git(dir, ['checkout', '-q', '-b', 'feat']);
+  writeFileSync(join(dir, 'README.md'), 'work\n');
+  git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'work']);
 
-    assert.equal(run(), 0, 'first-bootstrap clean checkout must pass');
-    // The toolkit left a gitignored, untracked, non-empty manifest locally.
-    mkdirSync(join(dir, '.adlc'), { recursive: true });
-    writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"seq":1}\n');
-    assert.equal(run(), 0, 'first-bootstrap with an untracked manifest must agree with CI (was: fail exit 1)');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  assert.equal(run(), 0, 'first-bootstrap clean checkout must pass');
+  // The toolkit left a gitignored, untracked, non-empty manifest locally.
+  mkdirSync(join(dir, '.adlc'), { recursive: true });
+  writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"seq":1}\n');
+  assert.equal(run(), 0, 'first-bootstrap with an untracked manifest must agree with CI (was: fail exit 1)');
 });
 
-test('#314: a TRACKED non-empty manifest on the first-bootstrap path is still rejected → exit 1', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'rgci-314boot2-'));
+test('#314: a TRACKED non-empty manifest on the first-bootstrap path is still rejected → exit 1', (t) => {
+  const dir = tmp(t, 'rgci-314boot2-');
   const run = () => {
     try { execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' }); return 0; }
     catch (e) { return e.status ?? 1; }
   };
-  try {
-    git(dir, ['init', '-q', '-b', 'main']);
-    git(dir, ['config', 'user.email', 'a@b.c']); git(dir, ['config', 'user.name', 'x']);
-    writeFileSync(join(dir, 'README.md'), 'base\n');
-    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'base']);
-    git(dir, ['checkout', '-q', '-b', 'feat']);
-    mkdirSync(join(dir, '.adlc'), { recursive: true });
-    writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"seq":1}\n');
-    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'prepopulated manifest']);
-    assert.equal(run(), 1, 'a first-bootstrap PR that commits pre-populated evidence is rejected');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  git(dir, ['init', '-q', '-b', 'main']);
+  git(dir, ['config', 'user.email', 'a@b.c']); git(dir, ['config', 'user.name', 'x']);
+  writeFileSync(join(dir, 'README.md'), 'base\n');
+  git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'base']);
+  git(dir, ['checkout', '-q', '-b', 'feat']);
+  mkdirSync(join(dir, '.adlc'), { recursive: true });
+  writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"seq":1}\n');
+  git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'prepopulated manifest']);
+  assert.equal(run(), 1, 'a first-bootstrap PR that commits pre-populated evidence is rejected');
 });
 
-test('#314: an ancestor .adlc committed as a SYMLINK is denied (ancestor type-confusion)', () => {
+test('#314: an ancestor .adlc committed as a SYMLINK is denied (ancestor type-confusion)', (t) => {
   // git ls-tree does NOT descend a symlinked `.adlc`, so the leaf lookup would report the
   // manifest absent while filesystem consumers follow `.adlc` → `state/manifest.jsonl` and
   // read forged evidence. The `.adlc`-is-a-tree ancestor guard denies it.
-  const dir = mkdtempSync(join(tmpdir(), 'rgci-314anc-'));
+  const dir = tmp(t, 'rgci-314anc-');
   const run = () => {
     try { execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' }); return 0; }
     catch (e) { return e.status ?? 1; }
   };
-  try {
-    git(dir, ['init', '-q', '-b', 'main']);
-    git(dir, ['config', 'user.email', 'a@b.c']); git(dir, ['config', 'user.name', 'x']);
-    writeFileSync(join(dir, 'README.md'), 'base\n'); // no .adlc at base → first bootstrap
-    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'base']);
-    git(dir, ['checkout', '-q', '-b', 'feat']);
-    mkdirSync(join(dir, 'state'), { recursive: true });
-    writeFileSync(join(dir, 'state', 'manifest.jsonl'), '{"forged":"evidence"}\n');
-    symlinkSync('state', join(dir, '.adlc')); // .adlc itself is a symlink
-    git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'symlink .adlc']);
-    assert.equal(run(), 2, 'a symlinked .adlc must be denied, not read as absent');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  git(dir, ['init', '-q', '-b', 'main']);
+  git(dir, ['config', 'user.email', 'a@b.c']); git(dir, ['config', 'user.name', 'x']);
+  writeFileSync(join(dir, 'README.md'), 'base\n'); // no .adlc at base → first bootstrap
+  git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'base']);
+  git(dir, ['checkout', '-q', '-b', 'feat']);
+  mkdirSync(join(dir, 'state'), { recursive: true });
+  writeFileSync(join(dir, 'state', 'manifest.jsonl'), '{"forged":"evidence"}\n');
+  symlinkSync('state', join(dir, '.adlc')); // .adlc itself is a symlink
+  git(dir, ['add', '-A']); git(dir, ['commit', '-qm', 'symlink .adlc']);
+  assert.equal(run(), 2, 'a symlinked .adlc must be denied, not read as absent');
 });
 
-test('#314: append-only is byte-exact — a base-region rewrite that COLLIDES under utf8 is denied', () => {
+test('#314: append-only is byte-exact — a base-region rewrite that COLLIDES under utf8 is denied', (t) => {
   // Base manifest carries an invalid UTF-8 byte (0x80); HEAD flips it to 0x81. Both decode to
   // U+FFFD, so a decoded-string prefix check would see identical strings and pass. The
   // byte-for-byte comparison denies the base-region rewrite.
   const baseBytes = Buffer.concat([Buffer.from('{"seq":1,"pad":"'), Buffer.from([0x80]), Buffer.from('"}\n')]);
   const headBytes = Buffer.concat([Buffer.from('{"seq":1,"pad":"'), Buffer.from([0x81]), Buffer.from('"}\n')]);
   const code = runScenario({
+    t,
     baseTickets: RAILED,
     seedFiles: ['src/critical/auth.mjs', '.adlc/manifest.jsonl'],
     seedFileContents: { '.adlc/manifest.jsonl': baseBytes },
@@ -496,12 +522,13 @@ test('#314: append-only is byte-exact — a base-region rewrite that COLLIDES un
   assert.equal(code, 2);
 });
 
-test('#314: a legitimate append-only manifest update larger than 1 MiB is accepted (maxBuffer)', () => {
+test('#314: a legitimate append-only manifest update larger than 1 MiB is accepted (maxBuffer)', (t) => {
   // Switching the HEAD read to `git cat-file` via spawnSync inherited Node's 1 MiB default
   // maxBuffer; the append-only ledger grows past that, so a valid large manifest must not
   // ENOBUFS-fail the gate. readFileSync had no such limit.
   const big = 'x'.repeat(1_100_000); // > 1 MiB
   const code = runScenario({
+    t,
     baseTickets: RAILED,
     seedFiles: ['src/critical/auth.mjs', '.adlc/manifest.jsonl'],
     seedFileContents: { '.adlc/manifest.jsonl': `${big}\n` },
@@ -510,12 +537,13 @@ test('#314: a legitimate append-only manifest update larger than 1 MiB is accept
   assert.equal(code, 0);
 });
 
-test('#314: a PR that adds a TRACKED but EMPTY manifest is allowed (empty bootstrap) → exit 0', () => {
+test('#314: a PR that adds a TRACKED but EMPTY manifest is allowed (empty bootstrap) → exit 0', (t) => {
   // The deny is for CREATING evidence, i.e. a NON-EMPTY manifest. An empty manifest is
   // the sanctioned bootstrap shape ("create it empty during bootstrap"), so a tracked,
   // empty add must pass. This also pins that the evidence is read from the specific
   // committed path (git show HEAD:.adlc/manifest.jsonl), not from `git show` writ large.
   const code = runScenario({
+    t,
     baseTickets: RAILED,
     seedFiles: ['src/critical/auth.mjs'],
     mutate: (d) => writeFileSync(join(d, '.adlc', 'manifest.jsonl'), ''),
@@ -523,8 +551,9 @@ test('#314: a PR that adds a TRACKED but EMPTY manifest is allowed (empty bootst
   assert.equal(code, 0);
 });
 
-test('trust root: PR edits deployed rails guard workflow while base rails exist → exit 2', () => {
+test('trust root: PR edits deployed rails guard workflow while base rails exist → exit 2', (t) => {
   const code = runScenario({
+    t,
     baseTickets: RAILED,
     seedFiles: ['src/critical/auth.mjs', '.github/workflows/adlc-rails-guard.yml'],
     mutate: (d) => writeFileSync(join(d, '.github/workflows/adlc-rails-guard.yml'), 'jobs: {}\n'),
@@ -549,8 +578,9 @@ for (const path of [
   'scripts/preflight.mjs',
   'scripts/test/preflight.test.mjs',
 ]) {
-  test(`REPO_TRUST_ROOTS: PR edits ${path} while base rails exist → exit 2`, () => {
+  test(`REPO_TRUST_ROOTS: PR edits ${path} while base rails exist → exit 2`, (t) => {
     const code = runScenario({
+      t,
       baseTickets: RAILED,
       seedFiles: ['src/critical/auth.mjs', path],
       seedFileContents: { [path]: 'orig\n' },
@@ -560,8 +590,9 @@ for (const path of [
   });
 }
 
-test('REPO_TRUST_ROOTS: an unrelated file edit is NOT blocked as a trust-root change', () => {
+test('REPO_TRUST_ROOTS: an unrelated file edit is NOT blocked as a trust-root change', (t) => {
   const code = runScenario({
+    t,
     baseTickets: RAILED,
     seedFiles: [
       'src/other.mjs',
@@ -574,7 +605,7 @@ test('REPO_TRUST_ROOTS: an unrelated file edit is NOT blocked as a trust-root ch
 });
 
 // #501: root package.json is an immutable trust root with a version-only exemption
-test('trust root #501: PR modifies scripts.preflight in root package.json → exit 2', () => {
+test('trust root #501: PR modifies scripts.preflight in root package.json → exit 2', (t) => {
   const basePkg = JSON.stringify({
     name: '@adlc/root',
     version: '1.5.0',
@@ -592,6 +623,7 @@ test('trust root #501: PR modifies scripts.preflight in root package.json → ex
     },
   }, null, 2) + '\n';
   const code = runScenario({
+    t,
     baseTickets: RAILED,
     seedFiles: ['src/critical/auth.mjs', 'package.json'],
     seedFileContents: { 'package.json': basePkg },
@@ -600,7 +632,7 @@ test('trust root #501: PR modifies scripts.preflight in root package.json → ex
   assert.equal(code, 2);
 });
 
-test('trust root #501: PR modifies scripts.test in root package.json → exit 2', () => {
+test('trust root #501: PR modifies scripts.test in root package.json → exit 2', (t) => {
   const basePkg = JSON.stringify({
     name: '@adlc/root',
     version: '1.5.0',
@@ -618,6 +650,7 @@ test('trust root #501: PR modifies scripts.test in root package.json → exit 2'
     },
   }, null, 2) + '\n';
   const code = runScenario({
+    t,
     baseTickets: RAILED,
     seedFiles: ['src/critical/auth.mjs', 'package.json'],
     seedFileContents: { 'package.json': basePkg },
@@ -626,7 +659,7 @@ test('trust root #501: PR modifies scripts.test in root package.json → exit 2'
   assert.equal(code, 2);
 });
 
-test('trust root #501: PR removes scripts block in root package.json → exit 2', () => {
+test('trust root #501: PR removes scripts block in root package.json → exit 2', (t) => {
   const basePkg = JSON.stringify({
     name: '@adlc/root',
     version: '1.5.0',
@@ -639,6 +672,7 @@ test('trust root #501: PR removes scripts block in root package.json → exit 2'
     version: '1.5.0',
   }, null, 2) + '\n';
   const code = runScenario({
+    t,
     baseTickets: RAILED,
     seedFiles: ['src/critical/auth.mjs', 'package.json'],
     seedFileContents: { 'package.json': basePkg },
@@ -647,7 +681,7 @@ test('trust root #501: PR removes scripts block in root package.json → exit 2'
   assert.equal(code, 2);
 });
 
-test('trust root #501: PR performs canonical version-only release bump on root package.json → exit 0', () => {
+test('trust root #501: PR performs canonical version-only release bump on root package.json → exit 0', (t) => {
   const basePkg = JSON.stringify({
     name: '@adlc/root',
     version: '1.5.0',
@@ -671,6 +705,7 @@ test('trust root #501: PR performs canonical version-only release bump on root p
     },
   }, null, 2) + '\n';
   const code = runScenario({
+    t,
     baseTickets: RAILED,
     seedFiles: ['src/critical/auth.mjs', 'package.json'],
     seedFileContents: { 'package.json': basePkg },
@@ -679,7 +714,7 @@ test('trust root #501: PR performs canonical version-only release bump on root p
   assert.equal(code, 0);
 });
 
-test('trust root #501: PR changes non-@adlc dependency in root package.json without ceremony → exit 2', () => {
+test('trust root #501: PR changes non-@adlc dependency in root package.json without ceremony → exit 2', (t) => {
   const basePkg = JSON.stringify({
     name: '@adlc/root',
     version: '1.5.0',
@@ -695,6 +730,7 @@ test('trust root #501: PR changes non-@adlc dependency in root package.json with
     },
   }, null, 2) + '\n';
   const code = runScenario({
+    t,
     baseTickets: RAILED,
     seedFiles: ['src/critical/auth.mjs', 'package.json'],
     seedFileContents: { 'package.json': basePkg },
@@ -703,60 +739,57 @@ test('trust root #501: PR changes non-@adlc dependency in root package.json with
   assert.equal(code, 2);
 });
 
-test('trust root #501: PR commits script tampering to HEAD but working tree is clean/restored → exit 2', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'rgci-head-tamper-'));
+test('trust root #501: PR commits script tampering to HEAD but working tree is clean/restored → exit 2', (t) => {
+  const dir = tmp(t, 'rgci-head-tamper-');
+  git(dir, ['init', '-q', '-b', 'main']);
+  git(dir, ['config', 'user.email', 'a@b.c']);
+  git(dir, ['config', 'user.name', 'x']);
+  mkdirSync(join(dir, '.adlc'), { recursive: true });
+  const parsedTickets = JSON.parse(RAILED);
+  for (const t of parsedTickets.tickets ?? []) t.title ??= `${t.id} fixture`;
+  writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify(parsedTickets));
+  const basePkg = JSON.stringify({
+    name: '@adlc/root',
+    version: '1.5.0',
+    scripts: {
+      preflight: 'node scripts/preflight.mjs',
+      test: 'node scripts/run-tests.mjs',
+    },
+  }, null, 2) + '\n';
+  writeFileSync(join(dir, 'package.json'), basePkg);
+  mkdirSync(join(dir, 'src', 'critical'), { recursive: true });
+  writeFileSync(join(dir, 'src', 'critical', 'auth.mjs'), 'orig\n');
+  git(dir, ['add', '-A']);
+  git(dir, ['commit', '-qm', 'base']);
+
+  git(dir, ['checkout', '-q', '-b', 'feat']);
+  const tamperedPkg = JSON.stringify({
+    name: '@adlc/root',
+    version: '1.5.0',
+    scripts: {
+      preflight: 'echo bypassed',
+      test: 'node scripts/run-tests.mjs',
+    },
+  }, null, 2) + '\n';
+  writeFileSync(join(dir, 'package.json'), tamperedPkg);
+  git(dir, ['add', 'package.json']);
+  git(dir, ['commit', '-qm', 'tamper scripts']);
+
+  // Restore working-tree package.json to basePkg without committing
+  writeFileSync(join(dir, 'package.json'), basePkg);
+
+  let code = 0;
   try {
-    git(dir, ['init', '-q', '-b', 'main']);
-    git(dir, ['config', 'user.email', 'a@b.c']);
-    git(dir, ['config', 'user.name', 'x']);
-    mkdirSync(join(dir, '.adlc'), { recursive: true });
-    const parsedTickets = JSON.parse(RAILED);
-    for (const t of parsedTickets.tickets ?? []) t.title ??= `${t.id} fixture`;
-    writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify(parsedTickets));
-    const basePkg = JSON.stringify({
-      name: '@adlc/root',
-      version: '1.5.0',
-      scripts: {
-        preflight: 'node scripts/preflight.mjs',
-        test: 'node scripts/run-tests.mjs',
-      },
-    }, null, 2) + '\n';
-    writeFileSync(join(dir, 'package.json'), basePkg);
-    mkdirSync(join(dir, 'src', 'critical'), { recursive: true });
-    writeFileSync(join(dir, 'src', 'critical', 'auth.mjs'), 'orig\n');
-    git(dir, ['add', '-A']);
-    git(dir, ['commit', '-qm', 'base']);
-
-    git(dir, ['checkout', '-q', '-b', 'feat']);
-    const tamperedPkg = JSON.stringify({
-      name: '@adlc/root',
-      version: '1.5.0',
-      scripts: {
-        preflight: 'echo bypassed',
-        test: 'node scripts/run-tests.mjs',
-      },
-    }, null, 2) + '\n';
-    writeFileSync(join(dir, 'package.json'), tamperedPkg);
-    git(dir, ['add', 'package.json']);
-    git(dir, ['commit', '-qm', 'tamper scripts']);
-
-    // Restore working-tree package.json to basePkg without committing
-    writeFileSync(join(dir, 'package.json'), basePkg);
-
-    let code = 0;
-    try {
-      execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe', env: { ...process.env, RAILS_BASE: '', BASE_REF: '' } });
-    } catch (e) {
-      code = e.status ?? 1;
-    }
-    assert.equal(code, 2);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+    execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe', env: { ...process.env, RAILS_BASE: '', BASE_REF: '' } });
+  } catch (e) {
+    code = e.status ?? 1;
   }
+  assert.equal(code, 2);
 });
 
-test('trust root #501: PR adds .npmrc with script-shell bypass → exit 2', () => {
+test('trust root #501: PR adds .npmrc with script-shell bypass → exit 2', (t) => {
   const code = runScenario({
+    t,
     baseTickets: RAILED,
     seedFiles: ['src/critical/auth.mjs'],
     mutate: (d) => writeFileSync(join(d, '.npmrc'), 'script-shell=/usr/bin/true\n'),
@@ -773,10 +806,11 @@ for (const [path, renamedPath] of [
   ['package.json', 'package-renamed.json'],
   ['.npmrc', '.npmrc.renamed'],
 ]) {
-  test(`trust root: PR renames ${path} → exit 2`, () => {
+  test(`trust root: PR renames ${path} → exit 2`, (t) => {
     const seedFiles = ['src/critical/auth.mjs'];
     if (path !== '.adlc/tickets.json') seedFiles.push(path);
     const code = runScenario({
+      t,
       baseTickets: RAILED,
       seedFiles,
       mutate: (d) => renameSync(join(d, path), join(d, renamedPath)),
@@ -784,10 +818,11 @@ for (const [path, renamedPath] of [
     assert.equal(code, 2);
   });
 
-  test(`trust root: PR deletes ${path} → exit 2`, () => {
+  test(`trust root: PR deletes ${path} → exit 2`, (t) => {
     const seedFiles = ['src/critical/auth.mjs'];
     if (path !== '.adlc/tickets.json') seedFiles.push(path);
     const code = runScenario({
+      t,
       baseTickets: RAILED,
       seedFiles,
       mutate: (d) => unlinkSync(join(d, path)),
@@ -796,8 +831,9 @@ for (const [path, renamedPath] of [
   });
 }
 
-test('trust root: PR edits .adlc/config.json even when no ticket rails exist → exit 2', () => {
+test('trust root: PR edits .adlc/config.json even when no ticket rails exist → exit 2', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
     seedFiles: ['.adlc/config.json', 'src/app.mjs'],
     seedFileContents: { '.adlc/config.json': `${VALID_CONFIG}\n` },
@@ -810,8 +846,9 @@ test('trust root: PR edits .adlc/config.json even when no ticket rails exist →
   assert.equal(code, 2);
 });
 
-test('standalone semantic gate blocks signed securityMode downgrade → exit 1', () => {
+test('standalone semantic gate blocks signed securityMode downgrade → exit 1', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
     seedFiles: ['.adlc/config.json', 'src/app.mjs'],
     seedFileContents: { '.adlc/config.json': `${SIGNED_CONFIG}\n` },
@@ -824,8 +861,9 @@ test('standalone semantic gate blocks signed securityMode downgrade → exit 1',
   assert.equal(code, 1);
 });
 
-test('standalone semantic gate blocks signed securityMode upgrade without ceremony → exit 1', () => {
+test('standalone semantic gate blocks signed securityMode upgrade without ceremony → exit 1', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
     seedFiles: ['.adlc/config.json', 'src/app.mjs'],
     seedFileContents: { '.adlc/config.json': `${VALID_CONFIG}\n` },
@@ -838,8 +876,9 @@ test('standalone semantic gate blocks signed securityMode upgrade without ceremo
   assert.equal(code, 1);
 });
 
-test('standalone semantic gate blocks trusted CODEOWNERS attestation removal → exit 1', () => {
+test('standalone semantic gate blocks trusted CODEOWNERS attestation removal → exit 1', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
     seedFiles: ['.adlc/config.json', 'src/app.mjs'],
     seedFileContents: { '.adlc/config.json': `${VALID_CONFIG}\n` },
@@ -852,8 +891,9 @@ test('standalone semantic gate blocks trusted CODEOWNERS attestation removal →
   assert.equal(code, 1);
 });
 
-test('standalone semantic gate blocks unknown head securityMode → exit 1', () => {
+test('standalone semantic gate blocks unknown head securityMode → exit 1', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
     seedFiles: ['.adlc/config.json', 'src/app.mjs'],
     seedFileContents: { '.adlc/config.json': `${VALID_CONFIG}\n` },
@@ -866,8 +906,9 @@ test('standalone semantic gate blocks unknown head securityMode → exit 1', () 
   assert.equal(code, 1);
 });
 
-test('standalone semantic gate blocks unknown base securityMode → exit 1', () => {
+test('standalone semantic gate blocks unknown base securityMode → exit 1', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
     seedFiles: ['.adlc/config.json', 'src/app.mjs'],
     seedFileContents: { '.adlc/config.json': `${JSON.stringify({ ...JSON.parse(VALID_CONFIG), securityMode: 'permissive-override' })}\n` },
@@ -880,8 +921,9 @@ test('standalone semantic gate blocks unknown base securityMode → exit 1', () 
   assert.equal(code, 1);
 });
 
-test('standalone semantic gate blocks existing signer deletion → exit 1', () => {
+test('standalone semantic gate blocks existing signer deletion → exit 1', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
     seedFiles: ['.adlc/config.json', 'src/app.mjs'],
     seedFileContents: { '.adlc/config.json': `${VALID_CONFIG}\n` },
@@ -894,8 +936,9 @@ test('standalone semantic gate blocks existing signer deletion → exit 1', () =
   assert.equal(code, 1);
 });
 
-test('standalone semantic gate blocks revokedKeys removal → exit 1', () => {
+test('standalone semantic gate blocks revokedKeys removal → exit 1', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
     seedFiles: ['.adlc/config.json', 'src/app.mjs'],
     seedFileContents: { '.adlc/config.json': `${VALID_CONFIG}\n` },
@@ -908,8 +951,9 @@ test('standalone semantic gate blocks revokedKeys removal → exit 1', () => {
   assert.equal(code, 1);
 });
 
-test('standalone semantic gate blocks securitySensitivePatterns removal → exit 1', () => {
+test('standalone semantic gate blocks securitySensitivePatterns removal → exit 1', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
     seedFiles: ['.adlc/config.json', 'src/app.mjs'],
     seedFileContents: { '.adlc/config.json': `${VALID_CONFIG}\n` },
@@ -922,8 +966,9 @@ test('standalone semantic gate blocks securitySensitivePatterns removal → exit
   assert.equal(code, 1);
 });
 
-test('standalone semantic gate blocks maxBundleAgeDays increase → exit 1', () => {
+test('standalone semantic gate blocks maxBundleAgeDays increase → exit 1', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
     seedFiles: ['.adlc/config.json', 'src/app.mjs'],
     seedFileContents: { '.adlc/config.json': `${VALID_CONFIG}\n` },
@@ -936,8 +981,9 @@ test('standalone semantic gate blocks maxBundleAgeDays increase → exit 1', () 
   assert.equal(code, 1);
 });
 
-test('standalone semantic gate blocks post-bootstrap signer additions → exit 1', () => {
+test('standalone semantic gate blocks post-bootstrap signer additions → exit 1', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
     seedFiles: ['.adlc/config.json', 'src/app.mjs'],
     seedFileContents: { '.adlc/config.json': `${VALID_CONFIG}\n` },
@@ -950,8 +996,9 @@ test('standalone semantic gate blocks post-bootstrap signer additions → exit 1
   assert.equal(code, 1);
 });
 
-test('standalone semantic gate blocks undeclared fields on new signers → exit 1', () => {
+test('standalone semantic gate blocks undeclared fields on new signers → exit 1', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
     seedFiles: ['.adlc/config.json', 'src/app.mjs'],
     seedFileContents: { '.adlc/config.json': `${VALID_CONFIG}\n` },
@@ -964,8 +1011,9 @@ test('standalone semantic gate blocks undeclared fields on new signers → exit 
   assert.equal(code, 1);
 });
 
-test('standalone semantic gate blocks undeclared fields on existing signers → exit 1', () => {
+test('standalone semantic gate blocks undeclared fields on existing signers → exit 1', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
     seedFiles: ['.adlc/config.json', 'src/app.mjs'],
     seedFileContents: { '.adlc/config.json': `${VALID_CONFIG}\n` },
@@ -978,13 +1026,14 @@ test('standalone semantic gate blocks undeclared fields on existing signers → 
   assert.equal(code, 1);
 });
 
-test('standalone semantic gate blocks trusted signer field removal → exit 1', () => {
+test('standalone semantic gate blocks trusted signer field removal → exit 1', (t) => {
   const baseConfig = JSON.stringify({
     acknowledgedNewRailBypass: true,
     securityMode: 'unsigned-fallback',
     signers: { alice: { role: 'builder', publicKey: 'abc123' } },
   });
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
     seedFiles: ['.adlc/config.json', 'src/app.mjs'],
     seedFileContents: { '.adlc/config.json': `${baseConfig}\n` },
@@ -997,8 +1046,9 @@ test('standalone semantic gate blocks trusted signer field removal → exit 1', 
   assert.equal(code, 1);
 });
 
-test('standalone semantic gate rejects null signers field → exit 1', () => {
+test('standalone semantic gate rejects null signers field → exit 1', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
     seedFiles: ['.adlc/config.json', 'src/app.mjs'],
     seedFileContents: { '.adlc/config.json': `${JSON.stringify({ acknowledgedNewRailBypass: true, securityMode: 'unsigned-fallback' })}\n` },
@@ -1011,8 +1061,9 @@ test('standalone semantic gate rejects null signers field → exit 1', () => {
   assert.equal(code, 1);
 });
 
-test('legit: a non-rail change with base rails → exit 0', () => {
+test('legit: a non-rail change with base rails → exit 0', (t) => {
   const code = runScenario({
+    t,
     baseTickets: RAILED,
     seedFiles: ['src/critical/auth.mjs', 'src/app.mjs'],
     mutate: (d) => writeFileSync(join(d, 'src/app.mjs'), 'feature\n'),
@@ -1020,8 +1071,9 @@ test('legit: a non-rail change with base rails → exit 0', () => {
   assert.equal(code, 0);
 });
 
-test('no rails at base → exit 0 (nothing frozen)', () => {
+test('no rails at base → exit 0 (nothing frozen)', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [] }),
     seedFiles: ['src/app.mjs'],
     mutate: (d) => writeFileSync(join(d, 'src/app.mjs'), 'feature\n'),
@@ -1029,8 +1081,9 @@ test('no rails at base → exit 0 (nothing frozen)', () => {
   assert.equal(code, 0);
 });
 
-test('malformed base tickets → exit 1 (fail closed)', () => {
+test('malformed base tickets → exit 1 (fail closed)', (t) => {
   const code = runScenario({
+    t,
     baseTickets: '{ not json',
     seedFiles: ['src/app.mjs'],
     mutate: (d) => writeFileSync(join(d, 'src/app.mjs'), 'feature\n'),
@@ -1038,102 +1091,86 @@ test('malformed base tickets → exit 1 (fail closed)', () => {
   assert.equal(code, 1);
 });
 
-test('no .adlc/tickets.json at base → exit 0 (genuinely nothing frozen)', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'rgci-'));
+test('no .adlc/tickets.json at base → exit 0 (genuinely nothing frozen)', (t) => {
+  const dir = tmp(t, 'rgci-');
+  git(dir, ['init', '-q', '-b', 'main']);
+  git(dir, ['config', 'user.email', 'a@b.c']);
+  git(dir, ['config', 'user.name', 'x']);
+  writeFileSync(join(dir, 'app.mjs'), 'x\n'); // base has NO .adlc/ at all
+  git(dir, ['add', '-A']);
+  git(dir, ['commit', '-qm', 'base']);
+  git(dir, ['checkout', '-q', '-b', 'feat']);
+  writeFileSync(join(dir, 'app.mjs'), 'y\n');
+  git(dir, ['commit', '-qam', 'change']);
+  let code = 0;
   try {
-    git(dir, ['init', '-q', '-b', 'main']);
-    git(dir, ['config', 'user.email', 'a@b.c']);
-    git(dir, ['config', 'user.name', 'x']);
-    writeFileSync(join(dir, 'app.mjs'), 'x\n'); // base has NO .adlc/ at all
-    git(dir, ['add', '-A']);
-    git(dir, ['commit', '-qm', 'base']);
-    git(dir, ['checkout', '-q', '-b', 'feat']);
-    writeFileSync(join(dir, 'app.mjs'), 'y\n');
-    git(dir, ['commit', '-qam', 'change']);
-    let code = 0;
-    try {
-      execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' });
-    } catch (e) {
-      code = e.status ?? 1;
-    }
-    assert.equal(code, 0);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+    execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' });
+  } catch (e) {
+    code = e.status ?? 1;
   }
+  assert.equal(code, 0);
 });
 
-test('base config without tickets still protects config.json trust root → exit 2', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'rgci-'));
+test('base config without tickets still protects config.json trust root → exit 2', (t) => {
+  const dir = tmp(t, 'rgci-');
+  git(dir, ['init', '-q', '-b', 'main']);
+  git(dir, ['config', 'user.email', 'a@b.c']);
+  git(dir, ['config', 'user.name', 'x']);
+  mkdirSync(join(dir, '.adlc'), { recursive: true });
+  writeFileSync(join(dir, '.adlc', 'config.json'), `${VALID_CONFIG}\n`);
+  git(dir, ['add', '-A']);
+  git(dir, ['commit', '-qm', 'base']);
+  git(dir, ['checkout', '-q', '-b', 'feat']);
+  writeFileSync(join(dir, '.adlc', 'config.json'), `${JSON.stringify({ ...JSON.parse(VALID_CONFIG), extraField: true })}\n`);
+  git(dir, ['commit', '-qam', 'change']);
+  let code = 0;
   try {
-    git(dir, ['init', '-q', '-b', 'main']);
-    git(dir, ['config', 'user.email', 'a@b.c']);
-    git(dir, ['config', 'user.name', 'x']);
-    mkdirSync(join(dir, '.adlc'), { recursive: true });
-    writeFileSync(join(dir, '.adlc', 'config.json'), `${VALID_CONFIG}\n`);
-    git(dir, ['add', '-A']);
-    git(dir, ['commit', '-qm', 'base']);
-    git(dir, ['checkout', '-q', '-b', 'feat']);
-    writeFileSync(join(dir, '.adlc', 'config.json'), `${JSON.stringify({ ...JSON.parse(VALID_CONFIG), extraField: true })}\n`);
-    git(dir, ['commit', '-qam', 'change']);
-    let code = 0;
-    try {
-      execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' });
-    } catch (e) {
-      code = e.status ?? 1;
-    }
-    assert.equal(code, 2);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+    execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' });
+  } catch (e) {
+    code = e.status ?? 1;
   }
+  assert.equal(code, 2);
 });
 
-test('standalone bootstrap rejects pre-populated manifest evidence → exit 1', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'rgci-'));
+test('standalone bootstrap rejects pre-populated manifest evidence → exit 1', (t) => {
+  const dir = tmp(t, 'rgci-');
+  git(dir, ['init', '-q', '-b', 'main']);
+  git(dir, ['config', 'user.email', 'a@b.c']);
+  git(dir, ['config', 'user.name', 'x']);
+  writeFileSync(join(dir, 'app.mjs'), 'x\n'); // base has NO .adlc/ at all
+  git(dir, ['add', '-A']);
+  git(dir, ['commit', '-qm', 'base']);
+  git(dir, ['checkout', '-q', '-b', 'feat']);
+  mkdirSync(join(dir, '.adlc'), { recursive: true });
+  writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"prepopulated":true}\n');
+  git(dir, ['add', '-A']);
+  git(dir, ['commit', '-qm', 'change']);
+  let code = 0;
   try {
-    git(dir, ['init', '-q', '-b', 'main']);
-    git(dir, ['config', 'user.email', 'a@b.c']);
-    git(dir, ['config', 'user.name', 'x']);
-    writeFileSync(join(dir, 'app.mjs'), 'x\n'); // base has NO .adlc/ at all
-    git(dir, ['add', '-A']);
-    git(dir, ['commit', '-qm', 'base']);
-    git(dir, ['checkout', '-q', '-b', 'feat']);
-    mkdirSync(join(dir, '.adlc'), { recursive: true });
-    writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), '{"prepopulated":true}\n');
-    git(dir, ['add', '-A']);
-    git(dir, ['commit', '-qm', 'change']);
-    let code = 0;
-    try {
-      execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' });
-    } catch (e) {
-      code = e.status ?? 1;
-    }
-    assert.equal(code, 1);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+    execFileSync(process.execPath, [SCRIPT, 'main'], { cwd: dir, stdio: 'pipe' });
+  } catch (e) {
+    code = e.status ?? 1;
   }
+  assert.equal(code, 1);
 });
 
-test('unresolvable base ref → exit 1 (fail closed, not fail open)', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'rgci-'));
+test('unresolvable base ref → exit 1 (fail closed, not fail open)', (t) => {
+  const dir = tmp(t, 'rgci-');
+  git(dir, ['init', '-q', '-b', 'main']);
+  git(dir, ['config', 'user.email', 'a@b.c']);
+  git(dir, ['config', 'user.name', 'x']);
+  mkdirSync(join(dir, '.adlc'), { recursive: true });
+  writeFileSync(join(dir, '.adlc', 'tickets.json'), RAILED);
+  writeFileSync(join(dir, 'app.mjs'), 'x\n');
+  git(dir, ['add', '-A']);
+  git(dir, ['commit', '-qm', 'base']);
+  let code = 0;
   try {
-    git(dir, ['init', '-q', '-b', 'main']);
-    git(dir, ['config', 'user.email', 'a@b.c']);
-    git(dir, ['config', 'user.name', 'x']);
-    mkdirSync(join(dir, '.adlc'), { recursive: true });
-    writeFileSync(join(dir, '.adlc', 'tickets.json'), RAILED);
-    writeFileSync(join(dir, 'app.mjs'), 'x\n');
-    git(dir, ['add', '-A']);
-    git(dir, ['commit', '-qm', 'base']);
-    let code = 0;
-    try {
-      execFileSync(process.execPath, [SCRIPT, 'origin/nonexistent-branch'], { cwd: dir, stdio: 'pipe' });
-    } catch (e) {
-      code = e.status ?? 1;
-    }
-    assert.equal(code, 1); // bad base must NOT be read as "no rails"
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+    execFileSync(process.execPath, [SCRIPT, 'origin/nonexistent-branch'], { cwd: dir, stdio: 'pipe' });
+  } catch (e) {
+    code = e.status ?? 1;
   }
+  assert.equal(code, 1); // bad base must NOT be read as "no rails"
 });
 
 // ---- T36: rails completion lifecycle — a completed ticket's rails auto-expire ----
@@ -1144,8 +1181,9 @@ test('unresolvable base ref → exit 1 (fail closed, not fail open)', () => {
 
 const editT1Rail = (d) => writeFileSync(join(d, 'src', 'critical', 'auth.mjs'), 'changed\n');
 
-test('T36 AC1: completed:true on a base ticket → its rails auto-expire → exit 0', () => {
+test('T36 AC1: completed:true on a base ticket → its rails auto-expire → exit 0', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', completed: true, rails: ['src/critical/**'] }] }),
     seedFiles: ['src/critical/auth.mjs'],
     mutate: editT1Rail,
@@ -1153,9 +1191,10 @@ test('T36 AC1: completed:true on a base ticket → its rails auto-expire → exi
   assert.equal(code, 0, 'a done ticket no longer freezes its rails');
 });
 
-test('T36 AC1: completed must be a STRICT boolean true — "true"/1/truthy do NOT lift → exit 2', () => {
+test('T36 AC1: completed must be a STRICT boolean true — "true"/1/truthy do NOT lift → exit 2', (t) => {
   for (const val of ['true', 1, 'yes', {}]) {
     const code = runScenario({
+      t,
       baseTickets: JSON.stringify({ tickets: [{ id: 'T1', completed: val, rails: ['src/critical/**'] }] }),
       seedFiles: ['src/critical/auth.mjs'],
       mutate: editT1Rail,
@@ -1164,8 +1203,9 @@ test('T36 AC1: completed must be a STRICT boolean true — "true"/1/truthy do NO
   }
 });
 
-test('T36 AC2: an IN-FLIGHT ticket (no completed field) still freezes its rails → exit 2', () => {
+test('T36 AC2: an IN-FLIGHT ticket (no completed field) still freezes its rails → exit 2', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: ['src/critical/**'] }] }),
     seedFiles: ['src/critical/auth.mjs'],
     mutate: editT1Rail,
@@ -1173,10 +1213,11 @@ test('T36 AC2: an IN-FLIGHT ticket (no completed field) still freezes its rails 
   assert.equal(code, 2);
 });
 
-test('T36 AC3 forge resistance: a PR that ADDS completed:true to an existing base ticket is DENIED → exit 2', () => {
+test('T36 AC3 forge resistance: a PR that ADDS completed:true to an existing base ticket is DENIED → exit 2', (t) => {
   // base has T1 WITHOUT completed; the PR tries to mark it complete to unfreeze it.
   // assertBaseTicketContractsPreserved denies any change to an existing base ticket.
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: ['src/critical/**'] }] }),
     seedFiles: ['src/critical/auth.mjs'],
     mutate: (d) => {
@@ -1188,8 +1229,9 @@ test('T36 AC3 forge resistance: a PR that ADDS completed:true to an existing bas
   assert.equal(code, 2, 'a non-admin cannot forge completion on an existing ticket');
 });
 
-test('T36 AC4 no self-unfreeze: even marking it complete AND removing its rail in the PR is DENIED → exit 2', () => {
+test('T36 AC4 no self-unfreeze: even marking it complete AND removing its rail in the PR is DENIED → exit 2', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: ['src/critical/**'] }] }),
     seedFiles: ['src/critical/auth.mjs'],
     mutate: (d) => {
@@ -1201,10 +1243,11 @@ test('T36 AC4 no self-unfreeze: even marking it complete AND removing its rail i
   assert.equal(code, 2, 'contract preservation blocks the self-serve completion+unfreeze');
 });
 
-test('T36 AC4: a NEW ticket a PR authors with completed:true cannot unfreeze ANOTHER ticket’s rails → exit 2', () => {
+test('T36 AC4: a NEW ticket a PR authors with completed:true cannot unfreeze ANOTHER ticket’s rails → exit 2', (t) => {
   // A PR may add new tickets. An attacker adds T99 completed:true — but that only
   // skips T99's own (empty) rails; T1 (in-flight) still freezes src/critical.
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: ['src/critical/**'] }] }),
     seedFiles: ['src/critical/auth.mjs'],
     mutate: (d) => {
@@ -1218,8 +1261,9 @@ test('T36 AC4: a NEW ticket a PR authors with completed:true cannot unfreeze ANO
   assert.equal(code, 2, 'a completed NEW ticket cannot lift a still-in-flight ticket’s rails');
 });
 
-test('T36 safety: a path frozen by BOTH a completed and an in-flight ticket STAYS frozen → exit 2', () => {
+test('T36 safety: a path frozen by BOTH a completed and an in-flight ticket STAYS frozen → exit 2', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [
       { id: 'T1', completed: true, rails: ['src/critical/**'] },
       { id: 'T2', rails: ['src/critical/**', 'src/other/**'] }, // in-flight — still freezes the shared path
@@ -1230,8 +1274,9 @@ test('T36 safety: a path frozen by BOTH a completed and an in-flight ticket STAY
   assert.equal(code, 2, 'completing T1 must not unfreeze a path T2 still freezes');
 });
 
-test('T36 safety: completing T1 lifts ONLY T1-exclusive rails; T2 in-flight rails still enforce → exit 2 on T2 path', () => {
+test('T36 safety: completing T1 lifts ONLY T1-exclusive rails; T2 in-flight rails still enforce → exit 2 on T2 path', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [
       { id: 'T1', completed: true, rails: ['src/a/**'] },
       { id: 'T2', rails: ['src/b/**'] },
@@ -1242,8 +1287,9 @@ test('T36 safety: completing T1 lifts ONLY T1-exclusive rails; T2 in-flight rail
   assert.equal(code, 2);
 });
 
-test('T36 safety: after completing T1, editing its now-expired rail AND a non-rail file → exit 0', () => {
+test('T36 safety: after completing T1, editing its now-expired rail AND a non-rail file → exit 0', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [
       { id: 'T1', completed: true, rails: ['src/a/**'] },
       { id: 'T2', rails: ['src/b/**'] },
@@ -1256,10 +1302,11 @@ test('T36 safety: after completing T1, editing its now-expired rail AND a non-ra
 
 // ---- T36 guardrails (codex round-1 review) ----
 
-test('T36 guardrail #1: a completed ticket is STILL contract-preserved — a PR editing it is DENIED → exit 2', () => {
+test('T36 guardrail #1: a completed ticket is STILL contract-preserved — a PR editing it is DENIED → exit 2', (t) => {
   // Completing a ticket expires its RAILS only; its contract stays immutable, so
   // a PR cannot mutate/delete a completed base ticket.
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', completed: true, rails: ['src/critical/**'] }] }),
     seedFiles: ['src/critical/auth.mjs'],
     mutate: (d) => writeFileSync(join(d, '.adlc', 'tickets.json'),
@@ -1268,8 +1315,9 @@ test('T36 guardrail #1: a completed ticket is STILL contract-preserved — a PR 
   assert.equal(code, 2, 'a completed ticket contract is still frozen');
 });
 
-test('T36 guardrail #1: a PR that REMOVES a completed base ticket is DENIED → exit 2', () => {
+test('T36 guardrail #1: a PR that REMOVES a completed base ticket is DENIED → exit 2', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [
       { id: 'T1', completed: true, rails: ['src/critical/**'] },
       { id: 'T2', rails: ['src/other/**'] },
@@ -1281,10 +1329,11 @@ test('T36 guardrail #1: a PR that REMOVES a completed base ticket is DENIED → 
   assert.equal(code, 2, 'a completed base ticket cannot be removed');
 });
 
-test('T36 guardrail #5: an ALL-COMPLETED repo (rails empty) still protects trust roots via baseHasConfig → exit 2', () => {
+test('T36 guardrail #5: an ALL-COMPLETED repo (rails empty) still protects trust roots via baseHasConfig → exit 2', (t) => {
   // Every ticket completed → rails union is empty. Trust-root protection must
   // still run (it keys on baseHasConfig, independent of the rail union).
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', completed: true, rails: ['src/critical/**'] }] }),
     seedFiles: ['src/critical/auth.mjs', '.adlc/config.json'],
     seedFileContents: { '.adlc/config.json': JSON.stringify({ securityMode: 'unsigned-fallback', acknowledgedNewRailBypass: true, trustedCodeownersAttested: true }) },
@@ -1294,8 +1343,9 @@ test('T36 guardrail #5: an ALL-COMPLETED repo (rails empty) still protects trust
   assert.equal(code, 2, 'trust roots stay protected even when all rails have expired');
 });
 
-test('T36 guardrail #5: all-completed repo, editing a now-expired rail path → exit 0 (rails genuinely lifted)', () => {
+test('T36 guardrail #5: all-completed repo, editing a now-expired rail path → exit 0 (rails genuinely lifted)', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', completed: true, rails: ['src/critical/**'] }] }),
     seedFiles: ['src/critical/auth.mjs'],
     mutate: (d) => writeFileSync(join(d, 'src', 'critical', 'auth.mjs'), 'changed\n'),
@@ -1306,8 +1356,9 @@ test('T36 guardrail #5: all-completed repo, editing a now-expired rail path → 
 // ---- #104: ticket-prune tombstone — the gate accepts a `completed:true` annotation
 // on a RAILS-LESS base ticket (zero unfreeze privilege), but nothing more. ----
 
-test('#104: a PR adding ONLY completed:true to a rails-LESS base ticket is ALLOWED → exit 0', () => {
+test('#104: a PR adding ONLY completed:true to a rails-LESS base ticket is ALLOWED → exit 0', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [], title: 'done work' }] }),
     seedFiles: ['app.mjs'],
     mutate: (d) => writeFileSync(join(d, '.adlc', 'tickets.json'),
@@ -1316,8 +1367,9 @@ test('#104: a PR adding ONLY completed:true to a rails-LESS base ticket is ALLOW
   assert.equal(code, 0, 'tombstoning a shipped rails-less ticket merges via a normal PR');
 });
 
-test('#104 forge resistance: adding completed:true to a RAILED base ticket is STILL DENIED → exit 2', () => {
+test('#104 forge resistance: adding completed:true to a RAILED base ticket is STILL DENIED → exit 2', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: ['src/critical/**'] }] }),
     seedFiles: ['src/critical/auth.mjs'],
     mutate: (d) => writeFileSync(join(d, '.adlc', 'tickets.json'),
@@ -1326,8 +1378,9 @@ test('#104 forge resistance: adding completed:true to a RAILED base ticket is ST
   assert.equal(code, 2, 'completing a still-railed ticket needs the admin ceremony (would unfreeze)');
 });
 
-test('#104: completed:true + ANY other field change on a rails-less ticket → DENIED → exit 2', () => {
+test('#104: completed:true + ANY other field change on a rails-less ticket → DENIED → exit 2', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [], title: 'orig' }] }),
     seedFiles: ['app.mjs'],
     mutate: (d) => writeFileSync(join(d, '.adlc', 'tickets.json'),
@@ -1336,8 +1389,9 @@ test('#104: completed:true + ANY other field change on a rails-less ticket → D
   assert.equal(code, 2, 'only the completed annotation may be added, nothing else');
 });
 
-test('#104: adding completed:true AND rails in the same PR → DENIED → exit 2', () => {
+test('#104: adding completed:true AND rails in the same PR → DENIED → exit 2', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
     seedFiles: ['app.mjs'],
     mutate: (d) => writeFileSync(join(d, '.adlc', 'tickets.json'),
@@ -1346,9 +1400,10 @@ test('#104: adding completed:true AND rails in the same PR → DENIED → exit 2
   assert.equal(code, 2, 'cannot smuggle a rails change under the completion annotation');
 });
 
-test('#104: completed must be STRICT true — "true"/1/false do NOT get the annotation exemption → exit 2', () => {
+test('#104: completed must be STRICT true — "true"/1/false do NOT get the annotation exemption → exit 2', (t) => {
   for (const val of ['true', 1, false]) {
     const code = runScenario({
+      t,
       baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }),
       seedFiles: ['app.mjs'],
       mutate: (d) => writeFileSync(join(d, '.adlc', 'tickets.json'),
@@ -1358,8 +1413,9 @@ test('#104: completed must be STRICT true — "true"/1/false do NOT get the anno
   }
 });
 
-test('#104: base ticket that ALREADY has a completed field cannot be re-annotated (only pristine → completed) → exit 2', () => {
+test('#104: base ticket that ALREADY has a completed field cannot be re-annotated (only pristine → completed) → exit 2', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [], completed: false }] }),
     seedFiles: ['app.mjs'],
     mutate: (d) => writeFileSync(join(d, '.adlc', 'tickets.json'),
@@ -1368,8 +1424,9 @@ test('#104: base ticket that ALREADY has a completed field cannot be re-annotate
   assert.equal(code, 2, 'the exemption is add-only on a ticket with no completed field');
 });
 
-test('#104: REMOVING a rails-less base ticket is still DENIED (tombstone, never delete) → exit 2', () => {
+test('#104: REMOVING a rails-less base ticket is still DENIED (tombstone, never delete) → exit 2', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [] }, { id: 'T2', rails: [] }] }),
     seedFiles: ['app.mjs'],
     mutate: (d) => writeFileSync(join(d, '.adlc', 'tickets.json'),
@@ -1378,8 +1435,9 @@ test('#104: REMOVING a rails-less base ticket is still DENIED (tombstone, never 
   assert.equal(code, 2, 'removal still needs the ceremony');
 });
 
-test('#104: idempotent — a PR that leaves an already-completed base ticket unchanged → exit 0', () => {
+test('#104: idempotent — a PR that leaves an already-completed base ticket unchanged → exit 0', (t) => {
   const code = runScenario({
+    t,
     baseTickets: JSON.stringify({ tickets: [{ id: 'T1', rails: [], completed: true }] }),
     seedFiles: ['app.mjs'],
     mutate: (d) => writeFileSync(join(d, 'app.mjs'), 'changed\n'),
@@ -1389,17 +1447,28 @@ test('#104: idempotent — a PR that leaves an already-completed base ticket unc
 
 // ---- #141: trust-root change ceremony (authorized-path recognition) ----
 
-function writeEvent(author, labels, number = 7) {
-  const p = join(mkdtempSync(join(tmpdir(), 'rgci-event-')), 'event.json');
+function writeEvent(authorOrT, labelsOrAuthor, numberOrLabels = 7, maybeNumber = 7) {
+  let ctx = null;
+  let author = authorOrT;
+  let labels = labelsOrAuthor;
+  let number = numberOrLabels;
+  if (authorOrT && typeof authorOrT === 'object' && typeof authorOrT.after === 'function') {
+    ctx = authorOrT;
+    author = labelsOrAuthor;
+    labels = numberOrLabels;
+    number = maybeNumber;
+  }
+  const p = join(tmp(ctx, 'rgci-event-'), 'event.json');
   writeFileSync(p, JSON.stringify({
-    pull_request: { number, user: { login: author }, labels: labels.map((name) => ({ name })) },
+    pull_request: { number, user: { login: author }, labels: (labels ?? []).map((name) => ({ name })) },
   }));
   return p;
 }
 
 // A PR that changes a trust root (docs/ci/rails-guard.yml), with config present
 // so immutableTrustRoots is active. CODEOWNERS at base owns the changed path.
-const trustRootChange = (env) => runScenario({
+const trustRootChange = (t, env) => runScenario({
+  t,
   baseTickets: '{"tickets":[]}',
   seedFiles: ['.adlc/config.json', '.adlc/manifest.jsonl', 'CODEOWNERS', 'docs/ci/rails-guard.yml'],
   seedFileContents: {
@@ -1412,34 +1481,34 @@ const trustRootChange = (env) => runScenario({
   env,
 });
 
-test('#141: a trust-root change with no PR context is denied (exit 2)', () => {
-  assert.equal(trustRootChange({}), 2);
+test('#141: a trust-root change with no PR context is denied (exit 2)', (t) => {
+  assert.equal(trustRootChange(t, {}), 2);
 });
 
-test('#141: label + non-author CODEOWNER approval AUTHORIZES the change (exit 0)', () => {
-  assert.equal(trustRootChange({
-    GITHUB_EVENT_PATH: writeEvent('contributor', ['trust-root-change']),
+test('#141: label + non-author CODEOWNER approval AUTHORIZES the change (exit 0)', (t) => {
+  assert.equal(trustRootChange(t, {
+    GITHUB_EVENT_PATH: writeEvent(t, 'contributor', ['trust-root-change']),
     ADLC_PR_REVIEWS: JSON.stringify([{ user: { login: 'trusty' }, state: 'APPROVED' }]),
   }), 0);
 });
 
-test('#141: author self-approval does NOT authorize (exit 2)', () => {
-  assert.equal(trustRootChange({
-    GITHUB_EVENT_PATH: writeEvent('trusty', ['trust-root-change']), // author is the owner
+test('#141: author self-approval does NOT authorize (exit 2)', (t) => {
+  assert.equal(trustRootChange(t, {
+    GITHUB_EVENT_PATH: writeEvent(t, 'trusty', ['trust-root-change']), // author is the owner
     ADLC_PR_REVIEWS: JSON.stringify([{ user: { login: 'trusty' }, state: 'APPROVED' }]),
   }), 2);
 });
 
-test('#141: approval from a non-CODEOWNER is not enough (exit 2)', () => {
-  assert.equal(trustRootChange({
-    GITHUB_EVENT_PATH: writeEvent('contributor', ['trust-root-change']),
+test('#141: approval from a non-CODEOWNER is not enough (exit 2)', (t) => {
+  assert.equal(trustRootChange(t, {
+    GITHUB_EVENT_PATH: writeEvent(t, 'contributor', ['trust-root-change']),
     ADLC_PR_REVIEWS: JSON.stringify([{ user: { login: 'random' }, state: 'APPROVED' }]),
   }), 2);
 });
 
-test('#141: missing the label denies even with a CODEOWNER approval (exit 2)', () => {
-  assert.equal(trustRootChange({
-    GITHUB_EVENT_PATH: writeEvent('contributor', []),
+test('#141: missing the label denies even with a CODEOWNER approval (exit 2)', (t) => {
+  assert.equal(trustRootChange(t, {
+    GITHUB_EVENT_PATH: writeEvent(t, 'contributor', []),
     ADLC_PR_REVIEWS: JSON.stringify([{ user: { login: 'trusty' }, state: 'APPROVED' }]),
   }), 2);
 });
@@ -1454,13 +1523,14 @@ const RAILED_TRUST_ROOT_CONTENTS = {
   'docs/ci/rails-guard.yml': 'orig\n',
   'src/critical/auth.mjs': 'orig\n',
 };
-const authorizedEnv = () => ({
-  GITHUB_EVENT_PATH: writeEvent('contributor', ['trust-root-change']),
+const authorizedEnv = (t) => ({
+  GITHUB_EVENT_PATH: writeEvent(t, 'contributor', ['trust-root-change']),
   ADLC_PR_REVIEWS: JSON.stringify([{ user: { login: 'trusty' }, state: 'APPROVED' }]),
 });
 
-test('#141: an authorized trust-root change does NOT lift an unrelated frozen ticket rail', () => {
+test('#141: an authorized trust-root change does NOT lift an unrelated frozen ticket rail', (t) => {
   const status = runScenario({
+    t,
     baseTickets: '{"tickets":[{"id":"T1","rails":["src/critical/**"]}]}',
     seedFiles: RAILED_TRUST_ROOT_FILES,
     seedFileContents: RAILED_TRUST_ROOT_CONTENTS,
@@ -1468,18 +1538,19 @@ test('#141: an authorized trust-root change does NOT lift an unrelated frozen ti
       writeFileSync(join(dir, 'docs/ci/rails-guard.yml'), 'changed\n'); // authorized trust root
       writeFileSync(join(dir, 'src/critical/auth.mjs'), 'sneak\n');     // out-of-scope ticket rail
     },
-    env: authorizedEnv(),
+    env: authorizedEnv(t),
   });
   assert.equal(status, 2); // the frozen ticket rail edit is STILL denied
 });
 
-test('#141: the same authorized trust-root change alone (no ticket-rail edit) is allowed', () => {
+test('#141: the same authorized trust-root change alone (no ticket-rail edit) is allowed', (t) => {
   const status = runScenario({
+    t,
     baseTickets: '{"tickets":[{"id":"T1","rails":["src/critical/**"]}]}',
     seedFiles: RAILED_TRUST_ROOT_FILES,
     seedFileContents: RAILED_TRUST_ROOT_CONTENTS,
     mutate: (dir) => writeFileSync(join(dir, 'docs/ci/rails-guard.yml'), 'changed\n'),
-    env: authorizedEnv(),
+    env: authorizedEnv(t),
   });
   assert.equal(status, 0);
 });
@@ -1501,64 +1572,68 @@ const GLOB_TRUST_ROOT_CONTENTS = {
   'src/critical/auth.mjs': 'orig\n',
 };
 
-test('#141: an authorized change to a GLOB-covered trust root is lifted, not denied', () => {
+test('#141: an authorized change to a GLOB-covered trust root is lifted, not denied', (t) => {
   const status = runScenario({
+    t,
     baseTickets: '{"tickets":[{"id":"T1","rails":["src/critical/**"]}]}',
     seedFiles: GLOB_TRUST_ROOT_FILES,
     seedFileContents: GLOB_TRUST_ROOT_CONTENTS,
     mutate: (dir) => writeFileSync(join(dir, 'packages/rails-guard/lib/ci/args.mjs'), 'changed\n'),
-    env: authorizedEnv(),
+    env: authorizedEnv(t),
   });
   assert.equal(status, 0);
 });
 
-test('#141: lifting a GLOB trust root does NOT lift a ticket rail that covers the same path', () => {
+test('#141: lifting a GLOB trust root does NOT lift a ticket rail that covers the same path', (t) => {
   // The lift is drawn from the trust-root set only. Matching against `unique` directly
   // would let an authorized trust-root change also unfreeze a ticket rail whose glob
   // happens to cover an authorized path — the ceremony authorizes trust roots, never rails.
   const status = runScenario({
+    t,
     baseTickets: '{"tickets":[{"id":"T1","rails":["packages/rails-guard/**"]}]}',
     seedFiles: GLOB_TRUST_ROOT_FILES,
     seedFileContents: GLOB_TRUST_ROOT_CONTENTS,
     mutate: (dir) => writeFileSync(join(dir, 'packages/rails-guard/lib/ci/args.mjs'), 'changed\n'),
-    env: authorizedEnv(),
+    env: authorizedEnv(t),
   });
   assert.equal(status, 2);
 });
 
-test('#141: a ticket rail IDENTICAL to a trust root is never lifted', () => {
+test('#141: a ticket rail IDENTICAL to a trust root is never lifted', (t) => {
   // #363 round 3, blocking. `unique` is a Set, so a ticket rail and a trust root spelled
   // the SAME string collapse to one entry. Lifting that entry unfroze the ticket's rail
   // along with the trust root. The ceremony authorizes trust roots, never rails.
   const status = runScenario({
+    t,
     baseTickets: '{"tickets":[{"id":"T1","rails":["packages/rails-guard/lib/ci/**"]}]}',
     seedFiles: GLOB_TRUST_ROOT_FILES,
     seedFileContents: GLOB_TRUST_ROOT_CONTENTS,
     mutate: (dir) => writeFileSync(join(dir, 'packages/rails-guard/lib/ci/args.mjs'), 'changed\n'),
-    env: authorizedEnv(),
+    env: authorizedEnv(t),
   });
   assert.equal(status, 2);
 });
 
-test('#141: label present but the reviews payload is absent → clean deny, not a crash (exit 2)', () => {
+test('#141: label present but the reviews payload is absent → clean deny, not a crash (exit 2)', (t) => {
   // GITHUB_EVENT_PATH is set (real PR context, label applied) but ADLC_PR_REVIEWS
   // is UNSET — the reviews fetch yielded nothing. readPrContext must treat that as
   // "no approving review" and fall through to deny, NOT dereference undefined. This
   // pins the `rawReviews && rawReviews.trim()` guard: swapping it to `||` makes
   // `undefined || undefined.trim()` throw, and the trust-root block is not wrapped
   // in a try/catch, so the throw would surface as exit 1 (crash) instead of 2.
-  assert.equal(trustRootChange({
-    GITHUB_EVENT_PATH: writeEvent('contributor', ['trust-root-change']),
+  assert.equal(trustRootChange(t, {
+    GITHUB_EVENT_PATH: writeEvent(t, 'contributor', ['trust-root-change']),
     // ADLC_PR_REVIEWS intentionally omitted
   }), 2);
 });
 
-test('#141: CODEOWNERS discovered only at docs/CODEOWNERS still resolves owners (authorized, exit 0)', () => {
+test('#141: CODEOWNERS discovered only at docs/CODEOWNERS still resolves owners (authorized, exit 0)', (t) => {
   // The owner of the changed trust root is declared ONLY in the third search
   // location, docs/CODEOWNERS. codeownersOwnersFor must probe all three locations;
   // dropping docs/CODEOWNERS from the search list would leave owners empty and
   // deny an otherwise-authorized change. This pins that third location.
   const status = runScenario({
+    t,
     baseTickets: '{"tickets":[]}',
     seedFiles: ['.adlc/config.json', '.adlc/manifest.jsonl', 'docs/CODEOWNERS', 'docs/ci/rails-guard.yml'],
     seedFileContents: {
@@ -1568,12 +1643,12 @@ test('#141: CODEOWNERS discovered only at docs/CODEOWNERS still resolves owners 
       'docs/ci/rails-guard.yml': 'orig\n',
     },
     mutate: (dir) => writeFileSync(join(dir, 'docs/ci/rails-guard.yml'), 'changed\n'),
-    env: authorizedEnv(),
+    env: authorizedEnv(t),
   });
   assert.equal(status, 0);
 });
 
-test('#141: an authorized trust-root RENAME between two trust roots is allowed (both path columns handled)', () => {
+test('#141: an authorized trust-root RENAME between two trust roots is allowed (both path columns handled)', (t) => {
   // CODEOWNERS -> .github/CODEOWNERS: BOTH are in immutableTrustRoots, so git
   // emits a real `R100\told\tnew` row (a rename to a NON-trust-root dest would be
   // pruned to a lone deletion by the pathspec and never exercise the capture).
@@ -1582,6 +1657,7 @@ test('#141: an authorized trust-root RENAME between two trust roots is allowed (
   // path's owner and authorizes — this test is RED without the fix.
   const content = '/CODEOWNERS   @trusty\n';
   const status = runScenario({
+    t,
     baseTickets: '{"tickets":[]}',
     seedFiles: ['.adlc/config.json', '.adlc/manifest.jsonl', 'CODEOWNERS'],
     seedFileContents: {
@@ -1594,7 +1670,7 @@ test('#141: an authorized trust-root RENAME between two trust roots is allowed (
       mkdirSync(join(dir, '.github'), { recursive: true });
       writeFileSync(join(dir, '.github/CODEOWNERS'), content);
     },
-    env: authorizedEnv(),
+    env: authorizedEnv(t),
   });
   assert.equal(status, 0);
 });

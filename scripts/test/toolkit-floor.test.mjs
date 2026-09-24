@@ -13,13 +13,43 @@
 // the against-the-real-floor cases copy the committed floor file into the
 // fixture instead of restating its value.
 
-import { test } from 'node:test';
+import { test as nodeTest } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, copyFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync, copyFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmp } from '@adlc/core/test-kit';
+
+// Per-test compatibility layer ensuring t.after lifecycle cleanup executes
+// across all supported Node >=18 runtimes (Node 18.0–18.12 lacked native TestContext.after).
+// Guarantees both direct hooks and tmp(t) lifecycle cleanup run per-test without leaks.
+function test(...args) {
+  const fn = args.pop();
+  if (typeof fn !== 'function') {
+    return nodeTest(...args, fn);
+  }
+  const wrapped = async (t) => {
+    const cleanups = [];
+    if (t && typeof t.after !== 'function') {
+      t.after = (cb) => cleanups.push(cb);
+    }
+    let err;
+    let res;
+    try {
+      res = await fn(t);
+    } catch (e) {
+      err = e;
+    }
+    for (const cb of cleanups) {
+      try { cb(); } catch {}
+    }
+    if (err) throw err;
+    return res;
+  };
+  return nodeTest(...args, wrapped);
+}
+Object.assign(test, nodeTest);
 import {
   FLOOR_FILE,
   MARKER_FILE,
@@ -39,8 +69,8 @@ const SCRIPT = join(REPO, 'scripts', 'toolkit-floor-check.mjs');
 // copies the committed floor file so a scenario can run against the actual
 // floor without this test restating it). `gateManifestVersion` seeds the
 // in-tree packages/gate-manifest/package.json.
-function makeFixture({ floor, marker = true, gateManifestVersion } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'toolkit-floor-'));
+function makeFixture(t, { floor, marker = true, gateManifestVersion } = {}) {
+  const dir = tmp(t, 'toolkit-floor-');
   mkdirSync(join(dir, 'scripts'), { recursive: true });
   if (floor === 'real') {
     copyFileSync(join(REPO, FLOOR_FILE), join(dir, FLOOR_FILE));
@@ -60,23 +90,23 @@ function makeFixture({ floor, marker = true, gateManifestVersion } = {}) {
 
 // A directory holding a fake `adlc` that reports `version`. Putting ONLY this
 // directory on PATH makes the global check see exactly this CLI and nothing else.
-function makeShim(version) {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-shim-'));
+function makeShim(t, version) {
+  const dir = tmp(t, 'adlc-shim-');
   writeFileSync(join(dir, 'adlc'), `#!/bin/sh\necho "${version}"\n`, { mode: 0o755 });
   return dir;
 }
 
 // An empty PATH directory: resolvable by spawn, resolves no adlc at all.
-function emptyPathDir() {
-  return mkdtempSync(join(tmpdir(), 'no-adlc-'));
+function emptyPathDir(t) {
+  return tmp(t, 'no-adlc-');
 }
 
 // A global-npm-layout install of @adlc/gate-manifest at `version`, with `bins`
 // symlinked into a bin dir the way `npm i -g` links them. The bin script
 // writes a canary file if it is ever EXECUTED — the floor probe must read the
 // owning package.json instead.
-function makeGlobalWriterInstall(version, bins = ['gate-manifest']) {
-  const prefix = mkdtempSync(join(tmpdir(), 'adlc-global-writer-'));
+function makeGlobalWriterInstall(t, version, bins = ['gate-manifest']) {
+  const prefix = tmp(t, 'adlc-global-writer-');
   const pkgDir = join(prefix, 'lib', 'node_modules', '@adlc', 'gate-manifest');
   mkdirSync(join(pkgDir, 'bin'), { recursive: true });
   writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: '@adlc/gate-manifest', version }));
@@ -137,23 +167,18 @@ test('the CI floor step lives in the rails-guard job, BEFORE npm install', () =>
 
 // ── AC2: stale global CLI fails preflight with an actionable message ──────
 
-test('global mode fails a below-floor adlc with a message naming the floor file and the upgrade command', () => {
-  const root = makeFixture({ floor: '2.3.4' });
-  const shim = makeShim('1.9.0');
-  try {
-    const r = runCheck('global', root, { path: shim });
-    assert.equal(r.status, 1);
-    assert.match(r.stderr, /scripts\/toolkit-floor\.json/);
-    assert.match(r.stderr, /npm i -g @adlc\/cli@latest/);
-    assert.match(r.stderr, /2\.3\.4/, 'the message states the floor it enforces');
-    assert.match(r.stderr, /1\.9\.0/, 'the message states the version it found');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(shim, { recursive: true, force: true });
-  }
+test('global mode fails a below-floor adlc with a message naming the floor file and the upgrade command', (t) => {
+  const root = makeFixture(t, { floor: '2.3.4' });
+  const shim = makeShim(t, '1.9.0');
+  const r = runCheck('global', root, { path: shim });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /scripts\/toolkit-floor\.json/);
+  assert.match(r.stderr, /npm i -g @adlc\/cli@latest/);
+  assert.match(r.stderr, /2\.3\.4/, 'the message states the floor it enforces');
+  assert.match(r.stderr, /1\.9\.0/, 'the message states the version it found');
 });
 
-test('preflight fails fast, before any gate, when the global adlc is below the repo floor', () => {
+test('preflight fails fast, before any gate, when the global adlc is below the repo floor', (t) => {
   // Against the REAL repo tree and its committed floor: a shim far below any
   // plausible floor must stop `npm run preflight` (which runs this script) at
   // the precondition, before the first gate banner is printed.
@@ -162,135 +187,96 @@ test('preflight fails fast, before any gate, when the global adlc is below the r
   // arranges it — its workspace `adlc` (current version, above the floor) must
   // NOT shadow the stale global shim behind it, or the check is vacuous
   // through the documented entry point.
-  const shim = makeShim('0.0.1');
-  try {
-    const r = spawnSync(process.execPath, [join(REPO, 'scripts', 'preflight.mjs')], {
-      cwd: REPO,
-      encoding: 'utf8',
-      env: { ...process.env, PATH: `${join(REPO, 'node_modules', '.bin')}:${shim}` },
-    });
-    // Exactly 1 — preflight's "refused to run" exit, distinct from a gate's own
-    // status (rail-freeze propagates 2). Pinning the value is what proves the
-    // precondition exits on ITS path rather than falling through to a gate.
-    assert.equal(r.status, 1);
-    assert.match(r.stderr, /toolkit-floor/);
-    assert.match(r.stderr, /npm i -g @adlc\/cli@latest/);
-    assert.ok(!r.stdout.includes('── [1/'), 'no gate may run once the floor check has failed');
-  } finally {
-    rmSync(shim, { recursive: true, force: true });
-  }
+  const shim = makeShim(t, '0.0.1');
+  const r = spawnSync(process.execPath, [join(REPO, 'scripts', 'preflight.mjs')], {
+    cwd: REPO,
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${join(REPO, 'node_modules', '.bin')}:${shim}` },
+  });
+  // Exactly 1 — preflight's "refused to run" exit, distinct from a gate's own
+  // status (rail-freeze propagates 2). Pinning the value is what proves the
+  // precondition exits on ITS path rather than falling through to a gate.
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /toolkit-floor/);
+  assert.match(r.stderr, /npm i -g @adlc\/cli@latest/);
+  assert.ok(!r.stdout.includes('── [1/'), 'no gate may run once the floor check has failed');
 });
 
-test('global mode ignores an npm-injected node_modules/.bin adlc and judges the real global', () => {
+test('global mode ignores an npm-injected node_modules/.bin adlc and judges the real global', (t) => {
   // An above-floor workspace adlc in a node_modules/.bin PATH entry sits AHEAD
   // of a below-floor "global" shim — the npm-run arrangement. The check must
   // skip the injected entry and fail on the shim behind it.
-  const root = makeFixture({ floor: '2.3.4' });
-  const shim = makeShim('1.9.0');
+  const root = makeFixture(t, { floor: '2.3.4' });
+  const shim = makeShim(t, '1.9.0');
   // The injected entry belongs to the WORKSPACE the check runs in (cwd), which
   // is what the workspace-scoped scrub removes — an unrelated prefix's entry
   // is deliberately kept (separate test below).
-  const fakeRepo = mkdtempSync(join(tmpdir(), 'fake-repo-'));
+  const fakeRepo = tmp(t, 'fake-repo-');
   const nmBin = join(fakeRepo, 'node_modules', '.bin');
   mkdirSync(nmBin, { recursive: true });
   writeFileSync(join(nmBin, 'adlc'), '#!/bin/sh\necho "99.99.99"\n', { mode: 0o755 });
-  try {
-    const r = runCheck('global', root, { path: `${nmBin}:${shim}`, cwd: fakeRepo });
-    assert.equal(r.status, 1, `the workspace adlc must not shadow the stale global: ${r.stdout}`);
-    assert.match(r.stderr, /1\.9\.0/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(shim, { recursive: true, force: true });
-    rmSync(fakeRepo, { recursive: true, force: true });
-  }
+  const r = runCheck('global', root, { path: `${nmBin}:${shim}`, cwd: fakeRepo });
+  assert.equal(r.status, 1, `the workspace adlc must not shadow the stale global: ${r.stdout}`);
+  assert.match(r.stderr, /1\.9\.0/);
 });
 
-test('a prerelease of the floor version fails both modes; a prerelease above it passes', () => {
-  const belowGlobal = makeFixture({ floor: '2.3.4' });
-  const rcShim = makeShim('2.3.4-rc.1');
-  const aboveShim = makeShim('2.3.5-rc.1');
-  try {
-    const denied = runCheck('global', belowGlobal, { path: rcShim });
-    assert.equal(denied.status, 1, denied.stdout);
-    assert.match(denied.stderr, /2\.3\.4-rc\.1/);
-    const allowed = runCheck('global', belowGlobal, { path: aboveShim });
-    assert.equal(allowed.status, 0, allowed.stderr);
-  } finally {
-    rmSync(belowGlobal, { recursive: true, force: true });
-    rmSync(rcShim, { recursive: true, force: true });
-    rmSync(aboveShim, { recursive: true, force: true });
-  }
+test('a prerelease of the floor version fails both modes; a prerelease above it passes', (t) => {
+  const belowGlobal = makeFixture(t, { floor: '2.3.4' });
+  const rcShim = makeShim(t, '2.3.4-rc.1');
+  const aboveShim = makeShim(t, '2.3.5-rc.1');
+  const denied = runCheck('global', belowGlobal, { path: rcShim });
+  assert.equal(denied.status, 1, denied.stdout);
+  assert.match(denied.stderr, /2\.3\.4-rc\.1/);
+  const allowed = runCheck('global', belowGlobal, { path: aboveShim });
+  assert.equal(allowed.status, 0, allowed.stderr);
 
-  const inTree = makeFixture({ floor: '2.3.4', gateManifestVersion: '2.3.4-rc.1' });
-  try {
-    const r = runCheck('in-tree', inTree);
-    assert.equal(r.status, 1, r.stdout);
-  } finally {
-    rmSync(inTree, { recursive: true, force: true });
-  }
+  const inTree = makeFixture(t, { floor: '2.3.4', gateManifestVersion: '2.3.4-rc.1' });
+  const r = runCheck('in-tree', inTree);
+  assert.equal(r.status, 1, r.stdout);
 });
 
 // ── AC3: a missing global adlc is not a failure ───────────────────────────
 
-test('global mode passes when no adlc resolves on PATH', () => {
-  const root = makeFixture({ floor: '2.3.4' });
-  const empty = emptyPathDir();
-  try {
-    const r = runCheck('global', root, { path: empty });
-    assert.equal(r.status, 0, r.stderr);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(empty, { recursive: true, force: true });
-  }
+test('global mode passes when no adlc resolves on PATH', (t) => {
+  const root = makeFixture(t, { floor: '2.3.4' });
+  const empty = emptyPathDir(t);
+  const r = runCheck('global', root, { path: empty });
+  assert.equal(r.status, 0, r.stderr);
 });
 
-test('checkGlobal passes only on a MISSING binary; other spawn errors fail closed', () => {
-  const root = makeFixture({ floor: '2.3.4' });
+test('checkGlobal passes only on a MISSING binary; other spawn errors fail closed', (t) => {
+  const root = makeFixture(t, { floor: '2.3.4' });
   const spawnError = (code) => ({ error: Object.assign(new Error(`spawn adlc ${code}`), { code }) });
-  try {
-    // pathValue: '' — no standalone-writer scan; this case is purely the
-    // umbrella spawn contract.
-    assert.equal(checkGlobal(root, { run: () => spawnError('ENOENT'), pathValue: '' }).ok, true, 'absent binary is not a failure');
-    // EACCES etc. mean an adlc may exist whose version was NOT verified.
-    const denied = checkGlobal(root, { run: () => spawnError('EACCES'), pathValue: '' });
-    assert.equal(denied.ok, false, 'a non-ENOENT spawn error must fail closed');
-    assert.match(denied.message, /EACCES/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  // pathValue: '' — no standalone-writer scan; this case is purely the
+  // umbrella spawn contract.
+  assert.equal(checkGlobal(root, { run: () => spawnError('ENOENT'), pathValue: '' }).ok, true, 'absent binary is not a failure');
+  // EACCES etc. mean an adlc may exist whose version was NOT verified.
+  const denied = checkGlobal(root, { run: () => spawnError('EACCES'), pathValue: '' });
+  assert.equal(denied.ok, false, 'a non-ENOENT spawn error must fail closed');
+  assert.match(denied.message, /EACCES/);
 });
 
 // ── AC4: real semver comparison, not string comparison ────────────────────
 
-test('versions above the real floor pass: next patch and next major', () => {
-  const root = makeFixture({ floor: 'real' });
+test('versions above the real floor pass: next patch and next major', (t) => {
+  const root = makeFixture(t, { floor: 'real' });
   const real = readFloor(root);
   const [major, minor, patch] = real.floor.triple;
   const nextPatch = [major, minor, patch + 1].join('.');
   const nextMajor = [major + 1, 0, 0].join('.');
   for (const version of [nextPatch, nextMajor, real.minToolkit]) {
-    const shim = makeShim(version);
-    try {
-      const r = runCheck('global', root, { path: shim });
-      assert.equal(r.status, 0, `${version} must satisfy the ${real.minToolkit} floor: ${r.stderr}`);
-    } finally {
-      rmSync(shim, { recursive: true, force: true });
-    }
+    const shim = makeShim(t, version);
+    const r = runCheck('global', root, { path: shim });
+    assert.equal(r.status, 0, `${version} must satisfy the ${real.minToolkit} floor: ${r.stderr}`);
   }
-  rmSync(root, { recursive: true, force: true });
 });
 
-test('comparison is numeric per component, never lexicographic', () => {
+test('comparison is numeric per component, never lexicographic', (t) => {
   // "10.0.0" < "9.0.0" as strings — a string compare fails this case.
-  const root = makeFixture({ floor: '9.0.0' });
-  const shim = makeShim('10.0.0');
-  try {
-    const r = runCheck('global', root, { path: shim });
-    assert.equal(r.status, 0, r.stderr);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(shim, { recursive: true, force: true });
-  }
+  const root = makeFixture(t, { floor: '9.0.0' });
+  const shim = makeShim(t, '10.0.0');
+  const r = runCheck('global', root, { path: shim });
+  assert.equal(r.status, 0, r.stderr);
 });
 
 test('compareVersions orders each component with the right precedence', () => {
@@ -343,134 +329,96 @@ test('scrubNpmPath drops only the workspace-and-ancestor entries npm injects', (
   );
 });
 
-test('global mode fails closed when adlc resolves but its version cannot be determined', () => {
-  const root = makeFixture({ floor: '2.3.4' });
-  const shim = makeShim('flurble');
-  try {
-    const r = runCheck('global', root, { path: shim });
-    assert.equal(r.status, 1);
-    assert.match(r.stderr, /npm i -g @adlc\/cli@latest/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(shim, { recursive: true, force: true });
-  }
+test('global mode fails closed when adlc resolves but its version cannot be determined', (t) => {
+  const root = makeFixture(t, { floor: '2.3.4' });
+  const shim = makeShim(t, 'flurble');
+  const r = runCheck('global', root, { path: shim });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /npm i -g @adlc\/cli@latest/);
 });
 
 // ── #489: standalone manifest-writer bins on PATH ─────────────────────────
 
-test('a below-floor standalone gate-manifest fails preflight WITHOUT being executed', () => {
-  const root = makeFixture({ floor: '2.3.4' });
-  const writer = makeGlobalWriterInstall('1.9.0');
-  try {
-    const r = runCheck('global', root, { path: writer.binDir }); // no adlc anywhere
-    assert.equal(r.status, 1, r.stdout);
-    assert.match(r.stderr, /gate-manifest/);
-    assert.match(r.stderr, /1\.9\.0/);
-    assert.match(r.stderr, /scripts\/toolkit-floor\.json/);
-    // Surface-specific remediation: the umbrella upgrade nests its own copy
-    // and cannot replace a separately installed standalone package.
-    assert.match(r.stderr, /npm i -g @adlc\/gate-manifest@latest/);
-    assert.equal(existsSync(writer.canary), false, 'the probe must never execute the stale writer');
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(writer.prefix, { recursive: true, force: true });
+test('a below-floor standalone gate-manifest fails preflight WITHOUT being executed', (t) => {
+  const root = makeFixture(t, { floor: '2.3.4' });
+  const writer = makeGlobalWriterInstall(t, '1.9.0');
+  const r = runCheck('global', root, { path: writer.binDir }); // no adlc anywhere
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stderr, /gate-manifest/);
+  assert.match(r.stderr, /1\.9\.0/);
+  assert.match(r.stderr, /scripts\/toolkit-floor\.json/);
+  // Surface-specific remediation: the umbrella upgrade nests its own copy
+  // and cannot replace a separately installed standalone package.
+  assert.match(r.stderr, /npm i -g @adlc\/gate-manifest@latest/);
+  assert.equal(existsSync(writer.canary), false, 'the probe must never execute the stale writer');
+});
+
+test('standalone writers at, above, and prerelease-above the floor pass; prerelease OF the floor fails', (t) => {
+  const root = makeFixture(t, { floor: '2.3.4' });
+  for (const [version, expected] of [['2.3.4', 0], ['3.0.0', 0], ['2.3.5-rc.1', 0], ['2.3.4-rc.1', 1]]) {
+    const writer = makeGlobalWriterInstall(t, version);
+    const r = runCheck('global', root, { path: writer.binDir });
+    assert.equal(r.status, expected, `${version}: ${r.stdout}${r.stderr}`);
+    assert.equal(existsSync(writer.canary), false);
   }
 });
 
-test('standalone writers at, above, and prerelease-above the floor pass; prerelease OF the floor fails', () => {
-  const root = makeFixture({ floor: '2.3.4' });
-  try {
-    for (const [version, expected] of [['2.3.4', 0], ['3.0.0', 0], ['2.3.5-rc.1', 0], ['2.3.4-rc.1', 1]]) {
-      const writer = makeGlobalWriterInstall(version);
-      try {
-        const r = runCheck('global', root, { path: writer.binDir });
-        assert.equal(r.status, expected, `${version}: ${r.stdout}${r.stderr}`);
-        assert.equal(existsSync(writer.canary), false);
-      } finally {
-        rmSync(writer.prefix, { recursive: true, force: true });
-      }
-    }
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('adlc-spend is probed too, and an above-floor umbrella does not mask a stale writer', (t) => {
+  const root = makeFixture(t, { floor: '2.3.4' });
+  const shim = makeShim(t, '9.9.9'); // umbrella comfortably above the floor
+  const writer = makeGlobalWriterInstall(t, '1.9.0', ['adlc-spend']);
+  const r = runCheck('global', root, { path: `${shim}:${writer.binDir}` });
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stderr, /adlc-spend/);
 });
 
-test('adlc-spend is probed too, and an above-floor umbrella does not mask a stale writer', () => {
-  const root = makeFixture({ floor: '2.3.4' });
-  const shim = makeShim('9.9.9'); // umbrella comfortably above the floor
-  const writer = makeGlobalWriterInstall('1.9.0', ['adlc-spend']);
-  try {
-    const r = runCheck('global', root, { path: `${shim}:${writer.binDir}` });
-    assert.equal(r.status, 1, r.stdout);
-    assert.match(r.stderr, /adlc-spend/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(shim, { recursive: true, force: true });
-    rmSync(writer.prefix, { recursive: true, force: true });
-  }
-});
-
-test('an above-floor NON-executable decoy does not mask a stale executable writer later on PATH', () => {
+test('an above-floor NON-executable decoy does not mask a stale executable writer later on PATH', (t) => {
   // Shell resolution skips a non-executable candidate and runs the next PATH
   // hit; the probe must judge the same file the shell would execute.
-  const root = makeFixture({ floor: '2.3.4' });
-  const decoy = makeGlobalWriterInstall('9.9.9');
-  const stale = makeGlobalWriterInstall('1.9.0');
-  try {
-    chmodSync(join(decoy.binDir, 'gate-manifest'), 0o644); // symlink target perms govern access
-    chmodSync(join(decoy.prefix, 'lib', 'node_modules', '@adlc', 'gate-manifest', 'bin', 'gate-manifest.mjs'), 0o644);
-    const r = runCheck('global', root, { path: `${decoy.binDir}:${stale.binDir}` });
-    assert.equal(r.status, 1, `the executable stale writer must be the judged surface: ${r.stdout}`);
-    assert.match(r.stderr, /1\.9\.0/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(decoy.prefix, { recursive: true, force: true });
-    rmSync(stale.prefix, { recursive: true, force: true });
-  }
+  const root = makeFixture(t, { floor: '2.3.4' });
+  const decoy = makeGlobalWriterInstall(t, '9.9.9');
+  const stale = makeGlobalWriterInstall(t, '1.9.0');
+  chmodSync(join(decoy.binDir, 'gate-manifest'), 0o644); // symlink target perms govern access
+  chmodSync(join(decoy.prefix, 'lib', 'node_modules', '@adlc', 'gate-manifest', 'bin', 'gate-manifest.mjs'), 0o644);
+  const r = runCheck('global', root, { path: `${decoy.binDir}:${stale.binDir}` });
+  assert.equal(r.status, 1, `the executable stale writer must be the judged surface: ${r.stdout}`);
+  assert.match(r.stderr, /1\.9\.0/);
 });
 
-test('an EMPTY PATH component means the current directory, exactly as the shell resolves it', () => {
+test('an EMPTY PATH component means the current directory, exactly as the shell resolves it', (t) => {
   // PATH=":" is two empty components — POSIX resolution searches the cwd. A
   // stale executable writer in the cwd must be found, not classified absent.
-  const root = makeFixture({ floor: '2.3.4' });
+  const root = makeFixture(t, { floor: '2.3.4' });
   writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@adlc/gate-manifest', version: '1.9.0' }));
   writeFileSync(join(root, 'gate-manifest'), '#!/bin/sh\n: > executed-canary\n', { mode: 0o755 });
-  try {
-    const r = runCheck('global', root, { path: ':', cwd: root });
-    assert.equal(r.status, 1, `the cwd writer must be judged: ${r.stdout}`);
-    assert.match(r.stderr, /1\.9\.0/);
-    assert.equal(existsSync(join(root, 'executed-canary')), false);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const r = runCheck('global', root, { path: ':', cwd: root });
+  assert.equal(r.status, 1, `the cwd writer must be judged: ${r.stdout}`);
+  assert.match(r.stderr, /1\.9\.0/);
+  assert.equal(existsSync(join(root, 'executed-canary')), false);
 });
 
-test('preflight end-to-end: a stale standalone writer fails the gate with no adlc anywhere', () => {
+test('preflight end-to-end: a stale standalone writer fails the gate with no adlc anywhere', (t) => {
   // The CALLER-level wiring: `node scripts/preflight.mjs` (what npm run
   // preflight executes) must surface the standalone-writer verdict — the probe
   // reads the process PATH, so caller-side suppression of it breaks this test.
-  const writer = makeGlobalWriterInstall('0.0.1');
-  try {
-    const r = spawnSync(process.execPath, [join(REPO, 'scripts', 'preflight.mjs')], {
-      cwd: REPO,
-      encoding: 'utf8',
-      env: { ...process.env, PATH: writer.binDir },
-    });
-    assert.equal(r.status, 1, `${r.stdout}${r.stderr}`);
-    assert.match(r.stderr, /gate-manifest/);
-    assert.match(r.stderr, /0\.0\.1/);
-    assert.equal(existsSync(writer.canary), false);
-    assert.ok(!r.stdout.includes('── [1/'), 'no gate may run once the floor check has failed');
-  } finally {
-    rmSync(writer.prefix, { recursive: true, force: true });
-  }
+  const writer = makeGlobalWriterInstall(t, '0.0.1');
+  const r = spawnSync(process.execPath, [join(REPO, 'scripts', 'preflight.mjs')], {
+    cwd: REPO,
+    encoding: 'utf8',
+    env: { ...process.env, PATH: writer.binDir },
+  });
+  assert.equal(r.status, 1, `${r.stdout}${r.stderr}`);
+  assert.match(r.stderr, /gate-manifest/);
+  assert.match(r.stderr, /0\.0\.1/);
+  assert.equal(existsSync(writer.canary), false);
+  assert.ok(!r.stdout.includes('── [1/'), 'no gate may run once the floor check has failed');
 });
 
-test('a stale writer under an UNRELATED node_modules/.bin prefix is still probed', () => {
+test('a stale writer under an UNRELATED node_modules/.bin prefix is still probed', (t) => {
   // A user-managed prefix (e.g. /opt/adlc/node_modules/.bin) is a real PATH
   // entry the shell resolves from — the workspace-scoped scrub must keep it.
-  const root = makeFixture({ floor: '2.3.4' });
-  const prefix = mkdtempSync(join(tmpdir(), 'adlc-user-prefix-'));
+  const root = makeFixture(t, { floor: '2.3.4' });
+  const prefix = tmp(t, 'adlc-user-prefix-');
   const pkgDir = join(prefix, 'node_modules', '@adlc', 'gate-manifest');
   mkdirSync(join(pkgDir, 'bin'), { recursive: true });
   writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: '@adlc/gate-manifest', version: '1.9.0' }));
@@ -479,14 +427,9 @@ test('a stale writer under an UNRELATED node_modules/.bin prefix is still probed
   const binDir = join(prefix, 'node_modules', '.bin');
   mkdirSync(binDir, { recursive: true });
   symlinkSync(target, join(binDir, 'gate-manifest'));
-  try {
-    const r = runCheck('global', root, { path: binDir, cwd: root });
-    assert.equal(r.status, 1, `the user-prefix writer must be judged: ${r.stdout}`);
-    assert.match(r.stderr, /1\.9\.0/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(prefix, { recursive: true, force: true });
-  }
+  const r = runCheck('global', root, { path: binDir, cwd: root });
+  assert.equal(r.status, 1, `the user-prefix writer must be judged: ${r.stdout}`);
+  assert.match(r.stderr, /1\.9\.0/);
 });
 
 test('on POSIX a plain-file wrapper never borrows an adjacent manifest — it fails closed', (t) => {
@@ -495,35 +438,25 @@ test('on POSIX a plain-file wrapper never borrows an adjacent manifest — it fa
   // NOT npm's layout. Certifying it against a neighbouring package's version
   // would approve a wrapper that dispatches to a different (possibly stale)
   // install — refuse instead, even when the adjacent manifest is above floor.
-  const prefix = mkdtempSync(join(tmpdir(), 'adlc-shim-layout-'));
+  const prefix = tmp(t, 'adlc-shim-layout-');
   const pkgDir = join(prefix, 'node_modules', '@adlc', 'gate-manifest');
   mkdirSync(pkgDir, { recursive: true });
   writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: '@adlc/gate-manifest', version: '9.9.9' }));
   writeFileSync(join(prefix, 'gate-manifest'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  const root = makeFixture({ floor: '2.3.4' });
-  try {
-    const r = runCheck('global', root, { path: prefix });
-    assert.equal(r.status, 1, `${r.stdout}${r.stderr}`);
-    assert.match(r.stderr, /could not locate its owning @adlc\/gate-manifest/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(prefix, { recursive: true, force: true });
-  }
+  const root = makeFixture(t, { floor: '2.3.4' });
+  const r = runCheck('global', root, { path: prefix });
+  assert.equal(r.status, 1, `${r.stdout}${r.stderr}`);
+  assert.match(r.stderr, /could not locate its owning @adlc\/gate-manifest/);
 });
 
-test('a writer bin whose owning package cannot be located fails closed', () => {
-  const root = makeFixture({ floor: '2.3.4' });
-  const strayDir = mkdtempSync(join(tmpdir(), 'stray-writer-'));
+test('a writer bin whose owning package cannot be located fails closed', (t) => {
+  const root = makeFixture(t, { floor: '2.3.4' });
+  const strayDir = tmp(t, 'stray-writer-');
   writeFileSync(join(strayDir, 'gate-manifest'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-  try {
-    const r = runCheck('global', root, { path: strayDir });
-    assert.equal(r.status, 1, r.stdout);
-    assert.match(r.stderr, /could not locate its owning @adlc\/gate-manifest/);
-    assert.match(r.stderr, /npm i -g @adlc\/gate-manifest@latest/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(strayDir, { recursive: true, force: true });
-  }
+  const r = runCheck('global', root, { path: strayDir });
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stderr, /could not locate its owning @adlc\/gate-manifest/);
+  assert.match(r.stderr, /npm i -g @adlc\/gate-manifest@latest/);
 });
 
 // ── #489: the floor inputs are trust roots ────────────────────────────────
@@ -578,102 +511,76 @@ test('the rails-guard job installs with npm ci --ignore-scripts and asserts a cl
 
 // ── the marker is the switch: no forest mode, no floor ────────────────────
 
-test('global mode is inert without the segmented-manifest marker', () => {
-  const root = makeFixture({ floor: '2.3.4', marker: false });
-  const shim = makeShim('0.0.1');
-  try {
-    const r = runCheck('global', root, { path: shim });
-    assert.equal(r.status, 0, r.stderr);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(shim, { recursive: true, force: true });
-  }
+test('global mode is inert without the segmented-manifest marker', (t) => {
+  const root = makeFixture(t, { floor: '2.3.4', marker: false });
+  const shim = makeShim(t, '0.0.1');
+  const r = runCheck('global', root, { path: shim });
+  assert.equal(r.status, 0, r.stderr);
 });
 
 test('an unreadable marker directory fails closed in both modes, never "not in forest mode"', (t) => {
   // An absent marker means no forest mode; an UNREADABLE one is
   // indistinguishable from a cut-over repo and must fail, not silently pass.
   if (process.getuid?.() === 0) return t.skip('permission fixtures are meaningless as root');
-  const globalRoot = makeFixture({ floor: '2.3.4' });
-  const inTreeRoot = makeFixture({ floor: '2.3.4', gateManifestVersion: '9.9.9' });
-  const shim = makeShim('9.9.9');
   const markerDir = (root) => join(root, '.adlc', 'manifest.d');
-  try {
-    chmodSync(markerDir(globalRoot), 0o000);
-    chmodSync(markerDir(inTreeRoot), 0o000);
-    const globalRun = runCheck('global', globalRoot, { path: shim });
-    assert.equal(globalRun.status, 1, `global must fail closed: ${globalRun.stdout}`);
-    assert.match(globalRun.stderr, /marker/);
-    const inTreeRun = runCheck('in-tree', inTreeRoot);
-    assert.equal(inTreeRun.status, 1, `in-tree must fail closed: ${inTreeRun.stdout}`);
-    assert.match(inTreeRun.stderr, /marker/);
-  } finally {
-    chmodSync(markerDir(globalRoot), 0o755);
-    chmodSync(markerDir(inTreeRoot), 0o755);
-    rmSync(globalRoot, { recursive: true, force: true });
-    rmSync(inTreeRoot, { recursive: true, force: true });
-    rmSync(shim, { recursive: true, force: true });
-  }
+  let globalRoot;
+  let inTreeRoot;
+  t.after(() => {
+    if (globalRoot) chmodSync(markerDir(globalRoot), 0o755);
+    if (inTreeRoot) chmodSync(markerDir(inTreeRoot), 0o755);
+  });
+  globalRoot = makeFixture(t, { floor: '2.3.4' });
+  inTreeRoot = makeFixture(t, { floor: '2.3.4', gateManifestVersion: '9.9.9' });
+  const shim = makeShim(t, '9.9.9');
+  chmodSync(markerDir(globalRoot), 0o000);
+  chmodSync(markerDir(inTreeRoot), 0o000);
+  const globalRun = runCheck('global', globalRoot, { path: shim });
+  assert.equal(globalRun.status, 1, `global must fail closed: ${globalRun.stdout}`);
+  assert.match(globalRun.stderr, /marker/);
+  const inTreeRun = runCheck('in-tree', inTreeRoot);
+  assert.equal(inTreeRun.status, 1, `in-tree must fail closed: ${inTreeRun.stdout}`);
+  assert.match(inTreeRun.stderr, /marker/);
+  chmodSync(markerDir(globalRoot), 0o755);
+  chmodSync(markerDir(inTreeRoot), 0o755);
 });
 
-test('a malformed floor file fails closed rather than silently not enforcing', () => {
-  const root = makeFixture({ floor: '^2.3.4' });
-  const shim = makeShim('9.9.9');
-  try {
-    const r = runCheck('global', root, { path: shim });
-    assert.equal(r.status, 1);
-    assert.match(r.stderr, /minToolkit/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-    rmSync(shim, { recursive: true, force: true });
-  }
+test('a malformed floor file fails closed rather than silently not enforcing', (t) => {
+  const root = makeFixture(t, { floor: '^2.3.4' });
+  const shim = makeShim(t, '9.9.9');
+  const r = runCheck('global', root, { path: shim });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /minToolkit/);
 });
 
 // ── AC5: the in-tree CI check ─────────────────────────────────────────────
 
-test('in-tree mode fails when the marker exists and gate-manifest is versioned below the floor', () => {
-  const root = makeFixture({ floor: '2.3.4', gateManifestVersion: '2.3.3' });
-  try {
-    const r = runCheck('in-tree', root);
-    assert.equal(r.status, 1);
-    assert.match(r.stderr, /scripts\/toolkit-floor\.json/);
-    assert.match(r.stderr, /packages\/gate-manifest\/package\.json/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('in-tree mode fails when the marker exists and gate-manifest is versioned below the floor', (t) => {
+  const root = makeFixture(t, { floor: '2.3.4', gateManifestVersion: '2.3.3' });
+  const r = runCheck('in-tree', root);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /scripts\/toolkit-floor\.json/);
+  assert.match(r.stderr, /packages\/gate-manifest\/package\.json/);
 });
 
-test('in-tree mode passes at and above the floor', () => {
+test('in-tree mode passes at and above the floor', (t) => {
   for (const version of ['2.3.4', '2.4.0', '3.0.0']) {
-    const root = makeFixture({ floor: '2.3.4', gateManifestVersion: version });
-    try {
-      const r = runCheck('in-tree', root);
-      assert.equal(r.status, 0, `${version}: ${r.stderr}`);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    const root = makeFixture(t, { floor: '2.3.4', gateManifestVersion: version });
+    const r = runCheck('in-tree', root);
+    assert.equal(r.status, 0, `${version}: ${r.stderr}`);
   }
 });
 
-test('in-tree mode is inert without the marker', () => {
-  const root = makeFixture({ floor: '2.3.4', marker: false, gateManifestVersion: '0.0.1' });
-  try {
-    const r = runCheck('in-tree', root);
-    assert.equal(r.status, 0, r.stderr);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('in-tree mode is inert without the marker', (t) => {
+  const root = makeFixture(t, { floor: '2.3.4', marker: false, gateManifestVersion: '0.0.1' });
+  const r = runCheck('in-tree', root);
+  assert.equal(r.status, 0, r.stderr);
 });
 
-test('in-tree mode fails closed when the marker exists but the package manifest is unreadable', () => {
-  const root = makeFixture({ floor: '2.3.4' }); // no packages/gate-manifest at all
-  try {
-    const r = runCheck('in-tree', root);
-    assert.equal(r.status, 1);
-    assert.match(r.stderr, /packages\/gate-manifest\/package\.json/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('in-tree mode fails closed when the marker exists but the package manifest is unreadable', (t) => {
+  const root = makeFixture(t, { floor: '2.3.4' }); // no packages/gate-manifest at all
+  const r = runCheck('in-tree', root);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /packages\/gate-manifest\/package\.json/);
 });
 
 test('the real repo tree passes the in-tree floor check', () => {
@@ -684,13 +591,9 @@ test('the real repo tree passes the in-tree floor check', () => {
 });
 
 // checkInTree is also importable; pin the unit surface the CI step relies on.
-test('checkInTree returns a failing verdict object below the floor', () => {
-  const root = makeFixture({ floor: '2.3.4', gateManifestVersion: '1.0.0' });
-  try {
-    const verdict = checkInTree(root);
-    assert.equal(verdict.ok, false);
-    assert.match(verdict.message, /below the minimum/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test('checkInTree returns a failing verdict object below the floor', (t) => {
+  const root = makeFixture(t, { floor: '2.3.4', gateManifestVersion: '1.0.0' });
+  const verdict = checkInTree(root);
+  assert.equal(verdict.ok, false);
+  assert.match(verdict.message, /below the minimum/);
 });
