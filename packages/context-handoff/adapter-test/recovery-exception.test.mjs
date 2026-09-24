@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, symlinkSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, symlinkSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 import {
   matchRecoveryCommand,
   isBareInspectionPwd,
@@ -13,8 +13,8 @@ import {
 
 // Fixture interpreter/script: real files on disk so fs.realpathSync resolves
 // them exactly like the real adapter's process.execPath / bin/handoff.mjs.
-function fixturePaths() {
-  const dir = mkdtempSync(join(tmpdir(), 'recovery-exception-'));
+function fixturePaths(t) {
+  const dir = tmp(t, 'recovery-exception-');
   const interpreterPath = join(dir, 'node');
   const scriptPath = join(dir, 'handoff.mjs');
   writeFileSync(interpreterPath, '');
@@ -39,8 +39,8 @@ test('isBareInspectionPwd — exact literal pwd only', () => {
   assert.equal(isBareInspectionPwd(undefined), false);
 });
 
-test('matchRecoveryCommand — positive fixture for every subcommand with a session value', () => {
-  const fx = fixturePaths();
+test('matchRecoveryCommand — positive fixture for every subcommand with a session value', (t) => {
+  const fx = fixturePaths(t);
   const sessionId = 'abc-123';
   for (const sub of ['bypass', 'unlock', 'repair', 'write', 'resume']) {
     const text = cmd(fx, `${sub} --session ${sessionId} --write`);
@@ -54,8 +54,8 @@ test('matchRecoveryCommand — positive fixture for every subcommand with a sess
   }
 });
 
-test('matchRecoveryCommand — unlock --started-at reproduces an ISO 8601 timestamp exactly', () => {
-  const fx = fixturePaths();
+test('matchRecoveryCommand — unlock --started-at reproduces an ISO 8601 timestamp exactly', (t) => {
+  const fx = fixturePaths(t);
   const sessionId = 'sess-1';
   const iso = '2026-08-15T12:34:56.789Z';
   const text = cmd(fx, `unlock --session ${sessionId} --started-at ${iso} --write`);
@@ -63,39 +63,39 @@ test('matchRecoveryCommand — unlock --started-at reproduces an ISO 8601 timest
   assert.equal(result.matched, true);
 });
 
-test('matchRecoveryCommand — resume --deny-session may name a DIFFERENT session', () => {
-  const fx = fixturePaths();
+test('matchRecoveryCommand — resume --deny-session may name a DIFFERENT session', (t) => {
+  const fx = fixturePaths(t);
   const sessionId = 'consumer-session';
   const text = cmd(fx, `resume --session ${sessionId} --deny-session other-denier-session --write`);
   const result = matchRecoveryCommand(text, { ...fx, sessionId });
   assert.equal(result.matched, true);
 });
 
-test('matchRecoveryCommand — --session naming a DIFFERENT (but valid) session is rejected', () => {
-  const fx = fixturePaths();
+test('matchRecoveryCommand — --session naming a DIFFERENT (but valid) session is rejected', (t) => {
+  const fx = fixturePaths(t);
   const sessionId = 'this-session';
   const text = cmd(fx, `bypass --session some-other-session --write`);
   const result = matchRecoveryCommand(text, { ...fx, sessionId });
   assert.equal(result.matched, false);
 });
 
-test('matchRecoveryCommand — no session resolvable means no --session command can match', () => {
-  const fx = fixturePaths();
+test('matchRecoveryCommand — no session resolvable means no --session command can match', (t) => {
+  const fx = fixturePaths(t);
   const text = cmd(fx, `bypass --session anything --write`);
   const result = matchRecoveryCommand(text, { ...fx, sessionId: null });
   assert.equal(result.matched, false);
 });
 
-test('matchRecoveryCommand — unbound bypass reason (free text) is not eligible', () => {
-  const fx = fixturePaths();
+test('matchRecoveryCommand — unbound bypass reason (free text) is not eligible', (t) => {
+  const fx = fixturePaths(t);
   const sessionId = 'sess-1';
   const text = cmd(fx, `bypass --session ${sessionId} --unbound-reason "free text here" --write`);
   const result = matchRecoveryCommand(text, { ...fx, sessionId });
   assert.equal(result.matched, false);
 });
 
-test('matchRecoveryCommand — quoted PATH_GRAMMAR token may contain $, &, (, ; as literal bytes', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'recovery-exception-special-'));
+test('matchRecoveryCommand — quoted PATH_GRAMMAR token may contain $, &, (, ; as literal bytes', (t) => {
+  const dir = tmp(t, 'recovery-exception-special-');
   const interpreterPath = join(dir, "node-with-$-&-(-;");
   const scriptPath = join(dir, 'handoff.mjs');
   writeFileSync(interpreterPath, '');
@@ -106,8 +106,8 @@ test('matchRecoveryCommand — quoted PATH_GRAMMAR token may contain $, &, (, ; 
   assert.equal(result.matched, true);
 });
 
-test('matchRecoveryCommand — a quoted path containing a literal space matches (formatRecoveryCommand round-trips)', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'recovery-exception-space '));
+test('matchRecoveryCommand — a quoted path containing a literal space matches (formatRecoveryCommand round-trips)', (t) => {
+  const dir = tmp(t, 'recovery-exception-space ');
   const interpreterPath = join(dir, 'node');
   const scriptPath = join(dir, 'handoff.mjs');
   writeFileSync(interpreterPath, '');
@@ -118,7 +118,7 @@ test('matchRecoveryCommand — a quoted path containing a literal space matches 
   assert.equal(result.matched, true);
 });
 
-test('matchRecoveryCommand — two adjacent quoted spans glued into one token are rejected, not concatenated', () => {
+test('matchRecoveryCommand — two adjacent quoted spans glued into one token are rejected, not concatenated', (t) => {
   // A real POSIX shell concatenates adjacent quoted spans after removing
   // every quote: '/a''b' executes as /ab (no apostrophes survive). A naive
   // parser that strips only the OUTER first/last quote and keeps interior
@@ -132,7 +132,7 @@ test('matchRecoveryCommand — two adjacent quoted spans glued into one token ar
   // interpreter — under the bug, this fixture's glued token would resolve
   // and match; the fix must reject the token SHAPE outright, before
   // `identityMatches` is even consulted.
-  const fx = fixturePaths();
+  const fx = fixturePaths(t);
   const sessionId = 'sess-1';
   const decoyName = "node''fake"; // literal apostrophes in the ON-DISK filename
   const decoyPath = join(fx.dir, decoyName);
@@ -147,8 +147,8 @@ test('matchRecoveryCommand — two adjacent quoted spans glued into one token ar
   assert.equal(result.matched, false);
 });
 
-test('matchRecoveryCommand — decoys are rejected', () => {
-  const fx = fixturePaths();
+test('matchRecoveryCommand — decoys are rejected', (t) => {
+  const fx = fixturePaths(t);
   const sessionId = 'sess-1';
   const decoys = [
     cmd(fx, `bypass --session ${sessionId} --write; rm -rf /`),
@@ -165,16 +165,16 @@ test('matchRecoveryCommand — decoys are rejected', () => {
   }
 });
 
-test('matchRecoveryCommand — a raw newline at a token boundary is rejected outright', () => {
-  const fx = fixturePaths();
+test('matchRecoveryCommand — a raw newline at a token boundary is rejected outright', (t) => {
+  const fx = fixturePaths(t);
   const sessionId = 'sess-1';
   const text = cmd(fx, `bypass --session\n${sessionId} --write`);
   const result = matchRecoveryCommand(text, { ...fx, sessionId });
   assert.equal(result.matched, false);
 });
 
-test('matchRecoveryCommand — script identity mismatch (wrong script) is rejected', () => {
-  const fx = fixturePaths();
+test('matchRecoveryCommand — script identity mismatch (wrong script) is rejected', (t) => {
+  const fx = fixturePaths(t);
   const sessionId = 'sess-1';
   const otherScript = join(fx.dir, 'not-handoff.mjs');
   writeFileSync(otherScript, '');
@@ -183,8 +183,8 @@ test('matchRecoveryCommand — script identity mismatch (wrong script) is reject
   assert.equal(result.matched, false);
 });
 
-test('matchRecoveryCommand — symlinked script resolves to the same real identity and still matches', () => {
-  const fx = fixturePaths();
+test('matchRecoveryCommand — symlinked script resolves to the same real identity and still matches', (t) => {
+  const fx = fixturePaths(t);
   const sessionId = 'sess-1';
   const linkPath = join(fx.dir, 'handoff-link.mjs');
   symlinkSync(fx.scriptPath, linkPath);
@@ -194,8 +194,8 @@ test('matchRecoveryCommand — symlinked script resolves to the same real identi
   assert.equal(realpathSync(linkPath), realpathSync(fx.scriptPath));
 });
 
-test('matchRecoveryCommand — duplicate flag is rejected', () => {
-  const fx = fixturePaths();
+test('matchRecoveryCommand — duplicate flag is rejected', (t) => {
+  const fx = fixturePaths(t);
   const sessionId = 'sess-1';
   const text = cmd(fx, `bypass --session ${sessionId} --session ${sessionId} --write`);
   const result = matchRecoveryCommand(text, { ...fx, sessionId });
@@ -225,8 +225,8 @@ test('formatRecoveryCommand — does not quote a plain path', () => {
   );
 });
 
-test('formatRecoveryCommand — the first line alone is the runnable command, and matches matchRecoveryCommand (D6/#970 round-trip)', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'recovery-exception-roundtrip '));
+test('formatRecoveryCommand — the first line alone is the runnable command, and matches matchRecoveryCommand (D6/#970 round-trip)', (t) => {
+  const dir = tmp(t, 'recovery-exception-roundtrip ');
   const interpreterPath = join(dir, 'node');
   const scriptPath = join(dir, 'handoff.mjs');
   writeFileSync(interpreterPath, '');
@@ -344,13 +344,13 @@ test('formatNoSessionIdMessage — contains all three required elements, no --se
   assert.doesNotMatch(msg, /--deny-session/);
 });
 
-test('matchRecoveryCommand — a recovery command with NO --session flag at all is rejected, for every subcommand (Round-5)', () => {
+test('matchRecoveryCommand — a recovery command with NO --session flag at all is rejected, for every subcommand (Round-5)', (t) => {
   // The per-flag check only enforced same-session binding WHEN --session
   // was present; a bare `bypass` (no flags) matched unconditionally,
   // regardless of sessionId — including when sessionId is null (no safe
   // session id resolved) or a real, valid session id. --session must be
   // required, not merely validated-if-present.
-  const fx = fixturePaths();
+  const fx = fixturePaths(t);
   for (const sub of ['bypass', 'unlock', 'repair', 'write', 'resume']) {
     const bare = cmd(fx, sub);
     for (const sessionId of [null, 'consumer-1']) {
@@ -364,8 +364,8 @@ test('matchRecoveryCommand — a recovery command with NO --session flag at all 
   }
 });
 
-test('matchRecoveryCommand — bypass --write with no --session is rejected even though --write is a valid boolean flag', () => {
-  const fx = fixturePaths();
+test('matchRecoveryCommand — bypass --write with no --session is rejected even though --write is a valid boolean flag', (t) => {
+  const fx = fixturePaths(t);
   const text = cmd(fx, 'bypass --write');
   const result = matchRecoveryCommand(text, { interpreterPath: fx.interpreterPath, scriptPath: fx.scriptPath, sessionId: 'consumer-1' });
   assert.equal(result.matched, false);
