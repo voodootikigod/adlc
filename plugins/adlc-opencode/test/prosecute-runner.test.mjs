@@ -6,9 +6,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   runProsecution, lensToolsMap, LENS_READ_TOOLS, makeLensAsk,
-  parseFindings, parseVerdict, parseFenced,
+  parseFindings, parseVerdict, parseFenced, listRegisteredAgents, replyModel, AGENT_LIST_TIMEOUT_MS,
 } from '../lib/prosecute-runner.mjs';
-import { LENSES, VERIFIER } from '../lib/prosecutor.mjs';
+import { LENSES, VERIFIER, ALL_AGENTS } from '../lib/prosecutor.mjs';
 import { READONLY_TOOLS } from '../rails-checker.mjs';
 
 const fenced = (obj) => '```json\n' + JSON.stringify(obj) + '\n```';
@@ -73,6 +73,122 @@ test('AC2: makeLensAsk passes the allowlist AND the system override to session.p
   assert.equal(body.tools['*'], false, 'deny-all floor set in the real call');
   for (const t of ['edit', 'write', 'bash', 'task', 'apply_patch']) assert.notEqual(body.tools[t], true, `${t} not enabled`);
   assert.deepEqual(body.parts, [{ type: 'text', text: 'find bugs' }]);
+});
+
+// ---- per-lens models: a registered lens prompts AS its agent so its configured model applies ----
+function lensClient(promptImpl, { agents = ALL_AGENTS, listing } = {}) {
+  const calls = { creates: 0, prompts: [], deletes: [], listings: 0 };
+  return {
+    calls,
+    app: {
+      agents: listing ?? (async () => { calls.listings += 1; return { data: agents.map((name) => ({ name })) }; }),
+    },
+    session: {
+      create: async () => { calls.creates += 1; return { data: { id: `child-${calls.creates}` } }; },
+      prompt: async (req) => { calls.prompts.push(req); return promptImpl(req); },
+      delete: async (req) => { calls.deletes.push(req.path.id); return { data: true }; },
+    },
+  };
+}
+const reply = (text, info) => ({ data: { ...(info ? { info } : {}), parts: [{ type: 'text', text }] } });
+
+test('per-lens model: a registered agent is sent as `agent` WITHOUT the system override, still write-disabled', async () => {
+  const client = lensClient(() => reply('ok'));
+  const ask = makeLensAsk(client, { parentID: 'parent' });
+  const text = await ask({ agent: 'prosecutor-security', system: 'LENS SYSTEM PROMPT', prompt: 'find bugs' });
+  assert.equal(text, 'ok');
+  const body = client.calls.prompts[0].body;
+  assert.equal(body.agent, 'prosecutor-security');
+  assert.equal('system' in body, false, 'the agent carries its own prompt; the override would duplicate it');
+  assert.equal('model' in body, false, 'no explicit model: opencode resolves the agent model');
+  assert.equal(Object.keys(body.tools)[0], '*');
+  assert.equal(body.tools['*'], false);
+  for (const t of ['edit', 'write', 'bash', 'task', 'apply_patch']) assert.notEqual(body.tools[t], true, `${t} not enabled`);
+});
+
+test('per-lens model: onResolved reports the model that answered and that the agent config was used', async () => {
+  const seen = [];
+  const client = lensClient(() => reply('ok', { providerID: 'vercel', modelID: 'vmc/adlc-prosecutor-security' }));
+  const ask = makeLensAsk(client, { parentID: 'p', onResolved: (r) => seen.push(r) });
+  await ask({ agent: 'prosecutor-security', system: 'S', prompt: 'x' });
+  assert.deepEqual(seen, [{ agent: 'prosecutor-security', model: 'vercel/vmc/adlc-prosecutor-security', agentModel: true, agentsListed: true }]);
+});
+
+test('per-lens model: an UNREGISTERED agent is never named; it runs once on the session model with the charter', async () => {
+  const seen = [];
+  const client = lensClient(() => reply('ok', { providerID: 'anthropic', modelID: 'claude-opus-5' }), { agents: ['build', 'plan'] });
+  const ask = makeLensAsk(client, { parentID: 'p', onResolved: (r) => seen.push(r) });
+  assert.equal(await ask({ agent: 'prosecutor-security', system: 'LENS SYSTEM PROMPT', prompt: 'x' }), 'ok');
+  assert.equal(client.calls.prompts.length, 1, 'one child session, no probe-and-retry');
+  const body = client.calls.prompts[0].body;
+  assert.equal('agent' in body, false, 'opencode reports an unknown agent only as a generic 500');
+  assert.equal(body.system, 'LENS SYSTEM PROMPT');
+  assert.equal(body.tools['*'], false, 'still write-disabled');
+  assert.deepEqual(seen, [{ agent: 'prosecutor-security', model: 'anthropic/claude-opus-5', agentModel: false, agentsListed: true }]);
+});
+
+test('per-lens model: a host that cannot list agents keeps the session-model behavior and says so (agentsListed:false)', async () => {
+  for (const client of [
+    lensClient(() => reply('ok'), { listing: async () => { throw new Error('404'); } }),
+    lensClient(() => reply('ok'), { listing: async () => ({ error: { name: 'UnknownError' } }) }),
+    { ...lensClient(() => reply('ok')), app: undefined },
+  ]) {
+    const seen = [];
+    const ask = makeLensAsk(client, { parentID: 'p', onResolved: (r) => seen.push(r) });
+    await ask({ agent: 'prosecutor-security', system: 'S', prompt: 'x' });
+    const body = client.calls.prompts[0].body;
+    assert.equal('agent' in body, false);
+    assert.equal(body.system, 'S');
+    assert.equal(seen[0].agentsListed, false, 'the fallback is attributed to the listing, not to a missing agent');
+    assert.equal(seen[0].agentModel, false);
+  }
+});
+
+test('per-lens model: a HUNG agent listing is bounded — the lens still runs, on the session model', async () => {
+  const seen = [];
+  const client = lensClient(() => reply('ok'), { listing: () => new Promise(() => {}) });
+  const ask = makeLensAsk(client, { parentID: 'p', agentListTimeoutMs: 20, onResolved: (r) => seen.push(r) });
+  const started = Date.now();
+  assert.equal(await ask({ agent: 'prosecutor-security', system: 'S', prompt: 'x' }), 'ok');
+  assert.ok(Date.now() - started < 2_000, 'did not wait on the hung listing');
+  assert.equal('agent' in client.calls.prompts[0].body, false);
+  assert.equal(seen[0].agentsListed, false);
+});
+
+test('per-lens model: the registered set is listed ONCE per ask, even across concurrent lenses', async () => {
+  const client = lensClient(() => reply('ok'));
+  const ask = makeLensAsk(client, { parentID: 'p' });
+  await Promise.all(ALL_AGENTS.map((agent) => ask({ agent, system: 'S', prompt: 'x' })));
+  assert.equal(client.calls.listings, 1);
+  assert.deepEqual(client.calls.prompts.map((p) => p.body.agent).sort(), [...ALL_AGENTS].sort());
+});
+
+test('per-lens model: a failing lens model is NOT retried on the session model (no silent family switch)', async () => {
+  const client = lensClient(() => { throw new Error('provider vercel: 503 model unavailable'); });
+  const ask = makeLensAsk(client, { parentID: 'p' });
+  await assert.rejects(() => ask({ agent: 'prosecutor-security', system: 'S', prompt: 'x' }), /503/);
+  assert.equal(client.calls.prompts.length, 1, 'no retry');
+  assert.deepEqual(client.calls.deletes, ['child-1'], 'child still cleaned up');
+});
+
+test('listRegisteredAgents / replyModel read the opencode shapes', async () => {
+  assert.deepEqual(await listRegisteredAgents({ app: { agents: async () => ({ data: [{ name: 'a' }, { name: 'b' }, {}] }) } }), new Set(['a', 'b']));
+  assert.equal(await listRegisteredAgents({}), null);
+  assert.equal(await listRegisteredAgents({ app: { agents: async () => ({ data: 'nope' }) } }), null);
+  assert.equal(await listRegisteredAgents({ app: { agents: () => new Promise(() => {}) } }, { timeoutMs: 10 }), null, 'hung listing → null');
+  assert.equal(AGENT_LIST_TIMEOUT_MS, 5_000);
+  assert.equal(replyModel({ data: { info: { providerID: 'vercel', modelID: 'vmc/a' } } }), 'vercel/vmc/a');
+  assert.equal(replyModel({ data: { parts: [] } }), null);
+  assert.equal(replyModel({ data: { info: { providerID: 'vercel' } } }), null, 'a half-known model is not reported');
+  assert.equal(replyModel({ data: { info: { modelID: 'vmc/a' } } }), null);
+});
+
+test('runProsecution names every lens and the verifier as its own agent (so each gets its own model)', async () => {
+  const calls = [];
+  const ask = scriptedAsk({ byAgent: { [LENSES[0].agent]: [finding('b')] }, calls });
+  await runProsecution({ ask, diff: 'DIFF' });
+  const agents = new Set(calls.map((c) => c.agent));
+  for (const a of [...LENSES.map((l) => l.agent), VERIFIER.agent]) assert.ok(agents.has(a), `${a} asked by name`);
 });
 
 test('AC2: makeLensAsk returns null when the client lacks the session API (caller falls back)', () => {

@@ -16,6 +16,7 @@
 
 import { buildProsecuteTool } from '../plugins/adlc-opencode/lib/prosecute-tool.mjs';
 import { LENS_READ_TOOLS } from '../plugins/adlc-opencode/lib/prosecute-runner.mjs';
+import { ALL_AGENTS } from '../plugins/adlc-opencode/lib/prosecutor.mjs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -30,13 +31,14 @@ const fenced = (obj) => '```json\n' + JSON.stringify(obj) + '\n```';
 // the tools disable-map, and scripts lens findings + a confirming verdict.
 const prompts = [];
 const client = {
+  app: { agents: async () => ({ data: ALL_AGENTS.map((name) => ({ name })) }) },
   session: {
     create: async () => ({ data: { id: `child-${prompts.length}` } }),
     prompt: async (req) => {
       prompts.push(req);
-      const system = req?.body?.system ?? '';
+      const agent = req?.body?.agent ?? '';
       // The verifier CONFIRMS the seeded defect; every lens SURFACES it.
-      const reply = system.includes('verifier')
+      const reply = agent === 'prosecutor-verifier'
         ? fenced({ real: true, reason: 'reproduced the seeded off-by-one' })
         : fenced([{ title: 'seeded-off-by-one', severity: 'high', file: 'src/loop.mjs', detail: 'i <= n should be i < n' }]);
       return { data: { parts: [{ type: 'text', text: reply }] } };
@@ -61,6 +63,7 @@ const result = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: '
 // AC3: the seeded defect surfaces and the loop terminates with a NO-SHIP verdict.
 if (result?.metadata?.deterministic !== true) fail('runner did not report a deterministic run');
 if (result.metadata.confirmed < 1) fail('the seeded defect did not survive to a confirmed finding');
+if (result.metadata.unverified !== 0) fail('the verifier did not verifiably confirm the seeded defect (kept only fail-closed)');
 if (!/NO-SHIP/.test(result.metadata.verdict)) fail(`expected NO-SHIP, got ${result.metadata.verdict}`);
 if (!/seeded-off-by-one/.test(result.output)) fail('the seeded finding is not in the report');
 if (result.metadata.rounds < 1 || result.metadata.hitBound === 'maxSessions') fail(`loop did not terminate cleanly (rounds=${result.metadata.rounds}, bound=${result.metadata.hitBound})`);
@@ -87,6 +90,18 @@ for (const p of prompts) {
   }
 }
 log(`all ${prompts.length} lens/verifier child sessions were fail-closed (wildcard-deny-first allowlist; task/unknown tools denied) (AC2)`);
+
+// Per-lens models: every child prompts AS its lens/verifier agent, so opencode
+// resolves that agent's configured model, and carries no duplicate `system`
+// charter on top of the agent's own prompt.
+const named = new Set(prompts.map((p) => p?.body?.agent));
+for (const agent of ALL_AGENTS) {
+  if (!named.has(agent)) fail(`no child session prompted as ${agent} (it would inherit the session model)`);
+}
+for (const p of prompts) {
+  if (p?.body?.system) fail(`child session for ${p?.body?.agent} duplicates the agent prompt as a system override`);
+}
+log(`every lens and the verifier prompted as its own agent (${ALL_AGENTS.length} agents) — per-lens models apply`);
 
 // The loop ran in FIRST-PARTY code (the tool's execute drove it) — not the host
 // model orchestrating — which is the whole point of the deterministic runner.

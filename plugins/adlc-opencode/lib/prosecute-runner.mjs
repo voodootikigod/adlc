@@ -75,19 +75,70 @@ export function parseVerdict(text) {
   return null;
 }
 
+/** `provider/model` that answered a session.prompt reply, or null if absent. */
+export function replyModel(res) {
+  const info = res?.data?.info ?? res?.info;
+  return info?.providerID && info?.modelID ? `${info.providerID}/${info.modelID}` : null;
+}
+
+/** Bound on the one agent-listing call per run; a local server answers in milliseconds. */
+export const AGENT_LIST_TIMEOUT_MS = 5_000;
+
+/**
+ * Names of the agents registered in this opencode instance (`client.app.agents`),
+ * or null when the host cannot list them (no API, error, bad payload, or no
+ * answer within `timeoutMs`). Never throws: an unlistable host keeps the
+ * pre-per-lens behavior (every lens on the session model).
+ */
+export async function listRegisteredAgents(client, { timeoutMs = AGENT_LIST_TIMEOUT_MS } = {}) {
+  if (typeof client?.app?.agents !== 'function') {
+    return null;
+  }
+  let timer;
+  try {
+    const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); });
+    const res = await Promise.race([client.app.agents(), timeout]);
+    const list = res?.data ?? res;
+    return Array.isArray(list) ? new Set(list.map((a) => a?.name).filter((n) => typeof n === 'string')) : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Build the real lens/verifier `ask` from the host SDK client: each call spins
- * up an isolated child session (parentID = active session) with a per-call
- * SYSTEM override (the agent prompt) and the WRITE-DISABLED tools map, returns
- * the reply text, and best-effort deletes the child. Returns null when the
- * client lacks the session API (caller falls back to the prose protocol).
- * Mirrors keyless-bridge makeAsk, adding `system` + the tools disable-map.
+ * up an isolated child session (parentID = active session) with the
+ * WRITE-DISABLED tools map, returns the reply text, and best-effort deletes the
+ * child. Returns null when the client lacks the session API (caller falls back
+ * to the prose protocol). Mirrors keyless-bridge makeAsk, adding the tools
+ * disable-map.
+ *
+ * A call whose `agent` is registered prompts AS that agent, so opencode resolves
+ * the lens's own configured `model` (agent frontmatter or `opencode.json`
+ * `agent.<name>.model`) exactly as its Task tool does, and uses the agent's own
+ * prompt — the `system` override is omitted there, or opencode would append the
+ * charter a second time. The registered set is read once per ask. An
+ * unregistered agent is never named: opencode reports that only as a generic
+ * 500, so the call carries the `system` override on the session model instead.
+ * `onResolved` is told which model answered each call, whether the agent's
+ * config was used, and whether the agent listing succeeded at all
+ * (`agentsListed: false` → every lens fell back because the host could not list
+ * agents, not because a lens agent is missing).
  */
-export function makeLensAsk(client, { parentID, model, timeoutMs = PROMPT_TIMEOUT_MS, withTimeout } = {}) {
+export function makeLensAsk(client, {
+  parentID, model, timeoutMs = PROMPT_TIMEOUT_MS, agentListTimeoutMs = AGENT_LIST_TIMEOUT_MS, withTimeout, onResolved,
+} = {}) {
   const session = client?.session;
   if (typeof session?.create !== 'function' || typeof session?.prompt !== 'function') return null;
   const race = withTimeout ?? ((p) => p);
-  return async ({ system, prompt }) => {
+  let registered;
+
+  return async ({ agent, system, prompt }) => {
+    registered ??= listRegisteredAgents(client, { timeoutMs: agentListTimeoutMs });
+    const agents = await registered;
+    const asAgent = Boolean(agent) && (agents?.has(agent) ?? false);
     const created = await race(
       session.create({ body: { ...(parentID ? { parentID } : {}), title: 'adlc-prosecute' } }),
       timeoutMs, 'prosecute: child session.create timed out');
@@ -98,12 +149,14 @@ export function makeLensAsk(client, { parentID, model, timeoutMs = PROMPT_TIMEOU
           path: { id: childId },
           body: {
             ...(model ? { model } : {}),
-            ...(system ? { system } : {}),
+            ...(asAgent ? { agent } : {}),
+            ...(!asAgent && system ? { system } : {}),
             tools: lensToolsMap(),
             parts: [{ type: 'text', text: prompt }],
           },
         }),
         timeoutMs, 'prosecute: child session.prompt timed out');
+      onResolved?.({ agent, model: replyModel(res), agentModel: asAgent, agentsListed: agents !== null });
       const parts = res?.data?.parts ?? res?.parts ?? [];
       return parts.filter((p) => p?.type === 'text').map((p) => p.text).join('') || '';
     } finally {

@@ -8,7 +8,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildProsecuteTool, captureDiff, makeAgentPromptReader } from '../lib/prosecute-tool.mjs';
+import { buildProsecuteTool, captureDiff, makeAgentPromptReader, makeModelLedger } from '../lib/prosecute-tool.mjs';
+import { ALL_AGENTS } from '../lib/prosecutor.mjs';
 import { checkToolCall } from '../rails-checker.mjs';
 
 const PKG = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -17,14 +18,23 @@ const fakeSchema = {
 };
 const fenced = (obj) => '```json\n' + JSON.stringify(obj) + '\n```';
 
-// a session client whose child prompt replies are scripted by agent title
-function mockClient(reply) {
+const isVerifier = (req) => (req.body.agent ?? req.body.system ?? '').includes('verifier');
+
+// a session client whose child prompt replies are scripted by agent; `info`
+// optionally returns the model that answered (opencode's assistant message info);
+// `agents` is what the host reports as registered
+function mockClient(reply, info, agents = ALL_AGENTS) {
   const calls = { prompts: [] };
   return {
     calls,
+    app: { agents: async () => ({ data: agents.map((name) => ({ name })) }) },
     session: {
       create: async () => ({ data: { id: 'child' } }),
-      prompt: async (req) => { calls.prompts.push(req); return { data: { parts: [{ type: 'text', text: reply(req) }] } }; },
+      prompt: async (req) => {
+        calls.prompts.push(req);
+        const i = info?.(req);
+        return { data: { ...(i ? { info: i } : {}), parts: [{ type: 'text', text: reply(req) }] } };
+      },
       delete: async () => ({ data: true }),
     },
   };
@@ -58,8 +68,7 @@ test('execute: empty diff → reports nothing to prosecute (does not spawn lense
 test('execute: a real diff drives the deterministic loop and returns a structured verdict', async () => {
   // lenses find a bug; verifier confirms it
   const client = mockClient((req) => {
-    const sys = req.body.system ?? '';
-    if (sys.includes('verifier')) return fenced({ real: true, reason: 'reproduced' });
+    if (isVerifier(req)) return fenced({ real: true, reason: 'reproduced' });
     return fenced([{ title: 'planted-bug', severity: 'high', file: 'x.mjs' }]);
   });
   const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG, client, diffImpl: () => 'diff --git a/x b/x' });
@@ -99,8 +108,7 @@ test('execute: a bounded/incomplete run with zero findings is NO-SHIP (INCOMPLET
   // never converges → hits maxRounds; still zero confirmed → must NOT SHIP
   let n = 0;
   const client = mockClient((req) => {
-    const sys = req.body.system ?? '';
-    if (sys.includes('verifier')) return fenced({ real: false }); // everything refuted → zero confirmed
+    if (isVerifier(req)) return fenced({ real: false }); // everything refuted → zero confirmed
     n += 1;
     return fenced([{ title: `ephemeral-${n}`, severity: 'low', file: 'x' }]); // new finding every round → never dry
   });
@@ -109,6 +117,86 @@ test('execute: a bounded/incomplete run with zero findings is NO-SHIP (INCOMPLET
   assert.equal(r.metadata.confirmed, 0);
   assert.ok(r.metadata.hitBound, 'the run hit a bound');
   assert.match(r.metadata.verdict, /NO-SHIP.*INCOMPLETE/);
+});
+
+// ---- per-lens models ----
+const lensModel = (req) => ({ providerID: 'vercel', modelID: `vmc/adlc-${req.body.agent ?? 'session'}` });
+
+test('execute: every lens and the verifier prompt AS their agent and report the model that answered', async () => {
+  const client = mockClient((req) => (isVerifier(req) ? fenced({ real: true }) : fenced([{ title: 'bug', severity: 'high', file: 'x' }])), lensModel);
+  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG, client, diffImpl: () => 'diff x' });
+  const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
+  const named = new Set(client.calls.prompts.map((p) => p.body.agent));
+  for (const a of ALL_AGENTS) assert.ok(named.has(a), `${a} prompted as its own agent`);
+  for (const p of client.calls.prompts) assert.equal('system' in p.body, false, 'no duplicated charter');
+  for (const a of ALL_AGENTS) assert.deepEqual(r.metadata.models[a], [`vercel/vmc/adlc-${a}`]);
+  assert.deepEqual(r.metadata.unregisteredAgents, []);
+  assert.equal(r.metadata.agentListUnavailable, false);
+  assert.equal(r.metadata.singleModel, false);
+  assert.match(r.output, /Reviewer models:/);
+  assert.match(r.output, /prosecutor-security: vercel\/vmc\/adlc-prosecutor-security/);
+  assert.doesNotMatch(r.output, /single-model review/);
+});
+
+test('execute: reviewers that all answer on one model are labelled single-model, not cross-model', async () => {
+  const client = mockClient(() => fenced([]), () => ({ providerID: 'anthropic', modelID: 'claude-opus-5' }));
+  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG, client, diffImpl: () => 'diff x' });
+  const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
+  assert.equal(r.metadata.singleModel, true);
+  assert.match(r.output, /fresh-context, single-model review \(not cross-model\)/);
+});
+
+test('execute: an unregistered lens agent runs on the session model and is surfaced, not hidden', async () => {
+  const client = mockClient(() => fenced([]), lensModel, ALL_AGENTS.filter((a) => a !== 'prosecutor-tests'));
+  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG, client, diffImpl: () => 'diff x' });
+  const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
+  assert.deepEqual(r.metadata.unregisteredAgents, ['prosecutor-tests']);
+  assert.equal(r.metadata.agentListUnavailable, false);
+  assert.deepEqual(r.metadata.models['prosecutor-tests'], ['vercel/vmc/adlc-session']);
+  assert.match(r.output, /prosecutor-tests: vercel\/vmc\/adlc-session \(session model: agent not registered\)/);
+  assert.doesNotMatch(r.output, /prosecutor-security: .*agent not registered/, 'only the missing agent is flagged');
+  assert.doesNotMatch(r.output, /Could not list OpenCode agents/);
+});
+
+test('execute: a host that cannot list agents is reported as such — not blamed on missing agents', async () => {
+  const client = mockClient(() => fenced([]), lensModel);
+  client.app.agents = async () => { throw new Error('GET /agent 500'); };
+  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG, client, diffImpl: () => 'diff x' });
+  const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
+  assert.equal(r.metadata.agentListUnavailable, true);
+  assert.deepEqual(r.metadata.unregisteredAgents, []);
+  assert.match(r.output, /Could not list OpenCode agents, so every reviewer ran on the session model/);
+  assert.doesNotMatch(r.output, /agent not registered/);
+  for (const p of client.calls.prompts) assert.equal('agent' in p.body, false, 'no agent named without a listing');
+});
+
+test('makeModelLedger: single-model needs every reviewer on one KNOWN, identical model; one reviewer is never "single-model"', () => {
+  const unknownOnly = makeModelLedger();
+  unknownOnly.record({ agent: 'a', model: null, agentModel: true });
+  unknownOnly.record({ agent: 'b', model: null, agentModel: true });
+  assert.equal(unknownOnly.summary().singleModel, false);
+  assert.deepEqual(unknownOnly.summary().models, { a: ['unknown'], b: ['unknown'] });
+  const mixed = makeModelLedger();
+  for (const agent of ['a', 'b', 'c']) mixed.record({ agent, model: 'anthropic/claude-opus-5', agentModel: true });
+  for (const agent of ['d', 'e', 'f']) mixed.record({ agent, model: null, agentModel: true });
+  assert.equal(mixed.summary().singleModel, false, 'unknown reviewers are not proof of one model');
+  const drifted = makeModelLedger();
+  drifted.record({ agent: 'a', model: 'x/y', agentModel: true });
+  drifted.record({ agent: 'a', model: 'x/z', agentModel: true });
+  drifted.record({ agent: 'b', model: 'x/y', agentModel: true });
+  assert.equal(drifted.summary().singleModel, false, 'a reviewer that answered on two models is not single-model');
+  const same = makeModelLedger();
+  same.record({ agent: 'a', model: 'x/y', agentModel: true });
+  same.record({ agent: 'b', model: 'x/y', agentModel: true });
+  assert.equal(same.summary().singleModel, true);
+  assert.equal(same.summary().agentListUnavailable, false, 'a record without agentsListed means the listing worked');
+  const unlisted = makeModelLedger();
+  unlisted.record({ agent: 'a', model: 'x/y', agentModel: false, agentsListed: false });
+  assert.equal(unlisted.summary().agentListUnavailable, true);
+  assert.deepEqual(unlisted.summary().unregisteredAgents, [], 'a listing failure is not blamed on the agent');
+  const one = makeModelLedger();
+  one.record({ agent: 'a', model: 'x/y', agentModel: true });
+  assert.equal(one.summary().singleModel, false);
 });
 
 test('makeAgentPromptReader reads the packaged agent prompt; "" for an unknown agent', () => {

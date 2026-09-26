@@ -20,6 +20,59 @@ export function makeAgentPromptReader(pkgRoot) {
 }
 
 /**
+ * Collect which model answered each lens/verifier call (fed by makeLensAsk's
+ * `onResolved`). `summary()` returns the per-agent models; the agents that ran
+ * on the session model because they are not registered (`unregisteredAgents`);
+ * `agentListUnavailable` when the host could not list agents, so every lens ran
+ * on the session model for that reason instead; and `singleModel` when every
+ * reviewer provably answered on one model — a fresh-context but NOT
+ * cross-model review. A reviewer whose model is unknown never counts as proof.
+ */
+export function makeModelLedger() {
+  const byAgent = new Map();
+  let agentListUnavailable = false;
+  return {
+    record({ agent, model, agentModel, agentsListed = true }) {
+      const key = agent ?? '(unnamed)';
+      const entry = byAgent.get(key) ?? { models: new Set(), unregistered: false };
+      entry.models.add(model ?? 'unknown');
+      if (!agentsListed) {
+        agentListUnavailable = true;
+      } else if (!agentModel) {
+        entry.unregistered = true;
+      }
+      byAgent.set(key, entry);
+    },
+    summary() {
+      const models = Object.fromEntries([...byAgent].map(([agent, e]) => [agent, [...e.models].sort()]));
+      const unregisteredAgents = [...byAgent].filter(([, e]) => e.unregistered).map(([agent]) => agent).sort();
+      const answered = Object.values(models).flat();
+      const singleModel = byAgent.size > 1 && !answered.includes('unknown') && new Set(answered).size === 1;
+      return { models, unregisteredAgents, agentListUnavailable, singleModel };
+    },
+  };
+}
+
+function modelLines({ models, unregisteredAgents, agentListUnavailable, singleModel }) {
+  const agents = Object.keys(models);
+  if (!agents.length) {
+    return [];
+  }
+  const lines = ['\nReviewer models:'];
+  if (agentListUnavailable) {
+    lines.push('Could not list OpenCode agents, so every reviewer ran on the session model (per-lens models not applied).');
+  }
+  for (const agent of agents) {
+    const note = unregisteredAgents.includes(agent) ? ' (session model: agent not registered)' : '';
+    lines.push(`- ${agent}: ${models[agent].join(', ')}${note}`);
+  }
+  if (singleModel) {
+    lines.push('Every reviewer answered on the same model: fresh-context, single-model review (not cross-model).');
+  }
+  return lines;
+}
+
+/**
  * The change under prosecution: `git diff <base>...HEAD`.
  * Returns { diff, error }. A git FAILURE (bad base ref, non-git cwd, buffer
  * overflow) sets error — the caller must NOT treat that as an empty diff (which
@@ -57,7 +110,8 @@ export function buildProsecuteTool(schema, { root = process.cwd(), pkgRoot, clie
       execute: async (a, ctx) => {
         const base = String(a?.base ?? 'main');
         const cwd = ctx?.directory ?? ctx?.worktree ?? root;
-        const ask = makeLensAsk(client, { parentID: ctx?.sessionID });
+        const ledger = makeModelLedger();
+        const ask = makeLensAsk(client, { parentID: ctx?.sessionID, onResolved: ledger.record });
         if (!ask) {
           return {
             title: 'adlc_prosecute: no session API',
@@ -93,12 +147,14 @@ export function buildProsecuteTool(schema, { root = process.cwd(), pkgRoot, clie
           : result.confirmed.length === 0
             ? 'SHIP (no confirmed findings)'
             : `NO-SHIP (${result.confirmed.length} confirmed)`;
+        const reviewers = ledger.summary();
         return {
           title: `adlc_prosecute: ${verdict}`,
           output: [
             `Deterministic P5 loop over ${LENSES.length} lenses + verifier.`,
             `Rounds: ${result.rounds}, child sessions: ${result.sessionsUsed}${result.hitBound ? `, stopped at bound: ${result.hitBound} (INCOMPLETE — not a converged pass)` : ''}.`,
             result.confirmed.length ? `\nConfirmed findings:\n${lines.join('\n')}` : (result.hitBound ? '\nNo confirmed findings yet, but the run did NOT converge.' : '\nNo findings survived verification.'),
+            ...modelLines(reviewers),
           ].join('\n'),
           metadata: {
             base, deterministic: true, verdict,
@@ -107,6 +163,10 @@ export function buildProsecuteTool(schema, { root = process.cwd(), pkgRoot, clie
             rounds: result.rounds,
             sessionsUsed: result.sessionsUsed,
             hitBound: result.hitBound,
+            models: reviewers.models,
+            unregisteredAgents: reviewers.unregisteredAgents,
+            agentListUnavailable: reviewers.agentListUnavailable,
+            singleModel: reviewers.singleModel,
           },
         };
       },
