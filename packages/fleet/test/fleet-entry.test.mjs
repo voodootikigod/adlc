@@ -9,10 +9,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { symlinkSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 
 const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'fleet.mjs');
 
@@ -56,18 +56,14 @@ test('an actually-unknown subcommand IS reported, so the check above can fail', 
 // import.meta.url is the real file. A guard comparing them textually returns
 // false there and the bin exits 0 having done nothing — a silent false green.
 
-test('running fleet.mjs through a SYMLINK (like npm .bin) still dispatches the CLI (#786)', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'fleet-symlink-'));
+test('running fleet.mjs through a SYMLINK (like npm .bin) still dispatches the CLI (#786)', (t) => {
+  const dir = tmp(t, 'fleet-symlink-');
   const link = join(dir, 'adlc-fleet');
   symlinkSync(BIN, link);
-  try {
-    const r = spawnSync(process.execPath, [link, '--help'], { encoding: 'utf8' });
-    assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /fleet — parallel ADLC ticket orchestration/,
-      'a symlinked entry must dispatch, not exit 0 silently');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const r = spawnSync(process.execPath, [link, '--help'], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /fleet — parallel ADLC ticket orchestration/,
+    'a symlinked entry must dispatch, not exit 0 silently');
 });
 
 // The guard keys on argv[1] (the script) — not argv[2] (the first user arg).
@@ -111,10 +107,10 @@ test('caller-supplied files must be REGULAR and bounded: a FIFO and an oversize 
   assert.throws(() => loadExt({ deadEndFile: '/missing' }, () => { throw new Error('ENOENT'); }), /ENOENT/);
 });
 
-test('an invalid or unknown run flag under --json still yields exactly one result document with reason dispatch-refused (codex r9)', () => {
+test('an invalid or unknown run flag under --json still yields exactly one result document with reason dispatch-refused (codex r9)', (t) => {
   const bin = new URL('../bin/fleet.mjs', import.meta.url).pathname;
   for (const argv of [['run', '--json', '--max-strikes', '0'], ['run', '--json', '--no-such-flag']]) {
-    const r = spawnSync(process.execPath, [bin, ...argv], { encoding: 'utf8', cwd: mkdtempSync(join(tmpdir(), 'fleet-flags-')) });
+    const r = spawnSync(process.execPath, [bin, ...argv], { encoding: 'utf8', cwd: tmp(t, 'fleet-flags-') });
     assert.equal(r.status, 1, `${argv.join(' ')}: exit 1`);
     let doc; try { doc = JSON.parse(r.stdout); } catch { doc = null; }
     assert.ok(doc && typeof doc === 'object', `exactly one (pretty-printed) document on stdout: ${r.stdout.slice(0, 200)}`);
@@ -123,32 +119,28 @@ test('an invalid or unknown run flag under --json still yields exactly one resul
   }
 });
 
-test('a ticket-store failure before dispatch under --json still yields one result document (codex r10)', () => {
+test('a ticket-store failure before dispatch under --json still yields one result document (codex r10)', (t) => {
   const bin = new URL('../bin/fleet.mjs', import.meta.url).pathname;
-  const r = spawnSync(process.execPath, [bin, 'run', '--json', '--no-pr'], { encoding: 'utf8', cwd: mkdtempSync(join(tmpdir(), 'fleet-nostore-')) });
+  const r = spawnSync(process.execPath, [bin, 'run', '--json', '--no-pr'], { encoding: 'utf8', cwd: tmp(t, 'fleet-nostore-') });
   assert.notEqual(r.status, 0);
   let doc; try { doc = JSON.parse(r.stdout); } catch { doc = null; }
   assert.ok(doc && typeof doc.reason === 'string', `one result document with a reason: ${r.stdout.slice(0, 200)} ${r.stderr.slice(0, 200)}`);
 });
 
-test('--model-plane-git mirror with a concurrency other than 1 is refused (one writable mirror per worker) — under --json as a dispatch-refused document (codex r11)', () => {
+test('--model-plane-git mirror with a concurrency other than 1 is refused (one writable mirror per worker) — under --json as a dispatch-refused document (codex r11)', (t) => {
   const bin = new URL('../bin/fleet.mjs', import.meta.url).pathname;
-  const cwd = mkdtempSync(join(tmpdir(), 'fleet-mirror-cc-'));
+  const cwd = tmp(t, 'fleet-mirror-cc-');
   const r = spawnSync(process.execPath, [bin, 'run', '--json', '--model-plane-git', 'mirror', '--model-plane-git-mirror', '/m/mirror.git', '--model-plane-read', 'bounded', '--model-plane-read-only', '/usr', '--concurrency', '2'], { encoding: 'utf8', cwd });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /requires concurrency 1/);
   assert.equal(JSON.parse(r.stdout).reason, 'dispatch-refused');
 });
 
-test('the production path reads extension files through the bounded single-descriptor reader (a FIFO is refused, never the plain io.readFile)', async () => {
-  const { mkdtempSync, rmSync } = await import('node:fs');
+test('the production path reads extension files through the bounded single-descriptor reader (a FIFO is refused, never the plain io.readFile)', async (t) => {
   const { execFileSync } = await import('node:child_process');
-  const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
-  const dir = mkdtempSync(join(tmpdir(), 'fleet-ext-prod-'));
-  try {
-    const fifo = join(dir, 'charter.fifo'); execFileSync('mkfifo', [fifo]);
-    // No injected reader: the default (production) reader must refuse the FIFO without blocking.
-    assert.throws(() => loadExt({ charterFile: fifo }), /not a regular file/);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  const dir = tmp(t, 'fleet-ext-prod-');
+  const fifo = join(dir, 'charter.fifo'); execFileSync('mkfifo', [fifo]);
+  // No injected reader: the default (production) reader must refuse the FIFO without blocking.
+  assert.throws(() => loadExt({ charterFile: fifo }), /not a regular file/);
 });

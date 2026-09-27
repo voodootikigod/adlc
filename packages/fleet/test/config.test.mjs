@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 import { resolveRunConfig, loadConfig, DEFAULTS } from '../lib/config.mjs';
 
 test('the concrete default constants are the documented values', () => {
@@ -20,8 +20,8 @@ test('flags override config which overrides defaults', () => {
   assert.equal(resolveRunConfig({ base: 'develop' }, {}).base, 'develop');
 });
 
-test('loadConfig returns the fleet block, or {} (never null) when absent/broken', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'fleet-config-'));
+test('loadConfig returns the fleet block, or {} (never null) when absent/broken', (t) => {
+  const dir = tmp(t, 'fleet-config-');
   assert.deepEqual(loadConfig(dir), {}, 'no config.json → empty object, not null');
   writeFileSync(join(dir, 'config.json'), JSON.stringify({ fleet: { concurrency: 5 } }));
   assert.deepEqual(loadConfig(dir), { concurrency: 5 });

@@ -13,11 +13,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
-import { mkdtempSync, rmSync, realpathSync, statSync, existsSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { realpathSync, statSync, existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync, spawn } from 'node:child_process';
+import { tmp } from '@adlc/core/test-kit';
 
 import {
   DEFAULT_BRIDGE_PORT, REFUSAL, parseConnectTarget, isAllowed, egressEnv, startEgressProxy,
@@ -32,7 +32,7 @@ const HEAD = (line) => `${line}\r\nHost: x\r\n\r\n`;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-function scratch(prefix) { return realpathSync(mkdtempSync(join(realpathSync(tmpdir()), prefix))); }
+function scratch(t, prefix) { return realpathSync(tmp(t, prefix)); }
 
 /** A TCP echo server on 127.0.0.1 — the stand-in for "the model API". */
 function startEcho() {
@@ -79,25 +79,24 @@ async function request({ path }, head) {
   return { status: reply.slice(0, end).split('\r\n')[0], rest: reply.slice(end + 4), socket };
 }
 
-async function withProxy(allowlist, fn) {
-  const dir = scratch('egress-');
+async function withProxy(t, allowlist, fn) {
+  const dir = scratch(t, 'egress-');
   const log = [];
   const proxy = await startEgressProxy({ socketPath: join(dir, 'p.sock'), allowlist, log: (e) => log.push(e) });
-  try { return await fn(proxy, log); } finally { await proxy.close(); rmSync(dir, { recursive: true, force: true }); }
+  t.after(() => proxy.close());
+  return await fn(proxy, log);
 }
 
-test('close() unlinks the socket pathname, so a second proxy on the SAME path (the next strike) can listen', async () => {
-  const dir = scratch('egress-relisten-');
-  try {
-    const path = join(dir, 'p.sock');
-    const first = await startEgressProxy({ socketPath: path, allowlist: ['api.anthropic.com:443'] });
-    assert.ok(existsSync(path), 'the socket exists while listening');
-    await first.close();
-    assert.ok(!existsSync(path), 'the pathname is unlinked on close');
-    const second = await startEgressProxy({ socketPath: path, allowlist: ['api.anthropic.com:443'] });
-    assert.ok(existsSync(path), 'a re-listen on the same path succeeds (no EADDRINUSE)');
-    await second.close();
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+test('close() unlinks the socket pathname, so a second proxy on the SAME path (the next strike) can listen', async (t) => {
+  const dir = scratch(t, 'egress-relisten-');
+  const path = join(dir, 'p.sock');
+  const first = await startEgressProxy({ socketPath: path, allowlist: ['api.anthropic.com:443'] });
+  assert.ok(existsSync(path), 'the socket exists while listening');
+  await first.close();
+  assert.ok(!existsSync(path), 'the pathname is unlinked on close');
+  const second = await startEgressProxy({ socketPath: path, allowlist: ['api.anthropic.com:443'] });
+  assert.ok(existsSync(path), 'a re-listen on the same path succeeds (no EADDRINUSE)');
+  await second.close();
 });
 
 // ── 1. parsers and the allow predicate ───────────────────────────────────────
@@ -141,58 +140,56 @@ test('egressEnv points both proxies at the bridge and leaves NO_PROXY empty so n
 
 // ── 2. the real proxy over a unix socket ─────────────────────────────────────
 
-test('an allowlisted CONNECT gets 200 and a byte-transparent tunnel; the socket is 0600', async () => {
+test('an allowlisted CONNECT gets 200 and a byte-transparent tunnel; the socket is 0600', async (t) => {
   const echo = await startEcho();
-  try {
-    await withProxy([`127.0.0.1:${echo.port}`], async (proxy) => {
-      assert.equal(statSync(proxy.socketPath).mode & 0o777, 0o600);
-      assert.deepEqual(proxy.allowlist, [`127.0.0.1:${echo.port}`]);
-      // ClientHello-style coalescing: payload in the SAME write as the head must reach the target.
-      const { status, rest, socket } = await request({ path: proxy.socketPath }, `${HEAD(`CONNECT 127.0.0.1:${echo.port} HTTP/1.1`)}early`);
-      assert.equal(status, 'HTTP/1.1 200 Connection Established');
-      const first = await readUntil(socket, (b) => b.includes('early'), rest);
-      assert.equal(first, 'early', 'bytes after the head belong to the tunnel, not the floor');
-      socket.write('ping');
-      const echoed = await readUntil(socket, (b) => b.includes('earlyping'), first);
-      assert.equal(echoed, 'earlyping');
-      socket.destroy();
-      assert.deepEqual(proxy.refused, []);
-    });
-  } finally { await echo.close(); }
+  t.after(() => echo.close());
+  await withProxy(t, [`127.0.0.1:${echo.port}`], async (proxy) => {
+    assert.equal(statSync(proxy.socketPath).mode & 0o777, 0o600);
+    assert.deepEqual(proxy.allowlist, [`127.0.0.1:${echo.port}`]);
+    // ClientHello-style coalescing: payload in the SAME write as the head must reach the target.
+    const { status, rest, socket } = await request({ path: proxy.socketPath }, `${HEAD(`CONNECT 127.0.0.1:${echo.port} HTTP/1.1`)}early`);
+    assert.equal(status, 'HTTP/1.1 200 Connection Established');
+    const first = await readUntil(socket, (b) => b.includes('early'), rest);
+    assert.equal(first, 'early', 'bytes after the head belong to the tunnel, not the floor');
+    socket.write('ping');
+    const echoed = await readUntil(socket, (b) => b.includes('earlyping'), first);
+    assert.equal(echoed, 'earlyping');
+    socket.destroy();
+    assert.deepEqual(proxy.refused, []);
+  });
 });
 
-test('an unlisted host, the right host on the wrong port, a GET and a malformed head are all 403 and recorded', async () => {
+test('an unlisted host, the right host on the wrong port, a GET and a malformed head are all 403 and recorded', async (t) => {
   const echo = await startEcho();
-  try {
-    await withProxy([`127.0.0.1:${echo.port}`], async (proxy, log) => {
-      const cases = [
-        [HEAD('CONNECT example.com:443 HTTP/1.1'), { method: 'CONNECT', host: 'example.com', port: 443, reason: REFUSAL.NOT_ALLOWED }],
-        [HEAD(`CONNECT 127.0.0.1:${echo.port + 1} HTTP/1.1`), { method: 'CONNECT', host: '127.0.0.1', port: echo.port + 1, reason: REFUSAL.NOT_ALLOWED }],
-        [HEAD('GET / HTTP/1.1'), { method: 'GET', host: null, port: null, reason: REFUSAL.METHOD }],
-        ['not http at all\r\n\r\n', { method: null, host: null, port: null, reason: REFUSAL.MALFORMED }],
-      ];
-      for (const [head, expected] of cases) {
-        const { status, socket } = await request({ path: proxy.socketPath }, head);
-        assert.equal(status, 'HTTP/1.1 403 Forbidden', head);
-        await new Promise((r) => socket.once('close', r));
-      }
-      assert.deepEqual(proxy.refused, cases.map(([, e]) => e));
-      assert.deepEqual(log, proxy.refused, 'every refusal is also logged');
-    });
-  } finally { await echo.close(); }
+  t.after(() => echo.close());
+  await withProxy(t, [`127.0.0.1:${echo.port}`], async (proxy, log) => {
+    const cases = [
+      [HEAD('CONNECT example.com:443 HTTP/1.1'), { method: 'CONNECT', host: 'example.com', port: 443, reason: REFUSAL.NOT_ALLOWED }],
+      [HEAD(`CONNECT 127.0.0.1:${echo.port + 1} HTTP/1.1`), { method: 'CONNECT', host: '127.0.0.1', port: echo.port + 1, reason: REFUSAL.NOT_ALLOWED }],
+      [HEAD('GET / HTTP/1.1'), { method: 'GET', host: null, port: null, reason: REFUSAL.METHOD }],
+      ['not http at all\r\n\r\n', { method: null, host: null, port: null, reason: REFUSAL.MALFORMED }],
+    ];
+    for (const [head, expected] of cases) {
+      const { status, socket } = await request({ path: proxy.socketPath }, head);
+      assert.equal(status, 'HTTP/1.1 403 Forbidden', head);
+      await new Promise((r) => socket.once('close', r));
+    }
+    assert.deepEqual(proxy.refused, cases.map(([, e]) => e));
+    assert.deepEqual(log, proxy.refused, 'every refusal is also logged');
+  });
 });
 
-test('a head that never terminates is cut off, not buffered forever', async () => {
-  await withProxy([], async (proxy) => {
+test('a head that never terminates is cut off, not buffered forever', async (t) => {
+  await withProxy(t, [], async (proxy) => {
     const { status } = await request({ path: proxy.socketPath }, `CONNECT ${'a'.repeat(9000)}:443 HTTP/1.1\r\n`);
     assert.equal(status, 'HTTP/1.1 403 Forbidden');
     assert.equal(proxy.refused[0].reason, REFUSAL.MALFORMED);
   });
 });
 
-test('an allowlisted target that refuses the connection yields 502, and the proxy survives', async () => {
+test('an allowlisted target that refuses the connection yields 502, and the proxy survives', async (t) => {
   const dead = await freePort();
-  await withProxy([`127.0.0.1:${dead}`], async (proxy) => {
+  await withProxy(t, [`127.0.0.1:${dead}`], async (proxy) => {
     const { status } = await request({ path: proxy.socketPath }, HEAD(`CONNECT 127.0.0.1:${dead} HTTP/1.1`));
     assert.equal(status, 'HTTP/1.1 502 Bad Gateway');
     const again = await request({ path: proxy.socketPath }, HEAD('GET / HTTP/1.1'));
@@ -265,24 +262,24 @@ function runBridge({ wrapper = [], socketPath, bridgePort, env }) {
   });
 }
 
-test('the bridge forwards its loopback port to the proxy end to end and exits with its child\'s code', { timeout: 30_000 }, async () => {
+test('the bridge forwards its loopback port to the proxy end to end and exits with its child\'s code', { timeout: 30_000 }, async (t) => {
   const echo = await startEcho();
-  try {
-    await withProxy([`127.0.0.1:${echo.port}`], async (proxy) => {
-      const bridgePort = await freePort();
-      // EXIT_OK=3: the child exits 3 only after the tunnel round-trip and the 403 both
-      // held, so a bridge exit of 3 proves forwarding AND exit-code propagation at once.
-      const res = await runBridge({ socketPath: proxy.socketPath, bridgePort, env: { ECHO_PORT: String(echo.port), EXIT_OK: '3' } });
-      assert.equal(res.status, 3, `stderr: ${res.stderr}`);
-      assert.deepEqual(proxy.refused.map((r) => r.host), ['example.com']);
-    });
-  } finally { await echo.close(); }
+  t.after(() => echo.close());
+  await withProxy(t, [`127.0.0.1:${echo.port}`], async (proxy) => {
+    const bridgePort = await freePort();
+    // EXIT_OK=3: the child exits 3 only after the tunnel round-trip and the 403 both
+    // held, so a bridge exit of 3 proves forwarding AND exit-code propagation at once.
+    const res = await runBridge({ socketPath: proxy.socketPath, bridgePort, env: { ECHO_PORT: String(echo.port), EXIT_OK: '3' } });
+    assert.equal(res.status, 3, `stderr: ${res.stderr}`);
+    assert.deepEqual(proxy.refused.map((r) => r.host), ['example.com']);
+  });
 });
 
-test('the bridge relays SIGTERM to its child and exits 128+signal', { timeout: 30_000 }, async () => {
+test('the bridge relays SIGTERM to its child and exits 128+signal', { timeout: 30_000 }, async (t) => {
   const bridgePort = await freePort();
-  const pidfile = join(scratch('egress-bridge-child-'), 'inner.pid');
+  const pidfile = join(scratch(t, 'egress-bridge-child-'), 'inner.pid');
   const child = spawn(process.execPath, [BRIDGE, '--socket', '/nonexistent.sock', '--port', String(bridgePort), '--', process.execPath, '-e', `require('fs').writeFileSync(${JSON.stringify(pidfile)}, String(process.pid)); setInterval(()=>{},1000)`], { stdio: 'ignore' });
+  t.after(() => { try { child.kill('SIGKILL'); } catch {} });
   // Wait until the loopback port answers — that is the moment the child has been spawned. A loaded
   // host may take seconds to start two node processes: wait up to 20 s and FAIL LOUDLY if it never
   // listens, instead of signalling a bridge that is not up yet.
@@ -291,30 +288,29 @@ test('the bridge relays SIGTERM to its child and exits 128+signal', { timeout: 3
     up = await new Promise((r) => { const s = net.connect(bridgePort, '127.0.0.1'); s.once('connect', () => { s.destroy(); r(true); }); s.once('error', () => r(false)); });
     if (!up) await new Promise((r) => setTimeout(r, 50));
   }
-  try {
-    assert.equal(up, true, 'the bridge listened within 20 s');
-    // The INNER worker must be provably alive before the signal: wait for its pidfile (a loaded
-    // host can take a second to boot the second node), so the relay is exercised for real.
-    let inner = 0;
-    for (let i = 0; i < 400 && !inner; i += 1) {
-      try { inner = Number(readFileSync(pidfile, 'utf8').trim()); } catch { await new Promise((r) => setTimeout(r, 50)); }
-    }
-    assert.ok(inner > 1, 'the inner worker started (pidfile) within 20 s');
-    child.kill('SIGTERM');
-    const status = await new Promise((r) => child.once('exit', (code) => r(code)));
-    assert.equal(status, 143, 'the child died of SIGTERM (128+15), so that is what the bridge reports');
-    // The INNER child (the worker) is gone too — the bridge relayed the signal, it did not just die itself.
-    let alive = true; for (let i = 0; i < 40 && alive; i++) { try { process.kill(inner, 0); await new Promise((r) => setTimeout(r, 50)); } catch { alive = false; } }
-    if (alive) { try { process.kill(inner, 'SIGKILL'); } catch { /* gone */ } }
-    assert.equal(alive, false, 'the inner worker process was terminated with the bridge');
-  } finally { try { child.kill('SIGKILL'); } catch { /* gone */ } rmSync(dirname(pidfile), { recursive: true, force: true }); }
+  assert.equal(up, true, 'the bridge listened within 20 s');
+  // The INNER worker must be provably alive before the signal: wait for its pidfile (a loaded
+  // host can take a second to boot the second node), so the relay is exercised for real.
+  let inner = 0;
+  for (let i = 0; i < 400 && !inner; i += 1) {
+    try { inner = Number(readFileSync(pidfile, 'utf8').trim()); } catch { await new Promise((r) => setTimeout(r, 50)); }
+  }
+  assert.ok(inner > 1, 'the inner worker started (pidfile) within 20 s');
+  child.kill('SIGTERM');
+  const status = await new Promise((r) => child.once('exit', (code) => r(code)));
+  assert.equal(status, 143, 'the child died of SIGTERM (128+15), so that is what the bridge reports');
+  // The INNER child (the worker) is gone too — the bridge relayed the signal, it did not just die itself.
+  let alive = true; for (let i = 0; i < 40 && alive; i++) { try { process.kill(inner, 0); await new Promise((r) => setTimeout(r, 50)); } catch { alive = false; } }
+  if (alive) { try { process.kill(inner, 'SIGKILL'); } catch { /* gone */ } }
+  assert.equal(alive, false, 'the inner worker process was terminated with the bridge');
 });
 
-test('the bridge relays SIGINT too (fleet stops a run with either signal) and exits 128+2', { timeout: 30_000 }, async () => {
+test('the bridge relays SIGINT too (fleet stops a run with either signal) and exits 128+2', { timeout: 30_000 }, async (t) => {
   // Both forwarded signals are load-bearing: a bridge that relayed only SIGTERM
   // would leave a worker running past a Ctrl-C / SIGINT stop.
   const bridgePort = await freePort();
   const child = spawn(process.execPath, [BRIDGE, '--socket', '/nonexistent.sock', '--port', String(bridgePort), '--', process.execPath, '-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' });
+  t.after(() => { try { child.kill('SIGKILL'); } catch {} });
   for (let i = 0; i < 100; i += 1) {
     const up = await new Promise((r) => { const s = net.connect(bridgePort, '127.0.0.1'); s.once('connect', () => { s.destroy(); r(true); }); s.once('error', () => r(false)); });
     if (up) break;
@@ -325,20 +321,19 @@ test('the bridge relays SIGINT too (fleet stops a run with either signal) and ex
   assert.equal(status, 130, 'the child died of SIGINT (128+2), so that is what the bridge reports');
 });
 
-test('the bridge exits 1 and never spawns the command when its port is already taken', { timeout: 30_000 }, async () => {
+test('the bridge exits 1 and never spawns the command when its port is already taken', { timeout: 30_000 }, async (t) => {
   // A worker started with HTTPS_PROXY pointing at a port the bridge does not own
   // would talk to whatever IS there; refusing to start is the only safe outcome.
-  const dir = scratch('egress-mark-');
+  const dir = scratch(t, 'egress-mark-');
   const taken = net.createServer();
   await new Promise((r) => taken.listen(0, '127.0.0.1', r));
-  try {
-    const mark = join(dir, 'ran');
-    const res = spawnSync(process.execPath, [BRIDGE, '--socket', '/s', '--port', String(taken.address().port), '--', process.execPath, '-e', 'require("fs").writeFileSync(process.env.MARK,"ran")'],
-      { encoding: 'utf8', env: { ...process.env, MARK: mark }, timeout: 20_000 });
-    assert.equal(res.status, 1, res.stderr);
-    assert.match(res.stderr, /egress-bridge: .*EADDRINUSE/);
-    assert.equal(existsSync(mark), false, 'the command must not have run');
-  } finally { taken.close(); rmSync(dir, { recursive: true, force: true }); }
+  t.after(() => taken.close());
+  const mark = join(dir, 'ran');
+  const res = spawnSync(process.execPath, [BRIDGE, '--socket', '/s', '--port', String(taken.address().port), '--', process.execPath, '-e', 'require("fs").writeFileSync(process.env.MARK,"ran")'],
+    { encoding: 'utf8', env: { ...process.env, MARK: mark }, timeout: 20_000 });
+  assert.equal(res.status, 1, res.stderr);
+  assert.match(res.stderr, /egress-bridge: .*EADDRINUSE/);
+  assert.equal(existsSync(mark), false, 'the command must not have run');
 });
 
 // ── 4. inside a REAL bwrap network namespace ─────────────────────────────────
@@ -361,20 +356,19 @@ function probeBwrap() {
 }
 const bwrap = probeBwrap();
 
-test('inside bwrap --unshare-net ONLY the allowlisted CONNECT gets out; direct TCP and DNS fail; the proxy names the refused host', { skip: bwrap.ok ? false : bwrap.reason, timeout: 60_000 }, async () => {
+test('inside bwrap --unshare-net ONLY the allowlisted CONNECT gets out; direct TCP and DNS fail; the proxy names the refused host', { skip: bwrap.ok ? false : bwrap.reason, timeout: 60_000 }, async (t) => {
   const echo = await startEcho();
-  try {
-    await withProxy([`127.0.0.1:${echo.port}`], async (proxy) => {
-      // `--tmpfs /tmp` must come BEFORE the socket-dir bind or it would shadow it.
-      const wrapper = bwrapArgv(['--bind', dirname(proxy.socketPath), dirname(proxy.socketPath), '--ro-bind', BRIDGE, BRIDGE]);
-      const res = await runBridge({
-        wrapper, socketPath: proxy.socketPath, bridgePort: DEFAULT_BRIDGE_PORT,
-        env: { ECHO_PORT: String(echo.port), EXIT_OK: '0', SANDBOX_CHECKS: '1' },
-      });
-      assert.equal(res.status, 0, `client inside the sandbox failed a check: ${res.stderr}`);
-      assert.deepEqual(proxy.refused, [{ method: 'CONNECT', host: 'example.com', port: 443, reason: REFUSAL.NOT_ALLOWED }]);
+  t.after(() => echo.close());
+  await withProxy(t, [`127.0.0.1:${echo.port}`], async (proxy) => {
+    // `--tmpfs /tmp` must come BEFORE the socket-dir bind or it would shadow it.
+    const wrapper = bwrapArgv(['--bind', dirname(proxy.socketPath), dirname(proxy.socketPath), '--ro-bind', BRIDGE, BRIDGE]);
+    const res = await runBridge({
+      wrapper, socketPath: proxy.socketPath, bridgePort: DEFAULT_BRIDGE_PORT,
+      env: { ECHO_PORT: String(echo.port), EXIT_OK: '0', SANDBOX_CHECKS: '1' },
     });
-  } finally { await echo.close(); }
+    assert.equal(res.status, 0, `client inside the sandbox failed a check: ${res.stderr}`);
+    assert.deepEqual(proxy.refused, [{ method: 'CONNECT', host: 'example.com', port: 443, reason: REFUSAL.NOT_ALLOWED }]);
+  });
 });
 
 // ── 5. the adapter declaration ───────────────────────────────────────────────
@@ -395,25 +389,24 @@ test('an adapter that declares no egress hosts gets NONE — never an implicit o
 });
 
 import { HEAD_TIMEOUT_MS, MAX_CLIENTS } from '../lib/egress-proxy.mjs';
-test('a client that never finishes its CONNECT head is dropped at the head deadline, and clients beyond the cap are refused (codex r4)', async () => {
+test('a client that never finishes its CONNECT head is dropped at the head deadline, and clients beyond the cap are refused (codex r4)', async (t) => {
   assert.equal(HEAD_TIMEOUT_MS, 10_000); assert.equal(MAX_CLIENTS, 64);
-  const dir = scratch('egress-bounds-');
+  const dir = scratch(t, 'egress-bounds-');
   const log = [];
   const proxy = await startEgressProxy({ socketPath: join(dir, 'p.sock'), allowlist: ['api.anthropic.com:443'], log: (e) => log.push(e), headTimeoutMs: 50, maxClients: 2 });
-  try {
-    const idle = net.connect(proxy.socketPath);
-    await new Promise((r) => idle.once('connect', r));
-    idle.write('CONNECT api.anthropic.com:443'); // never terminates the head
-    await new Promise((r) => idle.once('close', r));
-    assert.ok(log.some((e) => e.reason === 'head-timeout'), 'the idle client was dropped at the deadline');
-    const a = net.connect(proxy.socketPath); const b = net.connect(proxy.socketPath);
-    await Promise.all([a, b].map((s) => new Promise((r) => s.once('connect', r))));
-    await new Promise((r) => setTimeout(r, 10));
-    const c = net.connect(proxy.socketPath);
-    await new Promise((r) => c.once('close', r));
-    assert.ok(log.some((e) => e.reason === 'too-many-clients'), 'the third client is refused at the cap');
-    a.destroy(); b.destroy();
-  } finally { await proxy.close(); rmSync(dir, { recursive: true, force: true }); }
+  t.after(() => proxy.close());
+  const idle = net.connect(proxy.socketPath);
+  await new Promise((r) => idle.once('connect', r));
+  idle.write('CONNECT api.anthropic.com:443'); // never terminates the head
+  await new Promise((r) => idle.once('close', r));
+  assert.ok(log.some((e) => e.reason === 'head-timeout'), 'the idle client was dropped at the deadline');
+  const a = net.connect(proxy.socketPath); const b = net.connect(proxy.socketPath);
+  await Promise.all([a, b].map((s) => new Promise((r) => s.once('connect', r))));
+  await new Promise((r) => setTimeout(r, 10));
+  const c = net.connect(proxy.socketPath);
+  await new Promise((r) => c.once('close', r));
+  assert.ok(log.some((e) => e.reason === 'too-many-clients'), 'the third client is refused at the cap');
+  a.destroy(); b.destroy();
 });
 
 import { PassThrough } from 'node:stream';
@@ -438,43 +431,41 @@ test('resolveVettedAddress: a name whose ANY address is non-public is refused (D
   assert.equal(await resolveVettedAddress('10.0.0.5', async () => { throw new Error('never resolved'); }), '10.0.0.5');
 });
 
-test('the proxy dials the VETTED address of an allowlisted name and refuses (403, private-destination) a name that rebinds to loopback — upstream connect is never attempted', async () => {
-  const dir = scratch('egress-dns-');
+test('the proxy dials the VETTED address of an allowlisted name and refuses (403, private-destination) a name that rebinds to loopback — upstream connect is never attempted', async (t) => {
+  const dir = scratch(t, 'egress-dns-');
   const dialed = [];
   const connect = (port, host) => { dialed.push(`${host}:${port}`); const s = new PassThrough(); process.nextTick(() => s.emit('connect')); return s; };
   const lookup = async (name) => (name === 'rebind.example' ? [{ address: '127.0.0.1', family: 4 }] : [{ address: '93.184.216.34', family: 4 }]);
   const log = [];
   const proxy = await startEgressProxy({ socketPath: join(dir, 'p.sock'), allowlist: ['rebind.example:443', 'api.example:443'], connect, lookup, log: (e) => log.push(e) });
-  try {
-    const bad = await request({ path: proxy.socketPath }, 'CONNECT rebind.example:443 HTTP/1.1\r\nHost: rebind.example:443\r\n\r\n');
-    assert.match(bad.status, /^HTTP\/1\.1 403/, `refused: ${bad.status}`);
-    assert.deepEqual(dialed, [], 'no upstream dial for a rebinding name');
-    assert.ok(proxy.refused.some((r) => r.reason === EGRESS_REFUSAL.PRIVATE && r.host === 'rebind.example'), JSON.stringify(proxy.refused));
-    const ok = await request({ path: proxy.socketPath }, 'CONNECT api.example:443 HTTP/1.1\r\nHost: api.example:443\r\n\r\n');
-    assert.match(ok.status, /^HTTP\/1\.1 200/, `established: ${ok.status}`);
-    assert.deepEqual(dialed, ['93.184.216.34:443'], 'the tunnel dials the vetted ADDRESS, not the name');
-    ok.socket.destroy();
-  } finally { await proxy.close(); rmSync(dir, { recursive: true, force: true }); }
+  t.after(() => proxy.close());
+  const bad = await request({ path: proxy.socketPath }, 'CONNECT rebind.example:443 HTTP/1.1\r\nHost: rebind.example:443\r\n\r\n');
+  assert.match(bad.status, /^HTTP\/1\.1 403/, `refused: ${bad.status}`);
+  assert.deepEqual(dialed, [], 'no upstream dial for a rebinding name');
+  assert.ok(proxy.refused.some((r) => r.reason === EGRESS_REFUSAL.PRIVATE && r.host === 'rebind.example'), JSON.stringify(proxy.refused));
+  const ok = await request({ path: proxy.socketPath }, 'CONNECT api.example:443 HTTP/1.1\r\nHost: api.example:443\r\n\r\n');
+  assert.match(ok.status, /^HTTP\/1\.1 200/, `established: ${ok.status}`);
+  assert.deepEqual(dialed, ['93.184.216.34:443'], 'the tunnel dials the vetted ADDRESS, not the name');
+  ok.socket.destroy();
 });
 
-test('a CONNECT head larger than the limit is refused (403 malformed-head) even when its terminator arrives — the size limit is not bypassable by terminating the head', async () => {
-  const dir = scratch('egress-bighead-');
+test('a CONNECT head larger than the limit is refused (403 malformed-head) even when its terminator arrives — the size limit is not bypassable by terminating the head', async (t) => {
+  const dir = scratch(t, 'egress-bighead-');
   const dialed = [];
   const proxy = await startEgressProxy({ socketPath: join(dir, 'p.sock'), allowlist: ['api.example:443'], connect: (port, host) => { dialed.push(host); const s = new PassThrough(); process.nextTick(() => s.emit('connect')); return s; }, lookup: async () => [{ address: '93.184.216.34', family: 4 }] });
-  try {
-    const big = `CONNECT api.example:443 HTTP/1.1\r\nHost: api.example:443\r\nX-Pad: ${'p'.repeat(9000)}\r\n\r\n`;
-    const r = await request({ path: proxy.socketPath }, big);
-    assert.match(r.status, /^HTTP\/1\.1 403/, r.status);
-    assert.deepEqual(dialed, [], 'nothing dialled');
-    assert.ok(proxy.refused.some((x) => x.reason === EGRESS_REFUSAL.MALFORMED), JSON.stringify(proxy.refused));
-  } finally { await proxy.close(); rmSync(dir, { recursive: true, force: true }); }
+  t.after(() => proxy.close());
+  const big = `CONNECT api.example:443 HTTP/1.1\r\nHost: api.example:443\r\nX-Pad: ${'p'.repeat(9000)}\r\n\r\n`;
+  const r = await request({ path: proxy.socketPath }, big);
+  assert.match(r.status, /^HTTP\/1\.1 403/, r.status);
+  assert.deepEqual(dialed, [], 'nothing dialled');
+  assert.ok(proxy.refused.some((x) => x.reason === EGRESS_REFUSAL.MALFORMED), JSON.stringify(proxy.refused));
 });
 
-test('a stop signal that lands during the bridge start-up window is HELD and delivered to the child once spawned (never lost, never kills the bridge alone)', async () => {
+test('a stop signal that lands during the bridge start-up window is HELD and delivered to the child once spawned (never lost, never kills the bridge alone)', async (t) => {
   const { runBridge } = await import('../lib/egress-bridge.mjs');
   const { EventEmitter } = await import('node:events');
   const fakeProc = new EventEmitter(); fakeProc.env = { PATH: process.env.PATH };
-  const dir = scratch('egress-bridge-hold-');
+  const dir = scratch(t, 'egress-bridge-hold-');
   const killed = [];
   const fakeChild = new EventEmitter(); fakeChild.exitCode = null; fakeChild.kill = (sig) => { killed.push(sig); fakeChild.exitCode = 143; process.nextTick(() => fakeChild.emit('exit', null, 'SIGTERM')); };
   let spawned = false;
@@ -486,17 +477,15 @@ test('a stop signal that lands during the bridge start-up window is HELD and del
   assert.equal(spawned, true, 'the child was spawned');
   assert.deepEqual(killed, ['SIGTERM'], 'the held signal was delivered to the child');
   assert.equal(code, 143);
-  rmSync(dir, { recursive: true, force: true });
 });
 
-test('a resolver that never answers does not hold the client: the CONNECT is refused (403, dns-timeout) at the lookup deadline and nothing is dialled', async () => {
-  const dir = scratch('egress-dns-hang-');
+test('a resolver that never answers does not hold the client: the CONNECT is refused (403, dns-timeout) at the lookup deadline and nothing is dialled', async (t) => {
+  const dir = scratch(t, 'egress-dns-hang-');
   const dialed = [];
   const proxy = await startEgressProxy({ socketPath: join(dir, 'p.sock'), allowlist: ['slow.example:443'], connect: (port, host) => { dialed.push(host); const s = new PassThrough(); process.nextTick(() => s.emit('connect')); return s; }, lookup: () => new Promise(() => {}), dnsTimeoutMs: 100 });
-  try {
-    const r = await request({ path: proxy.socketPath }, 'CONNECT slow.example:443 HTTP/1.1\r\nHost: slow.example:443\r\n\r\n');
-    assert.match(r.status, /^HTTP\/1\.1 403/, r.status);
-    assert.deepEqual(dialed, []);
-    assert.ok(proxy.refused.some((x) => x.reason === EGRESS_REFUSAL.DNS_TIMEOUT), JSON.stringify(proxy.refused));
-  } finally { await proxy.close(); rmSync(dir, { recursive: true, force: true }); }
+  t.after(() => proxy.close());
+  const r = await request({ path: proxy.socketPath }, 'CONNECT slow.example:443 HTTP/1.1\r\nHost: slow.example:443\r\n\r\n');
+  assert.match(r.status, /^HTTP\/1\.1 403/, r.status);
+  assert.deepEqual(dialed, []);
+  assert.ok(proxy.refused.some((x) => x.reason === EGRESS_REFUSAL.DNS_TIMEOUT), JSON.stringify(proxy.refused));
 });
