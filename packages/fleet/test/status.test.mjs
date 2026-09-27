@@ -1,14 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmp as makeTmp } from '@adlc/core/test-kit';
 import {
   newStatus, loadStatus, saveStatus, withTicket, statusById, inFlightIds,
 } from '../lib/status.mjs';
 
-function tmp() {
-  return mkdtempSync(join(tmpdir(), 'fleet-status-'));
+function tmp(t) {
+  return makeTmp(t, 'fleet-status-');
 }
 
 test('newStatus carries the resume anchors, not base (N2)', () => {
@@ -21,8 +21,8 @@ test('newStatus carries the resume anchors, not base (N2)', () => {
   assert.deepEqual(s.tickets, {});
 });
 
-test('saveStatus writes atomically and loadStatus round-trips', () => {
-  const dir = tmp();
+test('saveStatus writes atomically and loadStatus round-trips', (t) => {
+  const dir = tmp(t);
   const s = newStatus({ runId: 'r1', base: 'main', baseSha: 'abc', integrationBranch: 'fleet/run-r1', concurrency: 2 });
   saveStatus(dir, s);
   assert.equal(existsSync(join(dir, 'fleet-status.json')), true);
@@ -31,8 +31,8 @@ test('saveStatus writes atomically and loadStatus round-trips', () => {
   assert.equal(loaded.integrationBranch, 'fleet/run-r1');
 });
 
-test('loadStatus returns null when no status exists', () => {
-  assert.equal(loadStatus(tmp()), null);
+test('loadStatus returns null when no status exists', (t) => {
+  assert.equal(loadStatus(tmp(t)), null);
 });
 
 test('withTicket is immutable and merges patches', () => {

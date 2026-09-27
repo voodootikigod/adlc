@@ -4,10 +4,10 @@
 // external observer (the herdr plugin, t-herdr-9) can depend on it.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmp } from '@adlc/core/test-kit';
 import { newStatus, saveStatus, loadStatus, FLEET_STATUS_SCHEMA_VERSION } from '../lib/status.mjs';
 
 test('AC1 newStatus stamps the exported schema version, which is a positive integer', () => {
@@ -17,8 +17,8 @@ test('AC1 newStatus stamps the exported schema version, which is a positive inte
   assert.equal(status.schemaVersion, FLEET_STATUS_SCHEMA_VERSION);
 });
 
-test('AC2 the schema version round-trips through save/load persistence unchanged', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-fleet-schema-'));
+test('AC2 the schema version round-trips through save/load persistence unchanged', (t) => {
+  const dir = tmp(t, 'adlc-fleet-schema-');
   saveStatus(dir, newStatus({ runId: 'r2' }));
   const loaded = loadStatus(dir);
   assert.equal(loaded.schemaVersion, FLEET_STATUS_SCHEMA_VERSION);

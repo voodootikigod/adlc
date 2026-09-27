@@ -20,11 +20,7 @@ const SUITE_DIRECTORIES = new Set(['test', 'cli-test', 'adapter-test']);
  * ratchet cannot silently stall. Do not add to it — a new or modified test file
  * that leaks is what this guard exists to stop.
  */
-const ALLOWLIST = new Set([
-  'packages/fleet/test/extensions.test.mjs',
-  'packages/fleet/test/status-schema.test.mjs',
-  'packages/fleet/test/status.test.mjs',
-]);
+const ALLOWLIST = new Set([]);
 
 /** @param {string} name directory entry name */
 export function isSuiteDirectory(name) {
