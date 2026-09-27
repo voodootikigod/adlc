@@ -12,12 +12,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, realpathSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
+import { tmp } from '@adlc/core/test-kit';
 import { detectBackend } from '../lib/sandbox.mjs';
 import { probeBwrap } from './helpers/bwrap-probe.mjs';
 import {
@@ -29,7 +29,7 @@ const probe = probeBwrap();
 const bwrapSkip = probe.ok ? false : `bounded model plane needs a USABLE bubblewrap; ${probe.reason}`;
 const SH = '/usr/bin/sh';
 
-const scratch = (prefix) => realpathSync(mkdtempSync(join(realpathSync(tmpdir()), prefix)));
+const scratch = (t, prefix) => realpathSync(tmp(t, prefix));
 const spawnExec = (argv, opts) => spawnSync(argv[0], argv.slice(1), { ...opts, encoding: 'utf8' });
 
 // A host layout the pure tests describe without touching a filesystem.
@@ -249,8 +249,8 @@ test('run() forwards the whole option bag and defaults cwd to the worktree; desc
 
 // ── REAL bwrap (AC12 / AC95 real half) ───────────────────────────────────────
 
-function fixture() {
-  const root = scratch('mp-read-');
+function fixture(t) {
+  const root = scratch(t, 'mp-read-');
   const worktree = join(root, 'wt');
   const home = join(root, 'home');
   const tools = join(root, 'tools');
@@ -267,55 +267,48 @@ function fixture() {
   return { root, worktree, home, tools, sb };
 }
 
-test('inside the sandbox a pre-existing host /tmp file is absent and a /tmp write never reaches the host (AC95)', { skip: bwrapSkip }, async () => {
-  const { root, sb } = fixture();
+test('inside the sandbox a pre-existing host /tmp file is absent and a /tmp write never reaches the host (AC95)', { skip: bwrapSkip }, async (t) => {
+  const { root, sb } = fixture(t);
   const tag = randomBytes(6).toString('hex');
   const hostFile = join('/tmp', `fleet-host-${tag}`);
   const probe = join('/tmp', `fleet-probe-${tag}`);
+  t.after(() => { rmSync(hostFile, { force: true }); rmSync(probe, { force: true }); });
   writeFileSync(hostFile, 'host');
-  try {
-    const res = await sb.run([SH, '-c', `if [ -e ${hostFile} ]; then echo present; else echo absent; fi; printf x > ${probe} && echo wrote`]);
-    assert.equal(res.status, 0, res.stderr);
-    assert.equal(res.stdout, 'absent\nwrote\n');
-    assert.ok(!existsSync(probe), 'the write landed in the private tmpfs, not on the host');
-  } finally { rmSync(hostFile, { force: true }); rmSync(probe, { force: true }); rmSync(root, { recursive: true, force: true }); }
+  const res = await sb.run([SH, '-c', `if [ -e ${hostFile} ]; then echo present; else echo absent; fi; printf x > ${probe} && echo wrote`]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout, 'absent\nwrote\n');
+  assert.ok(!existsSync(probe), 'the write landed in the private tmpfs, not on the host');
 });
 
-test('a single-file read-only entry exposes only that file — its sibling is ENOENT (AC12/AC95)', { skip: bwrapSkip }, async () => {
-  const { root, tools, sb } = fixture();
-  try {
-    const ok = await sb.run([SH, '-c', `cat ${join(tools, 'claude')}`]);
-    assert.equal(ok.status, 0, ok.stderr);
-    assert.equal(ok.stdout, 'pinned');
-    const sib = await sb.run([SH, '-c', `cat ${join(tools, 'sibling')}`]);
-    assert.notEqual(sib.status, 0);
-    assert.match(sib.stderr, /No such file/);
-    assert.equal(sib.stdout, '');
-    // CONTROL: unwrapped, the sibling IS readable — otherwise the denial proves nothing.
-    assert.equal(readFileSync(join(tools, 'sibling'), 'utf8'), 'sibling-secret');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+test('a single-file read-only entry exposes only that file — its sibling is ENOENT (AC12/AC95)', { skip: bwrapSkip }, async (t) => {
+  const { root, tools, sb } = fixture(t);
+  const ok = await sb.run([SH, '-c', `cat ${join(tools, 'claude')}`]);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(ok.stdout, 'pinned');
+  const sib = await sb.run([SH, '-c', `cat ${join(tools, 'sibling')}`]);
+  assert.notEqual(sib.status, 0);
+  assert.match(sib.stderr, /No such file/);
+  assert.equal(sib.stdout, '');
+  // CONTROL: unwrapped, the sibling IS readable — otherwise the denial proves nothing.
+  assert.equal(readFileSync(join(tools, 'sibling'), 'utf8'), 'sibling-secret');
 });
 
-test('a file outside the read set is unreadable, the worktree stays writable, TMPDIR is set inside', { skip: bwrapSkip }, async () => {
-  const { root, worktree, sb } = fixture();
-  try {
-    const out = await sb.run([SH, '-c', `cat ${join(root, 'outside', 'secret')}`]);
-    assert.notEqual(out.status, 0);
-    assert.equal(out.stdout, '');
-    const wt = await sb.run([SH, '-c', 'printf edit > src.txt && echo "$TMPDIR" && [ -d "$TMPDIR" ] && [ "$TMP" = "$TMPDIR" ] && [ "$TEMP" = "$TMPDIR" ]']);
-    assert.equal(wt.status, 0, wt.stderr);
-    assert.equal(wt.stdout, '/tmp/fleet-tmp\n');
-    assert.equal(readFileSync(join(worktree, 'src.txt'), 'utf8'), 'edit', 'the worktree write landed on the host');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+test('a file outside the read set is unreadable, the worktree stays writable, TMPDIR is set inside', { skip: bwrapSkip }, async (t) => {
+  const { root, worktree, sb } = fixture(t);
+  const out = await sb.run([SH, '-c', `cat ${join(root, 'outside', 'secret')}`]);
+  assert.notEqual(out.status, 0);
+  assert.equal(out.stdout, '');
+  const wt = await sb.run([SH, '-c', 'printf edit > src.txt && echo "$TMPDIR" && [ -d "$TMPDIR" ] && [ "$TMP" = "$TMPDIR" ] && [ "$TEMP" = "$TMPDIR" ]']);
+  assert.equal(wt.status, 0, wt.stderr);
+  assert.equal(wt.stdout, '/tmp/fleet-tmp\n');
+  assert.equal(readFileSync(join(worktree, 'src.txt'), 'utf8'), 'edit', 'the worktree write landed on the host');
 });
 
-test('inside the sandbox the HOST\'s processes are invisible: /proc is the sandbox\'s own (PID namespace), the orchestrator\'s pid does not exist there (AC95)', { skip: bwrapSkip }, async () => {
-  const { root, sb } = fixture();
-  try {
-    const res = await sb.run([SH, '-c', `if [ -e /proc/${process.pid} ]; then echo visible; else echo hidden; fi; ls /proc | grep -c '^[0-9]' `]);
-    assert.equal(res.status, 0, res.stderr);
-    const [vis, count] = res.stdout.trim().split('\n');
-    assert.equal(vis, 'hidden', "the orchestrator's pid is not in the sandbox's /proc");
-    assert.ok(Number(count) <= 5, `only the sandbox's own handful of processes are listed (${count})`);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+test('inside the sandbox the HOST\'s processes are invisible: /proc is the sandbox\'s own (PID namespace), the orchestrator\'s pid does not exist there (AC95)', { skip: bwrapSkip }, async (t) => {
+  const { root, sb } = fixture(t);
+  const res = await sb.run([SH, '-c', `if [ -e /proc/${process.pid} ]; then echo visible; else echo hidden; fi; ls /proc | grep -c '^[0-9]' `]);
+  assert.equal(res.status, 0, res.stderr);
+  const [vis, count] = res.stdout.trim().split('\n');
+  assert.equal(vis, 'hidden', "the orchestrator's pid is not in the sandbox's /proc");
+  assert.ok(Number(count) <= 5, `only the sandbox's own handful of processes are listed (${count})`);
 });

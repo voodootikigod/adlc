@@ -25,12 +25,9 @@ const ALLOWLIST = new Set([
   'packages/fleet/test/egress.test.mjs',
   'packages/fleet/test/extensions.test.mjs',
   'packages/fleet/test/fleet-entry.test.mjs',
-  'packages/fleet/test/model-plane-read.test.mjs',
-  'packages/fleet/test/model-plane-sandbox.test.mjs',
   'packages/fleet/test/preflight.test.mjs',
   'packages/fleet/test/status-schema.test.mjs',
   'packages/fleet/test/status.test.mjs',
-  'packages/fleet/test/synthetic-home-bwrap.test.mjs',
 ]);
 
 /** @param {string} name directory entry name */

@@ -23,11 +23,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { realpathSync } from 'node:fs';
 
+import { tmp } from '@adlc/core/test-kit';
 import {
   Sandbox, SANDBOX_MODES, NETWORK, READ_POLICY, detectBackend, resolveSandboxMode,
 } from '../lib/sandbox.mjs';
@@ -44,8 +44,8 @@ const backend = detectBackend();
 // realpath, because on macOS the OS temp dir is a symlink (/var -> /private/var)
 // and Seatbelt reasons about the resolved path. A profile written with the
 // unresolved path denies the very worktree it meant to allow.
-function scratch(prefix) {
-  return realpathSync(mkdtempSync(join(realpathSync(tmpdir()), prefix)));
+function scratch(t, prefix) {
+  return realpathSync(tmp(t, prefix));
 }
 
 /** Run `sh -c <script>` through a real model-plane sandbox rooted at `worktree`. */
@@ -66,88 +66,82 @@ async function runContained({ worktree, writablePaths = [], script }) {
 
 // ── AC1: a repo-controlled command cannot rewrite the operator-local registry ──
 
-test('a gate command on the model plane CANNOT overwrite the quartermaster registry', { skip: backend ? false : 'no sandbox backend on this host (bwrap/sandbox-exec)' }, async () => {
-  const root = scratch('mp-registry-');
-  try {
-    const worktree = join(root, 'wt');
-    const opHome = join(root, 'home');
-    mkdirSync(worktree, { recursive: true });
-    mkdirSync(join(opHome, '.config', 'adlc'), { recursive: true });
-    const registry = join(opHome, '.config', 'adlc', 'quartermaster.json');
-    const original = JSON.stringify({ channels: { frontier: { adapter: 'claude-code', model: 'claude-opus-5' } } });
-    writeFileSync(registry, original);
+test('a gate command on the model plane CANNOT overwrite the quartermaster registry', { skip: backend ? false : 'no sandbox backend on this host (bwrap/sandbox-exec)' }, async (t) => {
+  const root = scratch(t, 'mp-registry-');
+  const worktree = join(root, 'wt');
+  const opHome = join(root, 'home');
+  mkdirSync(worktree, { recursive: true });
+  mkdirSync(join(opHome, '.config', 'adlc'), { recursive: true });
+  const registry = join(opHome, '.config', 'adlc', 'quartermaster.json');
+  const original = JSON.stringify({ channels: { frontier: { adapter: 'claude-code', model: 'claude-opus-5' } } });
+  writeFileSync(registry, original);
 
-    // Exactly the substitution the issue describes: schema-valid, cheap supply.
-    const substituted = JSON.stringify({ channels: { frontier: { adapter: 'opencode', model: 'cheap/thing' } } });
-    const res = await runContained({
-      worktree,
-      script: `printf '%s' '${substituted}' > ${JSON.stringify(registry)}`,
-    });
+  // Exactly the substitution the issue describes: schema-valid, cheap supply.
+  const substituted = JSON.stringify({ channels: { frontier: { adapter: 'opencode', model: 'cheap/thing' } } });
+  const res = await runContained({
+    worktree,
+    script: `printf '%s' '${substituted}' > ${JSON.stringify(registry)}`,
+  });
 
-    assert.equal(readFileSync(registry, 'utf8'), original,
-      'the registry bytes must be UNCHANGED — this is the whole of #395');
-    assert.notEqual(res.status, 0, 'the write must FAIL, not silently succeed elsewhere');
+  assert.equal(readFileSync(registry, 'utf8'), original,
+    'the registry bytes must be UNCHANGED — this is the whole of #395');
+  assert.notEqual(res.status, 0, 'the write must FAIL, not silently succeed elsewhere');
 
-    // CONTROL: the same script UNWRAPPED succeeds. Without this the test above
-    // passes just as well against a script that could never have worked, a
-    // sandbox that runs nothing, or a path that was never writable — i.e. it
-    // would assert containment while proving only that something went wrong.
-    const { spawnSync } = await import('node:child_process');
-    const unwrapped = spawnSync('/bin/sh', ['-c', `printf '%s' '${substituted}' > ${JSON.stringify(registry)}`],
-      { cwd: worktree, encoding: 'utf8' });
-    assert.equal(unwrapped.status, 0, 'the control write must succeed — otherwise the denial above proves nothing');
-    assert.equal(readFileSync(registry, 'utf8'), substituted, 'and it really does substitute the supply');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  // CONTROL: the same script UNWRAPPED succeeds. Without this the test above
+  // passes just as well against a script that could never have worked, a
+  // sandbox that runs nothing, or a path that was never writable — i.e. it
+  // would assert containment while proving only that something went wrong.
+  const { spawnSync } = await import('node:child_process');
+  const unwrapped = spawnSync('/bin/sh', ['-c', `printf '%s' '${substituted}' > ${JSON.stringify(registry)}`],
+    { cwd: worktree, encoding: 'utf8' });
+  assert.equal(unwrapped.status, 0, 'the control write must succeed — otherwise the denial above proves nothing');
+  assert.equal(readFileSync(registry, 'utf8'), substituted, 'and it really does substitute the supply');
 });
 
 // ── AC2: nor anything else outside the worktree ───────────────────────────────
 
-test('a gate command on the model plane CANNOT overwrite ~/.claude/settings.json', { skip: backend ? false : 'no sandbox backend on this host (bwrap/sandbox-exec)' }, async () => {
-  const root = scratch('mp-settings-');
-  try {
-    const worktree = join(root, 'wt');
-    const opHome = join(root, 'home');
-    mkdirSync(worktree, { recursive: true });
-    mkdirSync(join(opHome, '.claude', 'hooks'), { recursive: true });
-    const settings = join(opHome, '.claude', 'settings.json');
-    const original = '{"permissions":{"allow":[]}}';
-    writeFileSync(settings, original);
+test('a gate command on the model plane CANNOT overwrite ~/.claude/settings.json', { skip: backend ? false : 'no sandbox backend on this host (bwrap/sandbox-exec)' }, async (t) => {
+  const root = scratch(t, 'mp-settings-');
+  const worktree = join(root, 'wt');
+  const opHome = join(root, 'home');
+  mkdirSync(worktree, { recursive: true });
+  mkdirSync(join(opHome, '.claude', 'hooks'), { recursive: true });
+  const settings = join(opHome, '.claude', 'settings.json');
+  const original = '{"permissions":{"allow":[]}}';
+  writeFileSync(settings, original);
 
-    // `.claude/projects` IS granted (it is declared harness state), and the
-    // sibling settings file is NOT — the grant is per state directory, not per
-    // harness home, precisely so this cannot be reached through it.
-    const projects = join(opHome, '.claude', 'projects');
-    mkdirSync(projects, { recursive: true });
+  // `.claude/projects` IS granted (it is declared harness state), and the
+  // sibling settings file is NOT — the grant is per state directory, not per
+  // harness home, precisely so this cannot be reached through it.
+  const projects = join(opHome, '.claude', 'projects');
+  mkdirSync(projects, { recursive: true });
 
-    const res = await runContained({
-      worktree,
-      writablePaths: [projects],
-      script: `printf 'pwned' > ${JSON.stringify(settings)}`,
-    });
+  const res = await runContained({
+    worktree,
+    writablePaths: [projects],
+    script: `printf 'pwned' > ${JSON.stringify(settings)}`,
+  });
 
-    assert.equal(readFileSync(settings, 'utf8'), original, 'settings.json bytes unchanged');
-    assert.notEqual(res.status, 0, 'the write must fail');
+  assert.equal(readFileSync(settings, 'utf8'), original, 'settings.json bytes unchanged');
+  assert.notEqual(res.status, 0, 'the write must fail');
 
-    // The grant it DOES have still works, or the profile would break every run.
-    const ok = await runContained({
-      worktree,
-      writablePaths: [projects],
-      script: `printf 'session' > ${JSON.stringify(join(projects, 'state.json'))}`,
-    });
-    assert.equal(ok.status, 0, 'declared harness state must remain writable');
-    assert.equal(readFileSync(join(projects, 'state.json'), 'utf8'), 'session');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  // The grant it DOES have still works, or the profile would break every run.
+  const ok = await runContained({
+    worktree,
+    writablePaths: [projects],
+    script: `printf 'session' > ${JSON.stringify(join(projects, 'state.json'))}`,
+  });
+  assert.equal(ok.status, 0, 'declared harness state must remain writable');
+  assert.equal(readFileSync(join(projects, 'state.json'), 'utf8'), 'session');
 });
 
-test('the worktree itself stays writable — containment must not break the build', { skip: backend ? false : 'no sandbox backend on this host (bwrap/sandbox-exec)' }, async () => {
-  const root = scratch('mp-worktree-');
-  try {
-    const worktree = join(root, 'wt');
-    mkdirSync(worktree, { recursive: true });
-    const res = await runContained({ worktree, script: 'printf edit > src.txt' });
-    assert.equal(res.status, 0, res.stderr);
-    assert.equal(readFileSync(join(worktree, 'src.txt'), 'utf8'), 'edit');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+test('the worktree itself stays writable — containment must not break the build', { skip: backend ? false : 'no sandbox backend on this host (bwrap/sandbox-exec)' }, async (t) => {
+  const root = scratch(t, 'mp-worktree-');
+  const worktree = join(root, 'wt');
+  mkdirSync(worktree, { recursive: true });
+  const res = await runContained({ worktree, script: 'printf edit > src.txt' });
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(readFileSync(join(worktree, 'src.txt'), 'utf8'), 'edit');
 });
 
 // ── AC3: the worker is not even told where the registry is ────────────────────
@@ -220,66 +214,58 @@ test('a repo-committed config cannot enable the override for the model plane eit
 
 // ── The write-grant policy itself ─────────────────────────────────────────────
 
-test('modelPlaneFilesystem grants the harness state dirs and nothing above them', () => {
-  const root = scratch('mp-policy-');
-  try {
-    const home = join(root, 'home');
-    mkdirSync(join(home, '.claude', 'projects'), { recursive: true });
-    mkdirSync(join(home, '.claude', 'hooks'), { recursive: true });
-    writeFileSync(join(home, '.claude', 'settings.json'), '{}');
-    writeFileSync(join(home, '.claude.json'), '{}');
+test('modelPlaneFilesystem grants the harness state dirs and nothing above them', (t) => {
+  const root = scratch(t, 'mp-policy-');
+  const home = join(root, 'home');
+  mkdirSync(join(home, '.claude', 'projects'), { recursive: true });
+  mkdirSync(join(home, '.claude', 'hooks'), { recursive: true });
+  writeFileSync(join(home, '.claude', 'settings.json'), '{}');
+  writeFileSync(join(home, '.claude.json'), '{}');
 
-    const { writablePaths } = modelPlaneFilesystem({
-      adapters: [claudeCode], home, tmpDir: undefined, mkdirp: () => {},
-    });
+  const { writablePaths } = modelPlaneFilesystem({
+    adapters: [claudeCode], home, tmpDir: undefined, mkdirp: () => {},
+  });
 
-    assert.ok(writablePaths.includes(join(home, '.claude', 'projects')), 'session scratch is granted');
-    assert.ok(!writablePaths.includes(join(home, '.claude')),
-      'the harness HOME dir is never granted — it holds settings.json, hooks/, agents/, skills/');
-    assert.ok(!writablePaths.includes(join(home, '.claude', 'hooks')),
-      'hooks decide what runs in the operator NEXT session');
-    assert.ok(!writablePaths.some((p) => p.endsWith('settings.json')));
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  assert.ok(writablePaths.includes(join(home, '.claude', 'projects')), 'session scratch is granted');
+  assert.ok(!writablePaths.includes(join(home, '.claude')),
+    'the harness HOME dir is never granted — it holds settings.json, hooks/, agents/, skills/');
+  assert.ok(!writablePaths.includes(join(home, '.claude', 'hooks')),
+    'hooks decide what runs in the operator NEXT session');
+  assert.ok(!writablePaths.some((p) => p.endsWith('settings.json')));
 });
 
-test('modelPlaneFilesystem CREATES a declared dir that does not exist yet', () => {
+test('modelPlaneFilesystem CREATES a declared dir that does not exist yet', (t) => {
   // Otherwise a first run on a clean host fails merely because the harness had
   // not made its scratch directory yet.
-  const root = scratch('mp-mkdir-');
-  try {
-    const home = join(root, 'home');
-    mkdirSync(home, { recursive: true });
-    const { writablePaths } = modelPlaneFilesystem({ adapters: [claudeCode], home });
-    const projects = join(home, '.claude', 'projects');
-    assert.ok(existsSync(projects), 'the declared scratch dir was created');
-    assert.ok(writablePaths.includes(projects));
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  const root = scratch(t, 'mp-mkdir-');
+  const home = join(root, 'home');
+  mkdirSync(home, { recursive: true });
+  const { writablePaths } = modelPlaneFilesystem({ adapters: [claudeCode], home });
+  const projects = join(home, '.claude', 'projects');
+  assert.ok(existsSync(projects), 'the declared scratch dir was created');
+  assert.ok(writablePaths.includes(projects));
 });
 
-test('modelPlaneFilesystem NAMES a declared state file it cannot grant', () => {
+test('modelPlaneFilesystem NAMES a declared state file it cannot grant', (t) => {
   // A missing state FILE cannot be bound (a bind needs a real source) and is not
   // invented. That is the one shape of this policy that can make a previously
   // working run fail, so it is surfaced rather than swallowed.
-  const root = scratch('mp-missing-');
-  try {
-    const home = join(root, 'home');
-    mkdirSync(home, { recursive: true });
-    const { writablePaths, missingStateFiles } = modelPlaneFilesystem({ adapters: [claudeCode], home });
-    assert.ok(missingStateFiles.includes(join(home, '.claude.json')));
-    assert.ok(!writablePaths.includes(join(home, '.claude.json')));
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  const root = scratch(t, 'mp-missing-');
+  const home = join(root, 'home');
+  mkdirSync(home, { recursive: true });
+  const { writablePaths, missingStateFiles } = modelPlaneFilesystem({ adapters: [claudeCode], home });
+  assert.ok(missingStateFiles.includes(join(home, '.claude.json')));
+  assert.ok(!writablePaths.includes(join(home, '.claude.json')));
 });
 
-test('an operator-local extra path widens the grant; nothing else can', () => {
-  const root = scratch('mp-extra-');
-  try {
-    const home = join(root, 'home');
-    const extra = join(root, 'extra');
-    mkdirSync(home, { recursive: true });
-    mkdirSync(extra, { recursive: true });
-    const { writablePaths } = modelPlaneFilesystem({ adapters: [], home, extraWritable: [extra] });
-    assert.ok(writablePaths.includes(extra));
-  } finally { rmSync(root, { recursive: true, force: true }); }
+test('an operator-local extra path widens the grant; nothing else can', (t) => {
+  const root = scratch(t, 'mp-extra-');
+  const home = join(root, 'home');
+  const extra = join(root, 'extra');
+  mkdirSync(home, { recursive: true });
+  mkdirSync(extra, { recursive: true });
+  const { writablePaths } = modelPlaneFilesystem({ adapters: [], home, extraWritable: [extra] });
+  assert.ok(writablePaths.includes(extra));
 });
 
 test('an adapter that declares no home state gets no grant outside the worktree', () => {
@@ -323,19 +309,17 @@ test('no adapter grants the parent directory that holds its own settings', () =>
 // boundary correctly and would have broken real runs getting there. Each is
 // pinned by the behaviour it broke, not by the shape of the fix.
 
-test('a contained command can still write /dev/null (review finding 2)', { skip: backend ? false : 'no sandbox backend on this host (bwrap/sandbox-exec)' }, async () => {
+test('a contained command can still write /dev/null (review finding 2)', { skip: backend ? false : 'no sandbox backend on this host (bwrap/sandbox-exec)' }, async (t) => {
   // The Seatbelt HOST profile denies file-write* as a blanket and re-allows the
   // write roots. /dev/null is a file, so `cmd 2>/dev/null` — ordinary in build and
   // gate commands — failed under it. bwrap covers this with --dev-bind; Seatbelt
   // had to be told. A worker that cannot redirect to /dev/null cannot run.
-  const root = scratch('mp-devnull-');
-  try {
-    const worktree = join(root, 'wt');
-    mkdirSync(worktree, { recursive: true });
-    const res = await runContained({ worktree, script: 'printf hello 2>/dev/null > out.txt; printf bye > /dev/null' });
-    assert.equal(res.status, 0, `writing /dev/null must succeed: ${res.stderr}`);
-    assert.equal(readFileSync(join(worktree, 'out.txt'), 'utf8'), 'hello');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  const root = scratch(t, 'mp-devnull-');
+  const worktree = join(root, 'wt');
+  mkdirSync(worktree, { recursive: true });
+  const res = await runContained({ worktree, script: 'printf hello 2>/dev/null > out.txt; printf bye > /dev/null' });
+  assert.equal(res.status, 0, `writing /dev/null must succeed: ${res.stderr}`);
+  assert.equal(readFileSync(join(worktree, 'out.txt'), 'utf8'), 'hello');
 });
 
 test('canWrite agrees with the profile about the device tree (review finding 2)', () => {
@@ -365,22 +349,20 @@ test('the temp dir is granted even when TMPDIR is unset (review finding 1)', () 
   assert.ok(writablePaths.includes(resolved), 'the temp dir must be writable on the model plane');
 });
 
-test('a missing declared state file is reported ONCE per run, not once per dispatch (review finding 3)', () => {
+test('a missing declared state file is reported ONCE per run, not once per dispatch (review finding 3)', (t) => {
   // A fleet runs many tickets and retries strikes. Repeating the warning dozens of
   // times trains the operator to scroll past the one message that explains why
   // their harness failed. modelPlaneFilesystem reports the full set every call —
   // the caller is what dedupes — so this asserts the reporting contract the
   // dedupe depends on: the same missing file is named every time it is asked.
-  const root = scratch('mp-warn-');
-  try {
-    const home = join(root, 'home');
-    mkdirSync(home, { recursive: true });
-    const first = modelPlaneFilesystem({ adapters: [claudeCode], home });
-    const second = modelPlaneFilesystem({ adapters: [claudeCode], home });
-    assert.deepEqual(second.missingStateFiles, first.missingStateFiles,
-      'the policy is a pure function of the host — deduping is the caller\'s job, not a hidden latch here');
-    assert.ok(first.missingStateFiles.length > 0);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  const root = scratch(t, 'mp-warn-');
+  const home = join(root, 'home');
+  mkdirSync(home, { recursive: true });
+  const first = modelPlaneFilesystem({ adapters: [claudeCode], home });
+  const second = modelPlaneFilesystem({ adapters: [claudeCode], home });
+  assert.deepEqual(second.missingStateFiles, first.missingStateFiles,
+    'the policy is a pure function of the host — deduping is the caller\'s job, not a hidden latch here');
+  assert.ok(first.missingStateFiles.length > 0);
 });
 
 // ── Mutation-gate survivors (#395 round 1) ───────────────────────────────────
@@ -403,55 +385,53 @@ test('--model-plane-writable is REPEATABLE, so a second path does not replace th
     'both grants must survive — dropping one loses a path the operator can see in their own command line');
 });
 
-test('EVERY rung of an escalation ladder contributes its state dirs to the grant', () => {
+test('EVERY rung of an escalation ladder contributes its state dirs to the grant', (t) => {
   // A ladder can move a later strike onto a DIFFERENT harness, and the sandbox is
   // built per dispatch. Granting only the current rung works until the first
   // escalation and then fails there — the same failure provisioning already avoids
   // by covering every rung (#401). The ternary that collects them is one swap away
   // from returning [] whenever a seat exists, which is exactly the ladder case.
-  const root = scratch('mp-ladder-');
-  try {
-    const home = join(root, 'home');
-    // Create the state dirs of a harness that is NOT the dispatching one, so its
-    // presence in the grant can only come from the ladder walk.
-    const opencodeState = join(home, '.local', 'share', 'opencode');
-    mkdirSync(opencodeState, { recursive: true });
+  const root = scratch(t, 'mp-ladder-');
+  const home = join(root, 'home');
+  // Create the state dirs of a harness that is NOT the dispatching one, so its
+  // presence in the grant can only come from the ladder walk.
+  const opencodeState = join(home, '.local', 'share', 'opencode');
+  mkdirSync(opencodeState, { recursive: true });
 
-    const rec = [];
-    // The real entry shape: a starting `seat` plus `escalation` rungs, which is what
-    // `ladderAdapters` walks.
-    const seats = new Map([['T1', {
-      mode: 'ladder',
-      seat: { adapter: 'claude-code', model: 'haiku', transport: 'subscription' },
-      escalation: [
-        { seat: { adapter: 'opencode', model: 'zai/glm-5.2', transport: 'subscription' } },
-      ],
-    }]]);
-    const deps = buildLiveDeps({
-      repo: '/repo', statusDir: undefined,
-      sandboxSpec: { mode: SANDBOX_MODES.SANDBOX, backend: { name: 'bubblewrap' } },
-      reviewRunner: () => ({ ok: true, findings: [] }),
-      config: { gate: { test: 'true' }, timeoutMinutes: 1 },
-      seats,
-      io: {
-        git: () => () => '', adlc: () => ({ status: 0, stdout: '{}' }), appendLog: () => {},
-        adlcAsync: async () => ({ status: 0, stdout: '' }),
-        spawnWorker: async (cmd, args, opts) => { rec.push({ cmd, args, env: opts?.env }); return { status: 0, stdout: 'TICKET-DONE', stderr: '' }; },
-        readFile: () => undefined, exists: () => false, mkdirp: () => {}, writeJson: () => {},
-        ensureGitignore: () => {}, hasGh: () => false,
-        env: { PATH: '/usr/bin', HOME: home },
-      },
-    });
+  const rec = [];
+  // The real entry shape: a starting `seat` plus `escalation` rungs, which is what
+  // `ladderAdapters` walks.
+  const seats = new Map([['T1', {
+    mode: 'ladder',
+    seat: { adapter: 'claude-code', model: 'haiku', transport: 'subscription' },
+    escalation: [
+      { seat: { adapter: 'opencode', model: 'zai/glm-5.2', transport: 'subscription' } },
+    ],
+  }]]);
+  const deps = buildLiveDeps({
+    repo: '/repo', statusDir: undefined,
+    sandboxSpec: { mode: SANDBOX_MODES.SANDBOX, backend: { name: 'bubblewrap' } },
+    reviewRunner: () => ({ ok: true, findings: [] }),
+    config: { gate: { test: 'true' }, timeoutMinutes: 1 },
+    seats,
+    io: {
+      git: () => () => '', adlc: () => ({ status: 0, stdout: '{}' }), appendLog: () => {},
+      adlcAsync: async () => ({ status: 0, stdout: '' }),
+      spawnWorker: async (cmd, args, opts) => { rec.push({ cmd, args, env: opts?.env }); return { status: 0, stdout: 'TICKET-DONE', stderr: '' }; },
+      readFile: () => undefined, exists: () => false, mkdirp: () => {}, writeJson: () => {},
+      ensureGitignore: () => {}, hasGh: () => false,
+      env: { PATH: '/usr/bin', HOME: home },
+    },
+  });
 
-    return deps.dispatch({
-      ticket: { id: 'T1', title: 'T1', scope: ['packages/fleet/**'], body: 'do', edges: [] },
-      worktree: join(root, 'wt'), startSha: 'SHA', strike: 1, deadEnds: [],
-    }).then(() => {
-      const argv = rec.map((c) => [c.cmd, ...(c.args ?? [])].join(' ')).join('\n');
-      assert.match(argv, new RegExp(`--bind ${opencodeState} ${opencodeState}`),
-        'the LATER rung\'s harness state must be granted at strike 1, or the first escalation fails');
-    });
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  return deps.dispatch({
+    ticket: { id: 'T1', title: 'T1', scope: ['packages/fleet/**'], body: 'do', edges: [] },
+    worktree: join(root, 'wt'), startSha: 'SHA', strike: 1, deadEnds: [],
+  }).then(() => {
+    const argv = rec.map((c) => [c.cmd, ...(c.args ?? [])].join(' ')).join('\n');
+    assert.match(argv, new RegExp(`--bind ${opencodeState} ${opencodeState}`),
+      'the LATER rung\'s harness state must be granted at strike 1, or the first escalation fails');
+  });
 });
 
 // The declared allow-lists are a SECURITY CONTRACT, not incidental data: each entry
@@ -510,30 +490,28 @@ test('the declared write boundary is pinned per adapter, in both directions', ()
   }
 });
 
-test('every declared grant is actually honoured when the path exists', () => {
+test('every declared grant is actually honoured when the path exists', (t) => {
   // The pin above says WHAT is declared; this says the declaration is load-bearing.
   // Together they mean an entry cannot be dropped silently (the pin fails) nor kept
   // as decoration (this fails).
-  const root = scratch('mp-honour-');
-  try {
-    const home = join(root, 'home');
-    for (const name of ADAPTERS) {
-      const state = homeStateOf(getAdapter(name));
-      for (const d of state.dirs) mkdirSync(join(home, d), { recursive: true });
-      for (const f of state.files) {
-        mkdirSync(dirname(join(home, f)), { recursive: true });
-        writeFileSync(join(home, f), '{}');
-      }
-      const { writablePaths, missingStateFiles } = modelPlaneFilesystem({ adapters: [getAdapter(name)], home });
-      assert.deepEqual(missingStateFiles, [], `${name}: every declared file exists in this fixture`);
-      for (const d of state.dirs) {
-        assert.ok(writablePaths.includes(join(home, d)), `${name}: declared dir ${d} must be granted`);
-      }
-      for (const f of state.files) {
-        assert.ok(writablePaths.includes(join(home, f)), `${name}: declared file ${f} must be granted`);
-      }
+  const root = scratch(t, 'mp-honour-');
+  const home = join(root, 'home');
+  for (const name of ADAPTERS) {
+    const state = homeStateOf(getAdapter(name));
+    for (const d of state.dirs) mkdirSync(join(home, d), { recursive: true });
+    for (const f of state.files) {
+      mkdirSync(dirname(join(home, f)), { recursive: true });
+      writeFileSync(join(home, f), '{}');
     }
-  } finally { rmSync(root, { recursive: true, force: true }); }
+    const { writablePaths, missingStateFiles } = modelPlaneFilesystem({ adapters: [getAdapter(name)], home });
+    assert.deepEqual(missingStateFiles, [], `${name}: every declared file exists in this fixture`);
+    for (const d of state.dirs) {
+      assert.ok(writablePaths.includes(join(home, d)), `${name}: declared dir ${d} must be granted`);
+    }
+    for (const f of state.files) {
+      assert.ok(writablePaths.includes(join(home, f)), `${name}: declared file ${f} must be granted`);
+    }
+  }
 });
 
 test('canWrite: a read-only entry under HOME or the private tmp (an attested file leaf) is NOT writable, though its parent root is (agy fleet r7 c1)', async () => {
