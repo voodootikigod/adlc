@@ -12,10 +12,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync, mkdirSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync, existsSync, rmSync, mkdirSync, statSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmp } from '@adlc/core/test-kit';
 import { buildLiveDeps, fleetLogPath, defaultIo } from '../lib/live-deps.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -66,8 +66,8 @@ const makeDeps = (statusDir, workerOutput, workerResult) => buildLiveDeps({
   io: makeIo(workerOutput, workerResult),
 });
 
-test('dispatch persists the worker transcript to the log flail-detector reads', async () => {
-  const statusDir = mkdtempSync(join(tmpdir(), 'fleet-e2e-'));
+test('dispatch persists the worker transcript to the log flail-detector reads', async (t) => {
+  const statusDir = tmp(t, 'fleet-e2e-');
   const deps = makeDeps(statusDir, 'Writing /etc/passwd\n');
 
   await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
@@ -77,8 +77,8 @@ test('dispatch persists the worker transcript to the log flail-detector reads', 
   assert.match(readFileSync(p, 'utf8'), /Writing \/etc\/passwd/);
 });
 
-test('the transcript ACCUMULATES across strikes rather than being overwritten', async () => {
-  const statusDir = mkdtempSync(join(tmpdir(), 'fleet-e2e-'));
+test('the transcript ACCUMULATES across strikes rather than being overwritten', async (t) => {
+  const statusDir = tmp(t, 'fleet-e2e-');
   const deps = makeDeps(statusDir, 'error: boom\n');
 
   await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
@@ -96,8 +96,8 @@ test('the transcript ACCUMULATES across strikes rather than being overwritten', 
 // `adlc` or a non-recursive mkdir would have shipped green.
 // ---------------------------------------------------------------------------
 
-test('defaultIo().adlc spawns the given bin and returns a real spawnSync result', async () => {
-  const log = makeLogAt(mkdtempSync(join(tmpdir(), 'fleet-e2e-')), 'Writing /etc/passwd\n');
+test('defaultIo().adlc spawns the given bin and returns a real spawnSync result', async (t) => {
+  const log = makeLogAt(tmp(t, 'fleet-e2e-'), 'Writing /etc/passwd\n');
 
   const r = defaultIo().adlc(['flail-detector', '--json', '--scope=src/**', '--', log], { bin: ADLC_BIN });
 
@@ -106,8 +106,8 @@ test('defaultIo().adlc spawns the given bin and returns a real spawnSync result'
   assert.equal(JSON.parse(r.stdout).verdict, 'flail');
 });
 
-test('defaultIo().appendLog creates missing parent directories and appends', async () => {
-  const p = join(mkdtempSync(join(tmpdir(), 'fleet-e2e-')), 'deep', 'nested', 'T1.log');
+test('defaultIo().appendLog creates missing parent directories and appends', async (t) => {
+  const p = join(tmp(t, 'fleet-e2e-'), 'deep', 'nested', 'T1.log');
   const io = defaultIo();
 
   io.appendLog(p, 'first\n');
@@ -116,8 +116,8 @@ test('defaultIo().appendLog creates missing parent directories and appends', asy
   assert.equal(readFileSync(p, 'utf8'), 'first\nsecond\n', 'nested dirs created, writes appended not clobbered');
 });
 
-test('deps.flail() detects a REAL flail after a real dispatch (the whole point of #284)', async () => {
-  const statusDir = mkdtempSync(join(tmpdir(), 'fleet-e2e-'));
+test('deps.flail() detects a REAL flail after a real dispatch (the whole point of #284)', async (t) => {
+  const statusDir = tmp(t, 'fleet-e2e-');
   // A worker that wrote outside its declared scope (ticket.scope is ['src/**']).
   const deps = makeDeps(statusDir, 'Writing /etc/passwd\n');
 
@@ -132,8 +132,8 @@ test('deps.flail() detects a REAL flail after a real dispatch (the whole point o
   );
 });
 
-test('deps.flail() reports clean for a well-behaved session', async () => {
-  const statusDir = mkdtempSync(join(tmpdir(), 'fleet-e2e-'));
+test('deps.flail() reports clean for a well-behaved session', async (t) => {
+  const statusDir = tmp(t, 'fleet-e2e-');
   const deps = makeDeps(statusDir, 'all good\n');
 
   await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
@@ -143,8 +143,8 @@ test('deps.flail() reports clean for a well-behaved session', async () => {
   assert.notEqual(r.failedOpen, true, 'a clean verdict is a verdict, not a fail-open');
 });
 
-test('deps.flail() fails OPEN when no transcript exists (§12 backstop intact)', async () => {
-  const statusDir = mkdtempSync(join(tmpdir(), 'fleet-e2e-'));
+test('deps.flail() fails OPEN when no transcript exists (§12 backstop intact)', async (t) => {
+  const statusDir = tmp(t, 'fleet-e2e-');
   const deps = makeDeps(statusDir, 'Writing /etc/passwd\n');
 
   // Discriminating: prove a REAL verdict is obtainable in this environment
@@ -167,8 +167,8 @@ test('deps.flail() fails OPEN when no transcript exists (§12 backstop intact)',
 // whole suite would stay green while production reproduced #284 exactly.
 // ---------------------------------------------------------------------------
 
-test('the transcript is written when the worker strike FAILS', async () => {
-  const statusDir = mkdtempSync(join(tmpdir(), 'fleet-e2e-'));
+test('the transcript is written when the worker strike FAILS', async (t) => {
+  const statusDir = tmp(t, 'fleet-e2e-');
   const deps = makeDeps(statusDir, 'Writing /etc/passwd\n', { status: 1 });
 
   const res = await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
@@ -179,8 +179,8 @@ test('the transcript is written when the worker strike FAILS', async () => {
   assert.notEqual(r.failedOpen, true);
 });
 
-test('the transcript is written when the worker TIMES OUT', async () => {
-  const statusDir = mkdtempSync(join(tmpdir(), 'fleet-e2e-'));
+test('the transcript is written when the worker TIMES OUT', async (t) => {
+  const statusDir = tmp(t, 'fleet-e2e-');
   const deps = makeDeps(statusDir, 'Writing /etc/passwd\n', { status: null, signal: 'SIGTERM' });
 
   await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
@@ -188,8 +188,8 @@ test('the transcript is written when the worker TIMES OUT', async () => {
   assert.equal((await deps.flail({ ticket })).flail, true);
 });
 
-test('the transcript is written when the worker emits TICKET-BLOCKED', async () => {
-  const statusDir = mkdtempSync(join(tmpdir(), 'fleet-e2e-'));
+test('the transcript is written when the worker emits TICKET-BLOCKED', async (t) => {
+  const statusDir = tmp(t, 'fleet-e2e-');
   const deps = makeDeps(statusDir, 'TICKET-BLOCKED\nWriting /etc/passwd\n');
 
   const res = await deps.dispatch({ ticket, worktree: '/wt/T1', startSha: 'SHA', strike: 1, deadEnds: [] });
@@ -198,11 +198,11 @@ test('the transcript is written when the worker emits TICKET-BLOCKED', async () 
   assert.ok(existsSync(fleetLogPath(statusDir, '/repo', 'T1')), 'a blocked run still leaves a transcript');
 });
 
-test('ensureGitignore excludes fleet state from a LINKED git worktree', async () => {
+test('ensureGitignore excludes fleet state from a LINKED git worktree', async (t) => {
   // <repo>/.git is a FILE in a linked worktree, so the old <repo>/.git/info
   // path silently failed — leaving .adlc/fleet-logs/ untracked and aborting
   // every later run at preflight.
-  const root = mkdtempSync(join(tmpdir(), 'fleet-e2e-git-'));
+  const root = tmp(t, 'fleet-e2e-git-');
   const main = join(root, 'main');
   const run = (cwd, ...a) => spawnSync('git', a, { cwd, encoding: 'utf8' });
   mkdirSync(main, { recursive: true });
@@ -230,8 +230,8 @@ test('ensureGitignore excludes fleet state from a LINKED git worktree', async ()
 // strike it ever took — a fail-CLOSED misfire from stale state.
 // ---------------------------------------------------------------------------
 
-test('strike 1 TRUNCATES, so a re-run is not judged on the previous run errors', async () => {
-  const statusDir = mkdtempSync(join(tmpdir(), 'fleet-e2e-'));
+test('strike 1 TRUNCATES, so a re-run is not judged on the previous run errors', async (t) => {
+  const statusDir = tmp(t, 'fleet-e2e-');
   const first = makeDeps(statusDir, 'error: boom\n', { status: 1 });
 
   // Run 1: two strikes, so 'error: boom' appears twice — enough on its own to
@@ -249,8 +249,8 @@ test('strike 1 TRUNCATES, so a re-run is not judged on the previous run errors',
   assert.equal((await second.flail({ ticket })).flail, false, 'a fresh run must not be killed by stale state');
 });
 
-test('a commit failure reaches the transcript the flail check analyzes', async () => {
-  const statusDir = mkdtempSync(join(tmpdir(), 'fleet-e2e-'));
+test('a commit failure reaches the transcript the flail check analyzes', async (t) => {
+  const statusDir = tmp(t, 'fleet-e2e-');
   const io = makeIo('worker ok\n');
   io.git = () => (...args) => {
     if (args[0] === 'rev-parse') return 'SHA';

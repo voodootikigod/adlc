@@ -1,18 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmp as makeTmp } from '@adlc/core/test-kit';
 import { acquireLock, readLockOwner, isLockLive, releaseLock, LOCK_DIR } from '../lib/lock.mjs';
 
-function tmp() {
-  return mkdtempSync(join(tmpdir(), 'fleet-lock-'));
+function tmp(t) {
+  return makeTmp(t, 'fleet-lock-');
 }
 const HOST = 'host-a';
 const self = (over = {}) => ({ pid: 4242, host: HOST, runId: 'r1', startedAt: 't', procStartTime: 'start-4242', ...over });
 
-test('acquire on a clean dir succeeds and writes owner metadata', () => {
-  const dir = tmp();
+test('acquire on a clean dir succeeds and writes owner metadata', (t) => {
+  const dir = tmp(t);
   const r = acquireLock(dir, self(), { host: HOST, pidAlive: () => false, procStartTimeOf: () => null });
   assert.equal(r.acquired, true);
   const owner = readLockOwner(dir);
@@ -20,8 +20,8 @@ test('acquire on a clean dir succeeds and writes owner metadata', () => {
   assert.equal(owner.procStartTime, 'start-4242');
 });
 
-test('a dead-pid lock is reclaimed (AC10 i / F5)', () => {
-  const dir = tmp();
+test('a dead-pid lock is reclaimed (AC10 i / F5)', (t) => {
+  const dir = tmp(t);
   // Seed a stale lock owned by a dead pid.
   mkdirSync(join(dir, LOCK_DIR));
   writeFileSync(join(dir, LOCK_DIR, 'owner.json'), JSON.stringify({ pid: 999, host: HOST, procStartTime: 'old' }));
@@ -30,8 +30,8 @@ test('a dead-pid lock is reclaimed (AC10 i / F5)', () => {
   assert.equal(readLockOwner(dir).pid, 4242);
 });
 
-test('a live pid whose start-time mismatches is treated as PID reuse → reclaimed (AC10 ii / N5)', () => {
-  const dir = tmp();
+test('a live pid whose start-time mismatches is treated as PID reuse → reclaimed (AC10 ii / N5)', (t) => {
+  const dir = tmp(t);
   mkdirSync(join(dir, LOCK_DIR));
   // Lock recorded pid 1234 with start-time 'boot-old'.
   writeFileSync(join(dir, LOCK_DIR, 'owner.json'), JSON.stringify({ pid: 1234, host: HOST, procStartTime: 'boot-old' }));
@@ -43,8 +43,8 @@ test('a live pid whose start-time mismatches is treated as PID reuse → reclaim
   assert.equal(r.acquired, true, 'pid-reuse stale lock should be reclaimed');
 });
 
-test('a genuinely live matching lock makes acquire refuse (AC10 iii)', () => {
-  const dir = tmp();
+test('a genuinely live matching lock makes acquire refuse (AC10 iii)', (t) => {
+  const dir = tmp(t);
   mkdirSync(join(dir, LOCK_DIR));
   writeFileSync(join(dir, LOCK_DIR, 'owner.json'), JSON.stringify({ pid: 1234, host: HOST, procStartTime: 'boot-1' }));
   const probes = { host: HOST, pidAlive: (pid) => pid === 1234, procStartTimeOf: (pid) => (pid === 1234 ? 'boot-1' : null) };
@@ -59,8 +59,8 @@ test('a lock from a different host is not treated as live-here', () => {
   assert.equal(isLockLive(owner, { host: HOST, pidAlive: () => true, procStartTimeOf: () => 'x' }), false);
 });
 
-test('after one reclaims a stale lock, a second attempt refuses (C3 single-holder invariant)', () => {
-  const dir = tmp();
+test('after one reclaims a stale lock, a second attempt refuses (C3 single-holder invariant)', (t) => {
+  const dir = tmp(t);
   mkdirSync(join(dir, LOCK_DIR));
   writeFileSync(join(dir, LOCK_DIR, 'owner.json'), JSON.stringify({ pid: 777, host: HOST, procStartTime: 'dead' }));
   // Realistic liveness: a pid is alive iff it's in `alive`; the stale owner 777
@@ -76,8 +76,8 @@ test('after one reclaims a stale lock, a second attempt refuses (C3 single-holde
   assert.equal(readLockOwner(dir).pid, 1001, 'A remains the sole holder');
 });
 
-test('releaseLock removes the lock', () => {
-  const dir = tmp();
+test('releaseLock removes the lock', (t) => {
+  const dir = tmp(t);
   acquireLock(dir, self(), { host: HOST, pidAlive: () => false, procStartTimeOf: () => null });
   releaseLock(dir);
   assert.equal(existsSync(join(dir, LOCK_DIR)), false);

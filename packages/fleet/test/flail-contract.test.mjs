@@ -11,10 +11,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmp } from '@adlc/core/test-kit';
 import { checkFlail, MAX_OUTPUT_BYTES } from '../lib/gates.mjs';
 import { flailExec } from '../lib/live-deps.mjs';
 
@@ -23,8 +23,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ADLC_BIN = resolve(HERE, '../../cli/bin/adlc.mjs');
 
 /** Write `content` to a log file in a fresh temp dir and return its path. */
-function makeLog(content) {
-  const dir = mkdtempSync(join(tmpdir(), 'fleet-flail-'));
+function makeLog(t, content) {
+  const dir = tmp(t, 'fleet-flail-');
   const p = join(dir, 'session.log');
   writeFileSync(p, content);
   return p;
@@ -66,8 +66,8 @@ function assertDetectorExits(expected, logFile, scope) {
 // AC1 — a real flail verdict (detector exits 2) must be reported as flail:true
 // ---------------------------------------------------------------------------
 
-test('checkFlail reports flail:true for a REAL detector flail verdict (exit 2)', async () => {
-  const log = makeLog('Writing /etc/passwd\n');
+test('checkFlail reports flail:true for a REAL detector flail verdict (exit 2)', async (t) => {
+  const log = makeLog(t, 'Writing /etc/passwd\n');
   assertDetectorExits(2, log, ['src/**']);
 
   const r = checkFlail(log, ['src/**'], { adlcBin: ADLC_BIN });
@@ -80,8 +80,8 @@ test('checkFlail reports flail:true for a REAL detector flail verdict (exit 2)',
 // AC6 — the detector's real signal objects survive the round trip
 // ---------------------------------------------------------------------------
 
-test('checkFlail propagates the detector real signal objects', async () => {
-  const log = makeLog('Writing /etc/passwd\n');
+test('checkFlail propagates the detector real signal objects', async (t) => {
+  const log = makeLog(t, 'Writing /etc/passwd\n');
   assertDetectorExits(2, log, ['src/**']);
 
   const { signals } = checkFlail(log, ['src/**'], { adlcBin: ADLC_BIN });
@@ -97,8 +97,8 @@ test('checkFlail propagates the detector real signal objects', async () => {
 // AC2 — a real clean verdict (exit 0) is a verdict, not a fallback
 // ---------------------------------------------------------------------------
 
-test('checkFlail reports flail:false for a REAL detector clean verdict (exit 0)', async () => {
-  const log = makeLog('all good\nbuild succeeded\n');
+test('checkFlail reports flail:false for a REAL detector clean verdict (exit 0)', async (t) => {
+  const log = makeLog(t, 'all good\nbuild succeeded\n');
   assertDetectorExits(0, log, ['src/**']);
 
   const r = checkFlail(log, ['src/**'], { adlcBin: ADLC_BIN });
@@ -111,8 +111,8 @@ test('checkFlail reports flail:false for a REAL detector clean verdict (exit 0)'
 // AC5 — an operational error (exit 1) still fails OPEN, and never flail:true
 // ---------------------------------------------------------------------------
 
-test('checkFlail FAILS OPEN on a real detector operational error (exit 1)', async () => {
-  const missing = join(mkdtempSync(join(tmpdir(), 'fleet-flail-')), 'does-not-exist.log');
+test('checkFlail FAILS OPEN on a real detector operational error (exit 1)', async (t) => {
+  const missing = join(tmp(t, 'fleet-flail-'), 'does-not-exist.log');
   // Pin that this is a real exit-1 operational error and not a dead binary.
   assertDetectorExits(1, missing, ['src/**']);
 
@@ -165,8 +165,8 @@ test('checkFlail FAILS OPEN when signals drifted to a non-array (§12)', async (
 // open on — so the args are built with `--opt=value` and a `--` terminator.
 // ---------------------------------------------------------------------------
 
-test('a scope glob beginning with "-" does not disable the gate', async () => {
-  const log = makeLog('Writing /etc/passwd\n');
+test('a scope glob beginning with "-" does not disable the gate', async (t) => {
+  const log = makeLog(t, 'Writing /etc/passwd\n');
   assertDetectorExits(2, log, ['-weird/**']);
 
   const r = checkFlail(log, ['-weird/**'], { adlcBin: ADLC_BIN });
@@ -175,8 +175,8 @@ test('a scope glob beginning with "-" does not disable the gate', async () => {
   assert.notEqual(r.failedOpen, true);
 });
 
-test('a log path beginning with "-" is passed as a path, not parsed as a flag', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'fleet-flail-'));
+test('a log path beginning with "-" is passed as a path, not parsed as a flag', async (t) => {
+  const dir = tmp(t, 'fleet-flail-');
   const p = join(dir, '-dash.log');
   writeFileSync(p, 'Writing /etc/passwd\n');
   assertDetectorExits(2, p, ['src/**']);
@@ -219,8 +219,8 @@ test('injected exec may signal the flail verdict the way execFileSync does (thro
 /** io shim whose `adlc` is spawnSync over the real binary, as production's is. */
 const realIo = { adlc: (args, opts = {}) => spawnSync(opts.bin ?? 'adlc', args, { encoding: 'utf8' }) };
 
-test('the production flailExec adapter reports a REAL flail verdict', async () => {
-  const log = makeLog('Writing /etc/passwd\n');
+test('the production flailExec adapter reports a REAL flail verdict', async (t) => {
+  const log = makeLog(t, 'Writing /etc/passwd\n');
   assertDetectorExits(2, log, ['src/**']);
 
   const r = checkFlail(log, ['src/**'], { adlcBin: ADLC_BIN, exec: flailExec(realIo) });
@@ -229,8 +229,8 @@ test('the production flailExec adapter reports a REAL flail verdict', async () =
   assert.notEqual(r.failedOpen, true);
 });
 
-test('the production flailExec adapter fails open on a real operational error', async () => {
-  const missing = join(mkdtempSync(join(tmpdir(), 'fleet-flail-')), 'nope.log');
+test('the production flailExec adapter fails open on a real operational error', async (t) => {
+  const missing = join(tmp(t, 'fleet-flail-'), 'nope.log');
   assertDetectorExits(1, missing, ['src/**']);
 
   const r = checkFlail(missing, ['src/**'], { adlcBin: ADLC_BIN, exec: flailExec(realIo) });
