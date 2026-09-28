@@ -16,24 +16,27 @@
 // hooks is exactly where the next unbounded spawn gets written. The bound is
 // cheap; discovering it the other way cost days of wall clock.
 //
-// Enforced STRUCTURALLY: raw `execFileSync/spawnSync(process.execPath, …)` is
-// banned outright inside these directories and must go through the shared
+// Enforced STRUCTURALLY: a raw spawn of Node (`process.execPath`,
+// `process.argv[0]`, or `node`, including as the head of an execSync command
+// line) is banned outright inside every plugin test directory, plugins/*/test
+// as well as plugins/*/hooks/test, and must go through that directory's
 // bounded helper, so there is no per-call-site property for a new test to
 // forget. A reformat cannot red this; a new raw spawn can.
 //
-// COVERAGE IS 68 OF 69 SITES, not all of them. copilot-io-contract.test.mjs
-// keeps one raw spawn because it is a frozen rail of another open ticket — see
-// RAILED_EXCEPTIONS below, which pins that exemption to a count so the one
-// known spawn cannot mask a second. Until that ticket lands, a hung child in
-// that single file can still stall a run; the exemption is recorded rather than
-// implied so nobody reads this guard as a stronger promise than it is.
+// COVERAGE IS NOT YET TOTAL, and the gaps are pinned rather than implied.
+// copilot-io-contract.test.mjs keeps one raw spawn because it is a frozen rail
+// of another open ticket (RAILED_EXCEPTIONS). The files in PENDING_CONVERSION
+// predate the scan of plugins/*/test and still spawn Node directly; each entry
+// is pinned to its exact count, so a new raw spawn in one of them reds, and the
+// list only shrinks. Until they are converted, a hung child in one of those
+// files can still stall a run.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parse } from 'acorn';
+import { rawSpawnSites, pluginTestDirectories } from './raw-spawn-sites.mjs';
 
 const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '../..');
 
@@ -50,6 +53,13 @@ const HOOK_TEST_DIRS = [
   'plugins/adlc-codex/hooks/test',
   'plugins/adlc-copilot/hooks/test',
 ];
+
+/**
+ * Every directory the raw-spawn ban applies to: each plugins/*\/hooks/test and
+ * plugins/*\/test on disk. Derived from the filesystem, so a new plugin or a
+ * new test directory is scanned without anyone remembering to list it.
+ */
+const SCANNED_DIRS = pluginTestDirectories(ROOT);
 
 /** The single file per directory allowed to spawn a raw child process. */
 const HELPER_RELATIVE = 'helpers/run-hook.mjs';
@@ -74,6 +84,44 @@ const RAILED_EXCEPTIONS = new Map([
   ],
 ]);
 
+/**
+ * Files that still spawn Node directly, mapped to their exact raw-spawn count.
+ * Shrink-only: converting a spawn to the directory's helper means lowering the
+ * count, and the last one means deleting the entry; the test below reds on an
+ * entry that is stale OR under-counted, so a file here cannot absorb a new raw
+ * spawn. Nothing may be added. A directory converting its first file copies
+ * helpers/run-hook.mjs from a hooks/test directory.
+ */
+const PENDING_CONVERSION = new Map([
+  ['plugins/adlc-copilot/test/rails-guard-contract.test.mjs', 2],
+  ['plugins/adlc-cursor/test/audit.test.mjs', 3],
+  ['plugins/adlc-cursor/test/build-gate.test.mjs', 2],
+  ['plugins/adlc-cursor/test/mcp-roots-proxy-lifecycle.test.mjs', 1],
+  ['plugins/adlc-cursor/test/mcp-wrapper.test.mjs', 1],
+  ['plugins/adlc-cursor/test/packaging.test.mjs', 1],
+  ['plugins/adlc-cursor/test/pretool-dispatch.test.mjs', 2],
+  ['plugins/adlc-cursor/test/rails-guard.test.mjs', 2],
+  ['plugins/adlc-cursor/test/scaffold-target.test.mjs', 1],
+  ['plugins/adlc-cursor/test/scaffold.test.mjs', 1],
+  ['plugins/adlc-cursor/test/session-start.test.mjs', 2],
+  ['plugins/adlc-cursor/test/shell-advisory.test.mjs', 2],
+  ['plugins/adlc-gemini/test/build-gate.test.mjs', 2],
+  ['plugins/adlc-gemini/test/lifecycle-hooks.test.mjs', 8],
+  ['plugins/adlc-gemini/test/packaging.test.mjs', 12],
+  ['plugins/adlc-gemini/test/shim.test.mjs', 5],
+  ['plugins/adlc-herdr/test/action-dispatch.test.mjs', 1],
+  ['plugins/adlc-herdr/test/ambiguous-width-env.test.mjs', 1],
+  ['plugins/adlc-herdr/test/board-e2e.test.mjs', 2],
+  ['plugins/adlc-herdr/test/manifest.test.mjs', 2],
+  ['plugins/adlc-herdr/test/on-event-e2e.test.mjs', 2],
+  ['plugins/adlc-herdr/test/show-ticket.test.mjs', 1],
+  ['plugins/adlc-herdr/test/watcher-e2e.test.mjs', 1],
+  ['plugins/adlc-opencode/test/entry-guard.test.mjs', 6],
+  ['plugins/adlc-pi/test/commands.test.mjs', 3],
+  ['plugins/adlc-pi/test/handoff-deny.test.mjs', 2],
+  ['plugins/adlc-pi/test/packaging.test.mjs', 3],
+]);
+
 /** Every `.mjs` under dir, recursively, repo-relative. */
 function mjsFilesUnder(dir) {
   const absolute = join(ROOT, dir);
@@ -90,143 +138,6 @@ function mjsFilesUnder(dir) {
   return out;
 }
 
-/** Child-process spawners that can start a Node process. */
-const SPAWN_FNS = new Set(['execFileSync', 'spawnSync', 'execFile', 'spawn', 'fork']);
-
-/** `process.execPath`, written as a dotted or computed member access. */
-function isProcessExecPath(node) {
-  if (!node || node.type !== 'MemberExpression') return false;
-  if (node.object?.type !== 'Identifier' || node.object.name !== 'process') return false;
-  return node.computed
-    ? node.property?.type === 'Literal' && node.property.value === 'execPath'
-    : node.property?.type === 'Identifier' && node.property.name === 'execPath';
-}
-
-/**
- * Locate every raw spawn of a Node process, with its 1-based line.
- *
- * Parsed, not pattern-matched: formatting and line wrapping are free. Resolved
- * rather than evaded: named and aliased imports, namespace and default imports,
- * a computed `process['execPath']`, a local binding of the exec path
- * (`const node = process.execPath`), and a local rebinding of the spawner
- * itself (`const f = spawnSync`), including one destructured off a namespace
- * import.
- *
- * Known limit, stated rather than implied: bindings are collected across the
- * whole module without scope analysis, so a shadowed name in a nested function
- * is treated as the outer one. That errs toward reporting, which is the safe
- * direction for a guard. Indirection through a property bag or a computed
- * method name would still pass unseen; this is a drift guard against the next
- * accidental raw spawn, not a sandbox against a determined bypass.
- */
-export function rawSpawnSites(source) {
-  let ast;
-  try {
-    ast = parse(source, { ecmaVersion: 'latest', sourceType: 'module', locations: true });
-  } catch {
-    // An unparseable test file is a different failure, surfaced by the suite
-    // that runs it; this guard reports nothing rather than guessing.
-    return [];
-  }
-
-  // Local names bound to a child_process spawner, plus namespace/default
-  // imports of the module itself: `import * as cp` and `import cp from` both
-  // reach the same spawners through a member expression.
-  const spawners = new Set();
-  const namespaces = new Set();
-  for (const node of ast.body) {
-    if (node.type !== 'ImportDeclaration') continue;
-    if (!String(node.source.value).endsWith('child_process')) continue;
-    for (const spec of node.specifiers) {
-      if (spec.type === 'ImportNamespaceSpecifier' || spec.type === 'ImportDefaultSpecifier') {
-        namespaces.add(spec.local.name);
-        continue;
-      }
-      const imported = spec.imported?.name ?? spec.local?.name;
-      if (SPAWN_FNS.has(imported)) spawners.add(spec.local.name);
-    }
-  }
-
-  // Locals bound to process.execPath (`const node = process.execPath`) and
-  // locals rebound to a spawner (`const f = spawnSync`, or one destructured off
-  // a namespace import). Both shapes produce a real Node spawn that a check on
-  // the callee name or the argument's member expression alone would miss.
-  // Repeated to a fixed point so a chain of rebindings resolves.
-  const execPathAliases = new Set();
-  for (let pass = 0, added = true; added && pass < 5; pass += 1) {
-    added = false;
-    const collect = (node) => {
-      if (!node || typeof node !== 'object') return;
-      if (node.type === 'VariableDeclarator') {
-        const { id, init } = node;
-        if (id?.type === 'Identifier' && isProcessExecPath(init) && !execPathAliases.has(id.name)) {
-          execPathAliases.add(id.name);
-          added = true;
-        }
-        // const f = spawnSync    /    const f = cp.spawnSync
-        if (id?.type === 'Identifier' && !spawners.has(id.name)) {
-          const fromIdentifier = init?.type === 'Identifier' && spawners.has(init.name);
-          const fromNamespace =
-            init?.type === 'MemberExpression' &&
-            !init.computed &&
-            SPAWN_FNS.has(init.property?.name) &&
-            (namespaces.has(init.object?.name) || init.object?.name === 'child_process');
-          if (fromIdentifier || fromNamespace) {
-            spawners.add(id.name);
-            added = true;
-          }
-        }
-        // const { spawnSync: f } = cp
-        if (id?.type === 'ObjectPattern' && init?.type === 'Identifier' && namespaces.has(init.name)) {
-          for (const prop of id.properties) {
-            const key = prop.key?.name ?? prop.key?.value;
-            const local = prop.value?.name;
-            if (SPAWN_FNS.has(key) && local && !spawners.has(local)) {
-              spawners.add(local);
-              added = true;
-            }
-          }
-        }
-      }
-      for (const key of Object.keys(node)) {
-        const value = node[key];
-        if (Array.isArray(value)) value.forEach(collect);
-        else if (value && typeof value === 'object' && value.type) collect(value);
-      }
-    };
-    collect(ast);
-  }
-
-  const isNodeTarget = (arg) =>
-    isProcessExecPath(arg) || (arg?.type === 'Identifier' && execPathAliases.has(arg.name));
-
-  const isSpawnCallee = (callee) => {
-    if (callee?.type === 'Identifier') return spawners.has(callee.name) || SPAWN_FNS.has(callee.name);
-    if (callee?.type === 'MemberExpression' && !callee.computed) {
-      const objectName = callee.object?.name;
-      const method = callee.property?.name;
-      // `cp.spawnSync(…)`, and the bare `child_process.spawnSync(…)` shape.
-      return Boolean(method && SPAWN_FNS.has(method) && (namespaces.has(objectName) || objectName === 'child_process'));
-    }
-    return false;
-  };
-
-  const sites = [];
-  const walk = (node) => {
-    if (!node || typeof node !== 'object') return;
-    if (node.type === 'CallExpression' && isSpawnCallee(node.callee) && isNodeTarget(node.arguments?.[0])) {
-      sites.push({ line: node.loc.start.line });
-    }
-    for (const key of Object.keys(node)) {
-      const value = node[key];
-      if (Array.isArray(value)) value.forEach(walk);
-      else if (value && typeof value === 'object' && value.type) walk(value);
-    }
-  };
-  walk(ast);
-  return sites.sort((a, b) => a.line - b.line);
-}
-
 /**
  * Report directories missing their bounded helper. Injectable so the
  * missing-helper case can be proven rather than assumed: an earlier version
@@ -236,6 +147,12 @@ export function rawSpawnSites(source) {
 export function directoriesMissingHelper(dirs, { exists = existsSync, root = ROOT } = {}) {
   return dirs.filter((dir) => !exists(join(root, dir, HELPER_RELATIVE)));
 }
+
+/** Every scanned directory that owns a helper, plus the hook test directories that must. */
+const HELPER_DIRS = [...new Set([
+  ...HOOK_TEST_DIRS,
+  ...SCANNED_DIRS.filter((dir) => existsSync(join(ROOT, dir, HELPER_RELATIVE))),
+])];
 
 test('the scanned directory list covers every plugin hook test directory', () => {
   // Against the filesystem, so adding a plugin cannot leave a directory
@@ -271,7 +188,7 @@ test('a directory without a helper is reported, not skipped', () => {
 });
 
 test('the shared helper bounds every spawn it makes', async () => {
-  for (const dir of HOOK_TEST_DIRS) {
+  for (const dir of HELPER_DIRS) {
     const helperPath = join(ROOT, dir, HELPER_RELATIVE);
     assert.ok(existsSync(helperPath), `${dir}/${HELPER_RELATIVE} is missing`);
     const sites = rawSpawnSites(readFileSync(helperPath, 'utf8'));
@@ -289,7 +206,7 @@ test('the shared helper bounds every spawn it makes', async () => {
 });
 
 test('a call site cannot unset or weaken the bound', async () => {
-  for (const dir of HOOK_TEST_DIRS) {
+  for (const dir of HELPER_DIRS) {
     const { resolveSpawnOptions, HOOK_TIMEOUT_MS } = await import(join(ROOT, dir, HELPER_RELATIVE));
 
     // The two properties that make the bound enforceable are not the caller's
@@ -315,7 +232,7 @@ test('each wrapper actually reaps a child that never exits', async () => {
   // through, leaving every other test in this file green. So drive the exported
   // wrappers against a child that would otherwise run forever.
   const NEVER_EXITS = ['-e', 'setInterval(() => {}, 1000)'];
-  for (const dir of HOOK_TEST_DIRS) {
+  for (const dir of HELPER_DIRS) {
     const { runHook, spawnHook } = await import(join(ROOT, dir, HELPER_RELATIVE));
 
     const started = Date.now();
@@ -342,7 +259,7 @@ test('a killed run cannot be read as the hook answering', async () => {
   // The failure mode a deadline introduces: 50 catch blocks in these suites do
   // `catch (e) { out = e.stdout ?? ''; }`, and for an advisory hook empty output
   // is a PASS. A timeout must not be able to impersonate deliberate silence.
-  for (const dir of HOOK_TEST_DIRS) {
+  for (const dir of HELPER_DIRS) {
     const { runHook, spawnHook } = await import(join(ROOT, dir, HELPER_RELATIVE));
 
     const killed = spawnHook(['-e', 'setInterval(() => {}, 1000)'], { timeout: 600 });
@@ -479,17 +396,55 @@ test('a railed exception covers its known spawns and no more', () => {
   assert.deepEqual(wrong, [], `RAILED_EXCEPTIONS is stale or under-counted:\n  ${wrong.join('\n  ')}`);
 });
 
-test('no hook test spawns a raw child process outside the shared helper', () => {
+test('a pending conversion covers its known spawns and no more', () => {
+  const wrong = [];
+  for (const [file, rawSpawns] of PENDING_CONVERSION) {
+    const absolute = join(ROOT, file);
+    if (!existsSync(absolute)) {
+      wrong.push(`${file}: gone — remove the entry`);
+      continue;
+    }
+    const actual = rawSpawnSites(readFileSync(absolute, 'utf8')).length;
+    if (actual === 0) wrong.push(`${file}: converted — remove the entry`);
+    else if (actual < rawSpawns) wrong.push(`${file}: ${actual} raw spawns, entry says ${rawSpawns} — lower it`);
+    else if (actual > rawSpawns) wrong.push(`${file}: ${actual} raw spawns, entry covers ${rawSpawns} — a new one was added`);
+  }
+  assert.deepEqual(wrong, [], `PENDING_CONVERSION is stale or under-counted:\n  ${wrong.join('\n  ')}`);
+});
+
+test('every pending conversion lies inside a scanned directory', () => {
+  const outside = [...PENDING_CONVERSION.keys()].filter((file) => !SCANNED_DIRS.some((dir) => file.startsWith(`${dir}/`)));
+  assert.deepEqual(outside, [], 'an entry outside the scanned directories exempts nothing and hides a typo');
+});
+
+/** Raw spawns in the scanned directories that nothing exempts, as `file:line`. */
+export function unexemptedSpawns({ dirs = SCANNED_DIRS, read = (f) => readFileSync(join(ROOT, f), 'utf8'), list = mjsFilesUnder } = {}) {
   const violations = [];
-  for (const dir of HOOK_TEST_DIRS) {
-    const helperRel = relative(ROOT, join(ROOT, dir, HELPER_RELATIVE));
-    for (const file of mjsFilesUnder(dir)) {
-      if (file === helperRel || RAILED_EXCEPTIONS.has(file)) continue;
-      for (const site of rawSpawnSites(readFileSync(join(ROOT, file), 'utf8'))) {
-        violations.push(`${file}:${site.line}`);
+  for (const dir of dirs) {
+    const helperRel = `${dir}/${HELPER_RELATIVE}`;
+    for (const file of list(dir)) {
+      if (file === helperRel || RAILED_EXCEPTIONS.has(file) || PENDING_CONVERSION.has(file)) continue;
+      for (const site of rawSpawnSites(read(file))) {
+        violations.push(`${file}:${site.line}${site.reason ? ` (${site.reason})` : ''}`);
       }
     }
   }
+  return violations;
+}
+
+test('the ban reaches plugins/*/test, not only plugins/*/hooks/test', () => {
+  const planted = 'plugins/adlc-cursor/test/planted.test.mjs';
+  const violations = unexemptedSpawns({
+    dirs: ['plugins/adlc-cursor/test'],
+    list: () => [planted],
+    read: () => "import { spawnSync } from 'node:child_process';\nspawnSync('node', ['hook.mjs'], { input: '{}' });",
+  });
+  assert.deepEqual(violations, [`${planted}:2`]);
+  assert.ok(SCANNED_DIRS.includes('plugins/adlc-cursor/test'), 'plugins/adlc-cursor/test must be scanned');
+});
+
+test('no plugin test spawns a raw child process outside its directory helper', () => {
+  const violations = unexemptedSpawns();
   assert.deepEqual(
     violations,
     [],
