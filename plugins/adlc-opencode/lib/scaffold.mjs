@@ -25,14 +25,34 @@ const DEFAULT_CONFIG = {
   maxBundleAgeDays: 14,
 };
 
+/** Why an existing config file is unusable, or null when it is a JSON object. */
+function configProblem(path) {
+  let value;
+  try {
+    value = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (err) {
+    return err.message;
+  }
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? null
+    : 'expected top-level object';
+}
+
 /**
  * Create .adlc/config.json with defaults if absent. Never clobbers an existing
- * config. Returns { created: boolean, path }.
+ * config. Returns { created: boolean, path, warning? }: `warning` is set when
+ * the existing file is not a readable JSON object, which every gate that reads
+ * the config would otherwise trip over later with an unrelated error.
  */
 export function ensureConfig(root, defaults = DEFAULT_CONFIG) {
   const dir = join(root, '.adlc');
   const path = join(dir, 'config.json');
-  if (existsSync(path)) return { created: false, path };
+  if (existsSync(path)) {
+    const problem = configProblem(path);
+    return problem === null
+      ? { created: false, path }
+      : { created: false, path, warning: `.adlc/config.json exists but is not readable JSON: ${problem}` };
+  }
   mkdirSync(dir, { recursive: true });
   writeFileSync(path, JSON.stringify(defaults, null, 2) + '\n');
   return { created: true, path };
