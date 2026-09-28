@@ -3,10 +3,11 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { tmp } from '@adlc/core/test-kit';
+import { FIXTURE_RM_OPTIONS } from '@adlc/core/test-kit';
 
 export const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'handoff.mjs');
 export const TEST_KEY = 'c'.repeat(64);
@@ -34,22 +35,14 @@ export function run(args, { cwd, env = {}, expectOk = true } = {}) {
   }
 }
 
-export function fixture(t, prefix = 'handoff-continue-cli-') {
-  return tmp(t, prefix);
-}
-
+/** Runs fn(dir) in a fresh temporary directory that is removed however fn exits. */
 export function withTempRepo(fn) {
-  const dir = fixture(null, 'handoff-continue-');
-  let result;
-  let err;
+  const made = mkdtempSync(join(tmpdir(), 'handoff-continue-'));
   try {
-    result = fn(dir);
-  } catch (e) {
-    err = e;
+    return fn(realpathSync(made));
+  } finally {
+    rmSync(made, FIXTURE_RM_OPTIONS);
   }
-  rmSync(dir, { recursive: true, force: true });
-  if (err) throw err;
-  return result;
 }
 
 /** Arm an open, ticket-bound deny for `session` the way an adapter would. */

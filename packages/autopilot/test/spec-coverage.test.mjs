@@ -17,6 +17,7 @@ import { spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { REGISTRY } from './ac-registry.mjs';
+import { runRegistered } from './helpers/run-registered.mjs';
 import { GATE_EXEC_KEY } from './helpers/node-test.mjs';
 
 // The execution passes import the test files to call their functions directly;
@@ -224,7 +225,7 @@ export async function ac114_everyRegisteredFunctionExecutes() {
     if (typeof mod[e.fn] !== 'function') { failures.push(`AC${e.n}: ${e.file} does not export ${e.fn}`); continue; }
     const why = hostSkip(e);
     if (why) { console.log(`skipped loudly: AC${e.n} ${e.fn} — ${why}`); hostSkippedHere.push(e.fn); continue; }
-    try { await mod[e.fn](); executed++; } catch (err) { failures.push(`AC${e.n}: ${e.fn} failed without a fixture: ${err.message.split('\n')[0]}`); }
+    try { await runRegistered(mod[e.fn]); executed++; } catch (err) { failures.push(`AC${e.n}: ${e.fn} failed without a fixture: ${err.message.split('\n')[0]}`); }
   }
   assert.deepEqual(failures, [], failures.join('\n'));
   if (hostSkippedHere.length) console.log(`host-skipped (not executed): ${hostSkippedHere.join(', ')}`);
@@ -266,12 +267,12 @@ export async function ac121_everyCriterionHasABitingFixture() {
         if (!now.has(e.seam)) { problems.push(`AC${n}: seam ${e.seam} is not registered by any lib module`); continue; }
       }
       let threw = false;
-      try { await withMutation(e.seam, () => fn()); } catch { threw = true; }
+      try { await withMutation(e.seam, () => runRegistered(fn)); } catch { threw = true; }
       clearAll();
       if (!threw) { problems.push(`AC${n}: ${e.fn} still passes with fixture ${e.seam} applied — the fixture does not bite`); continue; }
       // A fixture that bites proves nothing if the test fails WITHOUT it too: the plain leg must pass.
       let plainOk = true;
-      try { await fn(); } catch (err) { plainOk = false; problems.push(`AC${n}: ${e.fn} fails without any fixture: ${String(err?.message ?? err).split('\n')[0].slice(0, 160)}`); }
+      try { await runRegistered(fn); } catch (err) { plainOk = false; problems.push(`AC${n}: ${e.fn} fails without any fixture: ${String(err?.message ?? err).split('\n')[0].slice(0, 160)}`); }
       clearAll();
       if (plainOk) bit = true;
     }

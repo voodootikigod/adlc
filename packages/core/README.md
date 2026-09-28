@@ -76,3 +76,23 @@ Schema (see lib/tickets.mjs header): `{ id, title, body, scope[], rails[], edges
 
 - `tail(str, maxChars = 4000)` → the last `maxChars` characters of `str`, unchanged if already within limit. Hoisted here (was duplicated in consensus-fix) so every caller capping a prompt payload shares one implementation.
 - `fence(label, content, maxChars)` → wraps `content` in `<<UNTRUSTED:...>>`/`<<END:...>>` markers declaring it inert data, capped to `maxChars` (tail-biased — `maxChars` is required, not optional; there is no uncapped call). Used by `packages/fleet` to fence prior build/gate/prosecution logs into a fix charter.
+## test-kit (`@adlc/core/test-kit`)
+
+Fixture helpers for `node:test` suites; typed by `lib/test-kit.d.mts`.
+
+- `tmp(t, prefix?)` → a fresh realpath'd directory under `os.tmpdir()`, removed by a
+  hook registered on `t.after()` (retrying transient `ENOTEMPTY`/`EBUSY`,
+  `FIXTURE_RM_OPTIONS`). **Fails closed:** a `t` without a callable `.after` (none,
+  `null`, a prefix string, an options object, or the context a describe-level
+  `before()` receives) throws a `TypeError` and creates nothing.
+- `gitRepo(t, options?)` → `{ dir, git, g }`: a repo inside `tmp(t)` with a test
+  identity, `commit.gpgsign=false`, `gc.auto=0` and `gc.autoDetach=false` (no detached
+  maintenance child writing into `.git` during removal). `options` is
+  `{ prefix, branch, userEmail, userName }` or a prefix string. Same context rule as `tmp`.
+- `createScope()` → a context (`{ after, dispose }`) for fixtures that outlive one test
+  callback: create in `before()`, `await scope.dispose()` in `after()`. Registering on a
+  disposed scope throws.
+- `withScopedContext(fn)` → runs `fn(ctx)` with a fresh scope and disposes it when `fn`
+  settles; for code that calls test functions outside a `node:test` callback.
+- `runBin(binPath, args?, options?)` → `spawnSync` of a Node script with
+  `DEFAULT_SCRUBBED_ENV` (signing keys, bypass flags) removed unless `allowEnv` names them.

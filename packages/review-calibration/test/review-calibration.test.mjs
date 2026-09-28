@@ -5,7 +5,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  rmSync, writeFileSync, readFileSync, mkdirSync, existsSync,
+  writeFileSync, readFileSync, mkdirSync, existsSync,
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -26,7 +26,7 @@ import {
 } from '../lib/runner.mjs';
 import { buildJsonReport } from '../lib/report.mjs';
 import { mutate } from '../../core/index.mjs';
-import { gitRepo, tmp } from '@adlc/core/test-kit';
+import { createScope, gitRepo, tmp } from '@adlc/core/test-kit';
 
 const BIN = resolve(fileURLToPath(import.meta.url), '../../bin/review-calibration.mjs');
 
@@ -146,8 +146,10 @@ describe('filterCodeFiles', () => {
 describe('selectPlants', () => {
   let dir;
 
+  const scope = createScope();
+
   before(() => {
-    dir = tmp('rc-select-');
+    dir = tmp(scope, 'rc-select-');
     mkdirSync(join(dir, 'src'));
     writeFileSync(join(dir, 'src', 'calc.mjs'), [
       'export function add(a, b) {',
@@ -162,9 +164,7 @@ describe('selectPlants', () => {
     ].join('\n'));
   });
 
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
+  after(() => scope.dispose());
 
   it('returns at most maxPlants entries', () => {
     const plants = selectPlants(['src/calc.mjs'], dir, 3, mutate.generateMutants);
@@ -489,13 +489,13 @@ describe('buildJsonReport', () => {
 describe('{base} substitution in review command', () => {
   let dir;
 
+  const scope = createScope();
+
   before(() => {
-    ({ dir } = createRepo());
+    ({ dir } = createRepo(scope));
   });
 
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
+  after(() => scope.dispose());
 
   it('substitutes {base} with the commit ref in the command', () => {
     // Use a fake review cmd that writes what it received to stdout.
@@ -530,9 +530,11 @@ describe('E2E: echo reviewer is not trusted; default judge fails closed', () => 
   let scriptDir;
   let scriptPath;
 
+  const scope = createScope();
+
   before(() => {
-    ({ dir } = createRepo());
-    scriptDir = tmp('rc-script-');
+    ({ dir } = createRepo(scope));
+    scriptDir = tmp(scope, 'rc-script-');
     scriptPath = join(scriptDir, 'fake-review.mjs');
     writeFileSync(scriptPath, [
       '#!/usr/bin/env node',
@@ -559,10 +561,7 @@ describe('E2E: echo reviewer is not trusted; default judge fails closed', () => 
     ].join('\n'));
   });
 
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
-    rmSync(scriptDir, { recursive: true, force: true });
-  });
+  after(() => scope.dispose());
 
   it('default scorer (judge) with NO LLM provider → exit 1, refuses to string-match', () => {
     const result = spawnSync('node', [BIN,
@@ -627,17 +626,16 @@ describe('E2E: the scorer control self-test fails closed when the echoer scores'
   let dir;
   let plantsDir;
 
+  const scope = createScope();
+
   before(() => {
-    ({ dir } = createRepo());
+    ({ dir } = createRepo(scope));
     // The plants file lives OUTSIDE the repo: the tool refuses to run on a
     // dirty tree, and an untracked file in the repo is exactly that.
-    plantsDir = tmp('rc-selftest-plants-');
+    plantsDir = tmp(scope, 'rc-selftest-plants-');
   });
 
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
-    rmSync(plantsDir, { recursive: true, force: true });
-  });
+  after(() => scope.dispose());
 
   it('exits 1 and names the echo control when the echoer scores above the bound', () => {
     const plantsPath = join(plantsDir, 'plants.json');
@@ -680,13 +678,13 @@ describe('E2E: the scorer control self-test fails closed when the echoer scores'
 describe('E2E: a judge that rendered no verdict is reported as unbounded-unknown', () => {
   let dir;
 
+  const scope = createScope();
+
   before(() => {
-    ({ dir } = createRepo());
+    ({ dir } = createRepo(scope));
   });
 
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
+  after(() => scope.dispose());
 
   it('a SINGLE verdict is still enough to demand the control', (t) => {
     // The boundary that matters: one locating finding means the judge did
@@ -733,13 +731,13 @@ describe('E2E: a judge that rendered no verdict is reported as unbounded-unknown
 describe('E2E: fake review finds nothing → recall 0, gate fails (exit 2)', () => {
   let dir;
 
+  const scope = createScope();
+
   before(() => {
-    ({ dir } = createRepo());
+    ({ dir } = createRepo(scope));
   });
 
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
+  after(() => scope.dispose());
 
   it('exits 2 when recall is below min-recall', () => {
     // Fake review that reports nothing useful
@@ -765,13 +763,13 @@ describe('E2E: fake review finds nothing → recall 0, gate fails (exit 2)', () 
 describe('E2E: file restoration after run', () => {
   let dir;
 
+  const scope = createScope();
+
   before(() => {
-    ({ dir } = createRepo());
+    ({ dir } = createRepo(scope));
   });
 
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
+  after(() => scope.dispose());
 
   it('src/math.mjs is byte-identical after calibration run', () => {
     const srcPath = join(dir, 'src', 'math.mjs');
@@ -811,13 +809,13 @@ describe('E2E: --review-provider / --strict provider-independence guard', () => 
     ADLC_PROVIDER: 'anthropic',
   };
 
+  const scope = createScope();
+
   before(() => {
-    ({ dir } = createRepo());
+    ({ dir } = createRepo(scope));
   });
 
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
+  after(() => scope.dispose());
 
   function run(args) {
     return spawnSync('node', [BIN, ...args], {
@@ -899,13 +897,13 @@ describe('E2E: agy provider resolves to its tier-dependent model family', () => 
     ADLC_PROVIDER: 'agy',
   };
 
+  const scope = createScope();
+
   before(() => {
-    ({ dir } = createRepo());
+    ({ dir } = createRepo(scope));
   });
 
-  after(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
+  after(() => scope.dispose());
 
   function run(args) {
     return spawnSync('node', [BIN, ...args], {
