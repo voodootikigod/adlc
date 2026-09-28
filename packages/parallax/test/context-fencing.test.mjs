@@ -53,7 +53,7 @@ test('buildEdgePrompt: a directive-shaped ticket body is fenced, not followed', 
   const ticketB = { id: 'T2', title: 'B', body: 'normal body' };
   const prompt = buildEdgePrompt(ticketA, ticketB);
 
-  const fenceMatch = prompt.match(/<<UNTRUSTED:[^>]*>>\n([\s\S]*?)\n<<END:[^>]*>>/);
+  const fenceMatch = prompt.match(/<<UNTRUSTED:ticket-T1-body[^>]*>>\n([\s\S]*?)\n<<END:[^>]*>>/);
   assert.ok(fenceMatch, 'ticket body content must be wrapped in an UNTRUSTED fence');
   assert.ok(fenceMatch[1].includes(malicious));
 
@@ -65,8 +65,8 @@ test('buildEdgePrompt: both ticket bodies are independently fenced', () => {
   const ticketA = { id: 'T1', title: 'A', body: 'body A content' };
   const ticketB = { id: 'T2', title: 'B', body: 'body B content' };
   const prompt = buildEdgePrompt(ticketA, ticketB);
-  const opens = (prompt.match(/<<UNTRUSTED:/g) || []).length;
-  const ends = (prompt.match(/<<END:/g) || []).length;
+  const opens = (prompt.match(/<<UNTRUSTED:ticket-T\d-body/g) || []).length;
+  const ends = (prompt.match(/<<END:ticket-T\d-body/g) || []).length;
   assert.equal(opens, 2);
   assert.equal(ends, 2);
 });
@@ -76,7 +76,7 @@ test('buildEdgePrompt: a missing body renders the placeholder with no fence for 
   const ticketB = { id: 'T2', title: 'Gate', body: null };
   const prompt = buildEdgePrompt(ticketA, ticketB);
   assert.ok(prompt.includes('(no body)'));
-  assert.ok(!prompt.includes('<<UNTRUSTED:'), 'nothing to fence — both bodies are absent');
+  assert.ok(!/<<UNTRUSTED:ticket-T\d-body/.test(prompt), 'no body fence — both bodies are absent');
 });
 
 test('buildEdgePrompt: one missing body still fences the present one', () => {
@@ -84,7 +84,7 @@ test('buildEdgePrompt: one missing body still fences the present one', () => {
   const ticketB = { id: 'T2', title: 'Gate', body: 'real content here' };
   const prompt = buildEdgePrompt(ticketA, ticketB);
   assert.ok(prompt.includes('(no body)'));
-  const opens = (prompt.match(/<<UNTRUSTED:/g) || []).length;
+  const opens = (prompt.match(/<<UNTRUSTED:ticket-T\d-body/g) || []).length;
   assert.equal(opens, 1);
 });
 

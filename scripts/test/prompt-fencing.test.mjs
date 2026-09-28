@@ -61,11 +61,23 @@ const GUARDED = [
     ],
   },
   {
-    // parallax embeds ticket bodies and --context file content, both authored
-    // outside this repo's trust boundary (#707).
+    // parallax embeds ticket bodies and titles and --context file content, all
+    // authored outside this repo's trust boundary (#707), and feeds the fan's
+    // model-authored readings and answers back into a judge.
     file: 'packages/parallax/lib/prompts.mjs',
-    mustNotMatch: [/\$\{ticket\.body\}/, /\$\{f\.content\}/],
-    mustContain: ['fence(f.path, f.content'],
+    mustNotMatch: [
+      /\$\{ticket\.body\}/,
+      /\$\{f\.content\}/,
+      /\$\{ticket[AB]?\.title\}/,
+      /\$\{JSON\.stringify\(r/,
+      /===\\n\$\{a\}/,
+    ],
+    mustContain: [
+      'fence(f.path, f.content',
+      'fence(`ticket-${ticket.id}-title`, ticket.title',
+      'fence(`reading-${i + 1}`, JSON.stringify(r',
+      'fence(`answer-${i + 1}`, a',
+    ],
   },
   {
     // rejection-mining embeds review comments from a public PR.
