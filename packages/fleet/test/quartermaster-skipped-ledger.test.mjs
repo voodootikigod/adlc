@@ -53,12 +53,14 @@ test('planSeats reports the malformed ledger lines its priors were built without
   assert.equal(planned.seats.size, 1, 'the ticket is still routed');
   assert.equal(planned.skippedLedger.length, 1, 'the garbage line is reported');
   assert.equal(planned.skippedLedger[0].line, 2);
+  assert.ok(planned.notices.includes(skippedLedgerNotice(planned.skippedLedger)), 'the warning rides the notices every caller prints');
 });
 
 test('a clean ledger, and a plan with no tickets, report nothing skipped', (t) => {
   const adlcDir = makeTmp(t, 'qm-ledger-');
   writeFileSync(join(adlcDir, 'manifest.jsonl'), `${JSON.stringify({ gate: 'build', ticket: 'T-X' })}\n`);
   assert.deepEqual(plan(adlcDir).skippedLedger, []);
+  assert.ok(!plan(adlcDir).notices.some((n) => /malformed ledger/.test(n)), 'no warning for a clean ledger');
   assert.deepEqual(plan(adlcDir, []).skippedLedger, []);
 });
 
@@ -66,7 +68,7 @@ test('skippedLedgerNotice names the count and is silent when nothing was skipped
   assert.equal(skippedLedgerNotice([]), null);
   assert.equal(skippedLedgerNotice(undefined), null);
   const one = skippedLedgerNotice([{ segment: 'root', line: 2, error: 'x' }]);
-  assert.match(one, /^warning: quartermaster: 1 malformed ledger line skipped/);
+  assert.match(one, /^quartermaster: 1 malformed ledger line skipped/);
   assert.match(one, /root:2/);
   assert.match(skippedLedgerNotice([{ segment: 'root', line: 2 }, { segment: 'seg-a', line: null }]), /2 malformed ledger lines skipped.*root:2, seg-a/);
 });

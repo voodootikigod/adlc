@@ -122,7 +122,8 @@ export function assertNoArgvOverride(config = {}) {
  * never from the ticket.
  *
  * `skippedLedger` lists the malformed ledger lines the priors were built
- * without (the ledger read is lenient), so a caller can say so.
+ * without (the ledger read is lenient); when there are any, `notices` carries
+ * the operator warning for them, so every caller that prints notices says so.
  *
  * @returns {{ registryPath, registryDigest, notices, skippedLedger, seats: Map<string, {job, route, seat, assignment, registryDigest}> }}
  * @throws on a disabled/missing/invalid registry, or an unroutable ticket (fail closed)
@@ -202,7 +203,8 @@ export function planSeats({
       .map((channel) => ({ channel, seat: resolveRoute(registry, { channel }) }));
     seats.set(ticket.id, { job, route, seat: resolveRoute(registry, route), assignment, registryDigest, escalation });
   }
-  return { registryPath, registryDigest, notices, skippedLedger, seats };
+  const ledgerNotice = skippedLedgerNotice(skippedLedger);
+  return { registryPath, registryDigest, notices: ledgerNotice ? [...notices, ledgerNotice] : notices, skippedLedger, seats };
 }
 
 /**
@@ -213,7 +215,7 @@ export function skippedLedgerNotice(skipped) {
   if (!Array.isArray(skipped) || skipped.length === 0) return null;
   const where = skipped.map((s) => (s.line == null ? s.segment : `${s.segment}:${s.line}`)).join(', ');
   const noun = skipped.length === 1 ? 'line' : 'lines';
-  return `warning: quartermaster: ${skipped.length} malformed ledger ${noun} skipped; seat priors exclude them (${where})`;
+  return `quartermaster: ${skipped.length} malformed ledger ${noun} skipped; seat priors exclude them (${where})`;
 }
 
 /**
