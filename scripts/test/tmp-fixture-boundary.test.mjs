@@ -14,11 +14,14 @@ const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const SUITE_DIRECTORIES = new Set(['test', 'cli-test', 'adapter-test']);
 
 /**
- * Files that mint fixture directories without pairing them with a removal, as
- * of the scan that introduced this guard. THIS LIST MAY ONLY SHRINK: the test
- * below fails if an entry has become compliant and was left behind, so the
- * ratchet cannot silently stall. Do not add to it — a new or modified test file
- * that leaks is what this guard exists to stop.
+ * Historical allowlist for test files that leaked fixture directories.
+ * With the completion of Wave 6, every fixture leak in the repository has been
+ * eradicated and this set has reached exactly 0 entries.
+ *
+ * THIS LIST IS PERMANENTLY LOCKED AND MUST REMAIN EMPTY:
+ * The test below asserts `ALLOWLIST.size === 0`. Any addition to ALLOWLIST is
+ * forbidden by contract — any new or modified test file that leaks temporary
+ * fixture directories will fail this boundary guard.
  */
 const ALLOWLIST = new Set([]);
 
@@ -166,6 +169,11 @@ test('no un-allowlisted suite file leaks a fixture directory', () => {
 });
 
 test('the allowlist may only shrink', () => {
+  assert.equal(
+    ALLOWLIST.size,
+    0,
+    'ALLOWLIST has reached 0 and must remain empty — fixture leaking is 100% eradicated across the repository',
+  );
   const stillLeaking = new Set(scanRepo().map(({ name }) => name));
   const stale = [...ALLOWLIST].filter((name) => !stillLeaking.has(name)).sort();
   assert.deepEqual(
