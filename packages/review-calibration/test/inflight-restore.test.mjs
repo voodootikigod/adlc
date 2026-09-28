@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
 import {
   writeFileAtomic, recoverInflight, createJournal, decideFile, probeOwner, recordPathFor,
-  isContainedRelPath, RECORD_VERSION,
+  isContainedRelPath,
 } from '../lib/inflight.mjs';
 import { runWithPlants } from '../lib/runner.mjs';
 import { verifyWitness } from '../lib/verify.mjs';
@@ -31,8 +31,10 @@ function gitDirOf(dir) {
   return join(dir, '.git');
 }
 
+// Written with a literal version: a record left by a killed run must stay
+// readable by the next one, so the on-disk format is pinned here, not imported.
 function writeRecord(dir, files, pid = DEAD_PID) {
-  writeFileSync(recordPathFor(gitDirOf(dir)), JSON.stringify({ version: RECORD_VERSION, pid, files }));
+  writeFileSync(recordPathFor(gitDirOf(dir)), JSON.stringify({ version: 1, pid, files }));
 }
 
 function waitFor(pred, timeoutMs = 20_000) {
@@ -76,6 +78,32 @@ describe('a run killed mid-review is recovered by the next run', () => {
     assert.match(next.stderr, /restored 1 file/);
     assert.equal(readFileSync(mathPath(dir), 'utf8'), MATH_SOURCE);
     assert.equal(existsSync(recordPathFor(gitDirOf(dir))), false, 'record cleared after recovery');
+  });
+
+  it('a run killed in a subdirectory is recovered from the repository root', async (t) => {
+    const { dir } = createMathRepo(t);
+    const markers = tmp(t, 'rc-subdir-');
+    const started = join(markers, 'started');
+    const reviewer = join(markers, 'slow-reviewer.mjs');
+    writeFileSync(reviewer, [
+      "import { writeFileSync } from 'node:fs';",
+      `writeFileSync(${JSON.stringify(started)}, 'x');`,
+      'setTimeout(() => {}, 4000);',
+    ].join('\n'));
+    const subdirPlants = writePlantsFile(t, [{ ...BOUNDARY_PLANT, file: 'math.mjs' }]);
+    const child = spawn('node', [BIN, '--review-cmd', `node ${reviewer}`, '--plants-file', subdirPlants,
+      '--min-plants', '1', '--min-recall', '0', '--scorer', 'string'], { cwd: join(dir, 'src'), stdio: 'ignore' });
+    const exited = new Promise((resolve) => child.on('exit', resolve));
+    await waitFor(() => existsSync(started));
+    child.kill('SIGTERM');
+    await exited;
+    assert.equal(readFileSync(mathPath(dir), 'utf8'), PLANTED);
+
+    const next = runCli(['--review-cmd', 'node -e 0', '--plants-file', writePlantsFile(t),
+      '--min-plants', '1', '--min-recall', '0', '--scorer', 'string'], dir);
+    assert.notEqual(next.status, 1, `next run refused: ${next.stderr}`);
+    assert.match(next.stderr, /restored 1 file.*src\/math\.mjs/);
+    assert.equal(readFileSync(mathPath(dir), 'utf8'), MATH_SOURCE);
   });
 
   it('a record whose file moved on is a hard refusal that touches nothing', (t) => {

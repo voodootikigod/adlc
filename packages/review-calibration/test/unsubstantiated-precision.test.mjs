@@ -81,4 +81,13 @@ describe('precision counts located-but-unidentified findings as false positives'
     });
     assert.equal(report.unsubstantiated, 3);
   });
+
+  it('a scorecard without the count reports zero unsubstantiated findings', () => {
+    const report = buildJsonReport({
+      recall: 1, caught: 1, total: 1, precision: 1, truePositives: 1, falsePositives: 0,
+      minRecall: 0, minPrecision: null, scorer: 'judge', commit: 'HEAD', reviewExitCode: 0,
+      perCategory: {}, results: [],
+    });
+    assert.equal(report.unsubstantiated, 0);
+  });
 });
