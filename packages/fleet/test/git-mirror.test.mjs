@@ -7,7 +7,7 @@
 // NEVER reach the mirror (an extra branch, a dangling commit) and asserts the caller
 // repository's refs changed in exactly the expected way and no other.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -54,6 +54,7 @@ const hasObject = (dir, oid) => { try { gitAt(dir)('cat-file', '-e', oid); retur
 
 function makeFixture() {
   const root = mkdtempSync(join(tmpdir(), 'fleet-git-mirror-'));
+  fixtureDirs.add(root);
   const repo = join(root, 'repo');
   mkdirSync(repo);
   const g = gitAt(repo);
@@ -303,6 +304,10 @@ test('removeMirrorWorktree deregisters the worker worktree from the mirror and t
 });
 
 import { zeroOidFor } from '../lib/git-mirror.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 test('the CAS null object id is as wide as the repository object format: a SHA-256 caller repository gets its worker branch created (codex r2)', () => {
   assert.equal(zeroOidFor('a'.repeat(40)), '0'.repeat(40));

@@ -15,6 +15,10 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { changedLinesAreCommentOnly, fileChangeIsCommentOnly } from '../lib/targets.mjs';
 import { deletedLinesFromDiff } from '../lib/diff-deletions.mjs';
 
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 const BIN = resolve(new URL('.', import.meta.url).pathname, '../bin/hollow-test.mjs');
 const lines = (...xs) => xs.join('\n');
 
@@ -56,6 +60,7 @@ const GUARD_TEST = lines(
 /** A repo whose second commit rewrites src/auth.mjs to `after`. */
 function fixture(prefix, before, after) {
   const dir = mkdtempSync(join(tmpdir(), prefix));
+  fixtureDirs.add(dir);
   initRepo(dir);
   mkdirSync(join(dir, 'src'));
   mkdirSync(join(dir, 'test'));

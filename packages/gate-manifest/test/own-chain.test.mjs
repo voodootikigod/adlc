@@ -7,7 +7,7 @@
 // cannot read the forest; they read this instead. These tests pin the two
 // properties that makes true: unrelated segments are never returned, and what
 // IS returned is in an order this checkout can defend.
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -16,6 +16,10 @@ import { join } from 'node:path';
 import { readOwnManifestChain } from '../lib/own-chain.mjs';
 import { readManifestForest } from '../lib/forest.mjs';
 import { writeLineageToken } from '../lib/lineage.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const OUR_BRANCH = 'feat/own-chain-fixture';
 const OTHER_BRANCH = 'feat/somebody-elses-work';
@@ -26,6 +30,7 @@ const ULID_LAST = 'Z'.repeat(26);
 
 function repo(branch = OUR_BRANCH) {
   const root = mkdtempSync(join(tmpdir(), 'adlc-own-chain-'));
+  fixtureDirs.add(root);
   const g = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   g('init', '-q', '-b', branch);
   g('config', 'user.email', 't@t.co');

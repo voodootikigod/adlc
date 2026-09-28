@@ -8,13 +8,17 @@
 // WITHOUT node_modules (see core-inline.mjs for the rationale) — a regression
 // adding one would silently break every fresh `agy plugin install`.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pkgDir = resolve(here, '..');
@@ -220,6 +224,7 @@ function sealedEnv(home, pathValue) {
  */
 function runCliSealed(args, { agyScript, seedTarget, extraEnv } = {}) {
   const work = mkdtempSync(join(tmpdir(), 'adlc-agy-sealed-'));
+  fixtureDirs.add(work);
   const home = join(work, 'home');
   mkdirSync(home, { recursive: true });
 

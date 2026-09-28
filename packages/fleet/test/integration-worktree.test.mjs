@@ -10,7 +10,7 @@
 //
 // Driven against REAL git — a stub cannot demonstrate git's own refusal.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -20,8 +20,13 @@ import { ensureIntegrationWorktree, INTEGRATION_WORKTREE, defaultGit } from '../
 import { runFleet } from '../lib/run.mjs';
 import { resolveRunConfig } from '../lib/config.mjs';
 
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 function makeRepo() {
   const root = mkdtempSync(join(tmpdir(), 'fleet-integ-wt-'));
+  fixtureDirs.add(root);
   const git = (...args) =>
     execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=f@t', '-c', 'user.name=f', ...args], {
       cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],

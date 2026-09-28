@@ -11,7 +11,7 @@
 // path; or a satisfying `adversarial-review` gate-manifest record already
 // exists for the active ticket (or, with no active ticket, any record at all).
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -19,6 +19,10 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { runHook } from './helpers/run-hook.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-hook.mjs');
 const NODE_DIR = dirname(process.execPath);
@@ -39,6 +43,7 @@ function git(args, cwd) {
  */
 function initRepo({ tickets = '{"tickets":[]}', currentTicket = null, manifestLines = null } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-review-'));
+  fixtureDirs.add(dir);
   git(['init', '-b', 'main'], dir);
   git(['config', 'user.email', 'test@example.com'], dir);
   git(['config', 'user.name', 'Test'], dir);

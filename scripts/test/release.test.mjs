@@ -8,7 +8,7 @@
 // (a) never regenerated package-lock.json (it stayed at 1.0.2 → npm ci broke) and
 // (b) skipped plugins/adlc-pi (stranded at 1.0.2). These tests pin BOTH gaps shut.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -16,9 +16,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { releaseMain, repinInternalDependencies, packagePublishOrder, findVersionDrift, publishTargets, findPublishMetadataProblems, defaultIsPublished, hostMarketplacePaths } from '../release.mjs';
 
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 /** Build a throwaway repo with package and Codex-manifest version surfaces. */
 function makeRepo() {
   const root = mkdtempSync(join(tmpdir(), 'adlc-release-'));
+  fixtureDirs.add(root);
   const packagesDir = join(root, 'packages');
   const pluginsDir = join(root, 'plugins');
   mkdirSync(packagesDir);
@@ -441,11 +446,13 @@ test('releaseMain --publish fails closed and publishes NOTHING when a target lac
 // tickets (slot 29).
 
 import { fileURLToPath } from 'node:url';
+
 const REAL_REPO = fileURLToPath(new URL('../../', import.meta.url));
 
 /** Bare fixture: a packages/ tree with exactly the given manifests. */
 function depsRepo(packages, plugins = {}) {
   const root = mkdtempSync(join(tmpdir(), 'adlc-order-'));
+  fixtureDirs.add(root);
   const packagesDir = join(root, 'packages');
   const pluginsDir = join(root, 'plugins');
   mkdirSync(packagesDir, { recursive: true });

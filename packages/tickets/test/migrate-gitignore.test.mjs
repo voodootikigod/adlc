@@ -5,7 +5,7 @@
 // Both properties are asserted through `git check-ignore`, not by reading the
 // file: gitignore semantics are last-match-wins, so a negation can be present in
 // the text and still be dead. Only git can answer whether a path is tracked.
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
@@ -13,10 +13,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { migrateLegacyStore } from '../index.mjs';
 
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 const TICKET = { id: 'T1', title: 'x', scope: ['src/**'], rails: [], edges: [] };
 
 function legacyRepo(gitignore) {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-migrate-ignore-'));
+  fixtureDirs.add(dir);
   const g = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   g('init', '-q', '-b', 'main');
   g('config', 'user.email', 't@t.co');

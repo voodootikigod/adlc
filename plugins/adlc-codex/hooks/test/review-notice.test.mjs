@@ -5,7 +5,7 @@
 // for rails-guard). Plus stopReview/gitChangedPaths behavior coverage,
 // mirroring plugins/adlc-cursor/test/stop-preflight.test.mjs's structure.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -29,6 +29,10 @@ import {
   decideAdversarialReviewNotice as coreDecideNotice,
 } from '../../../../packages/core/lib/risk-tier.mjs';
 import { globMatch as coreGlobMatch } from '../../../../packages/core/lib/tickets.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const PATH_FIXTURES = [
   'src/auth/login.js', 'src/index.mjs', '.env', 'config/.env.production',
@@ -78,6 +82,7 @@ function routedSpawn(routes = []) {
 
 function mkAdlcRoot() {
   const root = mkdtempSync(join(tmpdir(), 'adlc-codex-review-'));
+  fixtureDirs.add(root);
   mkdirSync(join(root, '.adlc'), { recursive: true });
   writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [] }));
   writeFileSync(join(root, '.adlc', 'manifest.jsonl'), '');
@@ -86,6 +91,7 @@ function mkAdlcRoot() {
 
 function gitRepo() {
   const root = mkdtempSync(join(tmpdir(), 'adlc-codex-gitcp-'));
+  fixtureDirs.add(root);
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
   git('init', '-q');
   git('config', 'user.email', 'test@example.com');

@@ -4,7 +4,7 @@
 // signed run segment the REAL gate passes, while a forged signature, a missing
 // signature on a post-prefix line, or an unsigned run entry makes it fail.
 
-import { test } from './helpers/node-test.mjs';
+import { test, after } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -16,6 +16,10 @@ import { appendManifestEntry } from '../../gate-manifest/lib/record.mjs';
 import { createSequenceFixture } from './helpers/sequence-fixture.mjs';
 import { runIssue } from '../lib/run.mjs';
 import { FAKE } from './helpers/recover-fixture.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, '..', '..', '..');
@@ -31,6 +35,7 @@ function verify(dir, { key = KEY, allowLegacy = true } = {}) {
 /** A fresh git repo on the run branch holding the legacy UNSIGNED prefix of this repository's real root manifest verbatim. */
 function manifestCopy() {
   const root = mkdtempSync(join(tmpdir(), 'ap-manifest-'));
+  fixtureDirs.add(root);
   mkdirSync(join(root, '.adlc', 'manifest.d'), { recursive: true });
   const lines = readFileSync(join(REPO, '.adlc', 'manifest.jsonl'), 'utf8').split('\n').filter(Boolean);
   const firstSigned = lines.findIndex((l) => typeof JSON.parse(l).sig === 'string');

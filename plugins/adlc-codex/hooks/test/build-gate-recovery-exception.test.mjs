@@ -19,7 +19,7 @@
 // in the exact declared order, against a fixture with BOTH a high-risk
 // ticket AND declared rails, so neither gap can hide behind the other.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -28,6 +28,10 @@ import { fileURLToPath } from 'node:url';
 // Imported under an alias: this file already has its own runHook/spawnHook.
 import { runHook as runBoundedHook } from './helpers/run-hook.mjs';
 import { RECOVERY_CLI_PATH } from '@adlc/context-handoff';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const HOOKS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const RAILS_GUARD_HOOK = join(HOOKS_DIR, 'adlc-rails-guard.mjs');
@@ -80,6 +84,7 @@ function runPipeline(dir, payload) {
  */
 function setupHighRiskRailedDegradedSession() {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-build-gate-recovery-'));
+  fixtureDirs.add(dir);
   mkdirSync(join(dir, '.adlc'), { recursive: true });
   const ticket = {
     id: 'T1',

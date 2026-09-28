@@ -19,6 +19,11 @@ import { autopilotPaths, EXCLUDE_ENTRIES } from '../../lib/paths.mjs';
 import { writeNetGit, sha256 } from '../../lib/git-env.mjs';
 import { createRedactor } from '../../lib/redact.mjs';
 import { fakeSpawnImpl } from './fake-children.mjs';
+import { after } from './node-test.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
 export const TEST_SPEC_PATH = 'docs/specs/issue-autopilot-local.md';
@@ -85,6 +90,7 @@ export function approvalRecord({ ticket = BUILD_TICKET, specHash, items, seq = 3
  */
 export function makeFixture({ signEntries = true, repo = 'o/r', originUrl = 'git@github.com:o/r.git', pluginVersion = '1.11.0', installedVersion = pluginVersion, installedShape = 'object', specText = FIXTURE_SPEC, manifest = null, manifestLayout = 'segment', config = null, credentialsExpiresInMs = 8 * 3_600_000, now = Date.now() } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'ap-preflight-'));
+  fixtureDirs.add(root);
   const repoRoot = join(root, 'repo');
   const home = join(root, 'home');
   mkdirSync(repoRoot, { mode: 0o755 }); chmodSync(repoRoot, 0o755); // §9.3: the key file's parent must not be group/world-writable (umask-proof)

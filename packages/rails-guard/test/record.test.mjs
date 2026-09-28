@@ -12,6 +12,10 @@ import { fileURLToPath } from 'node:url';
 
 import { readEntries, ADLC_DIR } from '../../core/index.mjs';
 
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 const BIN = fileURLToPath(new URL('../bin/rails-guard.mjs', import.meta.url));
 
 function git(args, cwd) {
@@ -20,6 +24,7 @@ function git(args, cwd) {
 
 function setupRepo() {
   const dir = mkdtempSync(join(tmpdir(), 'rails-guard-record-'));
+  fixtureDirs.add(dir);
   git(['init', '-b', 'main'], dir);
   git(['config', 'user.email', 'test@example.com'], dir);
   git(['config', 'user.name', 'Test'], dir);

@@ -2,12 +2,16 @@
 // untracked-and-NOT-ignored refusal pinned at the lib level (untracked-file-refusal.test.mjs) for
 // runProsecution, exercised here as a real subprocess so the CLI wiring itself is covered, not
 // just the library function.
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
 
@@ -28,6 +32,7 @@ const cleanup = (dir) => rmSync(dir, { recursive: true, force: true });
 
 function repo() {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-untracked-refusal-cli-'));
+  fixtureDirs.add(dir);
   const g = (...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   g('init', '-q', '-b', 'main');
   g('config', 'user.email', 't@t.co');

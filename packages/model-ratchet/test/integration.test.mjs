@@ -12,6 +12,10 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 // import.meta.dirname is only available in Node >= 20.11; derive it so the
 // suite runs on the package's declared floor (engines.node >=18).
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -33,6 +37,7 @@ function git(args, cwd) {
  */
 function makeRepo(history) {
   const tmp = mkdtempSync(join(tmpdir(), 'mr-int-'));
+  fixtureDirs.add(tmp);
   git(['init', '-b', 'main'], tmp);
   git(['config', 'user.email', 'test@example.com'], tmp);
   git(['config', 'user.name', 'Test'], tmp);

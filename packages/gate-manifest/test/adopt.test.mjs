@@ -14,7 +14,7 @@
 // v2 signature — or adopt becomes a supported bypass of that gate from the
 // other side.
 
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, renameSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -28,12 +28,17 @@ import { segmentPath, discoverSegments, readRawLines } from '../lib/forest.mjs';
 import { signEntry } from '../lib/sign.mjs';
 import { sha256 } from '@adlc/core';
 
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 const BIN = new URL('../bin/gate-manifest.mjs', import.meta.url).pathname;
 const KEY = 'adopt-test-key';
 const NEGATED = '.adlc/*\n!.adlc/manifest.jsonl\n!.adlc/manifest.d/\n!.adlc/manifest.d/**\n.adlc/manifest.d/.lineage\n.adlc/manifest.d/*.lock\n';
 
 function gitRepo(branch = 'feat/adopt') {
   const root = mkdtempSync(join(tmpdir(), 'gate-manifest-adopt-'));
+  fixtureDirs.add(root);
   const g = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   g('init', '-q', '-b', branch);
   g('config', 'user.email', 't@t.co');

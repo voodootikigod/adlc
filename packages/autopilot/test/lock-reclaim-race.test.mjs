@@ -11,6 +11,11 @@ import { mkdtempSync, rmSync, renameSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { acquireLock, readOwner, LockHeldError, LOCK_DIR_NAME, STALE_AFTER_MS } from '../lib/lock.mjs';
+import { after } from './helpers/node-test.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const DEAD = { pidAlive: () => false, pidStartTimeOf: () => null };
 const T0 = Date.parse('2026-08-28T12:00:00Z');
@@ -18,6 +23,7 @@ const LATER = () => T0 + STALE_AFTER_MS + 60_000;
 
 function staleWorld() {
   const adlc = mkdtempSync(join(tmpdir(), 'ap-lock-race-'));
+  fixtureDirs.add(adlc);
   acquireLock(adlc, { self: { pid: 999_999, pidStartTime: '1' }, probes: DEAD, now: () => T0, token: 'd'.repeat(64) });
   return { adlc, lockDir: join(adlc, LOCK_DIR_NAME), cleanup: () => rmSync(adlc, { recursive: true, force: true }) };
 }

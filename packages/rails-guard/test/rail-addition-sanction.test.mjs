@@ -13,7 +13,7 @@
 //   - reported loudly, naming the declaring ticket id(s).
 // Everything else keeps today's denial: edits, renames (both sides), deletions,
 // files that exist at base, and anything touching a trust root.
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -22,6 +22,10 @@ import { join } from 'node:path';
 import { runRailFreezeGate } from '../lib/ci/rail-freeze.mjs';
 import { GateDeny } from '../lib/ci/errors.mjs';
 import { checkRailEdits } from '../lib/rails.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 // ── unit: the mechanism is a dumb, explicit membership skip ─────────────────────
 // Policy (what qualifies as a sanctioned addition) lives in the CI wrapper, which
@@ -61,6 +65,7 @@ test('the --help contract documents --sanctioned-add as CI plumbing, not an oper
 
 function scratchRepo({ tickets, seedFiles = {} }) {
   const root = mkdtempSync(join(tmpdir(), 'rail-add-sanction-'));
+  fixtureDirs.add(root);
   const g = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
   g('init', '-q', '-b', 'main');
   g('config', 'user.email', 'test@test.invalid');

@@ -2,7 +2,7 @@
 // Exercises the pure builders and the REAL hook handlers (system.transform +
 // tool.definition) through the plugin factory.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -10,8 +10,13 @@ import { join } from 'node:path';
 import { resolveTicketContext, buildSystemContext, buildToolRailNotice, buildStatusLine, sanitizeField } from '../lib/context-inject.mjs';
 import { adlcRailsGuard } from '../index.mjs';
 
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 function repo({ tickets } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'oc-ctx-'));
+  fixtureDirs.add(dir);
   mkdirSync(join(dir, '.adlc'), { recursive: true });
   if (tickets !== undefined) {
     tickets = structuredClone(tickets);

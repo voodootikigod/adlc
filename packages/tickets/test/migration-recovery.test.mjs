@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,8 +12,13 @@ import {
 } from '../index.mjs';
 import { ticket, writeLegacy } from './helpers.mjs';
 
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 function interruptedMigration(point) {
   const root = mkdtempSync(join(tmpdir(), 'adlc-migration-recovery-'));
+  fixtureDirs.add(root);
   writeLegacy(root, [ticket('A'), ticket('B')]);
   writeFileSync(join(root, '.gitignore'), 'node_modules/\n');
   const before = new LegacyTicketStore(join(root, '.adlc/tickets.json')).load();
@@ -30,6 +35,7 @@ function interruptedMigration(point) {
 
 function interruptedMigrationWithArchive(point) {
   const root = mkdtempSync(join(tmpdir(), 'adlc-migration-archive-recovery-'));
+  fixtureDirs.add(root);
   const archived = [ticket('ARCHIVED', { status: 'done' })];
   writeLegacy(root, [ticket('ACTIVE')]);
   writeFileSync(join(root, '.adlc/tickets.archive.json'), `${JSON.stringify({ tickets: archived }, null, 2)}\n`);

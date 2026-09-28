@@ -3,7 +3,7 @@
 // which DELETES, truncates, or rewrites the ledger — the exact data-loss the single-tree
 // secret scanner cannot see (a deleted ledger has nothing to scan, so it passes).
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,6 +13,10 @@ import { execFileSync } from 'node:child_process';
 import { appendOnlyViolations, baseLedger } from '../guard-findings-ledger-append-only.mjs';
 import { tmp } from '@adlc/core/test-kit';
 import { runAsProgram, importFromInlineModule } from './helpers/entry-guard.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'guard-findings-ledger-append-only.mjs');
 
@@ -90,6 +94,7 @@ test('baseLedger: unresolvable base (no merge-base, rev-parse fails) → fail cl
 
 function makeRepo() {
   const root = mkdtempSync(join(tmpdir(), 'ledger-guard-'));
+  fixtureDirs.add(root);
   const git = (...args) =>
     execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=g@t', '-c', 'user.name=g', ...args], {
       cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],

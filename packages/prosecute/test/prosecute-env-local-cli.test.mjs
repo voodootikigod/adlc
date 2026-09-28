@@ -5,12 +5,16 @@
 // Hermetic env: we build the subprocess environment explicitly (deleting any ambient
 // ADLC_MANIFEST_KEY / CI vars) so the result does not depend on the developer's or CI runner's
 // exported key — the whole point under test is where the key comes FROM.
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
 const KEY = 'env-local-signing-key';
@@ -41,6 +45,7 @@ function runBin(args, cwd, env) {
 // plus a .env.local holding the signing key at the repo root.
 function scratchRepo(envLocalContents) {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-envlocal-cli-'));
+  fixtureDirs.add(dir);
   const g = (...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   g('init', '-q', '-b', 'main');
   g('config', 'user.email', 't@t.co'); g('config', 'user.name', 'tester'); g('config', 'commit.gpgsign', 'false');

@@ -9,13 +9,17 @@
 // This is an end-to-end, subprocess-level proof: each consumer is invoked as its OWN CLI
 // subcommand, none is ever told the revision explicitly (no --revision anywhere below), and yet
 // an attestation recorded by one consumer satisfies the other two.
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { sha256 } from '@adlc/core';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
 
@@ -39,6 +43,7 @@ const cleanup = (dir) => rmSync(dir, { recursive: true, force: true });
 // mismatch would actually matter.
 function scratchRepo() {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-base-single-source-'));
+  fixtureDirs.add(dir);
   const g = (...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   g('init', '-q', '-b', 'main');
   g('config', 'user.email', 't@t.co');

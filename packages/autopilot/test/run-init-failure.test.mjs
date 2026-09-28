@@ -22,6 +22,11 @@ import { continueRun, runIssue } from '../lib/run.mjs';
 import { createRecordStore, newRecord } from '../lib/records.mjs';
 import { autopilotPaths } from '../lib/paths.mjs';
 import { createRedactor } from '../lib/redact.mjs';
+import { after } from './helpers/node-test.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const ISSUE = 7;
 
@@ -31,6 +36,7 @@ const ISSUE = 7;
  */
 function makeWorld({ state = 'dispatched', extra = {} } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'ap-992-'));
+  fixtureDirs.add(root);
   const paths = autopilotPaths(root);
   const records = createRecordStore({ paths, redactor: createRedactor() });
   records.save({

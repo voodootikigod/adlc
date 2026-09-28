@@ -5,7 +5,7 @@
 // rail-frozen file with a non-ASCII name silently evades the freeze gate.
 // See docs/review-lenses/text-scanning-gates.md (authoritative-source check).
 
-import { test, describe } from 'node:test';
+import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,10 +13,15 @@ import { join } from 'node:path';
 
 import { git, changedFiles, gitDiff, splitNulPaths, GIT_MAX_BUFFER } from '../lib/git.mjs';
 
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 const NON_ASCII = 'café.js'; // U+00E9 — git quotes this as "caf\303\251.js" by default
 
 function repoWithRenamedFile() {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-git-nonascii-'));
+  fixtureDirs.add(dir);
   const g = (args) => git(args, { cwd: dir, stdio: ['ignore', 'pipe', 'ignore'] });
   g(['init', '-q']);
   g(['config', 'user.email', 't@t']);

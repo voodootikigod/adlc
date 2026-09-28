@@ -1,7 +1,7 @@
 // command-gate.test.mjs — T32 AC3: both command.execute.before advisories,
 // including the no-warning happy paths. Advisory only — these never block.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync as readFileSyncSafe } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -16,6 +16,7 @@ const ON = { ADLC_P4_ENFORCEMENT: '1' };
 
 function repo({ tickets = [{ id: 'T1', rails: ['test/**'] }], manifest = null } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'oc-cmd-'));
+  fixtureDirs.add(dir);
   mkdirSync(join(dir, '.adlc'), { recursive: true });
   writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets }));
   if (manifest) writeFileSync(join(dir, '.adlc', 'manifest.jsonl'), manifest);
@@ -162,6 +163,10 @@ test('AC3: no deployed copy (or non-adlc command) → no warning (nothing to pro
 
 // ---- host-safety: the command.execute.before WRAPPER must swallow helper throws ----
 import { adlcRailsGuard } from '../index.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 test('command.execute.before hook never throws, even on a malformed command payload', async () => {
   const dir = repo();

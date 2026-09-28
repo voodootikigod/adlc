@@ -1,10 +1,14 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cpSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'claude-code-plugin-smoke.mjs');
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -422,6 +426,7 @@ test('claude-code-plugin-smoke follows a symlinked directory under the plugin gu
 // checkouts and live .adlc/ state are never what a throwaway copy needs.
 function copyRepoFast() {
   const tmpRepo = mkdtempSync(join(tmpdir(), 'adlc-cc-lockstep-'));
+  fixtureDirs.add(tmpRepo);
   cpSync(REPO, tmpRepo, { recursive: true, filter: copyFilter });
   return tmpRepo;
 }

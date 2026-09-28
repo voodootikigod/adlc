@@ -15,12 +15,18 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { after } from 'node:test';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'rails-guard.mjs');
 const RAIL = 'packages/build-gate/**';
 
 function makeRepo() {
   const dir = mkdtempSync(join(tmpdir(), 'rg-244-'));
+  fixtureDirs.add(dir);
   const run = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
   run('init', '-q', '-b', 'main');
   run('config', 'user.email', 'test@test.invalid');

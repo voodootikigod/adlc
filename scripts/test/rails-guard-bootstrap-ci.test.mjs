@@ -12,7 +12,7 @@
 // the copy it pinned. It could only prove the inline script was UNCHANGED, never that
 // it AGREED with the real gate — and they had already drifted (#314).
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -21,6 +21,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ticketFilename } from '@adlc/tickets';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const WORKFLOW = join(ROOT, 'docs', 'ci', 'rails-guard.yml');
@@ -155,6 +159,7 @@ function runBootstrapScenario({ baseConfig, headConfig, env = {}, mutateBase, mu
 
 function runRailFreezeScenario({ baseConfig = BASE_UNSIGNED, baseTickets, headConfig, env = {}, mutateBase, mutateHead }) {
   const dir = mkdtempSync(join(tmpdir(), 'rg-rail-freeze-'));
+  fixtureDirs.add(dir);
   try {
     git(dir, ['init', '-q', '-b', 'main']);
     git(dir, ['config', 'user.email', 'a@b.c']);

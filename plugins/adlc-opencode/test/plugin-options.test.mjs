@@ -3,15 +3,20 @@
 // per @opencode-ai/plugin `Plugin = (input, options?) => Hooks`). Env vars win
 // over options. Offline, temp-dir only.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { adlcRailsGuard, optionsToEnv } from '../index.mjs';
 
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 const railedRepo = () => {
   const dir = mkdtempSync(join(tmpdir(), 'oc-opts-'));
+  fixtureDirs.add(dir);
   mkdirSync(join(dir, '.adlc'), { recursive: true });
   writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'T1 fixture', rails: ['test/**'] }] }));
   return dir;

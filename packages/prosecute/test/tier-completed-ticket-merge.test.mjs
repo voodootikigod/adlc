@@ -17,12 +17,16 @@
 //
 // End-to-end at the process boundary in a real git repo, mirroring
 // tier-merge-base.test.mjs's fixture shape.
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
 
@@ -43,6 +47,7 @@ const PINNED_GIT_DATE = '2026-01-01T00:00:00Z';
 
 function scratchRepo({ baseTickets, mutate, advanceBase }) {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-tier-completed-merge-'));
+  fixtureDirs.add(dir);
   const g = (...a) => execFileSync('git', a, {
     cwd: dir,
     encoding: 'utf8',

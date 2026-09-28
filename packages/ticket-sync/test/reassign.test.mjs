@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync } from 'node:fs';
@@ -8,6 +8,10 @@ import { join } from 'node:path';
 import { sha256 } from '@adlc/core';
 import { recordTicketEvidence, resolveOpenSegment, segmentPath, readForestEntries, canonicalJson, lineagePath, readOwnChains } from '@adlc/tickets';
 import { reassignId, planManifestMigration, migrateManifestEvidence } from '../lib/reassign.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 // ---- reassignId (pure, store-wide edge rewrite) ----
 
@@ -192,6 +196,7 @@ test('migrateManifestEvidence derives sequence and prev from state observed insi
 
 function gitRepo(branch = 'feat/reassign-test') {
   const root = mkdtempSync(join(tmpdir(), 'adlc-reassign-segments-'));
+  fixtureDirs.add(root);
   const g = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   g('init', '-q', '-b', branch);
   g('config', 'user.email', 't@t.co');

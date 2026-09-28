@@ -4,7 +4,7 @@
 // a direction that would WEAKEN it: silently dropping a default, letting a caller shrink
 // the set, or freezing paths in a repo that has nothing frozen yet.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,6 +13,10 @@ import { execFileSync } from 'node:child_process';
 import { DEFAULT_IMMUTABLE_TRUST_ROOTS, resolveImmutableTrustRoots } from '../lib/ci/trust-roots.mjs';
 import { runRailFreezeGate } from '../lib/ci/rail-freeze.mjs';
 import { GateDeny } from '../lib/ci/errors.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 // #363 cross-model review, blocking finding 1: these were briefly passed in via
 // --trust-root from scripts/rails-guard-ci.mjs. That let ONE PR drop the arguments AND
@@ -117,6 +121,7 @@ test('resolving with no arguments still yields the full default set', () => {
  */
 function seedGateFixture(packageJson) {
   const root = mkdtempSync(join(tmpdir(), 'rf-trust-roots-'));
+  fixtureDirs.add(root);
   const run = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
   run('init', '-q', '-b', 'main');
   run('config', 'user.email', 'test@test.invalid');

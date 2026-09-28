@@ -3,7 +3,7 @@
 // REAL exported hook handler; the decision logic itself is @adlc/build-gate's
 // and has its own package tests.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,8 +11,13 @@ import { join } from 'node:path';
 import { createDepthTracker, checkBuildGate } from '../lib/build-gate.mjs';
 import { adlcRailsGuard } from '../index.mjs';
 
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 function repo({ tickets } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'oc-bg-'));
+  fixtureDirs.add(dir);
   mkdirSync(join(dir, '.adlc'), { recursive: true });
   if (tickets !== undefined) {
     tickets = structuredClone(tickets);

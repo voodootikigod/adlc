@@ -10,6 +10,10 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { SOURCE_EXTS, isExcluded, walkSourceFiles } from '../lib/walk.mjs';
 
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const bin = resolve(__dirname, '../bin/model-ratchet.mjs');
 
@@ -19,6 +23,7 @@ function git(args, cwd) {
 
 function makeRepoWithoutSources() {
   const tmp = mkdtempSync(join(tmpdir(), 'mr-empty-'));
+  fixtureDirs.add(tmp);
   git(['init', '-b', 'main'], tmp);
   git(['config', 'user.email', 'test@example.com'], tmp);
   git(['config', 'user.name', 'Test'], tmp);
