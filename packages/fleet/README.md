@@ -191,8 +191,8 @@ aborts before dispatch, and `--adapter-command`/`--adapter-args` are refused
 override would discard the forced model). `fleet run --dry-run` prints the
 resolved seat and the argv the adapter itself renders, in text or `--json`.
 Seats are routed from ledger priors; a malformed ledger line those priors were
-built without is reported as a stderr notice (dry-run and live run) and listed
-under `quartermaster.skippedLedger` in the dry-run `--json` plan.
+built without is reported as a stderr notice in the dry-run (text and `--json`)
+and the live run.
 
 Nothing in the repo under review participates: a registry-shaped file inside the
 tree is ignored with a notice, and a configured path that is relative or inside
