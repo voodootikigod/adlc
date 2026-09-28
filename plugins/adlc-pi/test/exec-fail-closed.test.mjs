@@ -202,7 +202,7 @@ test('AC4: the killed/codeless condition is spelled in exactly one source file',
 
 test('AC4: /adlc-accept fails closed through the same predicate', () => {
   const src = readFileSync(join(PLUGIN_ROOT, 'lib/commands.mjs'), 'utf8');
-  assert.match(src, /execFailureReason/, 'commands.mjs must import the shared predicate');
+  assert.match(src, /verdictFailureReason/, 'commands.mjs must import the shared predicate');
   assert.doesNotMatch(
     src,
     /const ok = parsed \? parsed\.ok === true : res\?\.code === 0;/,
@@ -282,13 +282,13 @@ async function runAccept(t, acceptResult) {
   return { notices: ctx.notices, entries: pi.entries };
 }
 
-test('AC4: /adlc-accept records the acceptance when the CLI exits 0 with no JSON on stdout', async (t) => {
+test('AC4: /adlc-accept refuses when the CLI exits 0 with no JSON on stdout (accept --json always prints one)', async (t) => {
   const { notices } = await runAccept(t, { stdout: 'accepted\n', stderr: '', code: 0 });
   assert.ok(
-    notices.some((n) => /recorded P6 acceptance/i.test(n.msg)),
-    `expected an acceptance notice, got ${JSON.stringify(notices)}`
+    notices.some((n) => /acceptance gate FAILED/i.test(n.msg)),
+    `expected a refusal notice, got ${JSON.stringify(notices)}`
   );
-  assert.ok(!notices.some((n) => /acceptance gate FAILED/i.test(n.msg)));
+  assert.ok(!notices.some((n) => /recorded P6 acceptance/i.test(n.msg)));
 });
 
 test('AC4: /adlc-accept refuses when the CLI exits non-zero with no JSON on stdout', async (t) => {
