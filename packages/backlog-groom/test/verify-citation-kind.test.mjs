@@ -82,6 +82,15 @@ test('pathKindAtRevision against this repository: a tracked directory is a tree,
   assert.equal(pathKindAtRevision('packages/backlog-groom/package.json', 'HEAD'), 'blob');
 });
 
+test('the default reader reads the cited file at the revision (real git)', () => {
+  // No injected readFile: a live line of a tracked file must verify valid.
+  const v = verifyIssue(
+    mechanical([{ path: 'packages/backlog-groom/package.json', line: 2, snippet: '"name": "@adlc/backlog-groom",' }]),
+    { revision: 'HEAD' },
+  );
+  assert.equal(v.verdict, 'valid');
+});
+
 // ---- per-citation verified locations ---------------------------------------
 
 test('verifiedPaths lists only the citations whose own check was valid or fixed', () => {
