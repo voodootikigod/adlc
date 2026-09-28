@@ -22,7 +22,10 @@ This is mutation testing aimed at the *reviewer* instead of the code (ADLC C8).
 3. **Equivalent-mutant filter**: a plant with a witness must DISCRIMINATE
    (pass on the original, fail on the mutant). Plants whose witness does not
    discriminate are equivalent mutants — there is no bug to find, so they are
-   excluded from the denominator rather than scored as missed.
+   excluded from the denominator rather than scored as missed. Each exclusion is
+   printed to stderr with its reason; a witness that fails on the ORIGINAL (a
+   broken witness rather than an equivalent mutant) includes the tail of that
+   run's output, and one that cannot start says so instead of "timed out".
 4. **Control self-test (scorer)**: before scoring, two reference reviewers run
    through the deterministic `referenceJudge` — an *echoer* (must score ~0) and
    an *oracle* (must score 1.0). If either is wrong the scorer itself is broken
