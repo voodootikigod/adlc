@@ -252,11 +252,11 @@ test('auditAdversarialReview: diffs against the merge-base, not the trunk candid
     'git ls-files': { status: 0, stdout: '' },
     'git rev-parse --verify --quiet main^{commit}': { status: 0, stdout: '' },
     'git merge-base main HEAD': { status: 0, stdout: 'deadbeefcafe\n' },
-    'git diff --name-only deadbeefcafe --': { status: 0, stdout: 'src/auth/login.mjs\n' },
+    'git diff --name-only -z deadbeefcafe --': { status: 0, stdout: 'src/auth/login.mjs\0' },
     // If the implementation regressed to diffing straight against the
     // candidate's tip, THIS is the call it would make instead — assert
     // that path never surfaces.
-    'git diff --name-only main --': { status: 0, stdout: 'docs/unrelated-trunk-only-change.md\n' },
+    'git diff --name-only -z main --': { status: 0, stdout: 'docs/unrelated-trunk-only-change.md\0' },
   });
   const r = auditAdversarialReview(root, { spawnImpl, env: {} });
   assert.equal(r.needed, true);
@@ -271,7 +271,7 @@ test('auditAdversarialReview: merge-base unresolvable → diff step skipped (no 
     'git ls-files': { status: 0, stdout: '' },
     'git rev-parse --verify --quiet main^{commit}': { status: 0, stdout: '' },
     'git merge-base main HEAD': { status: 1, stdout: '', stderr: 'fatal: no merge base' },
-    'git diff --name-only main --': { status: 0, stdout: 'src/auth/login.mjs\n' },
+    'git diff --name-only -z main --': { status: 0, stdout: 'src/auth/login.mjs\0' },
   });
   const r = auditAdversarialReview(root, { spawnImpl, env: {} });
   assert.equal(r.needed, false);
@@ -297,7 +297,7 @@ test('auditAdversarialReview: main exists but shares no history with HEAD → re
     // `master` is the real, resolvable ancestor — the retry loop must reach it.
     'git rev-parse --verify --quiet master^{commit}': { status: 0, stdout: '' },
     'git merge-base master HEAD': { status: 0, stdout: 'cafebabe1234\n' },
-    'git diff --name-only cafebabe1234 --': { status: 0, stdout: 'src/auth/login.mjs\n' },
+    'git diff --name-only -z cafebabe1234 --': { status: 0, stdout: 'src/auth/login.mjs\0' },
   });
   const r = auditAdversarialReview(root, { spawnImpl, env: {} });
   assert.equal(r.needed, true);

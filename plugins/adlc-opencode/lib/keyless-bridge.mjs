@@ -45,12 +45,21 @@ export function extractPrompts(stdout) {
  *  malformed rather than spawning an unbounded number of child sessions. */
 export const MAX_PROMPTS = 12;
 
+// Bound on the `--prompt-only` run, which executes in-process inside the host;
+// the same budget a plain CLI gate run gets. SIGKILL: not ignorable.
+const PROMPT_ONLY_TIMEOUT_MS = 120_000;
+
 export async function runGateKeyless({ bin, args = [], ask, spawnImpl = spawnSync, cwd = process.cwd(), maxPrompts = MAX_PROMPTS }) {
   if (typeof ask !== 'function') throw new Error('runGateKeyless: an ask(prompt) function is required');
-  const res = spawnImpl(bin, [...args, '--prompt-only'], { cwd, encoding: 'utf8' });
+  const res = spawnImpl(bin, [...args, '--prompt-only'], {
+    cwd, encoding: 'utf8', timeout: PROMPT_ONLY_TIMEOUT_MS, killSignal: 'SIGKILL',
+  });
   if (res.status !== 0) {
     const stderr = (res.stderr || '').trim();
-    const err = new Error(`gate ${bin} --prompt-only exited ${res.status}: ${stderr}`);
+    const how = typeof res.status === 'number'
+      ? `exited ${res.status}`
+      : `did not complete (${res.error?.code ?? res.signal ?? 'no exit code'})`;
+    const err = new Error(`gate ${bin} --prompt-only ${how}: ${stderr}`);
     // Distinguish "this gate does not IMPLEMENT --prompt-only" (caller may fall
     // back to the plain CLI) from a genuine failure of a prompt-only-supporting
     // gate (must surface, not be silently downgraded to a CLI run).

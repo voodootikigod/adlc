@@ -16,12 +16,37 @@ import { spawnSync } from 'node:child_process';
 import { classifyRiskTier, decideAdversarialReviewNotice, ticketStoreExists } from '@adlc/core';
 import { resolveActiveTicketId } from '../rails-checker.mjs';
 
-function run(spawnImpl, bin, args, cwd) {
+// These hooks run in-process inside the OpenCode host, where a synchronous
+// child that never exits freezes the host and nothing outside reaps it. So
+// every spawn is bounded, with SIGKILL so a child cannot ignore the bound.
+const ADLC_CLI_TIMEOUT_MS = 5000;
+
+// One budget for the WHOLE changed-path scan, which issues up to eleven git
+// commands: a per-call bound would let a wedged git cost eleven times over.
+const GIT_SCAN_DEADLINE_MS = 5000;
+
+// spawnSync treats `timeout: 0` as no timeout at all, so an exhausted budget
+// must still hand the next call a real (if immediate) bound.
+const MIN_CALL_MS = 1;
+
+/**
+ * Run a child with a bound. A child that ended without an exit code (killed
+ * by a signal, or by the timeout) reports `status: 1` and `killed: true`,
+ * never a success; a spawn failure keeps its `error`.
+ */
+function run(spawnImpl, bin, args, cwd, timeout = ADLC_CLI_TIMEOUT_MS) {
   try {
-    const r = spawnImpl(bin, args, { cwd, encoding: 'utf8' });
-    return { status: r.status ?? (r.error ? 1 : 0), stdout: r.stdout ?? '', stderr: r.stderr ?? '', error: r.error };
+    const r = spawnImpl(bin, args, { cwd, encoding: 'utf8', timeout, killSignal: 'SIGKILL' });
+    const killed = r.error?.code === 'ETIMEDOUT' || (typeof r.status !== 'number' && Boolean(r.signal));
+    return {
+      status: typeof r.status === 'number' ? r.status : 1,
+      stdout: r.stdout ?? '',
+      stderr: r.stderr ?? '',
+      error: r.error,
+      killed,
+    };
   } catch (err) {
-    return { status: 1, stdout: '', stderr: String(err), error: err };
+    return { status: 1, stdout: '', stderr: String(err), error: err, killed: false };
   }
 }
 
@@ -64,6 +89,10 @@ export function auditGateManifest(root, { spawnImpl = spawnSync } = {}) {
   // without weakening detection of real tampering — see
   // packages/gate-manifest/lib/verify.mjs.
   const res = run(spawnImpl, 'adlc', ['gate-manifest', 'verify', '--json', '--allow-legacy-unsigned'], root);
+  if (res.killed) {
+    // It started and was stopped: the chain was NOT verified, which is not "ok".
+    return { ok: false, skipped: false, warning: 'gate-manifest verify did not finish (timed out or killed) — the evidence chain was not verified.' };
+  }
   if (res.error) {
     return { ok: true, skipped: true, warning: null }; // can't run the verifier → stay silent (advisory)
   }
@@ -77,8 +106,9 @@ export function auditGateManifest(root, { spawnImpl = spawnSync } = {}) {
  * Unquote a path token from `git status --porcelain` (non -z form). Git
  * C-quotes any path containing a space or other "unusual" character by
  * wrapping it in double quotes and backslash-escaping the contents (e.g.
- * ` M "secrets/api key.pem"`), unlike `git diff --name-only`/`git ls-files`,
- * which never quote. Left as-is, the literal surrounding `"` (and any `\\`
+ * ` M "secrets/api key.pem"`); so do `git diff --name-only` and `git ls-files`,
+ * which is why those two are read with `-z` instead. Left as-is, the literal
+ * surrounding `"` (and any `\\`
  * escapes) become part of the path string and silently defeat the `$`-anchored
  * risk-tier globs in classifyRiskTier. Pass-through for the common (unquoted)
  * case; only unquotes tokens that are actually wrapped in `"..."`.
@@ -126,12 +156,17 @@ function unquoteGitStatusPath(raw) {
  * modifications + untracked files) and the committed branch diff against the
  * first reachable trunk candidate (or `base`, if given). Best-effort: any git
  * failure yields an empty set rather than throwing — this check is advisory
- * and must never crash or fail closed on a git problem.
+ * and must never crash or fail closed on a git problem. A git that never exits
+ * is such a failure: once the scan budget is spent the remaining calls fail
+ * immediately and the paths gathered so far are returned.
  */
 function gitChangedPaths(root, { spawnImpl = spawnSync, base } = {}) {
   const paths = new Set();
+  const startMs = Date.now();
+  const git = (args) =>
+    run(spawnImpl, 'git', args, root, Math.max(MIN_CALL_MS, GIT_SCAN_DEADLINE_MS - (Date.now() - startMs)));
 
-  const status = run(spawnImpl, 'git', ['status', '--porcelain', '--no-renames'], root);
+  const status = git(['status', '--porcelain', '--no-renames']);
   if (!status.error && status.status === 0 && status.stdout) {
     for (const line of status.stdout.split('\n')) {
       const p = unquoteGitStatusPath(line.slice(3).trim());
@@ -139,10 +174,12 @@ function gitChangedPaths(root, { spawnImpl = spawnSync, base } = {}) {
     }
   }
 
-  const untracked = run(spawnImpl, 'git', ['ls-files', '--others', '--exclude-standard'], root);
+  // -z: NUL-terminated, never C-quoted (a quoted path would not match the
+  // anchored risk-tier globs).
+  const untracked = git(['ls-files', '--others', '--exclude-standard', '-z']);
   if (!untracked.error && untracked.status === 0 && untracked.stdout) {
-    for (const p of untracked.stdout.split('\n')) {
-      if (p.trim()) paths.add(p.trim());
+    for (const p of untracked.stdout.split('\0')) {
+      if (p) paths.add(p);
     }
   }
 
@@ -158,14 +195,14 @@ function gitChangedPaths(root, { spawnImpl = spawnSync, base } = {}) {
   const baseCandidates = base ? [base] : ['main', 'master', 'origin/main', 'origin/master'];
   let diffBase = '';
   for (const c of baseCandidates) {
-    const exists = run(spawnImpl, 'git', ['rev-parse', '--verify', '--quiet', `${c}^{commit}`], root);
+    const exists = git(['rev-parse', '--verify', '--quiet', `${c}^{commit}`]);
     if (exists.error || exists.status !== 0) continue;
     // Diff against the MERGE-BASE (fork point of `c` and HEAD), NOT `c`'s live
     // tip — resolveBase() itself resolves to `git merge-base <candidate>
     // HEAD`. Diffing straight against the tip would flag any file trunk
     // changed *after* this branch diverged as "changed" on this branch too,
     // producing false-positive risk-tier matches.
-    const mergeBase = run(spawnImpl, 'git', ['merge-base', c, 'HEAD'], root);
+    const mergeBase = git(['merge-base', c, 'HEAD']);
     if (!mergeBase.error && mergeBase.status === 0 && mergeBase.stdout.trim()) {
       diffBase = mergeBase.stdout.trim();
       break;
@@ -173,10 +210,10 @@ function gitChangedPaths(root, { spawnImpl = spawnSync, base } = {}) {
     // candidate exists but shares no history with HEAD — try the next one
   }
   if (diffBase) {
-    const diff = run(spawnImpl, 'git', ['diff', '--name-only', diffBase, '--'], root);
+    const diff = git(['diff', '--name-only', '-z', diffBase, '--']);
     if (!diff.error && diff.status === 0 && diff.stdout) {
-      for (const p of diff.stdout.split('\n')) {
-        if (p.trim()) paths.add(p.trim());
+      for (const p of diff.stdout.split('\0')) {
+        if (p) paths.add(p);
       }
     }
   }

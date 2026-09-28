@@ -57,10 +57,16 @@ export function allowedSuppressions(ticket) {
   return allowed;
 }
 
+// The watcher runs in-process inside the OpenCode host on every file.edited
+// event, so each git call is bounded (SIGKILL: not ignorable) to keep a wedged
+// git from freezing the host.
+const GIT_TIMEOUT_MS = 5000;
+
+/** Run git with a bound; a child that ended without an exit code is a failure. */
 function run(exec, bin, args, cwd) {
   try {
-    const r = exec(bin, args, { cwd, encoding: 'utf8' });
-    return { status: r.status ?? (r.error ? 1 : 0), stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    const r = exec(bin, args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, killSignal: 'SIGKILL' });
+    return { status: typeof r.status === 'number' ? r.status : 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
   } catch (err) {
     return { status: 1, stdout: '', stderr: String(err) };
   }

@@ -705,8 +705,9 @@ function resolveActiveTicketIdAdvisory() {
  * Unquote a path token from `git status --porcelain` (non -z form). Git
  * C-quotes any path containing a space or other "unusual" character by
  * wrapping it in double quotes and backslash-escaping the contents (e.g.
- * ` M "secrets/api key.pem"`), unlike `git diff --name-only`/`git ls-files`,
- * which never quote. Left as-is, the literal surrounding `"` (and any `\\`
+ * ` M "secrets/api key.pem"`); so do `git diff --name-only` and `git ls-files`,
+ * which is why those two are read with `-z` instead. Left as-is, the literal
+ * surrounding `"` (and any `\\`
  * escapes) become part of the path string and silently defeat the `$`-anchored
  * risk-tier globs in matchRiskTier. Pass-through for the common (unquoted)
  * case; only unquotes tokens that are actually wrapped in `"..."`.
@@ -792,10 +793,12 @@ function gitChangedPaths() {
     }
   }
 
-  const untracked = runGit(['ls-files', '--others', '--exclude-standard']);
+  // -z: NUL-terminated, never C-quoted (a quoted path would not match the
+  // anchored risk-tier globs).
+  const untracked = runGit(['ls-files', '--others', '--exclude-standard', '-z']);
   if (!untracked.error && untracked.status === 0 && untracked.stdout) {
-    for (const p of untracked.stdout.split('\n')) {
-      if (p.trim()) paths.add(p.trim());
+    for (const p of untracked.stdout.split('\0')) {
+      if (p) paths.add(p);
     }
   }
 
@@ -828,10 +831,10 @@ function gitChangedPaths() {
     // candidate exists but shares no history with HEAD — try the next one
   }
   if (diffBase) {
-    const diff = runGit(['diff', '--name-only', diffBase, '--']);
+    const diff = runGit(['diff', '--name-only', '-z', diffBase, '--']);
     if (!diff.error && diff.status === 0 && diff.stdout) {
-      for (const p of diff.stdout.split('\n')) {
-        if (p.trim()) paths.add(p.trim());
+      for (const p of diff.stdout.split('\0')) {
+        if (p) paths.add(p);
       }
     }
   }
