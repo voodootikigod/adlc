@@ -76,6 +76,7 @@ Schema (see lib/tickets.mjs header): `{ id, title, body, scope[], rails[], edges
 
 - `tail(str, maxChars = 4000)` → the last `maxChars` characters of `str`, unchanged if already within limit. Hoisted here (was duplicated in consensus-fix) so every caller capping a prompt payload shares one implementation.
 - `fence(label, content, maxChars, opts?)` → wraps `content` in `<<UNTRUSTED:...>>`/`<<END:...>>` markers declaring it inert data, capped to `maxChars` (`maxChars` is required, not optional; there is no uncapped call). Truncation keeps the tail by default; pass `{ bias: 'head' }` to keep the opening (spec-shaped content). `opts` must be a plain object whose only key is `bias`, and `bias` must be `'head'` or `'tail'`; anything else throws. Used by `packages/fleet` to fence prior build/gate/prosecution logs into a fix charter.
+
 ## test-kit (`@adlc/core/test-kit`)
 
 Fixture helpers for `node:test` suites; typed by `lib/test-kit.d.mts`.
