@@ -26,8 +26,8 @@ adlc rejection-mining [--limit <n>] [--min <n>] [--out-dir <path>] [--write] [--
 
 | Flag | Description |
 | --- | --- |
-| `--limit <n>` | Maximum number of PRs to fetch (default `50`). |
-| `--min <n>` | Minimum cluster size to author a lens (default `2`). |
+| `--limit <n>` | Maximum number of PRs to fetch (default `50`). A plain positive integer; `1e3` or `50x` exits 1. |
+| `--min <n>` | Minimum cluster size to author a lens (default `2`). A plain positive integer. |
 | `--out-dir <path>` | Directory to write lens files into (default `.adlc/lenses`). |
 | `--write` | Emit lens files (default is dry-run). |
 | `--llm` | Sharpen each lens title and charter via one mid-tier LLM call per cluster. |
@@ -45,7 +45,7 @@ Requires the `gh` CLI installed and authenticated (`gh auth login`).
   <span style={{ color: 'var(--adlc-fail)' }}>**2**: reserved for a gate-fail; not currently emitted by this tool.</span>
 </div>
 
-When all PR details failed to fetch (e.g. rate limits or token permissions), or when `--llm` is requested and LLM refinement failed for all clusters, the command exits 1 with an operational error.
+When all PR details failed to fetch (e.g. rate limits or token permissions), or when `--llm` is requested and LLM refinement failed for all clusters, the command exits 1 with an operational error. A refinement counts only when the model returns a non-empty string `title` and `charter`; any other reply shape is a failed refinement.
 
 ## Example
 
