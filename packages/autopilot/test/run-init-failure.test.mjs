@@ -201,12 +201,10 @@ test('#992 runIssue ticketCache write (run.mjs :79): a record that vanished duri
     const { value: r, seen } = await withUnhandledRejectionWatch(() =>
       runIssue({ ctx: w.ctx, deps, issue: ISSUE, ticket: { title: 't' } }));
 
-    // The write at :79 no longer throws over the missing record, so the run
-    // carries on and terminates at the #962 rounds-loop guard — the truthful
-    // "this run is gone" answer — instead of rejecting three steps earlier.
+    // The write no longer throws over the missing record, and the run stops
+    // right there with the truthful "this run is gone" answer.
     assert.equal(r.state, 'unchanged');
     assert.equal(r.reason, 'record-vanished');
-    assert.equal(r.ticketId, 'T-W');
     assert.deepEqual(seen, [], 'no unhandled rejection was emitted');
   } finally { w.cleanup(); }
 });
