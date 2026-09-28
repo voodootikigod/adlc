@@ -15,7 +15,7 @@ extracts the claims it can actually check (command names, file paths, and
 `npm`/`npx`/`pnpm`/`yarn` script references), and verifies them against the
 repo. Verifiable-but-failing claims are `stale` and fail the gate; claims it
 cannot adjudicate (URLs, missing `package.json`) are `unverifiable` and never
-counted against you. Skills with zero checkable claims are reported as `[NO-CLAIMS]` and are never stamped under `--write`. Run it weekly in CI to keep the skill corpus honest.
+counted against you. Skills with zero checkable claims are reported as `[NO-CLAIMS]` and are never stamped under `--write`. A skill whose claims are all unverifiable is reported as `[UNVERIFIED]`, is not counted clean, and is never stamped. Run it weekly in CI to keep the skill corpus honest.
 
 ## Usage
 
@@ -26,7 +26,7 @@ adlc skill-rot [path ...] [--write] [--json]
 Positional paths override the default search roots (`.claude/skills`,
 `.agents/skills`, `skills`), which are searched only when they exist.
 
-Symlinked skill directories and symlinked `SKILL.md` files are followed, with cycle detection preventing infinite recursion on recursive symlink graphs.
+Symlinked skill directories and symlinked `SKILL.md` files are followed, with cycle detection preventing infinite recursion on recursive symlink graphs. Directories named `node_modules` or `.git` below a search root are skipped. A symlink resolving into one is skipped during default discovery and is an operational error (exit 1) when you pass explicit paths; name the target path to check it.
 
 | Flag | Description |
 | --- | --- |
@@ -36,8 +36,8 @@ Symlinked skill directories and symlinked `SKILL.md` files are followed, with cy
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
-  <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes. All skills clean.</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (no `SKILL.md` files found, or bad input).</span>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes. No skill has stale claims.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (no `SKILL.md` files found, bad input, or an explicit path that cannot be fully inspected).</span>
   <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails. At least one skill has stale claims.</span>
 </div>
 

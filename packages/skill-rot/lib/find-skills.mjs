@@ -4,10 +4,13 @@
  */
 
 import { readdirSync, existsSync, statSync, realpathSync } from 'node:fs';
-import { join, resolve, basename } from 'node:path';
+import { join, resolve, basename, relative } from 'node:path';
 
 /** Default search roots (only those that exist are searched). */
 export const DEFAULT_ROOTS = ['.claude/skills', '.agents/skills', 'skills'];
+
+/** Directory names never searched below a search root. */
+const EXCLUDED_DIRS = new Set(['node_modules', '.git']);
 
 /**
  * Find all SKILL.md files under the given root directories.
@@ -30,7 +33,7 @@ export function findSkills(roots, repoRoot, { strict = false } = {}) {
     }
     const stat = statSync(absRoot);
     if (stat.isDirectory()) {
-      collectSkills(absRoot, results, strict, visited);
+      collectSkills(absRoot, results, strict, visited, realpathSync(absRoot));
     } else if (stat.isFile() && basename(absRoot) === 'SKILL.md') {
       results.push(absRoot);
     } else if (strict) {
@@ -44,20 +47,36 @@ export function findSkills(roots, repoRoot, { strict = false } = {}) {
 }
 
 /**
+ * True when realDir, seen from the search root, passes through an excluded
+ * directory. Judged relative to the root so a root that itself lives under
+ * node_modules or .git is still searched.
+ */
+function isExcluded(realRoot, realDir) {
+  return relative(realRoot, realDir).split(/[\\/]/).some((part) => EXCLUDED_DIRS.has(part));
+}
+
+/**
  * Recursively walk dir and collect SKILL.md files.
  * Skips node_modules and .git directories. With strict (explicit roots) an
- * unreadable subtree is an error — a clean verdict must mean everything the
- * caller named was inspected; best-effort skipping is for default discovery.
+ * unreadable subtree, or a symlink resolving into an excluded directory, is an
+ * error — a clean verdict must mean everything the caller named was inspected;
+ * best-effort skipping is for default discovery.
  * `strict` is a required positional: a defaulted option that every caller
  * overrides is dead code the mutation gate rightly flags.
  */
-function collectSkills(dir, results, strict, visited) {
+function collectSkills(dir, results, strict, visited, realRoot) {
   const realDir = realpathSync(dir);
   if (visited.has(realDir)) return;
   visited.add(realDir);
 
-  const pathParts = realDir.split(/[\\/]/);
-  if (pathParts.includes('node_modules') || pathParts.includes('.git')) return;
+  // Plain recursion never enters an excluded name (see the entry check below),
+  // so only a symlink can land here.
+  if (isExcluded(realRoot, realDir)) {
+    if (strict) {
+      throw new Error(`symlink into an excluded directory: ${dir} -> ${realDir} (pass the target path explicitly to check it)`);
+    }
+    return;
+  }
 
   let entries;
   try {
@@ -68,12 +87,12 @@ function collectSkills(dir, results, strict, visited) {
   }
 
   for (const entry of entries) {
-    if (entry.name === 'node_modules' || entry.name === '.git') continue;
+    if (EXCLUDED_DIRS.has(entry.name)) continue;
 
     const fullPath = join(dir, entry.name);
 
     if (entry.isDirectory()) {
-      collectSkills(fullPath, results, strict, visited);
+      collectSkills(fullPath, results, strict, visited, realRoot);
     } else if (entry.isFile() && entry.name === 'SKILL.md') {
       results.push(fullPath);
     } else if (entry.isSymbolicLink()) {
@@ -86,7 +105,7 @@ function collectSkills(dir, results, strict, visited) {
       }
 
       if (targetStat.isDirectory()) {
-        collectSkills(fullPath, results, strict, visited);
+        collectSkills(fullPath, results, strict, visited, realRoot);
       } else if (targetStat.isFile() && entry.name === 'SKILL.md') {
         results.push(fullPath);
       }
