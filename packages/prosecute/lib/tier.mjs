@@ -62,6 +62,26 @@ const TRUST_ROOT_FILES = [
   // an empty PATH) while every protected file above stays untouched.
   'scripts/preflight.mjs',
   'scripts/test/preflight.test.mjs',
+  // Who may approve a trust-root change. GitHub reads the first of these that
+  // exists, so every location it honours is a trust root.
+  'CODEOWNERS',
+  '.github/CODEOWNERS',
+  'docs/CODEOWNERS',
+  // The /tmp fixture-boundary guard is permanently locked (its allowlist must
+  // stay empty); a change to its detector needs the same second model as a
+  // change to the gates.
+  'scripts/test/tmp-fixture-boundary.test.mjs',
+];
+
+// 1b. CI control surfaces: the workflows and composite actions that define
+//     every required status check except the base-controlled `gate`. A pull
+//     request runs its OWN copy of these, so editing one can make a required
+//     check report success without running; only this classifier makes such an
+//     edit need a distinct-provider attestation. Tiered unconditionally — the
+//     test-path exemption below never applies to them.
+const CI_CONTROL_PREFIXES = [
+  '.github/workflows/',
+  '.github/actions/',
 ];
 
 // 2. Enforcement packages: each emits an exit-2 gate. Editing them changes what
@@ -134,6 +154,9 @@ export function classifyTrustRootTier({ changedFiles = [], tickets = [] } = {}) 
     const path = toPosix(raw);
 
     if (TRUST_ROOT_FILES.includes(path)) push(`touches trust-root file ${path}`);
+    for (const prefix of CI_CONTROL_PREFIXES) {
+      if (path.startsWith(prefix)) push(`touches CI control surface ${prefix}`);
+    }
     // Package-prefix surfaces gate on LOGIC/CONTRACT risk; a test-only change
     // touches neither, so it is exempt here (#154/T41). The exact-file check
     // above and the rails-deny-path check below stay unconditional.
