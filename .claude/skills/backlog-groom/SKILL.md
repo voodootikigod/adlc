@@ -23,8 +23,8 @@ where the rules live; a wrapper that writes is a wrapper that has none of them.
 `packages/backlog-groom/test/skill-no-direct-mutation.test.mjs` enforces this, so
 a mutation added here fails the suite rather than shipping.
 
-That test matches literally, on purpose — which means this file cannot even
-*quote* a mutating invocation as an example. That is a deliberate trade: a guard
+That test matches every invocation, on purpose — which means this file cannot
+even *quote* a mutating invocation as an example. That is a deliberate trade: a guard
 that tries to tell a prohibition from an instruction is a guard with a hole in
 it, and the hole is worth more than the example.
 
@@ -53,23 +53,16 @@ The core is deterministic and has no model. Two things need judgment:
 
 ## Running it
 
-**There is no `backlog-groom` on PATH and no `adlc backlog-groom` subcommand yet.**
-Registering the verb means editing `packages/cli/lib/registry.mjs`, which is a
-frozen rail of an in-flight ticket, so the binary is invoked by path until that
-ticket ships. Tracked in #1021.
-
 ```bash
-# Read-only: verify, cluster, rank. Writes nothing, anywhere.
+# Read-only: verify, cluster, rank. Writes nothing to GitHub.
 # --threshold: see "Pick the relation threshold from the run's own numbers" below.
 # The 0.2 default surfaces far more candidate pairs than anyone will judge.
-node packages/backlog-groom/bin/backlog-groom.mjs --threshold 0.4 --json --out groomed.json
+adlc backlog-groom --threshold 0.4 --json --out groomed.json
 
 # Apply conclusions. Every action is gated and floored; nothing is applied
 # without an approve from a provider distinct from the deciding one.
-node packages/backlog-groom/bin/backlog-groom.mjs --apply --set groomed.json
+adlc backlog-groom --apply --set groomed.json
 ```
-
-When the verb lands, both become `adlc backlog-groom …` and this note goes away.
 
 ### Pick the relation threshold from the run's own numbers
 
@@ -112,8 +105,11 @@ indistinguishable from a complete one, so the run says which it had.
 - **One shot.** Each action is reviewed once, per `(issue, contentHash)`. A
   refusal **demotes the action to a proposal** — it is not an invitation to
   reword the artifact and ask again. The core records the verdict and refuses a
-  second review of the same revision, so re-asking fails rather than eventually
-  succeeding.
+  second review of the same revision in this checkout. The record is per-checkout
+  state (`.adlc/backlog-groom-ledger.json`, gitignored): removing it or running
+  from a fresh checkout or a new worktree forgets it. Do not do either to get a
+  second review — that is re-asking by another route, and the key is the
+  boundary that makes it a key-holder's decision rather than yours.
 - **Only an explicit approve licenses a write.** A reviewer error, a timeout and
   a material finding all demote. "Not blocked" is not "approved".
 - **No key means no writes.** Ledger entries are HMAC-signed with
@@ -138,7 +134,9 @@ indistinguishable from a complete one, so the run says which it had.
   the policy is compared against is the remote's own HEAD (`ls-remote --symref`),
   not a local `refs/remotes/...` ref, and the merge base must be reachable from
   it. If the remote cannot be reached the run refuses rather than falling back to
-  a local ref. A read-only groom is unaffected and still works offline.
+  a local ref. A read-only groom is unaffected and still works offline. `origin`
+  itself is whatever `.git/config` names; never repoint it to get a run through.
+  Against a caller who can, the key is the boundary.
 
 ## Reporting back
 

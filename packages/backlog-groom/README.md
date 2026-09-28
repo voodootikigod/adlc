@@ -4,19 +4,33 @@ Grooms a GitHub issue backlog **against the code**: verifies whether each issue'
 premise still holds at HEAD, clusters issues by the package their verified
 locations sit in, ranks them from what was learned, and emits a versioned set.
 
-**This package is the READ path. It writes nothing to GitHub.** The adversarial
-gate, the autonomy floor and execution are the write path, built separately.
-Proposals are emitted for it to decide on; nothing here applies them.
-
-> **The `backlog-groom` verb is not registered yet.** `packages/cli/lib/registry.mjs`
-> is a frozen rail of an in-flight ticket, so the binary is invoked by path until that
-> ticket ships — see #1021.
+**Read-only by default; `--apply` writes.** Without `--apply` the command reads
+the backlog and the code and writes nothing to GitHub. With `--apply --set
+<groomed.json>` it acts on a groomed set — closes and relabels — and every action
+passes an adversarial reviewer, the autonomy floor and a comment-first write.
+Writing also needs `ADLC_MANIFEST_KEY`: without it every action demotes to a
+proposal (see [The gate ledger is signed](#the-gate-ledger-is-signed)).
 
 ```bash
-node packages/backlog-groom/bin/backlog-groom.mjs                 # report
-node packages/backlog-groom/bin/backlog-groom.mjs --json          # the groomed set
-node packages/backlog-groom/bin/backlog-groom.mjs --out set.json  # write it to a file
+adlc backlog-groom                                   # report (read-only)
+adlc backlog-groom --json                            # the groomed set (read-only)
+adlc backlog-groom --threshold 0.4 --out set.json    # write the set to a file (read-only)
+adlc backlog-groom --apply --set set.json            # gated, floored writes to GitHub
 ```
+
+The package's own binary, `backlog-groom`, takes the same flags.
+
+| Flag | Meaning |
+|---|---|
+| `--profile <path>` | profile JSON (default `.claude/backlog-groom-profile.json`); refused with `--apply` |
+| `--cache <path>` / `--no-cache` | the verdict cache (default `.adlc/backlog-groom-cache.json`), or skip it |
+| `--threshold <n>` | relation candidate-filter threshold, 0–1 (default 0.2) |
+| `--json` / `--out <path>` | emit the groomed set as JSON / write it to a file |
+| `--apply` | act on a groomed set — the only mode that writes to GitHub |
+| `--set <path>` | with `--apply`: the groomed set to act on |
+
+Exit codes: `0` the run completed (including an `--apply` run whose every action
+demoted to a proposal), `1` operational error. There is no gate-fail exit.
 
 ## Why it exists
 
@@ -51,6 +65,12 @@ Three rules keep `fixed` — the verdict that leads to a close — honest:
 - **A path git has never tracked is not a deleted file.** It is prose that looks
   like a path, and calling it `moved` floods the report with citations this
   repository never had.
+- **A cited path must be a file.** A directory at the revision is `unverifiable`:
+  git would show a listing, and an excerpt never matches a listing.
+
+Clusters and area relabels use only the citations whose own check was `valid` or
+`fixed`. An issue can be `valid` on one live citation while another names a path
+that never existed; that second path says nothing about where the work is.
 
 Across several citations the precedence is `moved` > `valid` > `unverifiable` >
 `fixed`, so every tie-break fails towards *not* closing. `unverifiable`
@@ -84,18 +104,22 @@ merge base with the default branch: a wider `autonomyFloor`, fewer `frozenPaths`
 or different `providers`, `labels` or `units` refuse `--apply`, and `--apply`
 refuses `--profile` because the baseline is read at the profile's own path.
 
-**That baseline is anchored to the REMOTE** (#1036). `git ls-remote --symref
-origin HEAD` asks the remote for its own default branch and the commit it points
-at, in one exchange, and the merge base must be reachable from that commit. Local
-refs decide nothing: `git update-ref refs/remotes/origin/main HEAD` is a local
-write, and a baseline the caller can move is not a baseline. Asking the remote
-directly also binds the branch to the commit — an earlier version asked a forge
-API for the branch name, which a different host holding a same-named repository
-could answer. Every way of failing to reach the remote — no origin, an
-unreachable repository, a commit that cannot be fetched, a merge base outside the
-remote's history — refuses the run rather than falling back, because a fallback
-would restore the hole exactly when the remote could not contradict it. Only
-`--apply` reaches the remote; the read path stays as local as it was.
+**That baseline is anchored to the REMOTE.** `git ls-remote --symref origin HEAD`
+asks the remote for its own default branch and the commit it points at, in one
+exchange, and the merge base must be reachable from that commit. Local refs decide
+nothing: `git update-ref refs/remotes/origin/main HEAD` is a local write and does
+not move the comparison point. Every way of failing to reach the remote — no
+origin, an unreachable repository, a commit that cannot be fetched, a merge base
+outside the remote's history — refuses the run rather than falling back. Only
+`--apply` reaches the remote; the read path stays local.
+
+**What the remote anchor does not cover.** `origin` is whatever `.git/config`
+names, and that file is local state. A caller who can rewrite it (`git remote
+set-url`) can point `origin` at a repository they control, holding a commit with
+a widened floor, and the baseline follows. The anchor stops a caller who can edit
+the profile or move a local ref; it does not stop one who can rewrite
+`.git/config`. Against that caller the ledger key is the boundary: without
+`ADLC_MANIFEST_KEY` nothing is written, however the policy check went.
 
 ## The gate ledger is signed
 
@@ -111,12 +135,22 @@ done, and it exits 0. An unattended agent proposes; closing an issue takes the
 key. The signature is the one field a caller cannot compute — every other one,
 `artifactDigest` included, is derivable from the action itself.
 
+**The ledger is per-checkout state.** `.adlc/backlog-groom-ledger.json` is
+gitignored, and an absent file is a first run. The one-shot rule — one review
+per `(issue, contentHash)` — therefore holds within one checkout: removing the
+file, or running from a fresh checkout or a new worktree, forgets every spent
+review, and the same revision can be reviewed again. The signature stops a
+forged approval, not a forgotten refusal. The key is the boundary: whoever holds
+it can re-run from a fresh checkout and get a fresh review.
+
 ## Incrementality
 
 A gitignored cache at `.adlc/backlog-groom-cache.json`, keyed per issue on
-`(updatedAt, contentHash)`. **An issue with no referenced paths is never cached
-as `valid`** — a key with no code component can never be invalidated by a code
-change, and the cache would answer `valid` forever after the bug was fixed.
+`(updatedAt, contentHash)`. **An issue with no contentHash is only ever cached as
+`unverifiable` or `unverified`.** That covers an issue with no referenced paths
+and one citing any path unreadable at the revision: its key has no code
+component, so no code change can invalidate it, and a cached `valid` or `fixed`
+would outlive the fix — or the revert.
 
 ## Relations
 
