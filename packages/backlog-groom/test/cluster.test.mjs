@@ -57,10 +57,11 @@ test('unitFor returns the first declared unit that matches, or null', () => {
 test('only VERIFIED locations contribute a unit', () => {
   const units = [{ name: 'parallax', paths: ['packages/parallax/**'] }];
   const classified = { references: [{ path: 'packages/parallax/lib/a.mjs' }] };
-  assert.deepEqual(unitsForIssue({ verdict: 'valid' }, classified, units), ['parallax']);
+  const verifiedPaths = ['packages/parallax/lib/a.mjs'];
+  assert.deepEqual(unitsForIssue({ verdict: 'valid', verifiedPaths }, classified, units), ['parallax']);
   for (const verdict of ['moved', 'unverified', 'unverifiable']) {
     assert.deepEqual(
-      unitsForIssue({ verdict }, classified, units),
+      unitsForIssue({ verdict, verifiedPaths }, classified, units),
       [],
       `a ${verdict} location is not evidence about where the work is`
     );
@@ -70,9 +71,9 @@ test('only VERIFIED locations contribute a unit', () => {
 test('issues group by unit, and those with no unit are reported unclustered rather than dropped', () => {
   const units = [{ name: 'parallax', paths: ['packages/parallax/**'] }];
   const rows = [
-    { number: 1, verified: { verdict: 'valid' }, classified: { references: [{ path: 'packages/parallax/a.mjs' }] } },
-    { number: 2, verified: { verdict: 'valid' }, classified: { references: [{ path: 'packages/parallax/b.mjs' }] } },
-    { number: 3, verified: { verdict: 'valid' }, classified: { references: [{ path: 'scripts/c.mjs' }] } },
+    { number: 1, verified: { verdict: 'valid', verifiedPaths: ['packages/parallax/a.mjs'] }, classified: { references: [{ path: 'packages/parallax/a.mjs' }] } },
+    { number: 2, verified: { verdict: 'valid', verifiedPaths: ['packages/parallax/b.mjs'] }, classified: { references: [{ path: 'packages/parallax/b.mjs' }] } },
+    { number: 3, verified: { verdict: 'valid', verifiedPaths: ['scripts/c.mjs'] }, classified: { references: [{ path: 'scripts/c.mjs' }] } },
   ];
   const { clusters, unclustered } = clusterIssues(rows, units);
   assert.deepEqual(clusters, [{ unit: 'parallax', issues: [1, 2] }]);
@@ -98,7 +99,7 @@ test('an issue spanning SEVERAL units is unclustered, not filed under the first'
   ];
   const rows = [{
     number: 7,
-    verified: { verdict: 'valid' },
+    verified: { verdict: 'valid', verifiedPaths: ['packages/core/a.mjs', 'packages/prosecute/b.mjs'] },
     classified: { references: [{ path: 'packages/core/a.mjs' }, { path: 'packages/prosecute/b.mjs' }] },
   }];
   const { clusters, unclustered } = clusterIssues(rows, units);

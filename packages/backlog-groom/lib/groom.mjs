@@ -94,9 +94,11 @@ export function groom({ profile, cache = null, judge = null, io = {}, relationTh
 
     const hit = cache ? cacheGet(cache, key) : null;
     const verified = hit
-      ? { number: issue.number, route: hit.route, verdict: hit.verdict, evidence: hit.evidence ?? null }
+      ? { number: issue.number, route: hit.route, verdict: hit.verdict, evidence: hit.evidence ?? null, verifiedPaths: hit.verifiedPaths }
       : verifyIssue(classified, readIo);
-    if (cache && !hit) cachePut(cache, key, { route: verified.route, verdict: verified.verdict, evidence: verified.evidence });
+    if (cache && !hit) {
+      cachePut(cache, key, { route: verified.route, verdict: verified.verdict, evidence: verified.evidence, verifiedPaths: verified.verifiedPaths });
+    }
 
     return { ...issue, classified, verified, contentHash: hash, cached: Boolean(hit) };
   });

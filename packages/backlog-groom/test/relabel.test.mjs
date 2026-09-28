@@ -28,7 +28,7 @@ function row({ number = 1, verdict = 'valid', labels = [], paths = ['packages/pa
   return {
     number,
     labels,
-    verified: { number, verdict, route: 'mechanical' },
+    verified: { number, verdict, route: 'mechanical', verifiedPaths: ['valid', 'fixed'].includes(verdict) ? paths : [] },
     classified: { number, route: 'mechanical', references: paths.map((p) => ({ path: p, line: 1, snippet: 'x' })) },
     rank: { band, score: 0.8 },
   };
