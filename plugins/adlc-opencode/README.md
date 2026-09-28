@@ -16,6 +16,13 @@ npx @adlc/opencode init
 ```
 
 Restart opencode. `/adlc-init` inside the TUI re-runs the same idempotent scaffold.
+It never overwrites an existing `.adlc/config.json`; if that file is not a JSON
+object, the scaffold says so and exits non-zero instead of reporting it present.
+
+A gate run through `adlc_gate` that timed out or was killed by a signal returns
+`exitCode: null` and a "did not complete" error, never an exit code. Every `git` and
+`adlc` child the in-process session hooks and `file.edited` watcher spawn is bounded
+(5 s, SIGKILL), so a wedged child cannot freeze opencode.
 
 The bootstrap registers this package in `.opencode/opencode.json`'s `plugin` array;
 opencode auto-installs it via Bun on next launch. When you run the bootstrap from a
