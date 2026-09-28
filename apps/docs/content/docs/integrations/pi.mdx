@@ -36,11 +36,15 @@ each phase to the deterministic `adlc` gates.
   sessions); `adlc_gate` runs the LLM-backed gates keyless through your session
   model. A `TICKET-DONE` listener nudges prosecution at ticket completion.
   Both fail closed rather than reporting a result they did not obtain: a gate
-  whose process was killed (its 120s timeout, or any signal) or that reported
-  no exit code is a **tool error**, never a `PASS`, and records no gate-run
-  evidence; and a prosecution in which one or more lenses degraded returns the
-  verdict **`INCONCLUSIVE`**, never `CLEAN` — no lens result was obtained,
-  which is not the same as no findings.
+  whose process was killed (its 120s timeout, or any signal), that reported no
+  exit code, or that exited 0 without printing its `--json` verdict is a
+  **tool error**, never a `PASS`, and records no gate-run evidence
+  (`/adlc-accept` likewise records nothing without a JSON `ok: true`); and a
+  prosecution in which one or more lenses degraded — failed, timed out, or
+  replied with anything other than a findings array — returns the verdict
+  **`INCONCLUSIVE`**, never `CLEAN`: no lens result was obtained, which is not
+  the same as no findings. Lens and verifier prompts carry the diff, the
+  ticket title and each finding inside nonce-tagged untrusted-data fences.
 - **Commands + footer status pill:** `/ticket`, `/adlc-ticket`, `/adlc-init`,
   `/adlc-approve-spec`, `/adlc-accept`, `/adlc-rollback`, and a live pill
   showing the active enforcement context.
