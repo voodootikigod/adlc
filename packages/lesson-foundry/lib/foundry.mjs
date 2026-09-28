@@ -6,6 +6,7 @@ import { readEntries } from '@adlc/core';
 import { clusterFindings } from './cluster.mjs';
 import { routeCluster, clusterName, clusterId, clusterMembers, findingHash } from './route.mjs';
 import { planEmissions } from './emit.mjs';
+import { hasDefenseContent } from './artifact-io.mjs';
 
 /**
  * Legacy marker: identifies a spec-gap cluster's question inside the
@@ -164,7 +165,7 @@ export function findUnbankedClusters(
       // members it actually covers. Checking `!members.some(...)` here was the bug: a colliding
       // artifact records none of OUR members, so it slipped through as a false credit.
       // An empty, whitespace-only, or unreadable file must never grant legacy credit.
-      if (slugContent !== null && typeof slugContent === 'string' && slugContent.trim().length > 0 && !RECORDS_MEMBERS.test(slugContent)) return false;
+      if (hasDefenseContent(slugContent) && !RECORDS_MEMBERS.test(slugContent)) return false;
     }
 
     // Gather the artifact content that actually references THIS cluster — by member
