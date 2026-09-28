@@ -89,6 +89,23 @@ function flailOutput(payload, dataRoot) {
   return { systemMessage: `ADLC flail advisory: the same tool failure has repeated ${count} times. Stop, isolate the cause, and run adlc flail-detector on the relevant log before retrying.` };
 }
 
+/**
+ * Every child this hook spawns is bounded. An unbounded spawnSync waits forever
+ * on a child that never exits, and the host's per-hook timeout is the only other
+ * bound, which nothing calling these exports directly gets. A timed-out child
+ * reports `error` with no exit status, which each caller already treats as a
+ * failed call, so a wedged `adlc` or `git` degrades exactly like a missing one.
+ * A safety bound, not a tuning knob: not overridable from the environment.
+ */
+const SPAWN_TIMEOUT_MS = 5000;
+
+/** One budget for the WHOLE changed-path scan, which issues up to eight git calls. */
+const GIT_SCAN_DEADLINE_MS = 5000;
+
+// spawnSync treats `timeout: 0` as NO timeout and throws on a negative one, so
+// an exhausted budget must still hand the next call a real, tiny bound.
+const MIN_SPAWN_TIMEOUT_MS = 1;
+
 function verifyOutput(root) {
   if (!existsSync(join(root, '.adlc'))) return null;
   const command = process.env.ADLC_CLI_COMMAND ?? 'adlc';
@@ -99,6 +116,8 @@ function verifyOutput(root) {
     cwd: root,
     encoding: 'utf8',
     shell: false,
+    timeout: SPAWN_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
   });
   if (result.status === 0) return null;
   const detail = result.error?.message ?? result.stderr?.trim() ?? `exit ${result.status ?? 1}`;
@@ -194,9 +213,14 @@ export function decideAdversarialReviewNotice({ changedPaths = [], manifestEntri
 
 /** Generic spawn-and-normalize, for ANY binary (git, adlc, ...) — mirrors
  * plugins/adlc-cursor/hooks/adlc-stop.mjs's run(). Exported for tests. */
-export function run(spawnImpl, bin, args, cwd) {
+export function run(spawnImpl, bin, args, cwd, timeoutMs = SPAWN_TIMEOUT_MS) {
   try {
-    const r = spawnImpl(bin, args, { cwd, encoding: 'utf8' });
+    const r = spawnImpl(bin, args, {
+      cwd,
+      encoding: 'utf8',
+      timeout: Math.max(MIN_SPAWN_TIMEOUT_MS, timeoutMs),
+      killSignal: 'SIGKILL',
+    });
     return { status: r.status ?? (r.error ? 1 : 0), stdout: r.stdout ?? '', stderr: r.stderr ?? '', error: r.error };
   } catch (err) {
     return { status: 1, stdout: '', stderr: String(err), error: err };
@@ -205,8 +229,13 @@ export function run(spawnImpl, bin, args, cwd) {
 
 export function gitChangedPaths(root, { spawnImpl = spawnSync, base } = {}) {
   const paths = new Set();
+  // Each call gets whatever is left of one scan budget, so a wedged git costs
+  // the budget once rather than once per call; once it is spent the remaining
+  // calls fail at once and the paths gathered so far are returned.
+  const startMs = Date.now();
+  const git = (args) => run(spawnImpl, 'git', args, root, GIT_SCAN_DEADLINE_MS - (Date.now() - startMs));
 
-  const status = run(spawnImpl, 'git', ['status', '--porcelain', '--no-renames', '-z'], root);
+  const status = git(['status', '--porcelain', '--no-renames', '-z']);
   if (!status.error && status.status === 0 && status.stdout) {
     for (const rec of status.stdout.split('\0')) {
       const p = rec.slice(3).trim();
@@ -214,18 +243,18 @@ export function gitChangedPaths(root, { spawnImpl = spawnSync, base } = {}) {
     }
   }
 
-  const untracked = run(spawnImpl, 'git', ['ls-files', '--others', '--exclude-standard', '-z'], root);
+  const untracked = git(['ls-files', '--others', '--exclude-standard', '-z']);
   if (!untracked.error && untracked.status === 0 && untracked.stdout) {
     for (const p of untracked.stdout.split('\0')) if (p.trim()) paths.add(p.trim());
   }
 
   const baseCandidates = base ? [base] : ['main', 'master', 'origin/main', 'origin/master'];
   for (const c of baseCandidates) {
-    const exists = run(spawnImpl, 'git', ['rev-parse', '--verify', '--quiet', `${c}^{commit}`], root);
+    const exists = git(['rev-parse', '--verify', '--quiet', `${c}^{commit}`]);
     if (exists.error || exists.status !== 0) continue;
-    const mergeBase = run(spawnImpl, 'git', ['merge-base', c, 'HEAD'], root);
+    const mergeBase = git(['merge-base', c, 'HEAD']);
     if (mergeBase.error || mergeBase.status !== 0 || !mergeBase.stdout.trim()) continue;
-    const diff = run(spawnImpl, 'git', ['diff', '--name-only', '-z', mergeBase.stdout.trim(), '--'], root);
+    const diff = git(['diff', '--name-only', '-z', mergeBase.stdout.trim(), '--']);
     if (!diff.error && diff.status === 0 && diff.stdout) {
       for (const p of diff.stdout.split('\0')) if (p.trim()) paths.add(p.trim());
     }
