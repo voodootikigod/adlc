@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawnHook } from './helpers/run-hook.mjs';
 import { tmp } from '@adlc/core/test-kit';
 import { ensureConfig } from '../lib/scaffold.mjs';
 
@@ -46,7 +46,7 @@ test('ensureConfig: an absent config is still created', (t) => {
 });
 
 function runCli(root) {
-  return spawnSync(process.execPath, [CLI], { cwd: root, encoding: 'utf8', timeout: 30_000 });
+  return spawnHook([CLI], { cwd: root });
 }
 
 test('scaffold-cli: a malformed config.json fails the run and says why', (t) => {

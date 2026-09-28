@@ -3,7 +3,7 @@
 // MCP server child.
 
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { launchHook } from "./helpers/run-hook.mjs";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -59,7 +59,7 @@ rl.on("line", (line) => {
 }
 
 function launch(t, entry, { cwd, env }) {
-  const child = spawn(process.execPath, [entry], {
+  const child = launchHook([entry], {
     cwd,
     env: {
       ...process.env,
