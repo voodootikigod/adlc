@@ -1,12 +1,21 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { copyFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 import { runFromStdin } from '../hooks/adlc-rails-guard.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SHIM = join(HERE, '..', 'hooks', 'adlc-rails-guard.cjs');
+
+/** A copy of the shim with no sibling adapter module, so its import fails. */
+function shimWithoutAdapter(t) {
+  const copy = join(tmp(t, 'gemini-shim-no-adapter-'), 'adlc-rails-guard.cjs');
+  copyFileSync(SHIM, copy);
+  return copy;
+}
 
 test('runFromStdin: malformed JSON under enforcement fails closed', () => {
   const v = runFromStdin('{not json', { ADLC_P4_ENFORCEMENT: '1' });
@@ -76,24 +85,25 @@ test('shim: scalar JSON under enforcement fails closed with allow_tool: false', 
   assert.equal(JSON.parse(out).allow_tool, false);
   assert.equal(JSON.parse(out).decision, 'deny');
 });
-test('shim: broken ESM module path under enforcement → exit 0 AND fail-closed payload', () => {
+test('shim: broken ESM module path under enforcement → exit 0 AND fail-closed payload', (t) => {
   // execFileSync only throws on non-zero exit; since the shim always exits 0,
   // it returns stdout normally here — exit 0 is implicitly covered because a
   // future regression that exits non-zero would make execFileSync throw and
   // fail this test. The point of this test is the payload assertion below.
-  const out = execFileSync(process.execPath, [SHIM], {
+  const out = execFileSync(process.execPath, [shimWithoutAdapter(t)], {
     input: '{}', encoding: 'utf8',
-    env: { ...process.env, ADLC_TEST_MODE: '1', ADLC_P4_ENFORCEMENT: '1', ADLC_AGY_ADAPTER_OVERRIDE: '/no/such/module.mjs' },
+    env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' },
   });
   const v = JSON.parse(out);
   assert.equal(v.allow_tool, false);           // fail CLOSED under enforcement
   assert.equal(v.decision, 'deny');
   assert.ok(/ADLC rails-guard:\s*load\/exec/i.test(v.deny_reason ?? ''));
 });
-test('shim: broken ESM module path with enforcement OFF → exit 0 AND allow', () => {
-  const out = execFileSync(process.execPath, [SHIM], {
-    input: '{}', encoding: 'utf8',
-    env: { ...process.env, ADLC_TEST_MODE: '1', ADLC_AGY_ADAPTER_OVERRIDE: '/no/such/module.mjs' },  // no ADLC_P4_ENFORCEMENT
+test('shim: broken ESM module path with enforcement OFF → exit 0 AND allow', (t) => {
+  const env = { ...process.env };
+  delete env.ADLC_P4_ENFORCEMENT;
+  const out = execFileSync(process.execPath, [shimWithoutAdapter(t)], {
+    input: '{}', encoding: 'utf8', env,
   });
   assert.deepEqual(JSON.parse(out), { decision: 'allow', allow_tool: true });
 });

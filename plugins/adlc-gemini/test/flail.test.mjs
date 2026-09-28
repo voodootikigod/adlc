@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-process.env.ADLC_TEST_MODE = '1';
 
 import {
   normalizeError,
@@ -125,7 +124,7 @@ test('parseTranscriptLines extracts content and error text from JSONL transcript
     assert.ok(lines.includes('Error: Cannot find module express line 2'));
 
     // resolveTranscriptPath handles existing string paths
-    assert.equal(resolveTranscriptPath({ payload: { transcriptPath } }), transcriptPath);
+    assert.equal(resolveTranscriptPath({ payload: { transcriptPath }, env: { ANTIGRAVITY_APP_DATA_DIR: tmpDir } }), transcriptPath);
 
     // resolveTranscriptPath rejects non-string and non-existent paths
     assert.equal(resolveTranscriptPath({ payload: { transcriptPath: { invalid: true } } }), null);
