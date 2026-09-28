@@ -34,7 +34,10 @@
     "./revision": "./lib/revision.mjs",
     "./tickets": "./lib/tickets.mjs",
     "./mutate": "./lib/mutate.mjs",
-    "./test-kit": "./lib/test-kit.mjs"
+    "./test-kit": {
+      "types": "./lib/test-kit.d.mts",
+      "default": "./lib/test-kit.mjs"
+    }
   },
   "files": [
     "index.mjs",
