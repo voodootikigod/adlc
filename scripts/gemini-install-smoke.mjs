@@ -4,7 +4,7 @@
 // name/dir invariant, doc framing, and run the plugin unit tests. No agent binary
 // required. Exit 0 = pass, 2 = fail.
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -62,19 +62,24 @@ for (const [label, src] of SELF_CONTAINED_FILES) {
 }
 if (selfContained) ok('plugin is self-contained (node: + relative imports only, no @adlc/core)');
 
-// always exit 0 + allow_tool contract: drive the shim with a rail-hit fixture
+// always exit 0 + allow_tool contract: drive the shim with a rail-hit fixture.
+// The fixture is removed whether or not the shim behaves.
 const repo = mkdtempSync(join(tmpdir(), 'gemini-smoke-'));
-mkdirSync(join(repo, '.adlc'), { recursive: true });
-writeFileSync(join(repo, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 't', body: 'b', scope: ['src/**'], rails: ['src/frozen.js'] }] }));
-writeFileSync(join(repo, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
-mkdirSync(join(repo, 'src'), { recursive: true });
-const SHIM = join(PLUGIN, 'hooks', 'adlc-rails-guard.cjs');
-const drive = (name, args) => {
-  const out = execFileSync(process.execPath, [SHIM], { input: JSON.stringify({ toolCall: { name, args } }), env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' }, encoding: 'utf8' });
-  return JSON.parse(out);
-};
-if (drive('write_to_file', { TargetFile: join(repo, 'src', 'frozen.js') }).allow_tool !== false) fail('shim did not DENY a rail write'); else ok('shim denies a frozen-rail write (exit 0 + allow_tool:false)');
-if (drive('write_to_file', { TargetFile: join(repo, 'src', 'ok.js') }).allow_tool !== true) fail('shim did not ALLOW a non-rail write'); else ok('shim allows a non-rail write');
+try {
+  mkdirSync(join(repo, '.adlc'), { recursive: true });
+  writeFileSync(join(repo, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 't', body: 'b', scope: ['src/**'], rails: ['src/frozen.js'] }] }));
+  writeFileSync(join(repo, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  const SHIM = join(PLUGIN, 'hooks', 'adlc-rails-guard.cjs');
+  const drive = (name, args) => {
+    const out = execFileSync(process.execPath, [SHIM], { input: JSON.stringify({ toolCall: { name, args } }), env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' }, encoding: 'utf8' });
+    return JSON.parse(out);
+  };
+  if (drive('write_to_file', { TargetFile: join(repo, 'src', 'frozen.js') }).allow_tool !== false) fail('shim did not DENY a rail write'); else ok('shim denies a frozen-rail write (exit 0 + allow_tool:false)');
+  if (drive('write_to_file', { TargetFile: join(repo, 'src', 'ok.js') }).allow_tool !== true) fail('shim did not ALLOW a non-rail write'); else ok('shim allows a non-rail write');
+} finally {
+  rmSync(repo, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+}
 
 // doc framing
 const doc = read(join(ROOT, 'docs', 'integrations', 'gemini.md'));

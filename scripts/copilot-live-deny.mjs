@@ -24,7 +24,8 @@
 // Hook wiring: Copilot loads user-level hooks from ~/.copilot/hooks/. This script
 // adds ONE uniquely-named hook file there and removes exactly that file in a
 // finally block and on SIGINT/SIGTERM — it never reads or touches any other hook
-// (e.g. a user's superterm.json is left intact).
+// (e.g. a user's superterm.json is left intact). The per-leg lab directories it
+// creates under TMPDIR are removed on the same paths.
 //
 // Exit codes: 0 = pass, 1 = fail, 3 = skipped.
 import { spawnSync } from 'node:child_process';
@@ -53,17 +54,23 @@ const ver = spawnSync('copilot', ['--version'], { encoding: 'utf8' });
 if (ver.status !== 0) skipOrFail('no working `copilot` binary on PATH');
 
 const hookConfigPath = join(homedir(), '.copilot', 'hooks', `adlc-live-deny-${process.pid}.json`);
+const labRoots = [];
 let cleaned = false;
 function cleanup() {
   if (cleaned) return;
   cleaned = true;
   try { if (existsSync(hookConfigPath)) rmSync(hookConfigPath, { force: true }); } catch { /* best effort */ }
+  for (const root of labRoots) {
+    try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); } catch { /* best effort */ }
+  }
 }
 process.on('SIGINT', () => { cleanup(); process.exit(130); });
 process.on('SIGTERM', () => { cleanup(); process.exit(143); });
 
 function makeLab() {
-  const lab = join(mkdtempSync(join(tmpdir(), 'adlc-copilot-livedeny-')), 'repo');
+  const root = mkdtempSync(join(tmpdir(), 'adlc-copilot-livedeny-'));
+  labRoots.push(root);
+  const lab = join(root, 'repo');
   mkdirSync(join(lab, 'protected'), { recursive: true });
   mkdirSync(join(lab, '.adlc'), { recursive: true });
   spawnSync('git', ['init', '-q'], { cwd: lab });
