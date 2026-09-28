@@ -38,7 +38,7 @@ Options:
   --review-cmd <cmd>  Shell command to run per file. Use {file} as placeholder.
                       Example: --review-cmd "adversarial-review --file {file}"
   --timeout-ms <n>    Kill a review-cmd run after <n> ms and record it as an
-                      operational error for that file (default: 600000)
+                      operational error for that file (default: ${DEFAULT_REVIEW_TIMEOUT_MS})
   --churn-limit <n>   Commit history depth for churn computation (default: 1000)
   --dry-run           Print plan only, do not run review-cmd (default when no
                       --review-cmd is supplied)
