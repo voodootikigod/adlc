@@ -71,3 +71,7 @@
 # ruleset turns code-owner review on.
 /packages/rails-guard/                                @voodootikigod
 /packages/tickets/                                    @voodootikigod
+
+# The /tmp fixture-boundary guard: permanently locked, so a change to its
+# detector or its (empty) allowlist is a trust-root change.
+/scripts/test/tmp-fixture-boundary.test.mjs           @voodootikigod
