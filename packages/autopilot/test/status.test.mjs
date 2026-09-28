@@ -15,6 +15,28 @@ import { createRedactor } from '../lib/redact.mjs';
 import { createRecordStore } from '../lib/records.mjs';
 import { withMutation } from '../lib/mutations.mjs';
 import { scratch, cleanup, prOpenRecord } from './helpers/review-ctx.mjs';
+import { createLatch, awaitSignal } from './helpers/signal.mjs';
+
+/**
+ * Spawn `node <args>` and expose its stdout line by line: `line(text)` resolves
+ * once the child has printed that exact line (at once if it already did), and
+ * `exit` resolves with { code, lines, err }. Cross-process ordering is awaited
+ * on these lines, never on a wall-clock guess of how fast a child starts.
+ */
+function spawnLines(spawn, args) {
+  const child = spawn(process.execPath, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+  const lines = []; let buf = ''; let err = '';
+  const printed = createLatch();
+  child.stdout.on('data', (d) => {
+    buf += d;
+    const parts = buf.split('\n'); buf = parts.pop();
+    for (const l of parts) { lines.push(l); printed.fire(); }
+  });
+  child.stderr.on('data', (d) => { err += d; });
+  const exit = new Promise((resolve) => child.on('exit', (code) => { if (buf) lines.push(buf); resolve({ code, lines, err }); }));
+  const line = (text) => awaitSignal(printed.until(() => lines.includes(text)), { timeoutMs: 30_000, message: () => `the child never printed "${text}" (printed: ${JSON.stringify(lines)}; stderr: ${err.slice(0, 300)})` });
+  return { child, line, exit };
+}
 
 const probes = { pidAlive: () => true, pidStartTimeOf: () => '1' };
 const usage = (fiveHour) => ({ ok: true, fiveHour, sevenDay: 10, resetsAt: { fiveHour: '2026-08-28T20:00:00Z', sevenDay: null }, scoped: new Map() });
@@ -150,11 +172,20 @@ export async function ac87_orchestratorWritesNeverClobberHelperOrdinals() {
     const mutexDir = `${paths.statusFile}.mutex`; mk(mutexDir);
     const writer = `const { createStatusStore } = await import(${JSON.stringify(mods[0])}); const { autopilotPaths } = await import(${JSON.stringify(mods[1])}); const { createRedactor } = await import(${JSON.stringify(mods[2])});
       const { enable } = await import(${JSON.stringify(mods[3])}); for (const seam of ${JSON.stringify(activeSeams())}) enable(seam);
-      const t0 = Date.now(); const s = createStatusStore({ paths: autopilotPaths(${JSON.stringify(root)}), lockToken: ${JSON.stringify(lock.token)}, redactor: createRedactor({}) }); s.write({ lastError: 'from child' }); process.stdout.write(String(Date.now() - t0));`;
-    const elapsedP = new Promise((resolve, reject) => { const c = spawn(process.execPath, ['--input-type=module', '-e', writer], { stdio: ['ignore', 'pipe', 'pipe'] }); let out = ''; let err = ''; c.stdout.on('data', (d) => { out += d; }); c.stderr.on('data', (d) => { err += d; }); c.on('exit', (code) => (code === 0 ? resolve(Number(out.trim())) : reject(new Error(err.slice(0, 300))))); });
-    await new Promise((r) => setTimeout(r, 700)); rm(mutexDir, { recursive: true, force: true });
-    const elapsed = await elapsedP;
-    assert.ok(elapsed >= 500, `the child's write waited for the held mutex (${elapsed} ms)`);
+      const s = createStatusStore({ paths: autopilotPaths(${JSON.stringify(root)}), lockToken: ${JSON.stringify(lock.token)}, redactor: createRedactor({}) });
+      process.stdout.write('writing\\n'); s.write({ lastError: 'from child' }); process.stdout.write(String(Date.now()) + '\\n');`;
+    const w = spawnLines(spawn, ['--input-type=module', '-e', writer]);
+    // The child is about to write while this process holds the mutex. The hold after that is
+    // what lets a write that ignores the mutex land BEFORE the release; a correct write lands
+    // after it however slowly either process runs.
+    await w.line('writing');
+    await new Promise((r) => setTimeout(r, 200));
+    const releasedAt = Date.now();
+    rm(mutexDir, { recursive: true, force: true });
+    const { code, lines, err } = await w.exit;
+    assert.equal(code, 0, `the child writer exited cleanly: ${err.slice(0, 300)}`);
+    const wroteAt = Number(lines.at(-1));
+    assert.ok(wroteAt >= releasedAt, `the child's write completed only after the mutex was released (${wroteAt - releasedAt} ms after)`);
     assert.equal(store.read().lastError, 'from child');
   } finally { cleanup(root); }
 }
@@ -163,7 +194,7 @@ test('AC87: the orchestrator\'s status writes and a helper process\'s ordinal in
 export async function ac87_recordQuotaUnderTheMutex() {
   // A second PROCESS holds the mutex, bumps the file, releases: recordQuota must wait and re-read, never
   // persist a snapshot taken before the mutex (agy r4 c8).
-  const { mkdtempSync, rmSync, existsSync } = await import('node:fs');
+  const { mkdtempSync, rmSync, existsSync, writeFileSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
   const { spawn } = await import('node:child_process');
@@ -173,15 +204,24 @@ export async function ac87_recordQuotaUnderTheMutex() {
     mkdirSync(paths.runsDir ?? join(root, '.adlc', 'autopilot-runs'), { recursive: true });
     const store = createStatusStore({ paths, lockToken: () => null });
     store.write({});
-    const holder = spawn(process.execPath, ['-e', `
-      const fs = require('node:fs'); const file = process.argv[1]; const dir = file + '.mutex';
-      fs.mkdirSync(dir);
-      setTimeout(() => { const d = JSON.parse(fs.readFileSync(file, 'utf8')); d.holderMark = 1; fs.writeFileSync(file, JSON.stringify(d)); fs.rmdirSync(dir); }, 250);
-    `, paths.statusFile], { stdio: 'ignore' });
-    await new Promise((r) => setTimeout(r, 60));
+    // The holder takes the mutex, says so, and keeps it until this process creates the release
+    // file — so "the other process holds the mutex" is a fact when asserted, not a timing guess.
+    const release = `${paths.statusFile}.release`;
+    const holder = spawnLines(spawn, ['-e', `
+      const fs = require('node:fs'); const file = process.argv[1]; const dir = file + '.mutex'; const release = file + '.release';
+      fs.mkdirSync(dir); process.stdout.write('held\\n');
+      const t = setInterval(() => {
+        if (!fs.existsSync(release)) return;
+        clearInterval(t);
+        const d = JSON.parse(fs.readFileSync(file, 'utf8')); d.holderMark = 1; fs.writeFileSync(file, JSON.stringify(d)); fs.rmdirSync(dir);
+      }, 5);
+    `, paths.statusFile]);
+    await holder.line('held');
     assert.ok(existsSync(`${paths.statusFile}.mutex`), 'the other process holds the mutex');
+    writeFileSync(release, '');
     store.recordQuota('sample', null, { five: 1 });
-    await new Promise((resolve) => holder.once('exit', resolve));
+    const { code, err } = await holder.exit;
+    assert.equal(code, 0, `the holder exited cleanly: ${err.slice(0, 300)}`);
     assert.equal(store.read().holderMark, 1, 'the bump that landed while the mutex was held survives the quota record');
     assert.equal(store.read().quotaSteps.length, 1);
   } finally { rmSync(root, { recursive: true, force: true }); }
