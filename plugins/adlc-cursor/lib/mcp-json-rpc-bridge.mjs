@@ -1,5 +1,12 @@
 // mcp-json-rpc-bridge.mjs — owns IDs at the proxy boundary.
 
+/** True only for a plain JSON object: never null, a primitive, or an array. */
+export function isJsonObject(message) {
+  return (
+    message !== null && typeof message === "object" && !Array.isArray(message)
+  );
+}
+
 export function isJsonRpcResponse(message) {
   return (
     message &&

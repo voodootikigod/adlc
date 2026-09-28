@@ -12,6 +12,7 @@ import { MCP_BUILD_METADATA } from "./mcp-build-metadata.mjs";
 import { decodeRootsListResult } from "./mcp-file-uri.mjs";
 import { resolveHostEnvRoot } from "./mcp-hostenv.mjs";
 import {
+  isJsonObject,
   isJsonRpcMethodMessage,
   isJsonRpcResponse,
   JsonRpcIdBridge,
@@ -536,6 +537,9 @@ export async function runRootsProxy({
       } catch {
         return;
       }
+      // A JSON-RPC message is an object; `null`, primitives and batch arrays
+      // carry no id to answer, so they are dropped rather than dereferenced.
+      if (!isJsonObject(msg)) return;
       const isResponse = isJsonRpcResponse(msg);
 
       // Client response to our roots/list
