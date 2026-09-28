@@ -1,8 +1,8 @@
 // review-calibration/lib/verify.mjs
 // Behavioral verification. A witness is an input/test that PASSES on the
 // original and FAILS on the mutant — it proves a plant is a real, reproducible
-// bug (not an equivalent mutant) and, when a reviewer supplies its own repro,
-// lets a finding be confirmed model-free ("reproduce or kill").
+// bug (not an equivalent mutant). Witnesses come from the operator's plants
+// file; nothing here runs a command authored by the reviewer under test.
 
 import { writeFileSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
