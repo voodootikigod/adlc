@@ -1071,7 +1071,9 @@ test("list_changed fails queued and in-flight requests, ignoring stale Roots rep
     1,
     "a completed child request must leave in-flight tracking",
   );
-  assert.notEqual(latestRootsRequest(out).id, secondRoots.id);
+  // The failed call and the fresh roots/list are separate writes; wait for the
+  // request rather than assuming it precedes the reply.
+  await out.waitFor(() => latestRootsRequest(out).id !== secondRoots.id);
   child.kill();
 });
 
