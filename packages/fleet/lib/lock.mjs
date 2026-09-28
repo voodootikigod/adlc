@@ -12,6 +12,9 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, renameSync 
 import { join } from 'node:path';
 
 export const LOCK_DIR = 'fleet.lock';
+
+/** The fs surface `acquireLock` reclaims and publishes through (injectable so a test can interleave a racer). */
+export const LOCK_FS = Object.freeze({ mkdirSync, writeFileSync, rmSync, renameSync });
 const OWNER_FILE = 'owner.json';
 
 function lockDirPath(dir) {
@@ -23,7 +26,12 @@ function ownerPath(dir) {
 
 /** Read the current lock owner metadata, or null if unlocked/unreadable. */
 export function readLockOwner(dir) {
-  const p = ownerPath(dir);
+  return readOwnerIn(lockDirPath(dir));
+}
+
+/** The owner metadata inside a lock directory at `lockDir` (possibly moved aside), or null. */
+function readOwnerIn(lockDir) {
+  const p = join(lockDir, OWNER_FILE);
   if (!existsSync(p)) return null;
   try {
     return JSON.parse(readFileSync(p, 'utf8'));
@@ -53,6 +61,11 @@ export function isLockLive(owner, { host, pidAlive, procStartTimeOf }) {
   return true;
 }
 
+/** True when two owner readings describe the same lock (field for field). */
+function sameOwner(a, b) {
+  return a != null && b != null && JSON.stringify(a) === JSON.stringify(b);
+}
+
 /**
  * Try to acquire the lock. If an existing lock is stale (not live per the probes)
  * it is reclaimed first. Returns { acquired, refused, owner }.
@@ -60,38 +73,48 @@ export function isLockLive(owner, { host, pidAlive, procStartTimeOf }) {
  * @param dir    the .adlc directory
  * @param self   this run's owner metadata { pid, host, runId, startedAt, procStartTime }
  * @param probes { host, pidAlive, procStartTimeOf } — for staleness classification
+ * @param fsImpl  overrides for LOCK_FS
  */
-export function acquireLock(dir, self, probes) {
+export function acquireLock(dir, self, probes, fsImpl = {}) {
+  const fsx = { ...LOCK_FS, ...fsImpl };
   const existing = readLockOwner(dir);
   if (existing) {
     if (isLockLive(existing, probes)) {
       return { acquired: false, refused: true, owner: existing };
     }
     // Stale (dead pid, pid reuse, other host's dead run, or corrupt) → reclaim
-    // ATOMICALLY (adversarial-review C3). A blind rmSync-then-mkdir has a window
-    // where a second reclaimer can delete the first's freshly-created lock. So
-    // instead we rename the stale dir aside to a per-actor quarantine name:
-    // `rename` is atomic and fails with ENOENT for every racer but the one that
-    // wins, so exactly one process removes the stale lock. The loser then sees
-    // either no lock (and races for mkdir) or a new live lock (and refuses).
+    // by renaming it aside to a per-actor quarantine name. The rename is atomic,
+    // but a racer that judged the same stale owner may reach it only after the
+    // winner re-created the lock, and would then move the WINNER's lock. So the
+    // moved directory must be the lock judged stale; anything else is put back
+    // and the reclaim refused.
     const quarantine = `${lockDirPath(dir)}.stale-${self.pid}-${self.procStartTime ?? 'x'}`;
+    let moved = true;
     try {
-      renameSync(lockDirPath(dir), quarantine);
-      rmSync(quarantine, { recursive: true, force: true });
+      fsx.renameSync(lockDirPath(dir), quarantine);
     } catch (e) {
       if (e.code !== 'ENOENT') throw e;
       // Someone else won the reclaim rename. Fall through to the mkdir attempt;
       // if they already re-created the lock, our mkdir EEXISTs and we refuse.
+      moved = false;
+    }
+    if (moved) {
+      const took = readOwnerIn(quarantine);
+      if (!sameOwner(took, existing)) {
+        try { fsx.renameSync(quarantine, lockDirPath(dir)); } catch { /* a newer lock appeared meanwhile; leave it */ }
+        return { acquired: false, refused: true, owner: took ?? readLockOwner(dir) };
+      }
+      fsx.rmSync(quarantine, { recursive: true, force: true });
     }
   }
   // Atomic create: mkdir fails if another writer won the race in between.
   try {
-    mkdirSync(lockDirPath(dir), { recursive: false });
+    fsx.mkdirSync(lockDirPath(dir), { recursive: false });
   } catch (e) {
     if (e.code === 'EEXIST') return { acquired: false, refused: true, owner: readLockOwner(dir) };
     throw e;
   }
-  writeFileSync(ownerPath(dir), JSON.stringify(self, null, 2) + '\n');
+  fsx.writeFileSync(ownerPath(dir), JSON.stringify(self, null, 2) + '\n');
   return { acquired: true, refused: false, owner: self };
 }
 
