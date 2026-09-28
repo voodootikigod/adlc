@@ -44,7 +44,8 @@ This is mutation testing aimed at the *reviewer* instead of the code (ADLC C8).
    `configuredJudgeBounded` and `configuredJudgeEchoRecall` are `null` — it
    contributed nothing to the score, so there was nothing to bound.
 5. **Apply all plants**, **run `--review-cmd`** (`{base}` → commit ref), **restore**
-   (always, via `finally` + SIGINT handler).
+   (atomically, via `finally` + SIGINT handler; a killed run is restored by
+   the next one — see Safety).
 6. **Parse findings**: the reviewer's output is parsed as structured findings
    (adversarial-review `--json` shape, or a weak prose fallback).
 7. **Score**: a plant is CAUGHT only when a finding LOCATES it (file + line ±3)
@@ -72,8 +73,20 @@ See `REDESIGN.md` for the full design and the rationale for each decision.
 ## Safety
 
 - **Refuses to run on a dirty working tree** (opError, exit 1). Commit or stash first.
-- Files are **always restored** — `finally` block in the runner + SIGINT handler
-  in the CLI.
+- Plants are written and restored **atomically** (temp file + rename), so no
+  source file is ever left truncated.
+- On a normal exit, an error or Ctrl-C, files are restored by the runner's
+  `finally` block (and the CLI's SIGINT handler).
+- A run **killed** mid-review (SIGTERM from a CI cancel, `docker stop`, SIGKILL)
+  cannot restore anything itself — the review runs inside `spawnSync`, where no
+  signal handler runs. Before planting, the CLI writes an in-flight record of
+  each file's original and planted contents to the git dir
+  (`.git/adlc-review-calibration-inflight.json`). The **next run** restores
+  those files before its dirty-tree check and says so on stderr. It only
+  restores a file that still holds exactly the planted content; if the file has
+  changed since, it refuses (exit 1), writes nothing and keeps the record, which
+  then holds the only copy of the original. A record owned by a process that is
+  still running is left alone (exit 1).
 - Exit codes from the review command: 0 and 2 are valid (pass / gate-fail).
   Any other exit code is treated as a crash (opError, exit 1).
 

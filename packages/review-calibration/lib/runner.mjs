@@ -1,10 +1,13 @@
 // review-calibration/lib/runner.mjs
 // Apply all plants to the working tree, run the review command, restore tree.
-// Uses a finally block so restoration is guaranteed even on throw/SIGINT.
+// Restoration runs in a finally block, so a throw restores too. A process
+// killed while the review runs cannot restore anything itself; the journal's
+// in-flight record is what lets the next run do it (see inflight.mjs).
 
-import { writeFileSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tokenizeCommand } from '@adlc/core';
+import { writeFileAtomic, NO_JOURNAL } from './inflight.mjs';
 
 export { tokenizeCommand };
 
@@ -35,9 +38,12 @@ export function substituteToken(tokens, placeholder, value) {
  * @param {string} baseRef    - The commit ref to substitute for {base}
  * @param {string} cwd        - Working directory for the review command
  * @param {number} timeoutMs  - Timeout in milliseconds
+ * @param {object} [options]
+ * @param {{begin:Function, end:Function}} [options.journal]  records the plants
+ *   before any file is written; begin throwing aborts before planting
  * @returns {{ stdout: string, stderr: string, exitCode: number | null, timedOut: boolean }}
  */
-export function runWithPlants(plants, reviewCmd, baseRef, cwd, timeoutMs) {
+export function runWithPlants(plants, reviewCmd, baseRef, cwd, timeoutMs, { journal = NO_JOURNAL } = {}) {
   // Group plants by absolutePath.
   const byFile = groupByFile(plants);
 
@@ -51,13 +57,14 @@ export function runWithPlants(plants, reviewCmd, baseRef, cwd, timeoutMs) {
     }
   }
 
-  // Write mutated content to each file.
+  const planted = [...byFile].map(([absolutePath, filePlants]) => {
+    const original = originals.get(absolutePath);
+    return { absolutePath, original, mutated: applyAllPlantsToContent(original, filePlants) };
+  });
+  journal.begin(planted);
+
   try {
-    for (const [absPath, filePlants] of byFile) {
-      const original = originals.get(absPath);
-      const mutated = applyAllPlantsToContent(original, filePlants);
-      writeFileSync(absPath, mutated, 'utf8');
-    }
+    for (const { absolutePath, mutated } of planted) writeFileAtomic(absolutePath, mutated);
 
     // Tokenize the trusted template, THEN substitute the base ref as a
     // discrete argv element. Run with shell:false so the ref is never re-parsed
@@ -85,15 +92,24 @@ export function runWithPlants(plants, reviewCmd, baseRef, cwd, timeoutMs) {
       timedOut,
     };
   } finally {
-    // Always restore all files, even if an error occurred.
-    for (const [absPath, originalContent] of originals) {
-      try {
-        writeFileSync(absPath, originalContent, 'utf8');
-      } catch {
-        // Best-effort restore — don't mask the original error.
-      }
+    restoreAll(originals, journal);
+  }
+}
+
+/**
+ * Restore every original. The record is cleared only when all of them were
+ * written back; otherwise it stays for the next run to finish the job.
+ */
+function restoreAll(originals, journal) {
+  let restored = true;
+  for (const [absPath, originalContent] of originals) {
+    try {
+      writeFileAtomic(absPath, originalContent);
+    } catch {
+      restored = false; // don't mask the original error; the record remains
     }
   }
+  if (restored) journal.end();
 }
 
 /**

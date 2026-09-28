@@ -36,6 +36,15 @@ produced no findings), `precision` is `null` (not 1.0) because precision cannot
 be evaluated; configuring `--min-precision` will fail the gate if precision is
 `null`.
 
+## Safety
+
+The tool refuses to run on a dirty tree. Plants are written and restored
+atomically. A run killed mid-review (SIGTERM, SIGKILL) cannot restore its own
+plants, so before planting it records each file's original and planted contents
+in `.git/adlc-review-calibration-inflight.json`; the next run restores them
+before its dirty-tree check. A file that changed since it was planted is never
+overwritten: the run refuses and keeps the record, which holds the original.
+
 ## Usage
 
 ```sh
