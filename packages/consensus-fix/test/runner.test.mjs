@@ -28,18 +28,18 @@ function fixResponse(file, replacement) {
 
 // ─── runCommand ──────────────────────────────────────────────────────────────
 
-test('runCommand captures exit 0', () => {
-  const result = runCommand('exit 0');
+test('runCommand captures exit 0', async () => {
+  const result = await runCommand('exit 0');
   assert.equal(result.exitCode, 0);
 });
 
-test('runCommand captures non-zero exit code', () => {
-  const result = runCommand('exit 42');
+test('runCommand captures non-zero exit code', async () => {
+  const result = await runCommand('exit 42');
   assert.equal(result.exitCode, 42);
 });
 
-test('runCommand captures stdout output', () => {
-  const result = runCommand('echo hello_world');
+test('runCommand captures stdout output', async () => {
+  const result = await runCommand('echo hello_world');
   assert.ok(result.output.includes('hello_world'));
 });
 
