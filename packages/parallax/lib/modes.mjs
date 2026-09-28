@@ -89,6 +89,38 @@ export function divergencePayloadError(result) {
   return `divergence analysis returned an off-schema payload (${expected}; ${missing.join(' and ')} missing or not an array)`;
 }
 
+/**
+ * Validate the route-mode equivalence judge's payload.
+ *
+ * `equivalent` decides pass() vs gateFail(), and with --questions-json an
+ * equivalent verdict is emitted as an empty frontier. It must therefore be a
+ * real boolean: coercing a string such as "false" or a refusal object's
+ * field would turn an unreadable verdict into a pass. Each branch must also
+ * carry what the CLI renders for it (a non-empty answer, or at least one
+ * string variant), so a verdict that cannot be shown is an operational error
+ * rather than an empty answer or an unmeasured divergence.
+ *
+ * @param {unknown} result - Parsed judge output.
+ * @returns {string|null} An error message, or null when the payload is well-formed.
+ */
+export function judgePayloadError(result) {
+  const prefix = 'route judge returned an off-schema payload';
+  if (result === null || typeof result !== 'object' || Array.isArray(result)) {
+    return `${prefix} (expected an object, got ${describe(result)})`;
+  }
+  if (typeof result.equivalent !== 'boolean') {
+    return `${prefix} (equivalent must be a boolean, got ${describe(result.equivalent)})`;
+  }
+  if (result.equivalent) {
+    return typeof result.answer === 'string' && result.answer.trim() !== ''
+      ? null
+      : `${prefix} (equivalent:true needs a non-empty string answer)`;
+  }
+  const { variants } = result;
+  const listed = Array.isArray(variants) && variants.length > 0 && variants.every((v) => typeof v === 'string');
+  return listed ? null : `${prefix} (equivalent:false needs a non-empty array of string variants)`;
+}
+
 /** Short, non-throwing description of an off-schema value for an error message. */
 function describe(value) {
   if (value === null) return 'null';
@@ -289,9 +321,12 @@ export async function runRouteMode(question, contextFiles = [], opts = {}) {
   const judgeRaw = await llm.complete({ prompt: judgePrompt, tier });
   const judgeResult = extractJson(judgeRaw);
 
+  const payloadError = judgePayloadError(judgeResult);
+  if (payloadError) throw new Error(payloadError);
+
   return {
-    equivalent: Boolean(judgeResult.equivalent),
-    answer: judgeResult.answer ?? '',
+    equivalent: judgeResult.equivalent,
+    answer: judgeResult.equivalent ? judgeResult.answer : '',
     variants: judgeResult.variants ?? [],
     rawAnswers,
     errors,
