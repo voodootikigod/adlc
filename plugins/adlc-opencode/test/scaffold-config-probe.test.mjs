@@ -52,7 +52,7 @@ function runCli(root) {
 test('scaffold-cli: a malformed config.json fails the run and says why', (t) => {
   const root = withConfig(t, 'not json at all');
   const r = runCli(root);
-  assert.notEqual(r.status, 0);
+  assert.equal(r.status, 1, 'an operational error, not a gate failure');
   assert.match(r.stderr, /config\.json exists but is not readable JSON/);
   assert.doesNotMatch(r.stdout, /config\.json present/);
 });
