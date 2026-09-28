@@ -459,6 +459,8 @@ export const CURSOR_INTEGRATION = {
   ],
 };
 
+const OPENCODE_OPERATE_SMOKE = 'npm test --workspace=@adlc/opencode';
+
 /** @type {IntegrationFact} */
 export const OPENCODE_INTEGRATION = {
   slug: 'opencode',
@@ -577,7 +579,7 @@ export const OPENCODE_INTEGRATION = {
     title: 'operate: OpenCode plugin',
     lines: [
       '# Offline scaffold / hook contract (no opencode binary)',
-      'node scripts/opencode-install-smoke.mjs .',
+      OPENCODE_OPERATE_SMOKE,
       '',
       '# Re-run scaffold from inside the TUI',
       '/adlc-init',

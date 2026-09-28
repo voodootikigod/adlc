@@ -271,6 +271,7 @@ test('OpenCode marketing facts claim enforce-by-default rails', () => {
   const oc = integrationFor('opencode');
   assert.match(oc?.tagline ?? '', /Enforce-by-default|enforcing/i);
   assert.match(oc?.enforcement.session.body ?? '', /Enforcing by default/i);
+  assert.ok(oc?.operate.lines.includes('npm test --workspace=@adlc/opencode'));
 });
 
 test('Pi marketing facts emphasize proactive/reactive gates and team install', () => {

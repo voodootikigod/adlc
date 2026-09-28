@@ -50,7 +50,7 @@ npm name when installed from node_modules, the resolved local path from a source
 checkout). Verify locally without an `opencode` binary:
 
 ```sh
-node scripts/opencode-install-smoke.mjs .
+npm test --workspace=@adlc/opencode
 ```
 
 Per-repo config rides the `["@adlc/opencode", { … }]` plugin-options

@@ -1,12 +1,11 @@
 #!/usr/bin/env node
-// cursor-install-smoke.mjs — local verification for the ADLC Cursor integration
-// integration. Mirrors scripts/opencode-install-smoke.mjs: validates the package
-// shape, the hooks.json wiring (preToolUse dispatcher + afterFileEdit audit +
-// beforeShellExecution advisory), the rule registration, the command palette, the
-// @adlc/core delegation (no inlined rail engine), the shipped documentation's
-// honesty strings (T19), and runs the real enforcement unit tests. Does NOT
-// require the Cursor binary and does not mutate the user environment. Exit 0 =
-// all checks pass; exit 2 = a check failed.
+// cursor-install-smoke.mjs — local verification for the ADLC Cursor integration.
+// Validates the package shape, the hooks.json wiring (preToolUse dispatcher +
+// afterFileEdit audit + beforeShellExecution advisory), the rule registration,
+// the command palette, the @adlc/core delegation (no inlined rail engine), the
+// shipped documentation's honesty strings (T19), and runs the real enforcement
+// unit tests. Does NOT require the Cursor binary and does not mutate the user
+// environment. Exit 0 = all checks pass; exit 2 = a check failed.
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -477,9 +476,8 @@ else {
 }
 
 // ---- T19: the docs must tell the exact truth about T16-T18 — the honesty
-// ---- strings are ENFORCED here (mirrors how opencode-install-smoke asserts doc
-// ---- language). Strip any one of these from docs/integrations/cursor.md and
-// ---- this smoke fails (RED-probed).
+// ---- strings are ENFORCED here. Strip any one of these from
+// ---- docs/integrations/cursor.md and this smoke fails (RED-probed).
 if (existsSync(docPath)) {
   const doc = read(docPath);
   // buildgate honesty string (spec decision 7): advisory, default-off behind the

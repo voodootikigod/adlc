@@ -131,10 +131,10 @@ the tuple is the repo default). The audited bypasses (`ADLC_RAILS_BYPASS`,
 Local verification (no `opencode` binary needed, does not mutate your environment):
 
 ```sh
-node scripts/opencode-install-smoke.mjs .
+npm test --workspace=@adlc/opencode
 ```
 
-That smoke test validates the plugin manifest, the `tool.execute.before` hook
+That command validates the plugin manifest, the `tool.execute.before` hook
 wiring, command/agent/skill registration, the scaffolder, the `@adlc/core`
 delegation (the rail engine is not re-implemented), and runs the plugin unit tests.
 An end-to-end deny proof against a live `opencode` binary is the remaining GA
