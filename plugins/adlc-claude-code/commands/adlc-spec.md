@@ -31,7 +31,10 @@ treat it as the raw request text. There is no spec file yet at this step, so
 `--file` (which requires an existing file) is the wrong mode — use
 `--request` with the resolved text instead.
 
-Run `adlc parallax --request "<resolved text>" --prompt-only --record-verdict <file>`.
+Run `adlc parallax --request "<resolved text>" --prompt-only --record-verdict <file> --ticket <id>`.
+`--ticket` is required with `--record-verdict` (the CLI exits 1 without it):
+the record is P1 evidence for that one ticket, and an unbound record could
+satisfy any ticket's gate. Use the ticket id this spec is for.
 Produce the N independent readings, then the divergence analysis. (In a live
 provider setup, `adlc parallax --request "<resolved text>" --questions-json` returns the same
 divergences as structured `{questions: [{point, options}]}` instead of markdown.)
