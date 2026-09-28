@@ -8,8 +8,9 @@
 // header. Run this DURING the release ceremony (after the version bump, before
 // the bump commit) so the changelog entry lands in the same commit as the bump.
 //
-// The output is a STARTING POINT: it groups feat/fix/perf/refactor commits and
-// drops chore/test/ci/docs noise. Review and hand-edit the generated section
+// The output is a STARTING POINT: it groups feat/fix/perf/refactor commits,
+// lifts any breaking change (`type!:` or a BREAKING CHANGE footer) into a
+// Breaking section, and drops chore/test/ci/docs noise. Review and hand-edit the generated section
 // before committing — a good changelog is curated, not just a commit dump.
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -63,25 +64,68 @@ export function parseSubject(subject) {
   return { type: m[1], scope: m[2] ?? null, description: m[4] };
 }
 
-/** Build the markdown body (sections) for a set of commit subjects. */
-export function buildSections(subjects) {
-  const buckets = new Map(SECTIONS.map(([name]) => [name, []]));
-  for (const subject of subjects) {
-    const parsed = parseSubject(subject);
+// A breaking change is reported whatever its type: `chore!:` or a `refactor` with
+// a BREAKING CHANGE footer still breaks consumers, and SemVer is chosen from it.
+const BREAKING_SECTION = 'Breaking';
+const BREAKING_FOOTER = /^BREAKING[ -]CHANGE:\s*(.+)$/m;
+const BREAKING_MARKER = /^\w+(?:\([^)]+\))?!:/;
+
+/** A commit as { subject, body }; a bare string is a subject with no body. */
+function toCommit(commit) {
+  return typeof commit === 'string' ? { subject: commit, body: '' } : { subject: commit.subject, body: commit.body ?? '' };
+}
+
+/** True for a conventional commit carrying the `!` marker or a BREAKING CHANGE footer. */
+export function isBreaking(commit) {
+  const { subject, body } = toCommit(commit);
+  if (!parseSubject(subject)) return false;
+  return BREAKING_MARKER.test(subject) || BREAKING_FOOTER.test(body);
+}
+
+/** The changelog section a commit belongs in, or null when it is omitted. */
+function sectionFor(commit, parsed) {
+  if (isBreaking(commit)) return BREAKING_SECTION;
+  return SECTIONS.find(([, types]) => types.has(parsed.type))?.[0] ?? null;
+}
+
+/** One changelog bullet; a breaking footer's text is appended as the migration note. */
+function bulletFor(commit, parsed) {
+  const prefix = parsed.scope ? `**${parsed.scope}:** ` : '';
+  const footer = BREAKING_FOOTER.exec(toCommit(commit).body);
+  return `- ${prefix}${parsed.description}${footer ? ` — ${footer[1].trim()}` : ''}`;
+}
+
+/**
+ * Build the markdown body (sections) for a set of commits. Each commit is a
+ * subject string or { subject, body }; the body is read only for a breaking footer.
+ */
+export function buildSections(commits) {
+  const order = [BREAKING_SECTION, ...SECTIONS.map(([name]) => name)];
+  const buckets = new Map(order.map((name) => [name, []]));
+  for (const commit of commits) {
+    const parsed = parseSubject(toCommit(commit).subject);
     if (!parsed) continue;
     // Skip the bump commit and pure ticket-bookkeeping chores.
     if (/^bump version to /.test(parsed.description)) continue;
-    const section = SECTIONS.find(([, types]) => types.has(parsed.type))?.[0];
-    if (!section) continue;
-    const prefix = parsed.scope ? `**${parsed.scope}:** ` : '';
-    buckets.get(section).push(`- ${prefix}${parsed.description}`);
+    const section = sectionFor(commit, parsed);
+    if (section) buckets.get(section).push(bulletFor(commit, parsed));
   }
-  const parts = [];
-  for (const [name] of SECTIONS) {
-    const items = buckets.get(name);
-    if (items.length) parts.push(`### ${name}\n${items.join('\n')}`);
-  }
-  return parts.join('\n\n');
+  return order
+    .filter((name) => buckets.get(name).length)
+    .map((name) => `### ${name}\n${buckets.get(name).join('\n')}`)
+    .join('\n\n');
+}
+
+/** Split `git log --pretty=format:%s%x1f%b%x1e` output into { subject, body } records. */
+export function parseLog(raw) {
+  return raw
+    .split('\x1e')
+    .map((record) => record.replace(/^\n+/, ''))
+    .filter((record) => record.trim() !== '')
+    .map((record) => {
+      const [subject, body = ''] = record.split('\x1f');
+      return { subject: subject.trim(), body: body.trim() };
+    });
 }
 
 export function buildEntry({ version, date, subjects }) {
@@ -130,9 +174,7 @@ function main(argv) {
   const tags = git(['tag', '--list']).split('\n').filter(Boolean);
   const from = fromArg ?? previousTag(version, tags);
   const range = from ? `${from}..HEAD` : 'HEAD';
-  const subjects = git(['log', '--no-merges', '--pretty=format:%s', range])
-    .split('\n')
-    .filter(Boolean);
+  const subjects = parseLog(git(['log', '--no-merges', '--pretty=format:%s%x1f%b%x1e', range]));
 
   const entry = buildEntry({ version, date, subjects });
   const existing = existsSync(CHANGELOG) ? readFileSync(CHANGELOG, 'utf8') : '';
