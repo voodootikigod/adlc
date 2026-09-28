@@ -152,28 +152,26 @@ const REGEX_MAY_FOLLOW_KEYWORD = new Set([
 
 const IDENTIFIER_CHAR = /[A-Za-z0-9_$]/;
 
-/** Whitespace weights in a program projection: a newline outranks a space. */
-const WS_SPACE = 1;
-const WS_NEWLINE = 2;
-
 /**
  * Accumulates the PROGRAM text of a file — code, string, template and regex
  * characters, with comments dropped and each whitespace run reduced to one
- * space or one newline. Two sources with equal projections differ only in
- * comments and layout. Whitespace markers are numbers, so they can never be
- * confused with a newline that is part of a template's value.
+ * marker. Two sources with equal projections differ only in comments and
+ * layout. A space and a newline share the marker because the callers only
+ * compare sources whose changed lines are whole comment or blank lines, which
+ * cannot join or split the code lines around them. The marker is a number, so
+ * it can never be confused with whitespace inside a template's value.
  */
 function createProjection() {
   const out = [];
   let current = '';
-  let pendingWs = 0;
+  let pendingWs = false;
   return {
     data(text) {
-      if (pendingWs && current) { out.push(current, pendingWs); current = ''; }
-      pendingWs = 0;
+      if (pendingWs && current) { out.push(current, 0); current = ''; }
+      pendingWs = false;
       current += text;
     },
-    space(weight) { pendingWs = Math.max(pendingWs, weight); },
+    space() { pendingWs = true; },
     tokens() { return current ? [...out, current] : [...out]; },
   };
 }
@@ -233,7 +231,7 @@ function scanCodeBearingLines(source) {
     const lineNo = i + 1;
     if (i > 0) {
       if (state === 'template') projection.data('\n');
-      else projection.space(WS_NEWLINE);
+      else projection.space();
     }
     // A line that OPENS inside a template is string content before any
     // character is read — including a blank one, since whitespace inside a
@@ -261,9 +259,9 @@ function scanCodeBearingLines(source) {
       }
 
       // state === 'code'
-      if (ch === ' ' || ch === '\t' || ch === '\r') { projection.space(WS_SPACE); j++; continue; }
-      if (ch === '/' && next === '/') { projection.space(WS_SPACE); j = line.length; continue; }
-      if (ch === '/' && next === '*') { projection.space(WS_SPACE); state = 'block'; j += 2; continue; }
+      if (ch === ' ' || ch === '\t' || ch === '\r') { projection.space(); j++; continue; }
+      if (ch === '/' && next === '/') { projection.space(); j = line.length; continue; }
+      if (ch === '/' && next === '*') { projection.space(); state = 'block'; j += 2; continue; }
 
       codeBearing.add(lineNo);
 
