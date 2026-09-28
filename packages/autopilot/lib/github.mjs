@@ -197,32 +197,51 @@ export async function ensureLabel(ghc, n, label, { present }) {
   return { mutated: false };
 }
 
-/** Post a comment only if no comment carries `sentinel` (searched via the API, never the record). */
+/**
+ * The text of a sentinel comment. Every `<!--` in `body` is neutralised, so the
+ * sentinel is the only HTML comment the post carries: model, reviewer or CI
+ * text inside the body can never bring another outcome's sentinel with it.
+ */
+export function commentBody(sentinel, body) {
+  return `${sentinel}\n${String(body ?? '').replaceAll('<!--', '&lt;!--')}`;
+}
+
+/**
+ * True when `comment` carries `sentinel` and, when `author` is given, was
+ * written by that login. The autopilot passes its bound principal, so a
+ * sentinel another account posted never counts as the autopilot's own comment.
+ */
+function carriesSentinel(comment, sentinel, author) {
+  if (typeof comment?.body !== 'string' || !comment.body.includes(sentinel)) return false;
+  return author == null || comment?.user?.login === author;
+}
+
 /** True when a comment carrying `sentinel` exists on the issue/PR conversation — EVERY page (bounded), fail closed. */
-export async function hasComment(ghc, n, sentinel, { perPage = PER_PAGE, maxPages = MAX_PAGES } = {}) {
+export async function hasComment(ghc, n, sentinel, { perPage = PER_PAGE, maxPages = MAX_PAGES, author = null } = {}) {
   for (let page = 1; page <= maxPages; page++) {
     const comments = await ghc.json(['api', `repos/${ghc.repo}/issues/${validateIssueNumber(n)}/comments?per_page=${perPage}&page=${page}`]);
     if (!Array.isArray(comments)) throw new GhError('gh-bad-json', 'comments page is not an array');
-    if (comments.some((c) => typeof c?.body === 'string' && c.body.includes(sentinel))) return true;
+    if (comments.some((c) => carriesSentinel(c, sentinel, author))) return true;
     if (comments.length < perPage || active('github.paginateAll')) return false;
     if (page === maxPages) throw new GhError('gh-truncated', `comment search exceeded ${maxPages} pages`);
   }
   return false;
 }
 
-export async function ensureComment(ghc, n, sentinel, body, { perPage = PER_PAGE, maxPages = MAX_PAGES } = {}) {
+/** Post a comment only if no comment carries `sentinel` (searched via the API, never the record). */
+export async function ensureComment(ghc, n, sentinel, body, { perPage = PER_PAGE, maxPages = MAX_PAGES, author = null } = {}) {
   // The sentinel search covers EVERY page (bounded); an unreadable page fails closed —
   // a duplicate terminal comment is worse than a retried one.
   for (let page = 1; page <= maxPages; page++) {
     const comments = await ghc.json(['api', `repos/${ghc.repo}/issues/${validateIssueNumber(n)}/comments?per_page=${perPage}&page=${page}`]);
     if (!Array.isArray(comments)) throw new GhError('gh-bad-json', 'comments page is not an array');
-    if (comments.some((c) => typeof c?.body === 'string' && c.body.includes(sentinel))) return { posted: false };
+    if (comments.some((c) => carriesSentinel(c, sentinel, author))) return { posted: false };
     // Mutation seam `github.paginateAll`: only the first page is searched (the duplicate-comment defect).
     if (comments.length < perPage || active('github.paginateAll')) break;
     if (page === maxPages) throw new GhError('gh-truncated', `comment search exceeded ${maxPages} pages`);
   }
   // The POST itself is NOT retried (codex r5 A3): a failure after the comment landed would post it
   // twice; the next iteration's sentinel search is the idempotent retry. Seam `github.retryComments`.
-  await mutate(ghc, ['issue', 'comment', String(n), '--body-file', '-'], { stdinBytes: `${sentinel}\n${body}`, retries: active('github.retryComments') });
+  await mutate(ghc, ['issue', 'comment', String(n), '--body-file', '-'], { stdinBytes: commentBody(sentinel, body), retries: active('github.retryComments') });
   return { posted: true };
 }
