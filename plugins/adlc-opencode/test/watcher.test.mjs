@@ -2,7 +2,7 @@
 // Uses REAL git in a temp repo (the restore path is git-backed), plus the real
 // exported event handler for the end-to-end synthetic third-party-tool proof.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync, symlinkSync } from 'node:fs';
@@ -10,6 +10,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { handleFileEdited, createWatcherState, allowedSuppressions, MAX_RESTORES_PER_FILE, SUPPRESSION_MARKERS } from '../lib/watcher.mjs';
 import { adlcRailsGuard } from '../index.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const RAIL_CONTENT = 'export const frozen = true;\n';
 // Marker literals are concatenated so this test file does not trip the repo's
@@ -20,6 +24,7 @@ const NOQA = '# no' + 'qa';
 
 function gitRepo({ tickets }) {
   const dir = mkdtempSync(join(tmpdir(), 'oc-watch-'));
+  fixtureDirs.add(dir);
   mkdirSync(join(dir, '.adlc'), { recursive: true });
   mkdirSync(join(dir, 'test'), { recursive: true });
   mkdirSync(join(dir, 'src'), { recursive: true });

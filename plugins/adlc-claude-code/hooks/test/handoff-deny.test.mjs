@@ -2,7 +2,7 @@
 // Drives the real hook entrypoint as a subprocess (same pattern as
 // build-gate.test.mjs / rails.test.mjs).
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   mkdtempSync,
@@ -25,6 +25,10 @@ import {
   HANDOFF_DEPTH,
   RECOVERY_CLI_PATH,
 } from '@adlc/context-handoff';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const REAL_NODE = realpathSync(process.execPath);
 const REAL_RECOVERY_CLI = realpathSync(RECOVERY_CLI_PATH);
@@ -61,6 +65,7 @@ function runHandoff({
   viaRunner = false,
 }) {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-handoff-'));
+  fixtureDirs.add(dir);
   try {
     mkdirSync(join(dir, '.adlc'));
     writeFileSync(

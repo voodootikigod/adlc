@@ -5,6 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { after } from 'node:test';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const SCRIPT = join(ROOT, 'scripts', 'cursor-install-smoke.mjs');
@@ -23,6 +28,7 @@ function outputOf(result) {
 
 function makeFixture(change) {
   const root = mkdtempSync(join(tmpdir(), 'cursor-install-smoke-'));
+  fixtureDirs.add(root);
   mkdirSync(join(root, 'plugins'), { recursive: true });
   cpSync(SOURCE_PLUGIN, join(root, 'plugins', 'adlc-cursor'), {
     recursive: true,

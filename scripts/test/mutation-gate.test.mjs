@@ -20,9 +20,15 @@ import { join } from 'node:path';
 import { testTargetFor, hollowTestWouldMutate, classify, mutableChangedFiles, SURVIVOR_GUIDANCE, mutantBudget, MUTANTS_PER_CHANGED_FILE, HOLLOW_WINDOW_MS, FAST_RUN_TIMEOUT_MS, measureRun } from '../mutation-gate.mjs';
 import { generateMutants } from '../../packages/core/lib/mutate.mjs';
 import { isMutableSource } from '../../packages/hollow-test/lib/targets.mjs';
+import { after } from 'node:test';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 function fixtureRoot(dirs = [], files = []) {
   const root = mkdtempSync(join(tmpdir(), 'mutation-gate-fixture-'));
+  fixtureDirs.add(root);
   for (const d of dirs) mkdirSync(join(root, d), { recursive: true });
   for (const f of files) writeFileSync(join(root, f), '// fixture\n');
   return root;

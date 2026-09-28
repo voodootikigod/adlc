@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -8,6 +8,10 @@ import { fileURLToPath } from 'node:url';
 import { ensureDenyMarker } from '../lib/deny-marker.mjs';
 import { ORPHAN_MIN_AGE_MS } from '../lib/doctor.mjs';
 import { writeFinal } from '../lib/final.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'handoff.mjs');
 const TEST_KEY = 'd'.repeat(64);
@@ -23,6 +27,7 @@ function run(args, { cwd, env = {} } = {}) {
 
 function seeded() {
   const root = mkdtempSync(join(tmpdir(), 'handoff-doctor-cli-'));
+  fixtureDirs.add(root);
   ensureDenyMarker(root, { sessionId: 'orphan-a', host: 'pi' }, { now: () => new Date(Date.now() - 2 * ORPHAN_MIN_AGE_MS).toISOString() });
   ensureDenyMarker(root, { sessionId: 'bound-b', ticketId: 'T9', contentHash: 'c'.repeat(64), host: 'pi' });
   ensureDenyMarker(root, { sessionId: 'captured-c', host: 'pi' });

@@ -12,7 +12,7 @@
 // it deletes a finding that is genuinely still open on our chain, and the run
 // then completes past it. Every test here builds a second segment belonging to
 // another branch, which the frozen root made ordinary.
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, unlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -21,6 +21,10 @@ import { join } from 'node:path';
 import { runProsecution } from '../lib/run.mjs';
 import { appendManifestEntry } from '@adlc/gate-manifest';
 import { sha256 } from '@adlc/core';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const OUR_BRANCH = 'feat/own-chain-prosecute-fixture';
 const OTHER_BRANCH = 'feat/somebody-elses-work';
@@ -33,6 +37,7 @@ const REVISION = 'fixture-revision';
 // the way production decides it — by the branch that is checked out.
 function repo() {
   const root = mkdtempSync(join(tmpdir(), 'adlc-prosecute-own-chain-'));
+  fixtureDirs.add(root);
   const g = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   g('init', '-q', '-b', OUR_BRANCH);
   g('config', 'user.email', 't@t.co');

@@ -5,7 +5,7 @@
 // also driven with the guard suite's adversarial payload shapes and must be
 // verdict-IDENTICAL to calling decide() directly.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
@@ -16,11 +16,16 @@ import { fileURLToPath } from 'node:url';
 import { dispatch } from '../hooks/adlc-pretool.mjs';
 import { decide } from '../hooks/adlc-rails-guard.mjs';
 
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DISPATCHER_SCRIPT = join(HERE, '..', 'hooks', 'adlc-pretool.mjs');
 
 function fixture({ tickets = null, currentTicket = undefined } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'adlc-cursor-dispatch-'));
+  fixtureDirs.add(root);
   if (tickets) {
     mkdirSync(join(root, '.adlc'), { recursive: true });
     writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets }));

@@ -13,7 +13,7 @@
 // `completed` trust anchor still read the BASE TIP. Reading completion from the tip is
 // the documented forge-resistance design, and reading rails from the tip can only widen
 // the frozen set — the fail-safe direction.
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -23,6 +23,10 @@ import { ticketFilename } from '@adlc/tickets';
 import { isCompletionAnnotationOnly, runRailFreezeGate } from '../lib/ci/rail-freeze.mjs';
 import { resolveMergeBase } from '../lib/ci/git.mjs';
 import { GateDeny, GateFail } from '../lib/ci/errors.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const SHA = (char) => char.repeat(40);
 
@@ -37,6 +41,7 @@ function writeStore(root, tickets) {
  */
 function scratchRepo({ tickets, seedFiles = {} }) {
   const root = mkdtempSync(join(tmpdir(), 'store-merge-base-'));
+  fixtureDirs.add(root);
   const g = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
   g('init', '-q', '-b', 'main');
   g('config', 'user.email', 'test@test.invalid');

@@ -26,7 +26,7 @@
 //       goes uncovered (delete the gate, suite stays green);
 //   (c) `.every()` over a list the fixture never populated — vacuously true.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, existsSync, readdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -42,6 +42,10 @@ import {
   hostDiscoveryNearMisses,
   publishTargets,
 } from '../release.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const write = (p, obj) => writeFileSync(p, JSON.stringify(obj, null, 2) + '\n');
@@ -70,6 +74,7 @@ function snapshotTree(dir, base = dir, acc = {}) {
  */
 function makeRepo({ stranded = '0.2.0', current = '1.0.0' } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'adlc-artifact-'));
+  fixtureDirs.add(root);
   const packagesDir = join(root, 'packages');
   const pluginsDir = join(root, 'plugins');
   mkdirSync(packagesDir);
@@ -377,6 +382,7 @@ test('discovery never walks into .worktrees or node_modules', () => {
  */
 function makePackagingFixture(files, source, { entry = 'lib/doctor.mjs', type = 'module' } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'adlc-packing-'));
+  fixtureDirs.add(root);
   const packagesDir = join(root, 'packages');
   const pluginsDir = join(root, 'plugins');
   mkdirSync(join(packagesDir, 'escaper', 'lib'), { recursive: true });

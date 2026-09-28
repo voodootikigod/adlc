@@ -7,6 +7,11 @@ import { fileURLToPath } from 'node:url';
 import { version as esbuildVersion } from 'esbuild';
 
 import { buildCursorMcp } from '../build-cursor-mcp.mjs';
+import { after } from 'node:test';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 function writeJson(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
@@ -21,6 +26,7 @@ function makeFixture({
   ticketsRange = '^1.2.3',
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'build-cursor-mcp-'));
+  fixtureDirs.add(root);
   const plugin = join(root, 'plugins', 'adlc-cursor');
   mkdirSync(join(root, 'packages', 'core'), { recursive: true });
   mkdirSync(join(root, 'packages', 'tickets'), { recursive: true });

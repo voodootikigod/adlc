@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -7,6 +7,10 @@ import { mapIssue, githubProvider, parseIssueNumberFromUrl, parseCommentId } fro
 import { serializeBlock, parseBlock } from '../lib/block.mjs';
 import { canonicalHash } from '../lib/canonical.mjs';
 import { push, extractSentinelKey, orderLocalByDependency } from '../lib/push.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 // ---------------------------------------------------------------------------
 // mapIssue / listIssues (read path)
@@ -303,6 +307,7 @@ const CONFIG = {
 
 function repo({ tickets = [], sidecar, manifest = [], config = CONFIG } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-push-'));
+  fixtureDirs.add(dir);
   mkdirSync(join(dir, '.adlc'));
   writeFileSync(join(dir, '.adlc', 'config.json'), JSON.stringify(config));
   writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets }, null, 2));

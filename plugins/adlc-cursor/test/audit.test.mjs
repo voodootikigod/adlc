@@ -2,7 +2,7 @@
 // fires an advisory on a synthetic churn window and stays silent otherwise;
 // the rail audit behavior is unchanged and the hook still never blocks.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
@@ -13,11 +13,16 @@ import { fileURLToPath } from 'node:url';
 import { audit, flailCheck } from '../hooks/adlc-audit.mjs';
 import { SESSION_TTL_MS, RECENT_EDITS_FILE } from '../constants.mjs';
 
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const AUDIT_SCRIPT = join(HERE, '..', 'hooks', 'adlc-audit.mjs');
 
 function fixture({ tickets = null } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'adlc-cursor-audit-'));
+  fixtureDirs.add(root);
   if (tickets) {
     mkdirSync(join(root, '.adlc'), { recursive: true });
     writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets }));

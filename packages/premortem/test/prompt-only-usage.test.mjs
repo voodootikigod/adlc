@@ -6,7 +6,7 @@
 // aggregator can count. Driven through the real CLI into a real ledger, because
 // the claim is about what lands on disk.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -15,6 +15,10 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 import { aggregateSpend } from '../../gate-manifest/lib/spend.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'premortem.mjs');
 
@@ -26,6 +30,7 @@ const SPEC = `# Spec: a thing
 
 function runVerdict() {
   const dir = mkdtempSync(join(tmpdir(), 'premortem-usage-'));
+  fixtureDirs.add(dir);
   const specPath = join(dir, 'spec.md');
   writeFileSync(specPath, SPEC, 'utf8');
   const res = spawnSync(process.execPath, [CLI, specPath, '--prompt-only', '--record-verdict', '-', '--ticket', 'T1'], {

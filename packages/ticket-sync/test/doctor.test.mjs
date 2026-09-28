@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, statSync, readdirSync, utimesSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -6,12 +6,17 @@ import { join } from 'node:path';
 import { doctor } from '../lib/doctor.mjs';
 import { generateAll } from '../scripts/gen-schema.mjs';
 
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 const VALID_CONFIG = { ticketSync: { provider: 'github', repo: 'acme/app', statusLabels: {} } };
 const VALID_TICKETS = { tickets: [{ id: 'T1', title: 'x', scope: ['a/**'], duration: 1 }] };
 
 /** Build a repo with selected .adlc files; omit a key to leave that file out. */
 function mk({ config = VALID_CONFIG, tickets = VALID_TICKETS, sidecar, lock = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-doctor-'));
+  fixtureDirs.add(dir);
   mkdirSync(join(dir, '.adlc'));
   if (config !== null) writeFileSync(join(dir, '.adlc', 'config.json'), typeof config === 'string' ? config : JSON.stringify(config));
   if (tickets !== null) writeFileSync(join(dir, '.adlc', 'tickets.json'), typeof tickets === 'string' ? tickets : JSON.stringify(tickets));

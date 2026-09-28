@@ -15,6 +15,11 @@ import { autopilotPaths } from '../../lib/paths.mjs';
 import { acquireLock } from '../../lib/lock.mjs';
 import { fakeSpawnImpl } from './fake-children.mjs';
 import { fakeGithub } from './triage-gh.mjs';
+import { after } from './node-test.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 export const NOW = Date.parse('2026-08-28T12:00:00Z');
 export const BASE_OID = 'b'.repeat(40);
@@ -46,6 +51,7 @@ export const claudeResult = (ticket, extra = {}) => JSON.stringify({ type: 'resu
  */
 export function makeTriageCtx({ issues = [], prs = [], claude = null, adlc = null, schemaFail = false, specLintFail = false, tree = DEFAULT_TREE, denyGlobs = DEFAULT_DENY, model = 'opus', secretValues = [], redactor = null, now = NOW } = {}) {
   const repoRoot = mkdtempSync(join(tmpdir(), 'ap-triage-'));
+  fixtureDirs.add(repoRoot);
   const paths = autopilotPaths(repoRoot);
   mkdirSync(paths.runsDir, { recursive: true });
   const gh = fakeGithub({ issues, prs });

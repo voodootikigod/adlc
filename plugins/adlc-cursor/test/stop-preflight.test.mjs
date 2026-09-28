@@ -4,7 +4,7 @@
 // modules' exports — no Cursor event is invented or wired here (the scripts stay
 // disabled by default; see scaffold.test.mjs for the wiring contract).
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -15,8 +15,13 @@ import { preflightOnce, PRECEDENCE_ASSERTION } from '../hooks/adlc-preflight.mjs
 import { run, stopAudit, gitChangedPaths } from '../hooks/adlc-stop.mjs';
 import { SESSION_TTL_MS, PREFLIGHT_MARKER_FILE } from '../constants.mjs';
 
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 const mkRoot = ({ adlc = true } = {}) => {
   const root = mkdtempSync(join(tmpdir(), 'adlc-cursor-stoppre-'));
+  fixtureDirs.add(root);
   if (adlc) mkdirSync(join(root, '.adlc'), { recursive: true });
   return root;
 };
@@ -167,6 +172,7 @@ function routedSpawn(routes = []) {
 /** A fully ADLC-initialized root (tickets.json + empty manifest.jsonl). */
 function mkAdlcRoot() {
   const root = mkdtempSync(join(tmpdir(), 'adlc-cursor-stopaudit-'));
+  fixtureDirs.add(root);
   mkdirSync(join(root, '.adlc'), { recursive: true });
   writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [] }));
   writeFileSync(join(root, '.adlc', 'manifest.jsonl'), '');
@@ -176,6 +182,7 @@ function mkAdlcRoot() {
 /** A real, minimal git repo fixture (identity + no gpg signing). */
 function gitRepo() {
   const root = mkdtempSync(join(tmpdir(), 'adlc-cursor-gitcp-'));
+  fixtureDirs.add(root);
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
   git('init', '-q');
   git('config', 'user.email', 'test@example.com');

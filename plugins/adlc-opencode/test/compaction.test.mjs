@@ -1,7 +1,7 @@
 // compaction.test.mjs — T32 AC1/AC2: context survives compaction, and a
 // degraded high-risk session does not silently auto-continue past it.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,6 +11,7 @@ import { createDepthTracker } from '../lib/build-gate.mjs';
 
 function repo(tickets) {
   const dir = mkdtempSync(join(tmpdir(), 'oc-compact-'));
+  fixtureDirs.add(dir);
   mkdirSync(join(dir, '.adlc'), { recursive: true });
   tickets = structuredClone(tickets);
   for (const ticket of tickets) ticket.title ??= `${ticket.id} fixture`;
@@ -97,6 +98,10 @@ test('AC2: high-risk but session NOT degraded (no compaction, shallow) → autoc
 
 // ---- integration: the three T32 hooks fire through the real plugin ----
 import { adlcRailsGuard } from '../index.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const withEnv = async (patch, fn) => {
   const saved = { ...process.env };

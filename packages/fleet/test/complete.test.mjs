@@ -7,7 +7,7 @@
 //   2. runFleet wiring, proving completion is GATED — invoked after a passing
 //      post-merge gate, and (b) NEVER invoked when the post-merge gate fails.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -19,6 +19,10 @@ import { appendManifestEntry } from '@adlc/gate-manifest';
 import { runFleet, integrationBranchName } from '../lib/run.mjs';
 import { resolveRunConfig } from '../lib/config.mjs';
 import { completeTicketOnIntegration, revertCompletionCommit } from '../lib/complete.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 function gitRunner(cwd) {
   return (...args) =>
@@ -32,6 +36,7 @@ function gitRunner(cwd) {
 /** A temp git repo carrying a directory ticket store with one open ticket on an integration branch. */
 function makeRepo(ticket = { id: 'T1', title: 'first' }, { bootstrapManifest = true } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'fleet-complete-'));
+  fixtureDirs.add(root);
   const git = gitRunner(root);
   git('init', '-b', 'main');
   // A realistic .gitignore (mirrors this repo's own .adlc/* block, spec §4.8): without

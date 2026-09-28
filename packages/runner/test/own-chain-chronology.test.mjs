@@ -12,7 +12,7 @@
 // With one segment the consumers are right by accident. Every test here builds
 // a SECOND segment belonging to another branch, which is what the frozen root
 // made ordinary — and each of them fails against a whole-forest read.
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -23,6 +23,10 @@ import { assertPhase } from '../lib/assertions.mjs';
 import { recordAcceptancePacket } from '../lib/acceptance.mjs';
 import { sha256 } from '@adlc/core';
 import { ticketHash as domainTicketHash } from '@adlc/tickets';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const OUR_BRANCH = 'feat/own-chain-runner-fixture';
 const OTHER_BRANCH = 'feat/somebody-elses-work';
@@ -35,6 +39,7 @@ const BIN = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'adlc.
 
 function repo() {
   const root = mkdtempSync(join(tmpdir(), 'adlc-runner-own-chain-'));
+  fixtureDirs.add(root);
   const g = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   g('init', '-q', '-b', OUR_BRANCH);
   g('config', 'user.email', 't@t.co');

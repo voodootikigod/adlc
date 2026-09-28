@@ -6,7 +6,7 @@
 // Driven through the real CLI into a real ledger, because the claim is about
 // what lands on disk.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -15,6 +15,10 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 import { aggregateSpend } from '../../gate-manifest/lib/spend.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'coldstart.mjs');
 
@@ -34,6 +38,7 @@ const TICKETS = {
 
 function runVerdict() {
   const dir = mkdtempSync(join(tmpdir(), 'coldstart-usage-'));
+  fixtureDirs.add(dir);
   mkdirSync(join(dir, '.adlc'), { recursive: true });
   writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify(TICKETS, null, 2));
   const res = spawnSync(process.execPath, [CLI, 'T-ONE', '--prompt-only', '--record-verdict', '-'], {

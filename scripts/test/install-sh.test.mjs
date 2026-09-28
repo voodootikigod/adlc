@@ -13,7 +13,7 @@
 // is a logging shim, so what is asserted is the script's actual behavior, not a
 // description of it.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -30,6 +30,10 @@ import {
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const INSTALL_SH = path.join(repoRoot, 'apps/docs/public/install.sh');
@@ -66,6 +70,7 @@ const HARNESSES = [
  */
 function sandbox({ bins = [], nodeVersion = 'v22.21.0', failing = [], adlcOnPath = true, npmPrefix } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), 'adlc-install-'));
+  fixtureDirs.add(root);
   const binDir = path.join(root, 'bin');
   const home = path.join(root, 'home');
   const log = path.join(root, 'commands.log');

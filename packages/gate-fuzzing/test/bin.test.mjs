@@ -5,17 +5,22 @@
  * circuit before any provider is actually contacted.
  */
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
 
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 const BIN = resolve(new URL('../bin/gate-fuzzing.mjs', import.meta.url).pathname);
 
 function makeRepoWithSuite() {
   const dir = mkdtempSync(join(tmpdir(), 'gate-fuzzing-bin-test-'));
+  fixtureDirs.add(dir);
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
   execFileSync('git', ['config', 'user.email', 't@t.co'], { cwd: dir });
   execFileSync('git', ['config', 'user.name', 'tester'], { cwd: dir });

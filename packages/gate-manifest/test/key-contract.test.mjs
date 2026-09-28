@@ -17,6 +17,10 @@ import { repairChain } from '../lib/repair.mjs';
 import { verifyEntrySig } from '../lib/sign.mjs';
 import { recordTicketEvidence } from '@adlc/tickets';
 
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 const AMBIENT = 'ambient-key-that-must-never-be-consulted';
 let savedKey;
 before(() => { savedKey = process.env.ADLC_MANIFEST_KEY; process.env.ADLC_MANIFEST_KEY = AMBIENT; });
@@ -27,6 +31,7 @@ after(() => {
 
 function scratchDir() {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-key-contract-'));
+  fixtureDirs.add(dir);
   return dir;
 }
 

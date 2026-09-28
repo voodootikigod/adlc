@@ -12,13 +12,17 @@
 //
 // Offline, leaves no trace (mkdtempSync temp dirs + scratch git repos inside them).
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PRUNE_BIN = join(HERE, '..', 'bin', 'ticket-prune.mjs');
@@ -81,6 +85,7 @@ function runRailsGuardCi(dir) {
  */
 function setupBaseRepo({ baseTickets, seedFiles = [] }) {
   const dir = mkdtempSync(join(tmpdir(), 'ticket-prune-rt-'));
+  fixtureDirs.add(dir);
   git(dir, ['init', '-q', '-b', 'main']);
   git(dir, ['config', 'user.email', 'a@b.c']);
   git(dir, ['config', 'user.name', 'x']);

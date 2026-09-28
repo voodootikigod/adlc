@@ -17,7 +17,7 @@
 //   - working-tree inclusivity is preserved: an uncommitted edit still moves the
 //     identity (the FIX A property at the identity level);
 //   - AC5: disjoint histories (no merge-base) fail closed to null.
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,12 +25,17 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { resolveChangeSetRevision, changeSetBase, isChangeSetRevision } from '../lib/revision.mjs';
 
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 // Commit dates pinned so shas are deterministic run-to-run (mirrors the
 // prosecute tier-check test fixture; nothing here asserts cross-repo equality).
 const PINNED_GIT_DATE = '2026-01-01T00:00:00Z';
 
 function scratchRepo() {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-rev-merge-base-'));
+  fixtureDirs.add(dir);
   const g = (...a) => execFileSync('git', a, {
     cwd: dir,
     encoding: 'utf8',

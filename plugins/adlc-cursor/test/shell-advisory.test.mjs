@@ -2,7 +2,7 @@
 // advisory on a command that obviously targets a frozen rail / trust root, is
 // silent on a benign command, and NEVER denies (permission is always allow).
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
@@ -12,11 +12,16 @@ import { fileURLToPath } from 'node:url';
 
 import { adviseShell, extractCommand } from '../hooks/adlc-shell-advisory.mjs';
 
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, '..', 'hooks', 'adlc-shell-advisory.mjs');
 
 function fixture({ tickets = null } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'adlc-cursor-shell-'));
+  fixtureDirs.add(root);
   if (tickets) {
     mkdirSync(join(root, '.adlc'), { recursive: true });
     writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets }));

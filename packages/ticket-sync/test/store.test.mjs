@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -6,8 +6,13 @@ import { join } from 'node:path';
 import { acquireLock, releaseLock, writeTicketsAtomic, readSidecar, writeSidecar } from '../lib/store.mjs';
 import { DirectoryTicketStore, TicketService, initializeTicketStores, loadTicketSnapshot } from '@adlc/tickets';
 
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 function repo() {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-store-'));
+  fixtureDirs.add(dir);
   mkdirSync(join(dir, '.adlc'));
   return dir;
 }

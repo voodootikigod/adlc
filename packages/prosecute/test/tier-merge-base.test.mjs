@@ -16,12 +16,16 @@
 //     merge-base anchor);
 //   - AC5: a --base that resolves but shares no history (no merge-base) fails
 //     closed (exit 1) with the actionable changed-file-set message.
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const BIN = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
 
@@ -48,6 +52,7 @@ const PINNED_GIT_DATE = '2026-01-01T00:00:00Z';
 // and the checkout returns to feat, which is now BEHIND main.
 function scratchRepo({ baseTickets, mutate, advanceBase }) {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-tier-merge-base-'));
+  fixtureDirs.add(dir);
   const g = (...a) => execFileSync('git', a, {
     cwd: dir,
     encoding: 'utf8',

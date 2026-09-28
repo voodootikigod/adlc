@@ -1,6 +1,6 @@
 // subagent.test.mjs — T67 AC11/AC12: P5 marker + Task/subagent policy.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,11 +14,16 @@ import { handlePreCompact } from '../hooks/adlc-precompact.mjs';
 import { dispatch } from '../hooks/adlc-pretool.mjs';
 import { mergeHooks } from '../lib/scaffold.mjs';
 
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIX = join(HERE, 'fixtures');
 
 function stateEnv() {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-p5-'));
+  fixtureDirs.add(dir);
   return { env: { ADLC_CURSOR_STATE_DIR: dir }, dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 

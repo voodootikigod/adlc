@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -8,6 +8,10 @@ import { serializeBlock } from '../lib/block.mjs';
 import { canonicalHash } from '../lib/canonical.mjs';
 import { githubProvider } from '../lib/providers/github.mjs';
 import { loadTicketSnapshot } from '@adlc/tickets';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 // ---- validityGate (pure) ----
 
@@ -41,6 +45,7 @@ test('validityGate catches duplicate ids and cycles', () => {
 
 function repo({ tickets, sidecar } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-pull-'));
+  fixtureDirs.add(dir);
   mkdirSync(join(dir, '.adlc'));
   writeFileSync(join(dir, '.adlc', 'config.json'), JSON.stringify({ ticketSync: { provider: 'github', repo: 'acme/app' } }));
   if (tickets) writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ tickets }, null, 2));

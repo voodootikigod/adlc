@@ -20,6 +20,11 @@ import { watchCi } from '../lib/ci.mjs';
 import { createRecordStore, newRecord, updateIfPresent } from '../lib/records.mjs';
 import { autopilotPaths } from '../lib/paths.mjs';
 import { createRedactor } from '../lib/redact.mjs';
+import { after } from './helpers/node-test.mjs';
+
+// Every fixture the factories below mint; removed once this file's tests finish.
+const fixtureDirs = new Set();
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
 const ISSUE = 7;
 const OID = 'd'.repeat(40);
@@ -30,6 +35,7 @@ const VANISHED = Object.freeze({ state: 'unchanged', reason: 'record-vanished' }
 /** A real record store over a temp root, so every throw under test is the production one. */
 function makeWorld({ state = 'dispatched', extra = {} } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'ap-vanish-'));
+  fixtureDirs.add(root);
   const paths = autopilotPaths(root);
   const records = createRecordStore({ paths, redactor: createRedactor() });
   records.save({
