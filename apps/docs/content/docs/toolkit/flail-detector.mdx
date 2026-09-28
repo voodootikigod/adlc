@@ -34,7 +34,7 @@ adlc flail-detector <log-file> [--scope <glob>...] [--max-repeat <n>] [--max-byt
 | `--json` | Machine-readable JSON output for orchestrators. |
 | `--help` | Print help and exit 0. |
 
-Path-bearing verbs (`Writing`, `Editing`, `Created`) match at line start or when preceded by whitespace (e.g. timestamp prefixes `12:03:01 Writing <path>` or indented lines); prior to #623, only line-leading verbs matched.
+Path-bearing verbs (`Writing`, `Editing`, `Created`) must open the line, optionally after indentation and log prefixes: timestamps (`12:03:01 Writing <path>`), bracketed fields (`[INFO] Editing <path>`), or upper-case level names (`WARN Created <path>`). A verb anywhere else is prose and yields no path, so a tool result such as `File created successfully at: <path>` is not read as a write to `successfully`.
 
 ## Exit codes
 
