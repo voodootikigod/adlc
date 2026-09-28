@@ -13,7 +13,8 @@
  *   2  gate fails (--width > firstWaveWidth, or vetoed pair concurrent)
  */
 
-import { parseArgs, loadTickets, pass, opError, printJson, activeTickets } from '@adlc/core';
+import { resolve } from 'node:path';
+import { parseArgs, loadTickets, pass, opError, printJson, activeTickets, isGitRepo, repoRoot } from '@adlc/core';
 import { runForecast } from '../lib/forecast.mjs';
 import { formatForecast } from '../lib/output.mjs';
 
@@ -123,18 +124,30 @@ if (tickets.length === 0) {
   opError(allTickets.length > 0 ? 'no active tickets found (all tickets are completed)' : 'no tickets found');
 }
 
+// Ticket scopes and co-change paths are repo-root-relative, so the forecast
+// runs from the repository root even when invoked from a subdirectory.
+// Outside a git repository there is no root to find; the cwd stands in.
+function forecastRoot(cwd) {
+  if (!isGitRepo(cwd)) return cwd;
+  try {
+    return repoRoot(cwd);
+  } catch (err) {
+    opError(`cannot resolve the git repository root: ${err.message}`);
+  }
+}
+
 // Run forecast
 let result;
 try {
   result = await runForecast({
     tickets,
-    root: process.cwd(),
+    root: forecastRoot(process.cwd()),
     coChangeLimit,
     conflictThreshold,
     width: widthFlag,
     buildMin,
     mergeMin,
-    graphCouplingFile: values['graph-coupling'],
+    graphCouplingFile: values['graph-coupling'] && resolve(values['graph-coupling']),
   });
 } catch (err) {
   opError(err.message ?? String(err));
