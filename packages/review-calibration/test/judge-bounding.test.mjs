@@ -107,13 +107,12 @@ describe('buildJudgePrompt fences externally-authored text (#750)', () => {
     }
   });
 
-  it('leaves structured values (file, line, category) unfenced', () => {
+  it('leaves location values (file, line) unfenced', () => {
     const prompt = buildJudgePrompt(PLANT, {
       file: 'src/auth.mjs', line: 42, description: 'ok', evidence: null,
     });
     assert.ok(prompt.includes('src/auth.mjs:42'), 'plant location stays a plain value');
-    assert.ok(prompt.includes('logic-inversion'), 'category stays a plain value');
-    for (const label of ['PLANT_FILE', 'PLANT_LINE', 'PLANT_CATEGORY', 'FINDING_AT']) {
+    for (const label of ['PLANT_FILE', 'PLANT_LINE', 'FINDING_AT']) {
       assert.ok(!prompt.includes(label), `${label} must not be fenced — it is a structured value`);
     }
   });

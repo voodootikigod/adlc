@@ -4,6 +4,7 @@
 // (find the bug) — the generator–verifier gap — so a cheap model judges well.
 // The judge is itself calibrated against a labeled fixture (calibrateJudge).
 
+import { basename } from 'node:path';
 import { resolveModel, fence } from '@adlc/core';
 
 /**
@@ -36,14 +37,21 @@ const FIELD_CAP = 300;
  * (#750), so each goes through core's fence(): delimiters plus declared
  * provenance, which the system prompt tells the model to read as data.
  *
- * Structured values (file, line, category) stay plain — they are not prose and
- * fencing them would only add noise.
+ * `plant.category` is fenced too: a plants file may set it to any string.
+ *
+ * The finding's location is rendered from what the scorer actually checked, not
+ * from the reviewer's raw `file`. A finding reaches the judge only when
+ * `basename(finding.file)` equals the plant's basename, so the basename is a
+ * repo-derived value; the directory part is unconstrained reviewer text and is
+ * never shown. `finding.line` and the plant's file and line are integers or
+ * repo paths and stay plain.
  */
 export function buildJudgePrompt(plant, finding) {
   return [
     'PLANTED DEFECT',
     `  file: ${plant.file}:${plant.line}`,
-    `  category: ${plant.category ?? 'unknown'}`,
+    '  category:',
+    fence('PLANT_CATEGORY', oneLine(plant.category ?? 'unknown'), FIELD_CAP),
     '  change (original -> mutated):',
     fence('PLANT_ORIGINAL', oneLine(plant.original), FIELD_CAP),
     fence('PLANT_MUTATED', oneLine(plant.mutated), FIELD_CAP),
@@ -51,7 +59,7 @@ export function buildJudgePrompt(plant, finding) {
     fence('PLANT_DEFECT', oneLine(plant.defect ?? '(no description)'), FIELD_CAP),
     '',
     'REVIEW FINDING',
-    `  at: ${finding.file}:${finding.line}`,
+    `  at: ${basename(String(finding.file))}:${finding.line}`,
     '  says:',
     fence('FINDING_SAYS', oneLine(finding.description), FIELD_CAP),
     finding.evidence ? '  evidence:' : '',
