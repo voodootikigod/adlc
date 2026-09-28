@@ -13,7 +13,7 @@ Addresses [issue #39](https://github.com/voodootikigod/adlc/issues/39).
 ## Usage
 
 ```
-ticket-prune [--tickets path] [--base-ref ref] [--infer-scope] [--write] [--json]
+ticket-prune [--tickets path] [--base-ref ref] [--infer-scope] [--write] [--allow-unsigned] [--json]
 ```
 
 Dry-run by default, consistent with every other ADLC writer (`skill-rot`,
@@ -113,10 +113,10 @@ matching, and is exactly the check the issue's worked example did by hand.
 | Flag | Description |
 |------|-------------|
 | `--tickets <path>` | Ticket-store override. The default auto-detects sharded `.adlc/tickets/` or legacy `.adlc/tickets.json`. |
-| `--archive <path>` | Legacy-backend archive override. Sharded stores always use `.adlc/ticket-archive/`. |
 | `--base-ref <ref>` | Git ref to check declared `scope` globs against (default `HEAD`). Point at `origin/main` to audit a feature branch's tickets against what's already shipped on trunk. |
 | `--infer-scope` | Enable the scope-existence staleness inference (default **off**, #779). Without it, only an explicit done-shaped `status` makes a ticket stale. |
-| `--write` | Tombstone rails-less stale tickets: add `completed: true` in place (never remove, never mutate any other field). Rails-freezing stale tickets are left untouched and reported under `needsCeremony`. |
+| `--write` | Tombstone rails-less stale tickets: add `completed: true` in place on the legacy flat-file store (never remove, never mutate any other field); move them to `.adlc/ticket-archive/` on the sharded store. Rails-freezing stale tickets are left untouched and reported under `needsCeremony`. |
+| `--allow-unsigned` | Let a `--write` against a frozen trust root record its audit entry unsigned when no `ADLC_MANIFEST_KEY` is set (warns first; the unsigned entry is permanent). Same contract as `adlc ticket --allow-unsigned`. |
 | `--ceremony` | **Deprecated (#208).** Fails closed and redirects to `adlc ticket complete <id> --write --authorize --json`. Rail-freezing tickets are completed per-ticket via that command, not in bulk here. |
 | `--json` | Machine-readable `{ baseRef, write, ceremony, inferScope, stale[], active[], tombstoned[], archived[], ceremonyCompleted[], needsCeremony[], blocked[] }`. |
 

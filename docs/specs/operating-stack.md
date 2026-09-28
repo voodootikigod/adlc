@@ -4,8 +4,9 @@
 the build items in §9 are follow-on tickets, each independently executable. Companion
 strategy doc (personal economics, kept out of repo): `~/ideal-agentic-setup.md`.
 
-Status: **proposed, revision 12** — revised after eleven cross-model adversarial
-review rounds (codex). Round 1: registry-as-attack-surface, tier-only routing gap,
+Status: **partially shipped** — §4–§5 are built as `packages/quartermaster`; §9 items
+1, 3 and 4 remain follow-on tickets. Kept as the design record (revision 12), revised
+after eleven cross-model adversarial review rounds (codex). Round 1: registry-as-attack-surface, tier-only routing gap,
 gateway identity assertion, missing quorum, non-computable monitors, undefined
 fallback. Round 2: symbolic selection still downgradeable, fallback transport
 collision, gateway quorum collapse, unvalidated job labels, usage-schema

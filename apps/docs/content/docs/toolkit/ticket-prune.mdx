@@ -1,15 +1,15 @@
 ---
 title: ticket-prune
-description: Reports and archives stale, already-shipped tickets out of .adlc/tickets.json so live work is not buried under leftovers.
+description: Reports stale, already-shipped tickets and, with --write, tombstones or archives them so live work is not buried under leftovers.
 ---
 
 # ticket-prune
 
-**ADLC phase: maintenance / cross-phase (C12)** · **Gate:** none. Advisory report; `--write` archives stale tickets, never deletes.
+**ADLC phase: maintenance / cross-phase (C12)** · **Gate:** none. Advisory report; `--write` tombstones (legacy store) or archives (sharded store) stale tickets, never deletes.
 
 ## What it defends against
 
-`.adlc/tickets.json` is a mutable scratchpad, and nothing else prunes it after a ticket ships. Completed tickets accumulate and masquerade as an open backlog. You can't tell live work from leftovers without cross-checking deliverables and merged PRs by hand. `ticket-prune` reports (and, with `--write`, archives) the tickets it can determine are stale, so the backlog reflects what is actually open.
+`.adlc/tickets.json` is a mutable scratchpad, and nothing else prunes it after a ticket ships. Completed tickets accumulate and masquerade as an open backlog. You can't tell live work from leftovers without cross-checking deliverables and merged PRs by hand. `ticket-prune` reports (and, with `--write`, tombstones or archives) the tickets it can determine are stale, so the backlog reflects what is actually open.
 
 A ticket is stale when it carries an explicit terminal `status` (`done` / `closed` / `complete` / `completed` / `archived` / `shipped`, case-insensitive), or — **only with `--infer-scope`** — when, absent a status, it declares at least one `scope` glob and every glob resolves to a file tracked at `--base-ref`. A ticket with no scope and no status is never inferred stale.
 
@@ -18,16 +18,17 @@ That scope-existence inference is **off by default** (#779). Scope existence is 
 ## Usage
 
 ```sh
-adlc ticket-prune [--tickets path] [--archive path] [--base-ref ref] [--infer-scope] [--write] [--json]
+adlc ticket-prune [--tickets path] [--base-ref ref] [--infer-scope] [--write] [--allow-unsigned] [--json]
 ```
 
 | Flag | Description |
 | --- | --- |
 | `--tickets <path>` | Ticket file to read (default `.adlc/tickets.json`). |
-| `--archive <path>` | Archive file written under `--write` (default `.adlc/tickets.archive.json`, gitignored). |
 | `--base-ref <ref>` | Git ref to check `scope` globs against (default `HEAD`). Point at `origin/main` to audit a branch's tickets against trunk. |
 | `--infer-scope` | Enable the scope-existence staleness inference (default **off**, #779). Without it, only an explicit done-shaped `status` makes a ticket stale. |
-| `--write` | Archive stale tickets: move them out of `--tickets` into `--archive` (append/upsert by id; never clobbered, never deleted). |
+| `--write` | Tombstone rails-less stale tickets: add `completed: true` in place on the legacy flat-file store (never remove, never mutate any other field); move them to `.adlc/ticket-archive/` on the sharded store. Rails-freezing stale tickets are left untouched and reported under `needsCeremony`. |
+| `--allow-unsigned` | Let a `--write` against a frozen trust root record its audit entry unsigned when no `ADLC_MANIFEST_KEY` is set (warns first; the unsigned entry is permanent). Same contract as `adlc ticket --allow-unsigned`. |
+| `--ceremony` | **Deprecated.** Fails closed (exit 1) and redirects to `adlc ticket complete <id> --write --authorize --json`; rail-freezing tickets are completed per ticket, not in bulk here. |
 | `--json` | Machine-readable `{ baseRef, write, ceremony, inferScope, stale[], active[], tombstoned[], archived[], ceremonyCompleted[], needsCeremony[], blocked[] }`. |
 
 `--json` fields: `archived[]` lists the tickets `--write` moved out of the active directory store (`.adlc/tickets/`), so on that store it, not `tombstoned[]`, records what changed; `tombstoned[]` lists the in-place `completed: true` tombstones `--write` adds on the legacy flat-file store (`.adlc/tickets.json`); `blocked[]` lists stale tickets left unarchived because a ticket outside the batch still references them; `ceremony` is always `false` and `ceremonyCompleted[]` always empty since `--ceremony` was deprecated (#208), both retained for compatibility.
@@ -43,10 +44,15 @@ adlc ticket-prune [--tickets path] [--archive path] [--base-ref ref] [--infer-sc
 
 ```sh
 $ adlc ticket-prune --base-ref origin/main --infer-scope
-stale (2): T3 (status: shipped), T7 (scope shipped on origin/main)
-active (4): T9, T10, T11, T12
+ticket-prune — base ref: origin/main (dry-run, scope-existence inference: on)
 
-Dry run — re-run with --write to archive.
+Stale tickets (2) — re-run with --write to tombstone them:
+  - T3: explicit status: "shipped"
+  - T7: inferred: all 2 declared scope glob(s) resolve to tracked files on the base ref
+
+Active tickets (2):
+  - T9: no explicit status; declared scope not fully present on the base ref
+  - T10: no explicit status and no declared scope — cannot infer, treated as active
 exit 0
 ```
 
