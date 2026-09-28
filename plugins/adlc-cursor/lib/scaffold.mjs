@@ -289,12 +289,38 @@ export function deployCommands(projectRoot, { pluginRoot = PLUGIN_ROOT } = {}) {
   return deployed;
 }
 
-/** Create `.adlc/config.json` with defaults if absent (never clobber). */
+/**
+ * Why an existing config file cannot be used, or null when it parses to a
+ * plain JSON object.
+ */
+function configUnreadableReason(cfgPath) {
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(cfgPath, 'utf8'));
+  } catch (error) {
+    return `is not readable JSON: ${error.message}`;
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return 'is not usable: expected a top-level object';
+  }
+  return null;
+}
+
+/**
+ * Create `.adlc/config.json` with defaults if absent (never clobber). An
+ * existing file that is not a JSON object is left untouched and returned with
+ * a `warning`, so the caller can fail rather than report it as present.
+ */
 export function ensureConfig(projectRoot) {
   const adlcDir = join(projectRoot, '.adlc');
   mkdirSync(adlcDir, { recursive: true });
   const cfgPath = join(adlcDir, 'config.json');
-  if (existsSync(cfgPath)) return { path: cfgPath, created: false };
+  if (existsSync(cfgPath)) {
+    const reason = configUnreadableReason(cfgPath);
+    return reason === null
+      ? { path: cfgPath, created: false }
+      : { path: cfgPath, created: false, warning: `.adlc/config.json exists but ${reason}` };
+  }
   writeFileSync(cfgPath, `${JSON.stringify({ securityMode: 'unsigned-fallback' }, null, 2)}\n`);
   return { path: cfgPath, created: true };
 }

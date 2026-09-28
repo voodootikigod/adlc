@@ -56,7 +56,13 @@ const { config, hooks, rule, commands, gitignore, formatterIgnores } = scaffold(
 
 const tag = (r) => (r.created ? 'created' : 'present');
 console.log(`adlc-cursor scaffold (${projectRoot}):`);
-console.log(`  .adlc/config.json     — ${tag(config)}`);
+if (config.warning) {
+  console.error(`adlc-cursor: ${config.warning}. Fix or remove it, then re-run.`);
+  process.exitCode = 1;
+  console.log('  .adlc/config.json     — UNREADABLE (left untouched)');
+} else {
+  console.log(`  .adlc/config.json     — ${tag(config)}`);
+}
 console.log(`  .cursor/hooks.json    — ${hooks.created ? 'created' : 'merged'} (preToolUse dispatcher + audit + shell advisory${wireUnpinned ? ' + stop/beforeSubmitPrompt' : ' (stop/preflight omitted via --no-unpinned)'})`);
 if (hooks.backedUp) {
   console.log(`  ⚠ existing .cursor/hooks.json was unparseable — preserved verbatim at ${hooks.backedUp} before writing a fresh file`);
