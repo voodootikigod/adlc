@@ -343,6 +343,22 @@ function sameLock(claimed, judged, { read, io }) {
   return Boolean(now && judged.stat && now.ino === judged.stat.ino && now.mtimeMs === judged.stat.mtimeMs);
 }
 
+/**
+ * Whether `pid` is a running process.
+ *
+ * Signal 0 checks without delivering anything. EPERM means the process EXISTS
+ * but belongs to another user — alive. Reading it as dead would recover a live
+ * lock and put two writers in one transaction.
+ */
+export function pidAlive(pid, kill = process.kill.bind(process)) {
+  try {
+    kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err?.code === 'EPERM';
+  }
+}
+
 /** Age of the lock directory, or null when it cannot be determined. */
 function lockAgeMs(path, { stat = statSync, now = Date.now } = {}) {
   try {
@@ -366,19 +382,25 @@ export function acquireApplyLock(path, io = {}) {
     rmdir = rmSync,
     write = writeFileSync,
     read = (p) => readFileSync(p, 'utf8'),
-    alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } },
+    alive = pidAlive,
     rename = renameSync,
     pid = process.pid,
   } = io;
 
   const ownerFile = `${path}/owner.json`;
 
+  // What this run wrote, so its release can prove the lock at `path` is still
+  // its own before removing it.
+  let mine = null;
   const take = () => {
     mkdir(path);
     // Owner metadata, so a lock left by a killed process can be told from one a
     // live process is holding. Without it a crash mid-run leaves a lock nobody
     // can safely clear: removing it might race a writer that is still going.
-    try { write(ownerFile, `${JSON.stringify({ pid, startedAt: new Date().toISOString() })}\n`); } catch { /* the lock still holds without it */ }
+    const ownerRaw = `${JSON.stringify({ pid, startedAt: new Date().toISOString() })}\n`;
+    let written = null;
+    try { write(ownerFile, ownerRaw); written = ownerRaw; } catch { /* the lock still holds without it */ }
+    mine = { ownerRaw: written, stat: lockStat(path, io) };
   };
 
   try {
@@ -416,6 +438,15 @@ export function acquireApplyLock(path, io = {}) {
     // RENAME the stale directory to a name only it knows. rename is atomic, so
     // exactly one succeeds and the losers get ENOENT and refuse.
     const claimed = `${path}.stale-${pid}-${Date.now()}`;
+    // Re-read immediately before the claim: a recoverer that already replaced
+    // the judged lock has left a live one here, and moving it is the thing to
+    // avoid. This narrows the window; the post-claim check below closes it.
+    if (!sameLock(path, judged, { read, io })) {
+      throw Object.assign(
+        new Error(`backlog-groom: another run recovered the stale lock at ${path} first — the lock now there is live, and was left in place`),
+        { isOpError: true }
+      );
+    }
     try {
       rename(path, claimed);
     } catch (claimErr) {
@@ -430,7 +461,7 @@ export function acquireApplyLock(path, io = {}) {
     // transaction. So prove the claim before clearing it, and hand a lock that is
     // not the judged one straight back.
     if (!sameLock(claimed, judged, { read, io })) {
-      try { rename(claimed, path); } catch { /* best effort: the holder's own release clears its path */ }
+      handBack(claimed, path, rename);
       throw Object.assign(
         new Error(`backlog-groom: another run recovered the stale lock at ${path} first — the lock now there is live, and was left in place`),
         { isOpError: true }
@@ -448,9 +479,35 @@ export function acquireApplyLock(path, io = {}) {
     }
   }
 
+  // Release only while the lock at `path` is still this run's. A lock moved away
+  // and replaced by another run's is that run's to release.
+  const held = mine;
   return () => {
-    try { rmdir(path, { recursive: true, force: true }); } catch { /* releasing a lock must never mask the run's own error */ }
+    try {
+      if (sameLock(path, held, { read, io })) rmdir(path, { recursive: true, force: true });
+    } catch { /* releasing a lock must never mask the run's own error */ }
   };
+}
+
+/**
+ * Return a live lock moved by a lost claim to where its holder expects it.
+ *
+ * If another run took `path` in between, the moved lock cannot go back, and its
+ * holder is now running without a lock at `path`. That is refused loudly and
+ * names where the moved lock sits, because it needs an operator.
+ */
+function handBack(claimed, path, rename) {
+  try {
+    rename(claimed, path);
+  } catch (err) {
+    throw Object.assign(
+      new Error(
+        `backlog-groom: a live apply lock was moved to ${claimed} while recovering ${path}, and could not be returned (${err.code ?? err.message}) — ` +
+        'another run has since taken the lock, so two apply runs may be active; let both finish, then remove the moved directory'
+      ),
+      { isOpError: true }
+    );
+  }
 }
 
 /**
