@@ -20,7 +20,7 @@ Default search roots (searched only when they exist):
 
 Pass one or more explicit path arguments to override the defaults.
 
-Symlinked skill directories and symlinked `SKILL.md` files are followed, with cycle detection preventing infinite recursion on recursive symlink graphs.
+Symlinked skill directories and symlinked `SKILL.md` files are followed, with cycle detection preventing infinite recursion on recursive symlink graphs. Directories named `node_modules` or `.git` below a search root are skipped. A symlink resolving into one is skipped during default discovery and is an operational error (exit 1) when you pass explicit paths; name the target path to check it.
 
 ## Flags
 
@@ -54,14 +54,14 @@ For each `SKILL.md` file found recursively (skipping `node_modules` and `.git`):
 - `stale` — verifiable but fails (counts toward gate failure)
 - `unverifiable` — cannot determine truth (URLs, no `package.json`, ambiguous)
 
-Unverifiable claims are never counted as stale. Skills with zero checkable claims are reported as `[NO-CLAIMS]` and are never stamped under `--write`.
+Unverifiable claims are never counted as stale. Skills with zero checkable claims are reported as `[NO-CLAIMS]` and are never stamped under `--write`. A skill whose claims are all unverifiable is reported as `[UNVERIFIED]`, is not counted clean, and is never stamped.
 
 ## Exit codes
 
 | Code | Meaning |
 |------|---------|
-| `0` | Gate passes — all skills clean |
-| `1` | Operational error — no `SKILL.md` files found, bad input |
+| `0` | Gate passes — no skill has stale claims |
+| `1` | Operational error — no `SKILL.md` files found, bad input, or an explicit path that cannot be fully inspected |
 | `2` | Gate fails — at least one skill has stale claims |
 
 ## Examples
