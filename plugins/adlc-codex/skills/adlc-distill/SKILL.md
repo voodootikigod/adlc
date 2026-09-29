@@ -66,8 +66,10 @@ Dry-run by default (never writes on its own): reports tickets that look
 already shipped, meaning an explicit `status: done`-shaped field. The older scope-existence inference — every declared `scope` glob resolving to a file already tracked on `HEAD` — is OFF unless you add `--infer-scope` (#779): it is true the moment a ticket is authored on a repo older than its backlog, so it is a review aid, never a basis for a bulk write. A **plan, not a
 gate** — exit `0` either way; exit `1` only on an operational error (a
 missing/invalid ticket store). List stale tickets found and recommend
-confirming by hand, then `adlc ticket-prune --write` to archive into the
-gitignored `.adlc/tickets.archive.json` (never deletes outright). Treat
+confirming by hand, then `adlc ticket-prune --write` to tombstone the
+rails-less ones (`completed: true` in place on a legacy `.adlc/tickets.json`
+store; moved to `.adlc/ticket-archive/` on a sharded store — never deletes
+outright). Treat
 `--write` as a human-confirmed action — the ticket store is shared,
 hand-edited state.
 
