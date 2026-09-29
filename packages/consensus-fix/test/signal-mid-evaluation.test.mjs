@@ -124,7 +124,7 @@ test('runCommand resolves promptly and kills the whole process group on abort', 
     setTimeout(() => controller.abort(), 200);
     const result = await pending;
     assert.ok(Date.now() - started < 1500, 'abort did not stop the command');
-    assert.notEqual(result.exitCode, 0);
+    assert.equal(result.exitCode, 130);
     await new Promise((res) => setTimeout(res, 1300));
     assert.equal(existsSync(late), false, 'background grandchild survived the abort');
   } finally {
@@ -139,7 +139,7 @@ test('runCommand does not start a command when already aborted', async () => {
     const controller = new AbortController();
     controller.abort();
     const result = await runCommand(`touch '${marker}'`, { signal: controller.signal });
-    assert.notEqual(result.exitCode, 0);
+    assert.equal(result.exitCode, 130);
     await new Promise((res) => setTimeout(res, 200));
     assert.equal(existsSync(marker), false);
   } finally {
