@@ -53,8 +53,9 @@ describe('witness runner keeps the diagnostics', () => {
     const { dir } = createMathRepo(t);
     const witness = { cmd: 'node', args: ['-e', 'process.stderr.write("x".repeat(100000) + "TAIL"); process.exit(1)'] };
     const v = verifyWitness(plantIn(dir, witness), dir);
-    assert.match(v.reason, /TAIL/);
-    assert.ok(v.reason.length < 3000, `reason is ${v.reason.length} chars`);
+    const shown = v.reason.split('original run output: ')[1];
+    assert.equal(shown.length, 1200, 'the last 1200 characters of the output');
+    assert.ok(shown.endsWith('xTAIL'));
   });
 
   it('restores the file byte-for-byte after a failing witness', (t) => {

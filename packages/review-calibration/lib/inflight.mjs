@@ -20,7 +20,7 @@ import {
   readFileSync, existsSync, lstatSync, statSync, realpathSync, readdirSync,
 } from 'node:fs';
 import { basename, dirname, join, resolve, relative, isAbsolute } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 
 export const INFLIGHT_BASENAME = 'adlc-review-calibration-inflight.json';
 export const RECORD_VERSION = 1;
@@ -47,7 +47,7 @@ export function writeFileAtomic(path, contents) {
     mode = statSync(realPath).mode & 0o7777;
   } catch { /* new file: default mode */ }
 
-  const tmp = `${realPath}.tmp-${process.pid}-${randomBytes(8).toString('hex')}`;
+  const tmp = `${realPath}.tmp-${process.pid}-${randomUUID()}`;
   const fd = openSync(tmp, 'wx');
   let open = true;
   let renamed = false;

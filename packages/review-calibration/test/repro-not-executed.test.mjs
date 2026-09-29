@@ -60,6 +60,7 @@ describe('docs describe only the judge path', () => {
     const result = runCli(['--help'], dir);
     assert.equal(result.status, 0);
     assert.doesNotMatch(result.stdout, /repro/i);
+    assert.match(result.stdout, /Echoing changed lines scores ~0/);
   });
 
   it('the bin header does not claim repro verification', () => {
