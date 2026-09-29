@@ -12,6 +12,13 @@ import { tmp } from '@adlc/core/test-kit';
 import { runWitness, verifyWitness } from '../lib/verify.mjs';
 import { BOUNDARY_PLANT, MATH_SOURCE, createMathRepo, writePlantsFile, runCli } from './cli-fixtures.mjs';
 
+// A witness pointing at a test file that no longer exists. `node --test` on a
+// missing path exits 0 on some Node versions, so the red run is spelled out.
+const RENAMED_AWAY_WITNESS = {
+  cmd: 'node',
+  args: ['-e', 'console.error("Could not find test/renamed-away.test.mjs"); process.exit(1)'],
+};
+
 function plantIn(dir, witness) {
   return { ...BOUNDARY_PLANT, absolutePath: join(dir, 'src', 'math.mjs'), witness };
 }
@@ -42,7 +49,7 @@ describe('witness runner keeps the diagnostics', () => {
 
   it('a witness red on the original tree reports that run\'s output', (t) => {
     const { dir } = createMathRepo(t);
-    const witness = { cmd: 'node', args: ['--test', 'test/renamed-away.test.mjs'] };
+    const witness = RENAMED_AWAY_WITNESS;
     const v = verifyWitness(plantIn(dir, witness), dir);
     assert.equal(v.discriminates, false);
     assert.match(v.reason, /original exit 1/);
@@ -70,7 +77,7 @@ describe('the CLI shows why a witnessed plant was excluded', () => {
     const { dir } = createMathRepo(t);
     const plants = writePlantsFile(t, [{
       ...BOUNDARY_PLANT,
-      witness: { cmd: 'node', args: ['--test', 'test/renamed-away.test.mjs'] },
+      witness: RENAMED_AWAY_WITNESS,
     }]);
     const result = runCli([
       '--review-cmd', 'node -e "0"', '--plants-file', plants,
