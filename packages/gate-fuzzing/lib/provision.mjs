@@ -108,8 +108,9 @@ export function makeProvisionFn(opts) {
         destroy: () => destroyClone(cloneDir),
       };
     } catch (e) {
-      // Provisioning blew up (e.g. no sandbox + no --unsafe). Surface as error and
-      // make sure any partial clone is destroyed.
+      // Provisioning blew up (e.g. no sandbox + no --unsafe). Surface as error.
+      // provisionClone already removed its own clone if it threw; cloneDir is
+      // set only when the throw came after it returned.
       const dir = cloneDir;
       return {
         cloneDir: dir,

@@ -10,6 +10,8 @@
 //   3. apply candidate diff in cloneDir; run candidate setup steps in cloneDir
 //   4. run gates + witness inside cloneDir UNDER THE SANDBOX (spawnCandidateCmd)
 //   5. finally { rmSync(cloneDir, {recursive,force}) } — ALWAYS, even on throw
+//      (a throw inside provisionClone itself destroys the clone before
+//      propagating, since the caller never received its path)
 //
 // Every harness git invocation is hardened with
 //   -c core.hooksPath=/dev/null -c core.fsmonitor=false
@@ -82,15 +84,23 @@ export function provisionClone(candidate, opts) {
   } = opts;
 
   const cloneDir = mkdtempFn(join(tmpRoot, 'gf-clone-'));
+  // Until this returns, the caller has no path to destroy: any throw (a failed
+  // clone, a patch write error, the no-sandbox refusal) removes the clone here.
+  try {
+    return populateClone(candidate, cloneDir, { repoRoot, sandboxType, unsafeNoSandbox, spawnFn, timeout });
+  } catch (e) {
+    safeDestroy(cloneDir);
+    throw e;
+  }
+}
 
+function populateClone(candidate, cloneDir, { repoRoot, sandboxType, unsafeNoSandbox, spawnFn, timeout }) {
   // 2. Disposable clone with --no-hardlinks (Fix 2). Hardened git.
   const clone = hardenedGit(
     ['clone', '--local', '--no-hardlinks', repoRoot, cloneDir],
     { spawnFn, timeout }
   );
   if (clone.exitCode !== 0) {
-    // Clean up the empty temp dir before throwing.
-    safeDestroy(cloneDir);
     throw new Error(
       `git clone --local --no-hardlinks failed (exit ${clone.exitCode}): ${clone.stderr.trim()}`
     );
