@@ -12,6 +12,33 @@ import { runGateKeyless, makeAsk } from './keyless-bridge.mjs';
 
 const GATE_SET = new Set(GATE_BINS);
 
+// A gate run's wall-clock bound. SIGKILL because a gate that ignores SIGTERM
+// would otherwise outlive the bound inside the host process.
+const GATE_TIMEOUT_MS = 120_000;
+
+const INSTALL_HINT = 'Is @adlc/cli installed (npm i -g @adlc/cli)?';
+
+/**
+ * Why a spawnSync result carries no exit code, or null when it has one.
+ * spawnSync reports a signal death as `{ status: null, signal }` with no
+ * `error`, and its own timeout as `{ status: null, error: ETIMEDOUT }`; neither
+ * is a gate verdict.
+ *
+ * @returns {{error: 'spawn-failed'|'timed-out'|'killed'|'no-exit-code', detail: string}|null}
+ */
+function incompleteRun(res) {
+  if (res?.error?.code === 'ENOENT') {
+    return { error: 'spawn-failed', detail: `adlc was not found. ${INSTALL_HINT}` };
+  }
+  if (res?.error?.code === 'ETIMEDOUT') {
+    return { error: 'timed-out', detail: `timed out after ${GATE_TIMEOUT_MS}ms and was killed` };
+  }
+  if (res?.error) return { error: 'spawn-failed', detail: String(res.error.message ?? res.error) };
+  if (typeof res?.status === 'number') return null;
+  if (res?.signal) return { error: 'killed', detail: `killed by ${res.signal} before it exited` };
+  return { error: 'no-exit-code', detail: 'the process reported no exit code' };
+}
+
 // Gates that IMPLEMENT --prompt-only (verified against each package's source —
 // see the membership test). In OpenCode these run keyless (--prompt-only routed
 // to the host model via the bridge); a plain CLI run of them would need an API
@@ -27,8 +54,10 @@ export const LLM_BACKED_GATES = new Set([
  * Validate + run a deterministic (non-LLM) ADLC gate as `adlc <gate> [args…]`.
  * Returns a structured result the tool wrapper hands back to the model:
  *   { title, output, metadata: { gate, exitCode, llmBacked } }
- * Fail-safe: an unknown gate or a spawn failure returns a structured error
- * result rather than throwing, so a tool call never crashes the turn.
+ * Fail-safe: an unknown gate, a spawn failure, or a run that ended without an
+ * exit code (timeout, signal) returns a structured error result with
+ * `exitCode: null` rather than throwing, so a tool call never crashes the turn
+ * and a killed gate is never read as a verdict.
  */
 export function runGate({ gate, args = [], spawnImpl = spawnSync, cwd = process.cwd() }) {
   const name = String(gate ?? '').trim();
@@ -43,15 +72,23 @@ export function runGate({ gate, args = [], spawnImpl = spawnSync, cwd = process.
   const llmBacked = LLM_BACKED_GATES.has(name);
   let res;
   try {
-    res = spawnImpl('adlc', [name, ...cleanArgs], { cwd, encoding: 'utf8', timeout: 120000 });
+    res = spawnImpl('adlc', [name, ...cleanArgs], { cwd, encoding: 'utf8', timeout: GATE_TIMEOUT_MS, killSignal: 'SIGKILL' });
   } catch (err) {
     return {
       title: `adlc_gate: ${name} could not run`,
-      output: `Failed to execute \`adlc ${name}\`: ${String(err?.message ?? err)}. Is @adlc/cli installed (npm i -g @adlc/cli)?`,
+      output: `Failed to execute \`adlc ${name}\`: ${String(err?.message ?? err)}. ${INSTALL_HINT}`,
       metadata: { gate: name, exitCode: null, llmBacked, error: 'spawn-failed' },
     };
   }
-  const exitCode = res.status ?? (res.error ? 1 : 0);
+  const incomplete = incompleteRun(res);
+  if (incomplete) {
+    return {
+      title: `adlc_gate: ${name} did not complete`,
+      output: `\`adlc ${name}\` produced no verdict: ${incomplete.detail}. Treat the gate as NOT passed.`,
+      metadata: { gate: name, exitCode: null, llmBacked, error: incomplete.error },
+    };
+  }
+  const exitCode = res.status;
   const stdout = (res.stdout ?? '').trim();
   const stderr = (res.stderr ?? '').trim();
   const body = stdout || stderr || '(no output)';
