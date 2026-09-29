@@ -251,9 +251,14 @@ if (values['plants-file']) {
 // ── equivalent-mutant filter (plants WITH a witness must discriminate) ────────
 
 const { valid: validPlants, equivalent } = filterEquivalentMutants(plants, cwd);
+const exclusionLines = equivalent.map((p) => `${p.file}:${p.line} — ${p.reason}`);
 if (validPlants.length === 0) {
-  opError(`all ${plants.length} plant(s) were equivalent mutants (no behavioral discriminator) — cannot calibrate`);
+  opError(
+    `all ${plants.length} plant(s) were excluded — no witness discriminated mutant from original ` +
+    `(an equivalent mutant, or a broken witness) — cannot calibrate:\n  ${exclusionLines.join('\n  ')}`
+  );
 }
+for (const line of exclusionLines) console.error(`WARNING: excluded ${line}`);
 if (validPlants.length < minPlants) {
   opError(
     `only ${validPlants.length} valid plant(s) (--min-plants requires ${minPlants}) — ` +

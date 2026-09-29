@@ -6,6 +6,11 @@
 
 import { writeFileSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { tail } from '@adlc/core';
+
+// Enough of a failing witness's output to show its failure line, small enough
+// to print once per excluded plant.
+const OUTPUT_TAIL = 1200;
 
 /**
  * Run a witness command against the current working tree.
@@ -14,16 +19,35 @@ import { spawnSync } from 'node:child_process';
  *
  * @param {{cmd:string, args?:string[]}} witnessSpec
  * @param {string} cwd
- * @param {Function} [runFn]  (cmd, args, cwd) => { status:number, timedOut:boolean }
- * @returns {{status:number, timedOut:boolean}}
+ * @param {Function} [runFn]  (cmd, args, cwd) => WitnessRun
+ * @returns {{status:number|null, timedOut:boolean, output?:string, spawnError?:string|null}}
  */
 export function runWitness(witnessSpec, cwd, runFn = defaultRun) {
   return runFn(witnessSpec.cmd, witnessSpec.args ?? [], cwd);
 }
 
+/**
+ * A witness that could not be started (missing binary, EACCES, EAGAIN) has no
+ * exit status either, so it is told apart from a timeout by spawnSync's error
+ * code rather than by a null status.
+ */
 function defaultRun(cmd, args, cwd) {
   const r = spawnSync(cmd, args, { cwd, timeout: 60_000, encoding: 'utf8', stdio: 'pipe', shell: false });
-  return { status: r.status, timedOut: r.signal === 'SIGTERM' || r.status === null };
+  const timedOut = r.error?.code === 'ETIMEDOUT' || (!r.error && r.signal === 'SIGTERM');
+  const spawnError = r.error && !timedOut ? `${r.error.code ?? 'error'}: ${r.error.message}` : null;
+  const output = tail(`${r.stdout ?? ''}${r.stderr ?? ''}`.trim(), OUTPUT_TAIL);
+  return { status: r.status, timedOut, output, spawnError };
+}
+
+/** Why a witness failed to discriminate, with the output that explains it. */
+function nonDiscriminatingReason(onOriginal, onMutant) {
+  const codes = `witness did not discriminate (original exit ${onOriginal.status}, mutant exit ${onMutant.status})`;
+  // Red on the original means the witness itself is broken; its output is the
+  // only thing that tells that apart from an equivalent mutant.
+  if (onOriginal.status !== 0 && onOriginal.output) {
+    return `${codes}; original run output: ${onOriginal.output}`;
+  }
+  return codes;
 }
 
 /**
@@ -59,16 +83,17 @@ export function verifyWitness(plant, cwd, runFn = defaultRun) {
     writeFileSync(plant.absolutePath, original, 'utf8');
     const onOriginal = runWitness(plant.witness, cwd, runFn);
 
+    const spawnError = onOriginal.spawnError ?? onMutant.spawnError;
+    if (spawnError) {
+      return { discriminates: false, reason: `witness could not start (${spawnError})` };
+    }
     if (onOriginal.timedOut || onMutant.timedOut) {
       return { discriminates: false, reason: 'witness timed out' };
     }
     const passesOriginal = onOriginal.status === 0;
     const failsMutant = onMutant.status !== 0;
     if (passesOriginal && failsMutant) return { discriminates: true, reason: 'ok' };
-    return {
-      discriminates: false,
-      reason: `witness did not discriminate (original exit ${onOriginal.status}, mutant exit ${onMutant.status})`,
-    };
+    return { discriminates: false, reason: nonDiscriminatingReason(onOriginal, onMutant) };
   } finally {
     try {
       writeFileSync(plant.absolutePath, original, 'utf8');
