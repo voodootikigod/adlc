@@ -212,6 +212,11 @@ function tailBytes(path, maxBytes) {
 // allowlist (#807).
 // ---------------------------------------------------------------------------
 
+// A recorder that never exits is killed after this long. The killed child has
+// no exit status, so the bypass counts as unrecorded and the gate denies —
+// promptly, instead of holding the tool call until the host gives up.
+const BYPASS_RECORD_TIMEOUT_MS = 5000;
+
 export function recordBuildGateBypass(ticketId, signals, depth, sessionBytes, { cwd } = {}) {
   const adlcBinPath = resolveTrustedBinary('adlc', process.env.PATH);
   if (!adlcBinPath) return false;
@@ -235,7 +240,13 @@ export function recordBuildGateBypass(ticketId, signals, depth, sessionBytes, { 
     '--ticket', ticketId,
     '--data', JSON.stringify({ signals, depth, sessionBytes }),
   ];
-  const result = spawnSync(process.execPath, args, { encoding: 'utf8', env, ...(cwd ? { cwd } : {}) });
+  const result = spawnSync(process.execPath, args, {
+    encoding: 'utf8',
+    env,
+    timeout: BYPASS_RECORD_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+    ...(cwd ? { cwd } : {}),
+  });
   return !!result && result.status === 0;
 }
 
