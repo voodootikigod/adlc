@@ -27,6 +27,7 @@
 // the issue untouched, or the signal becomes noise and gets muted.
 
 import { execFileSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { runTicketPrune } from '../packages/ticket-prune/lib/run.mjs';
 import { resolveActiveTicketId } from '../packages/tickets/lib/pointer.mjs';
 
@@ -779,7 +780,9 @@ async function main() {
 }
 
 // Only run main() when executed directly, so the test can import the pure parts.
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+// pathToFileURL, not a hand-built URL: import.meta.url is percent-encoded, so
+// a raw `file://` + argv[1] never matches from a path containing a space.
+if (Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((e) => {
     // EXIT-CODE CONTRACT — two different failures, deliberately treated apart:
     //
