@@ -3,8 +3,9 @@
 // heartbeatAt }`; the holder rewrites `heartbeatAt` every 60 s (temp + rename).
 // Another starter may reclaim ONLY when the heartbeat is older than 10 minutes
 // AND (the pid is not alive OR its /proc start time differs); reclaim is
-// `rename(lockdir → lockdir.stale-<token>)` then `rmdir`, then a fresh `mkdir` —
-// a losing racer's rename fails and it exits 1 `lock-held`. Release checks the
+// `rename(lockdir → lockdir.stale-<token>)`, a check that the moved directory is
+// the lock judged stale (else it is put back and the reclaim refused), then
+// `rmdir` and a fresh publish — a losing racer exits 1 `lock-held`. Release checks the
 // token before removing.
 
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, renameSync, rmSync, readdirSync, lstatSync } from 'node:fs';
@@ -56,6 +57,31 @@ export function isStale(owner, { now = Date.now(), pidAlive, pidStartTimeOf }) {
   return live != null && owner.pidStartTime != null && String(live) !== String(owner.pidStartTime);
 }
 
+/** True when two owner readings name the same lock: the same token, or neither carries one. */
+function sameLock(a, b) {
+  return (a?.token ?? null) === (b?.token ?? null);
+}
+
+/**
+ * Remove the lock judged stale as `judged`. The rename is atomic, but another
+ * reclaimer may have removed that lock and published its own between the
+ * judgment and the rename; the moved directory is therefore checked, and a
+ * lock that is not the judged one is put back and the reclaim refused.
+ */
+function reclaimStale(lockDir, judged, quarantine, fsx) {
+  try { fsx.renameSync(lockDir, quarantine); }
+  catch (e) {
+    if (e.code === 'ENOENT') return; // another reclaimer removed it first; the publish below races fairly
+    throw new LockHeldError(readOwner(lockDir));
+  }
+  const moved = readOwner(quarantine);
+  if (!sameLock(moved, judged)) {
+    try { fsx.renameSync(quarantine, lockDir); } catch { /* a newer lock appeared meanwhile; leave it */ }
+    throw new LockHeldError(moved);
+  }
+  fsx.rmSync(quarantine, { recursive: true, force: true });
+}
+
 /**
  * Acquire. Returns { token, lockDir, heartbeat(), release() }; throws LockHeldError.
  * `self` = { pid, pidStartTime }; `probes` as in isStale.
@@ -67,10 +93,7 @@ export function acquireLock(adlcDir, { self, probes, now = Date.now, token = ran
   if (existing || existsSync(lockDir)) {
     // Mutation seam `lock.alwaysAcquire`: a LIVE lock is reclaimed anyway.
     if (!active('lock.alwaysAcquire') && !isStale(existing, { now: now(), ...probes })) throw new LockHeldError(existing);
-    // Reclaim atomically: exactly one racer's rename succeeds.
-    const quarantine = `${lockDir}.stale-${token}`;
-    try { fsx.renameSync(lockDir, quarantine); fsx.rmSync(quarantine, { recursive: true, force: true }); }
-    catch (e) { if (e.code !== 'ENOENT') throw new LockHeldError(readOwner(lockDir)); }
+    reclaimStale(lockDir, existing, `${lockDir}.stale-${token}`, fsx);
   }
   const owner = { pid: self.pid, pidStartTime: self.pidStartTime ?? null, token, heartbeatAt: new Date(now()).toISOString() };
   if (active('lock.twoStepPublish')) {
