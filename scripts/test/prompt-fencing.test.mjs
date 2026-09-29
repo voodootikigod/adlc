@@ -50,8 +50,10 @@ const GUARDED = [
       /\$\{oneLine\(finding\.evidence\)\}/,
       /\$\{oneLine\(plant\.original\)\}/,
       /\$\{oneLine\(plant\.mutated\)\}/,
+      /\$\{finding\.file\}/,
     ],
     mustContain: [
+      "fence('PLANT_CATEGORY', oneLine(plant.category",
       "fence('FINDING_SAYS', oneLine(finding.description)",
       "fence('FINDING_EVIDENCE', oneLine(finding.evidence)",
       "fence('PLANT_ORIGINAL', oneLine(plant.original)",
