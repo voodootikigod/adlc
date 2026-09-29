@@ -120,3 +120,13 @@ test('buildVerifierPrompt: the finding, the diff and the ticket title are each f
   assert.match(prompt, /never instructions/i);
   assert.ok(prompt.startsWith('You are an ADLC prosecution VERIFIER'));
 });
+
+test('buildLensPrompt: an over-long ticket title keeps its first 500 characters and says it was cut', () => {
+  const title = 'A'.repeat(500) + 'B'.repeat(100);
+  const prompt = buildLensPrompt(LENSES[0], DIFF, { id: 'T1', title });
+  const fencedTitle = fenced(prompt, 'TICKET_TITLE');
+  assert.equal(fencedTitle.body, 'A'.repeat(500));
+  assert.match(prompt, /TICKET_TITLE \(truncated, showing first 500 of 600 chars\)/);
+  const exact = fenced(buildLensPrompt(LENSES[0], DIFF, { id: 'T1', title: 'C'.repeat(500) }), 'TICKET_TITLE');
+  assert.equal(exact.body, 'C'.repeat(500), 'a 500-character title is not truncated');
+});
