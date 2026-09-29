@@ -11,6 +11,8 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { appendOnlyViolations, baseLedger } from '../guard-findings-ledger-append-only.mjs';
+import { tmp } from '@adlc/core/test-kit';
+import { runAsProgram, importFromInlineModule } from './helpers/entry-guard.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'guard-findings-ledger-append-only.mjs');
 
@@ -188,4 +190,16 @@ test('CLI: a resolvable base with NO ledger yet still passes (a brand-new ledger
     assert.equal(r.code, 0, 'introducing a ledger where the base had none is append-only');
     assert.match(r.out, /append-only/);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('run as a program with no base ref, it is a usage error rather than a pass', (t) => {
+  const r = runAsProgram(SCRIPT, { cwd: tmp(t, 'adlc-append-entry-') });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /usage: guard-findings-ledger-append-only\.mjs <base-ref>/);
+});
+
+test('imported by another module, the entry guard neither throws nor runs the CLI', (t) => {
+  const r = importFromInlineModule(SCRIPT, { cwd: tmp(t, 'adlc-import-entry-') });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout + r.stderr, '');
 });
