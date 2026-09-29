@@ -4,9 +4,10 @@
 // bug (not an equivalent mutant). Witnesses come from the operator's plants
 // file; nothing here runs a command authored by the reviewer under test.
 
-import { writeFileSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tail } from '@adlc/core';
+import { writeFileAtomic, NO_JOURNAL } from './inflight.mjs';
 
 // Enough of a failing witness's output to show its failure line, small enough
 // to print once per excluded plant.
@@ -60,9 +61,12 @@ function nonDiscriminatingReason(onOriginal, onMutant) {
  * @param {{absolutePath:string, line:number, original:string, mutated:string, witness?:object}} plant
  * @param {string} cwd
  * @param {Function} [runFn]
+ * @param {object} [options]
+ * @param {{begin:Function, end:Function}} [options.journal]  records the mutation
+ *   before the file is written; begin throwing aborts before any write
  * @returns {{discriminates:boolean, reason:string}}
  */
-export function verifyWitness(plant, cwd, runFn = defaultRun) {
+export function verifyWitness(plant, cwd, runFn = defaultRun, { journal = NO_JOURNAL } = {}) {
   if (!plant.witness) return { discriminates: false, reason: 'no witness' };
   let original;
   try {
@@ -74,33 +78,46 @@ export function verifyWitness(plant, cwd, runFn = defaultRun) {
   if (lines[plant.line - 1] !== plant.original) {
     return { discriminates: false, reason: 'original drifted — refusing to verify' };
   }
+  const mutated = lines.map((l, i) => (i === plant.line - 1 ? plant.mutated : l)).join('\n');
+  journal.begin([{ absolutePath: plant.absolutePath, original, mutated }]);
   try {
-    // Mutant must fail.
-    lines[plant.line - 1] = plant.mutated;
-    writeFileSync(plant.absolutePath, lines.join('\n'), 'utf8');
-    const onMutant = runWitness(plant.witness, cwd, runFn);
-    // Original must pass.
-    writeFileSync(plant.absolutePath, original, 'utf8');
-    const onOriginal = runWitness(plant.witness, cwd, runFn);
-
-    const spawnError = onOriginal.spawnError ?? onMutant.spawnError;
-    if (spawnError) {
-      return { discriminates: false, reason: `witness could not start (${spawnError})` };
-    }
-    if (onOriginal.timedOut || onMutant.timedOut) {
-      return { discriminates: false, reason: 'witness timed out' };
-    }
-    const passesOriginal = onOriginal.status === 0;
-    const failsMutant = onMutant.status !== 0;
-    if (passesOriginal && failsMutant) return { discriminates: true, reason: 'ok' };
-    return { discriminates: false, reason: nonDiscriminatingReason(onOriginal, onMutant) };
+    const { onMutant, onOriginal } = runBothSides(plant, cwd, runFn, { original, mutated });
+    return judgeWitnessRuns(onOriginal, onMutant);
   } finally {
-    try {
-      writeFileSync(plant.absolutePath, original, 'utf8');
-    } catch {
-      // best effort
-    }
+    if (restoreOriginal(plant.absolutePath, original)) journal.end();
   }
+}
+
+/** Run the witness on the mutant, then on the restored original. */
+function runBothSides(plant, cwd, runFn, { original, mutated }) {
+  writeFileAtomic(plant.absolutePath, mutated);
+  const onMutant = runWitness(plant.witness, cwd, runFn);
+  writeFileAtomic(plant.absolutePath, original);
+  const onOriginal = runWitness(plant.witness, cwd, runFn);
+  return { onMutant, onOriginal };
+}
+
+function restoreOriginal(absolutePath, original) {
+  try {
+    writeFileAtomic(absolutePath, original);
+    return true;
+  } catch {
+    return false; // the in-flight record stays for the next run
+  }
+}
+
+function judgeWitnessRuns(onOriginal, onMutant) {
+  const spawnError = onOriginal.spawnError ?? onMutant.spawnError;
+  if (spawnError) {
+    return { discriminates: false, reason: `witness could not start (${spawnError})` };
+  }
+  if (onOriginal.timedOut || onMutant.timedOut) {
+    return { discriminates: false, reason: 'witness timed out' };
+  }
+  const passesOriginal = onOriginal.status === 0;
+  const failsMutant = onMutant.status !== 0;
+  if (passesOriginal && failsMutant) return { discriminates: true, reason: 'ok' };
+  return { discriminates: false, reason: nonDiscriminatingReason(onOriginal, onMutant) };
 }
 
 /**
@@ -115,9 +132,10 @@ export function verifyWitness(plant, cwd, runFn = defaultRun) {
  * @param {Array<object>} plants
  * @param {string} cwd
  * @param {Function} [runFn]
+ * @param {object} [options]  passed to verifyWitness (journal)
  * @returns {{valid:Array, equivalent:Array}}
  */
-export function filterEquivalentMutants(plants, cwd, runFn = defaultRun) {
+export function filterEquivalentMutants(plants, cwd, runFn = defaultRun, options = {}) {
   const valid = [];
   const equivalent = [];
   for (const plant of plants) {
@@ -125,7 +143,7 @@ export function filterEquivalentMutants(plants, cwd, runFn = defaultRun) {
       valid.push({ ...plant, witnessed: false });
       continue;
     }
-    const v = verifyWitness(plant, cwd, runFn);
+    const v = verifyWitness(plant, cwd, runFn, options);
     if (v.discriminates) valid.push({ ...plant, witnessed: true });
     else equivalent.push({ ...plant, reason: v.reason });
   }

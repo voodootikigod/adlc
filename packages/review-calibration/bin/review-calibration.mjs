@@ -7,9 +7,12 @@
 // There is no string-match shortcut: a reviewer that merely echoes changed lines
 // scores ~0, proven by the built-in echo control that runs on every invocation.
 //
-// Safety: refuses to run on a dirty tree; all plants restored in finally + SIGINT.
+// Safety: refuses to run on a dirty tree. Plants are written atomically and
+// restored in finally; before any file is planted an in-flight record goes to
+// the git dir, so a run killed mid-review (SIGTERM, SIGKILL) is restored by the
+// next run before its dirty-tree check.
 
-import { writeFileSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import {
   parseArgs, pass, gateFail, opError, printJson, promptOnly,
   git, isDirty, isGitRepo, mutate,
@@ -25,6 +28,9 @@ import {
 } from '../lib/judge.mjs';
 import { filterEquivalentMutants } from '../lib/verify.mjs';
 import { echoControl, formatRecall, judgeBoundFailure, oracleReviewer } from '../lib/controls.mjs';
+import {
+  createJournal, recoverInflight, recordPathFor, writeFileAtomic,
+} from '../lib/inflight.mjs';
 import { printScorecard, buildJsonReport } from '../lib/report.mjs';
 
 // ── arg parsing ──────────────────────────────────────────────────────────────
@@ -170,6 +176,36 @@ if (strict && !reviewProvider) {
 // ── safety checks ────────────────────────────────────────────────────────────
 
 if (!isGitRepo(cwd)) opError('not a git repository');
+
+// ── recover plants an interrupted run left behind (before the dirty check) ────
+
+const repoRoot = git(['rev-parse', '--show-toplevel'], { cwd }).trim();
+const recordPath = recordPathFor(git(['rev-parse', '--absolute-git-dir'], { cwd }).trim());
+const journal = createJournal({ recordPath, repoRoot });
+reportRecovery(recoverInflight({ recordPath, repoRoot }));
+
+function reportRecovery(recovery) {
+  if (recovery.status === 'skip') {
+    opError(
+      `another review-calibration run (pid ${recovery.pid}) has plants in this tree, or its ` +
+      `state cannot be established — wait for it, or remove ${recordPath} once it is gone`
+    );
+  }
+  if (recovery.status === 'conflict') {
+    opError(
+      `an interrupted run (pid ${recovery.pid}) left plants, but ${recovery.conflicts.join(', ')} ` +
+      'no longer hold(s) the planted content, so nothing was restored. The original contents ' +
+      `are in ${recordPath}; restore by hand, then delete that file.`
+    );
+  }
+  if (recovery.status === 'recovered' && recovery.restored.length > 0) {
+    console.error(
+      `restored ${recovery.restored.length} file(s) left planted by an interrupted run ` +
+      `(pid ${recovery.pid}): ${recovery.restored.join(', ')}`
+    );
+  }
+}
+
 if (isDirty(cwd)) opError('commit or stash first — review-calibration plants bugs in-place and restores them');
 
 // ── resolve the judge BEFORE expensive work (fail closed, never string-match silently) ──
@@ -250,7 +286,7 @@ if (values['plants-file']) {
 
 // ── equivalent-mutant filter (plants WITH a witness must discriminate) ────────
 
-const { valid: validPlants, equivalent } = filterEquivalentMutants(plants, cwd);
+const { valid: validPlants, equivalent } = filterEquivalentMutants(plants, cwd, undefined, { journal });
 const exclusionLines = equivalent.map((p) => `${p.file}:${p.line} — ${p.reason}`);
 if (validPlants.length === 0) {
   opError(
@@ -283,7 +319,9 @@ if (oracleScore.recall < 0.999) {
 }
 
 
-// ── SIGINT safety: track planted files for emergency restore ──────────────────
+// ── SIGINT: restore on an interactive interrupt ───────────────────────────────
+// The handler runs only once spawnSync returns control; a signal that kills the
+// process outright is covered by the in-flight record instead.
 
 const preOriginals = new Map();
 for (const plant of validPlants) {
@@ -295,7 +333,7 @@ let plantedFiles = preOriginals;
 process.on('SIGINT', () => {
   if (plantedFiles !== null) {
     for (const [absPath, content] of plantedFiles) {
-      try { writeFileSync(absPath, content, 'utf8'); } catch { /* best-effort */ }
+      try { writeFileAtomic(absPath, content); } catch { /* the in-flight record remains */ }
     }
   }
   process.exit(1);
@@ -305,7 +343,7 @@ process.on('SIGINT', () => {
 
 let runResult;
 try {
-  runResult = runWithPlants(validPlants, reviewCmd, commitRef, cwd, 300_000);
+  runResult = runWithPlants(validPlants, reviewCmd, commitRef, cwd, 300_000, { journal });
 } catch (err) {
   plantedFiles = null;
   opError(`planting or review command failed: ${err.message}`);
