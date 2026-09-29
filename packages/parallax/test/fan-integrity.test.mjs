@@ -613,11 +613,17 @@ test('AC7: --ticket without --record-verdict is accepted and records nothing', (
 // ---------------------------------------------------------------------------
 
 test('the ADLC_GATE_MOCK_RESPONSE seam is ignored unless NODE_ENV is test', () => {
+  // With every provider variable removed, the real path fails at provider
+  // lookup: that message proves the seam was bypassed, and no live model call
+  // is made on a machine that has a key exported.
+  const providerEnv = new Set(['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'ADLC_AGY', 'ADLC_PROVIDER']);
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([k]) => !providerEnv.has(k)));
   const r = run(['--request', 'Add a login page', '--n', '2'], {
-    env: { ...process.env, NODE_ENV: 'production', ADLC_GATE_MOCK_RESPONSE: JSON.stringify({ fan: TWO_GOOD_READINGS, divergence: CONVERGED }) },
+    env: { ...inherited, NODE_ENV: 'production', ADLC_GATE_MOCK_RESPONSE: JSON.stringify({ fan: TWO_GOOD_READINGS, divergence: CONVERGED }) },
   });
   assert.notEqual(r.status, 0, 'a mocked verdict must never be produced outside a test run');
   assert.ok(!r.stdout.includes('gate PASSES'));
+  assert.match(r.stderr, /no LLM provider configured/);
 });
 
 test('an unparseable mock fails closed rather than degrading to a passing gate', () => {

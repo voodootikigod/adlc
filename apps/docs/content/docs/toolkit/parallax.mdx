@@ -40,7 +40,7 @@ Three modes: **spec** (default, fans readers over a raw request), **edge** (`--e
 
 ### What a verdict requires
 
-parallax refuses to certify a reading it did not actually take. Two guards, both
+parallax refuses to certify a reading it did not actually take. Three guards, all
 operational errors (exit 1), never a score:
 
 - **Off-schema divergence payload.** The mid-tier divergence call is asked for
@@ -48,6 +48,12 @@ operational errors (exit 1), never a score:
   a bare array or a `{result: ...}` wrapper used to fall through to "zero
   divergences, zero agreements", which scores 0 and passes the gate — an
   unanalysed spec reported as unambiguous. Such a payload is now refused.
+- **Off-schema route judge payload.** The route equivalence judge is asked for
+  `{equivalent: boolean, answer, variants}`. `equivalent` must be a real
+  boolean (a string such as `"false"` is refused, not coerced), an equivalent
+  verdict must carry a non-empty `answer`, and a non-equivalent one at least one
+  string `variant`. Anything else is refused rather than reported as a pass
+  (with `--questions-json`, an empty frontier) or as an unmeasured divergence.
 - **Shrunken fan.** The score is measured across `--n` independent readings, so
   a fan narrowed by rate limits, timeouts or unparseable JSON measures a smaller
   sample and scores systematically LOWER — it biases toward a pass. When fewer
@@ -63,7 +69,7 @@ another, so it could only ever spend an API call on the way to an error.
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
   <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes. Ambiguity score at or below threshold (spec/edge), or answers equivalent (route).</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (bad input, missing file, network failure, too few readings).</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error (bad input, missing file, network failure, too few readings, an off-schema divergence or route judge payload).</span>
   <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails. Ambiguity score exceeds threshold, or route answers diverge.</span>
 </div>
 
