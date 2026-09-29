@@ -345,23 +345,27 @@ export function hostDiscoveryNearMisses({ root = ROOT, pluginsDir = PLUGINS } = 
   return misses;
 }
 
+// Marketplace listings that live outside a `.<host>-plugin` directory because the
+// host fixes the path: the Copilot CLI reads `.github/plugin/marketplace.json`
+// for `copilot plugin marketplace add <owner>/<repo>`.
+const FIXED_MARKETPLACE_PATHS = [join('.github', 'plugin', 'marketplace.json')];
+
 /**
- * Every root-level host marketplace listing: `<root>/.<host>-plugin/marketplace.json`.
- * Depth-exact for the same reason as above. Only files that ALREADY exist are
- * returned — the bump must never CREATE a manifest, because
- * scripts/claude-code-plugin-smoke.mjs asserts the nested
+ * Every root-level host marketplace listing: `<root>/.<host>-plugin/marketplace.json`
+ * plus the host-fixed paths above. Depth-exact for the same reason as above. Only
+ * files that ALREADY exist are returned — the bump must never CREATE a manifest,
+ * because scripts/claude-code-plugin-smoke.mjs asserts the nested
  * plugins/adlc-claude-code/.claude-plugin/marketplace.json does NOT exist (a
  * second copy causes a dual-resolution failure on live install).
  */
 export function hostMarketplacePaths(root = ROOT) {
   if (!existsSync(root)) return [];
-  const paths = [];
-  for (const entry of readdirSync(root).sort()) {
-    if (!HOST_PLUGIN_DIR.test(entry)) continue;
-    const p = join(root, entry, 'marketplace.json');
-    if (existsSync(p)) paths.push(p);
-  }
-  return paths;
+  const dotted = readdirSync(root)
+    .sort()
+    .filter((entry) => HOST_PLUGIN_DIR.test(entry))
+    .map((entry) => join(root, entry, 'marketplace.json'));
+  const fixed = FIXED_MARKETPLACE_PATHS.map((rel) => join(root, rel));
+  return [...dotted, ...fixed].filter((p) => existsSync(p));
 }
 
 /**
