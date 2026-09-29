@@ -2,7 +2,7 @@
 // lesson-foundry — ADLC C9, the compounding closer.
 // Converts prosecution findings into permanent defenses.
 
-import { existsSync, mkdirSync, appendFileSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, appendFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   ledgerPath,
@@ -17,6 +17,7 @@ import { loadFindings, buildClusters, findUnbankedClusters } from '../lib/foundr
 import { planEmissions } from '../lib/emit.mjs';
 import { buildHumanReport, buildJsonResult } from '../lib/report.mjs';
 import { buildAllPrompts, refineClusters } from '../lib/llm.mjs';
+import { hasDefenseContent, readArtifact, writeFileAtomic } from '../lib/artifact-io.mjs';
 
 const { values: flags } = parseArgs({
   options: {
@@ -104,7 +105,11 @@ if (flags.llm && clusters.length > 0) {
   } catch (err) {
     opError(`LLM refinement failed: ${err.message}. Use --prompt-only to get prompts.`);
   }
+  if (llmRefinements.size === 0) {
+    opError('LLM refinement failed for all clusters. Use --prompt-only to inspect prompts.');
+  }
 }
+const failedRefinements = flags.llm ? clusters.length - llmRefinements.size : 0;
 
 // Plan emissions
 const plan = planEmissions(clusters, findings, outDir, llmRefinements);
@@ -121,8 +126,9 @@ const realPlan = plan.filter((p) => p.cluster !== null);
 const templatePlan = plan.filter((p) => p.route === 'spec-gap-template');
 
 // --write (real artifacts only): run BEFORE the output section so --json can report which
-// paths were skipped. An existing file is left untouched unless --force is given (#674) —
-// hand-refined lint descriptors / check scripts / SKILL stubs must survive a re-run.
+// paths were skipped. An existing file with content is left untouched unless --force is
+// given — hand-refined lint descriptors / check scripts / SKILL stubs must survive a re-run.
+// An empty one defends nothing (the gate does not credit it), so it is regenerated.
 const writeSkippedPaths = [];
 if (flags.write) {
   // Ensure output directory exists
@@ -137,14 +143,15 @@ if (flags.write) {
   for (const entry of realPlan) {
     for (const file of entry.files) {
       const fullPath = file.path; // already prefixed with outDir
-      if (!flags.force && existsSync(fullPath)) {
+      const exists = existsSync(fullPath);
+      if (!flags.force && exists && hasDefenseContent(readArtifact(fullPath))) {
         writeSkippedPaths.push(fullPath);
         if (!flags.json) console.log(`  exists (skipped): ${fullPath}`);
         continue;
       }
       try {
-        writeFileSync(fullPath, file.content, 'utf8');
-        if (!flags.json) console.log(`  wrote: ${fullPath}`);
+        writeFileAtomic(fullPath, file.content);
+        if (!flags.json) console.log(`  ${exists && !flags.force ? 'empty (regenerated)' : 'wrote'}: ${fullPath}`);
       } catch (err) {
         opError(`failed to write "${fullPath}": ${err.message}`);
       }
@@ -165,9 +172,10 @@ if (flags.json) {
   printJson(buildJsonResult({
     clusters, skipped, filtered, plan, gateResult,
     writeSkipped: flags.write ? writeSkippedPaths : null,
+    refinements: llmRefinements,
   }));
 } else {
-  const lines = buildHumanReport({ clusters, skipped, filtered, plan });
+  const lines = buildHumanReport({ clusters, skipped, filtered, plan, failedRefinements });
   for (const l of lines) console.log(l);
 }
 
@@ -213,7 +221,7 @@ if (flags.write) {
             console.log(`  up-to-date: ${fullPath}`);
           }
         } else {
-          writeFileSync(fullPath, file.content, 'utf8');
+          writeFileAtomic(fullPath, file.content);
           if (!flags.json) console.log(`  wrote: ${fullPath}`);
         }
       } catch (err) {

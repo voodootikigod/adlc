@@ -5,7 +5,7 @@
  * clusters: array of { name, route, indices, size }
  * plan: array of emission plan entries
  */
-export function buildHumanReport({ clusters, skipped, filtered, plan }) {
+export function buildHumanReport({ clusters, skipped, filtered, plan, failedRefinements = 0 }) {
   const lines = [];
 
   if (filtered > 0) {
@@ -13,6 +13,9 @@ export function buildHumanReport({ clusters, skipped, filtered, plan }) {
   }
   if (skipped > 0) {
     lines.push(`  skipped ${skipped} malformed ledger line(s)`);
+  }
+  if (failedRefinements > 0) {
+    lines.push(`  LLM refinement failed for ${failedRefinements} of ${clusters.length} cluster(s); those keep unrefined wording`);
   }
 
   if (clusters.length === 0) {
@@ -57,15 +60,17 @@ export function buildHumanReport({ clusters, skipped, filtered, plan }) {
 
 /**
  * Build JSON output structure.
+ * refinements: Map<clusterIndex, refinement> — a cluster is `refined` only when
+ * the LLM produced wording for it.
  */
-export function buildJsonResult({ clusters, skipped, filtered, plan, gateResult, writeSkipped }) {
+export function buildJsonResult({ clusters, skipped, filtered, plan, gateResult, writeSkipped, refinements = new Map() }) {
   return {
     skippedMalformed: skipped,
     skippedKilled: filtered,
     // Existing artifacts --write left untouched to preserve hand-refinement (#674). null
     // when --write was not requested; otherwise an array, empty when nothing was skipped.
     writeSkipped: writeSkipped ?? null,
-    clusters: clusters.map((c) => {
+    clusters: clusters.map((c, idx) => {
       const p = plan.find((e) => e.cluster === c);
       return {
         id: c.id,
@@ -79,6 +84,7 @@ export function buildJsonResult({ clusters, skipped, filtered, plan, gateResult,
         destination: p?.destination ?? null,
         sample: c.sample,
         indices: c.indices,
+        refined: refinements.has(idx),
       };
     }),
     gate: gateResult ?? null,
