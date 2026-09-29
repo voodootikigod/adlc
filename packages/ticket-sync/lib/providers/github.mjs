@@ -36,6 +36,21 @@ export function parseCommentId(url) {
 
 const refNum = (ref) => String(typeof ref === 'object' ? ref.number : ref);
 
+/** GitHub's search API returns at most this many results, whatever --limit says. */
+export const SEARCH_RESULT_CAP = 1000;
+
+/**
+ * The row count at which a listing may be truncated. `select.query` routes gh
+ * through the search API, so the ceiling there is the smaller of the requested
+ * limit and SEARCH_RESULT_CAP.
+ */
+function truncationThreshold(ticketSync, limit) {
+  const searched = Boolean(ticketSync?.select?.query);
+  return searched && limit > SEARCH_RESULT_CAP
+    ? { at: SEARCH_RESULT_CAP, why: `the search API returns at most ${SEARCH_RESULT_CAP} results` }
+    : { at: limit, why: `hit the limit of ${limit}` };
+}
+
 export function githubProvider() {
   return {
     /** @returns {Promise<{ok, issues?, error?, truncated?}>} */
@@ -45,8 +60,10 @@ export function githubProvider() {
       if (!Array.isArray(r.data)) return { ok: false, error: 'gh issue list did not return an array' };
       // A full page means we cannot be sure we got everything — fail closed rather
       // than risk a truncated set driving deletions/incomplete sync.
-      if (r.data.length >= limit) {
-        return { ok: false, truncated: true, error: `fetched ${r.data.length} issues (hit the limit of ${limit}); narrow the selector or raise --limit` };
+      const cap = truncationThreshold(ticketSync, limit);
+      if (r.data.length >= cap.at) {
+        const remedy = cap.at === limit ? 'narrow the selector or raise --limit' : 'narrow select.query';
+        return { ok: false, truncated: true, error: `fetched ${r.data.length} issues (${cap.why}); ${remedy}` };
       }
       return { ok: true, issues: r.data.map(mapIssue) };
     },
