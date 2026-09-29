@@ -19,7 +19,7 @@ import { createHmac } from 'node:crypto';
 import { appendEntries, sha256 } from '@adlc/core';
 import {
   isSegmentedRepo, resolveOpenSegment, readOwnChains, forestChainsIntact,
-  segmentPath, lineagePath, withManifestLock, canonicalJson, entrySigValid,
+  segmentPath, lineagePath, withManifestLock, canonicalEntryBytes, entrySigValid,
   validateKeyParam,
 } from '@adlc/tickets';
 
@@ -100,24 +100,10 @@ function legacyReattestationMatches(entry, source) {
     && JSON.stringify(entry.files ?? {}) === JSON.stringify(source.files ?? {});
 }
 
-// Mirror of @adlc/gate-manifest sign.mjs canonicalEntryBytes (v1) — the signed
-// payload is { seq, gate, ts, ticket?, data?, files, prev } in this fixed key
-// order, sig excluded. Kept local (zero cross-package coupling); pinned by a test.
-function canonicalEntryBytes(entry) {
-  const c = { seq: entry.seq, gate: entry.gate, ts: entry.ts };
-  if (entry.ticket !== undefined) c.ticket = entry.ticket;
-  if (entry.data !== undefined) c.data = entry.data;
-  c.files = entry.files;
-  c.prev = entry.prev;
-  return JSON.stringify(c);
-}
-
-// v2 signing (all fields except sig/segment, canonically sorted) — required
-// for a segment's anchor-carrying first entry (spec §4.4: v1's fixed field
-// set never covers `anchor`). Mirrors @adlc/gate-manifest/lib/sign.mjs.
-function signV2(key, entry) {
-  const { sig: _sig, segment: _segment, ...signed } = entry;
-  return createHmac('sha256', key).update(canonicalJson(signed)).digest('hex');
+// Signs with the shared canonicalisation the verifiers use: v1's fixed field
+// set, or v2 (every field but sig/segment) when `sigVersion` is 2.
+function signEntry(key, entry) {
+  return createHmac('sha256', key).update(canonicalEntryBytes(entry)).digest('hex');
 }
 
 // Build the re-attestation entries for one contiguous append (root OR one
@@ -145,16 +131,12 @@ function buildReattestationEntries(sources, { oldId, newId, now, key, startSeq, 
       files: src.files ?? {},
       prev,
     };
-    if (key) {
-      if (carriesAnchor) {
-        entry.sigVersion = 2;
-        entry.sig = signV2(key, entry);
-      } else {
-        entry.sig = createHmac('sha256', key).update(canonicalEntryBytes(entry)).digest('hex');
-      }
-    }
-    additions.push(entry);
-    prev = sha256(JSON.stringify(entry));
+    // An anchor-carrying first entry signs at v2: v1's fixed field set never
+    // covers `anchor`.
+    const unsigned = key && carriesAnchor ? { ...entry, sigVersion: 2 } : entry;
+    const signed = key ? { ...unsigned, sig: signEntry(key, unsigned) } : unsigned;
+    additions.push(signed);
+    prev = sha256(JSON.stringify(signed));
   });
   return additions;
 }
