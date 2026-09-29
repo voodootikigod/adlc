@@ -23,6 +23,12 @@ import { execFileSync } from 'node:child_process';
 /** How many open issues a single fetch will ask for. */
 export const ISSUE_FETCH_LIMIT = 500;
 
+/**
+ * How long the backlog fetch may take. A `gh` that connects and never answers
+ * would otherwise hang the sweep with no report and no exit.
+ */
+export const FETCH_TIMEOUT_MS = 120_000;
+
 /** The `gh --json` field set. `updatedAt` is required by the cache key. */
 export const ISSUE_FIELDS = 'number,title,body,labels,url,updatedAt';
 
@@ -33,8 +39,10 @@ export const ISSUE_FIELDS = 'number,title,body,labels,url,updatedAt';
  */
 function tryRun(cmd, args, run) {
   try {
-    return { ok: true, out: String(run(cmd, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })).trim() };
+    const opts = { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: FETCH_TIMEOUT_MS, killSignal: 'SIGKILL' };
+    return { ok: true, out: String(run(cmd, args, opts)).trim() };
   } catch (err) {
+    if (err?.code === 'ETIMEDOUT') return { ok: false, out: `timed out after ${FETCH_TIMEOUT_MS / 1000}s` };
     const out = [err?.stderr, err?.stdout, err?.message].filter(Boolean).map(String).join(' ').trim();
     return { ok: false, out };
   }
