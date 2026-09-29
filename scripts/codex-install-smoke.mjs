@@ -7,6 +7,16 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 
 class SmokeFailure extends Error {}
 
+// Git reads GIT_CONFIG_COUNT/KEY/VALUE from the environment of whichever process
+// spawns it, so this reaches the git that codex runs to clone the plugin. With
+// gc.autoDetach=false its auto-maintenance finishes before the command returns,
+// instead of a detached child writing under the clone while teardown removes it.
+const FOREGROUND_GIT_MAINTENANCE = Object.freeze({
+  GIT_CONFIG_COUNT: '1',
+  GIT_CONFIG_KEY_0: 'gc.autoDetach',
+  GIT_CONFIG_VALUE_0: 'false',
+});
+
 function fail(message) {
   throw new SmokeFailure(message);
 }
@@ -278,6 +288,7 @@ async function main() {
       TERM: process.env.TERM ?? 'dumb',
       NO_COLOR: '1',
       CI: '1',
+      ...FOREGROUND_GIT_MAINTENANCE,
     };
     if (process.env.ADLC_CODEX_SMOKE_FAIL_AFTER_TEMP === '1') fail('injected failure after temporary setup');
 
@@ -349,7 +360,7 @@ async function main() {
       mcpToolCall,
     }, null, 2));
   } finally {
-    for (const path of temporaryRoots.reverse()) rmSync(path, { recursive: true, force: true });
+    for (const path of temporaryRoots.reverse()) rmSync(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 }
 
