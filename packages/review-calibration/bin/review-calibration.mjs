@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // review-calibration — reviewer recall measurement via planted bugs (ADLC C8)
 //
-// A plant is CAUGHT only when a reviewer finding LOCATES it AND identifies the
-// defect — judged semantically (cheap model) or verified behaviorally (a repro
-// that discriminates mutant from original). There is no string-match shortcut:
-// a reviewer that merely echoes changed lines scores ~0, proven by the built-in
-// echo control that runs on every invocation.
+// A plant is CAUGHT only when a reviewer finding LOCATES it AND the configured
+// judge (a cheap model) confirms it identifies the defect. A finding's `repro`
+// is never executed: the reviewer under test does not get to run commands here.
+// There is no string-match shortcut: a reviewer that merely echoes changed lines
+// scores ~0, proven by the built-in echo control that runs on every invocation.
 //
 // Safety: refuses to run on a dirty tree; all plants restored in finally + SIGINT.
 
@@ -55,9 +55,9 @@ review-calibration — reviewer recall measurement via planted bugs (ADLC C8)
 Usage:
   review-calibration --review-cmd "cmd with {base} placeholder" [options]
 
-A plant is caught only when a finding locates it AND identifies the defect
-(judged by a cheap model, or verified by a reviewer-supplied repro). Echoing
-changed lines scores ~0 — enforced by a built-in control on every run.
+A plant is caught only when a finding locates it AND a cheap-model judge
+confirms it identifies the defect. Echoing changed lines scores ~0 — enforced
+by a built-in control on every run.
 
 Options:
   --review-cmd <cmd>    (required) Command to run the reviewer. {base} is the

@@ -45,8 +45,9 @@ This is mutation testing aimed at the *reviewer* instead of the code (ADLC C8).
 6. **Parse findings**: the reviewer's output is parsed as structured findings
    (adversarial-review `--json` shape, or a weak prose fallback).
 7. **Score**: a plant is CAUGHT only when a finding LOCATES it (file + line ±3)
-   **AND** identifies the defect — verified behaviorally (a reviewer-supplied
-   `repro` that discriminates) or judged semantically by a cheap model. There is
+   **AND** the configured judge (a cheap model) confirms it identifies the defect.
+   A `repro` field on a finding is parsed but never run: the CLI does not execute
+   commands supplied by the reviewer it is measuring. There is
    **no string-match shortcut**: a reviewer that echoes changed lines scores ~0.
    Recall = caught / valid plants. Precision = true / (true + spurious findings),
    where a finding that locates a plant without identifying it is spurious.
@@ -58,7 +59,7 @@ This is mutation testing aimed at the *reviewer* instead of the code (ADLC C8).
 - **`judge`** (default) — cheap-model semantic match. Requires an LLM provider
   (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY`). With no provider
   the tool **fails closed** (exit 1) rather than emit an untrustworthy number.
-  A reviewer-supplied `repro` is verified behaviorally and bypasses the judge.
+  Every locating finding is judged, including one that carries a `repro`.
 - **`string`** — LEGACY location-only matching. Gameable by a reviewer that
   echoes changed lines; prints a warning and is not a trustworthy recall number.
   Provided only as an offline escape hatch.
@@ -185,9 +186,9 @@ be evaluated; configuring `--min-precision` will fail the gate if precision is
 
 **Caught** — a plant is caught only when a finding does BOTH:
 1. **Locates** it — mentions the file's basename and a line within ±3.
-2. **Identifies** it — a reviewer-supplied `repro` discriminates the mutant from
-   the original (model-free), or a cheap-model judge confirms the finding
-   describes *this* defect.
+2. **Identifies** it — a cheap-model judge confirms the finding describes *this*
+   defect. (`scorePlants` accepts an injected `verifyRepro` for library callers;
+   the CLI does not supply one.)
 
 There is no "output contains a substring of the changed line" rule: that is
 exactly what let a line-echoing reviewer score 1.0. Echoing locates but does not

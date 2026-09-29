@@ -11,7 +11,8 @@ import { basename } from 'node:path';
  * - file/line locate the claim
  * - description is the reviewer's reasoning (what the judge reads)
  * - evidence is the verbatim quote the reviewer cited (optional)
- * - repro, when present, is a runnable reproduction → behavioral verification
+ * - repro, when present, is carried for library callers that inject a
+ *   `verifyRepro` into scorePlants; the CLI never executes it
  */
 
 /**

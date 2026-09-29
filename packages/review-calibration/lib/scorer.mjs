@@ -1,8 +1,8 @@
 // review-calibration/lib/scorer.mjs
 // Score reviewer findings against planted defects. A plant is CAUGHT only when
-// a finding LOCATES it AND identifies the defect — verified behaviorally (the
-// finding's own repro discriminates mutant from original) or judged
-// semantically. There is deliberately NO "output contains a substring of the
+// a finding LOCATES it AND identifies the defect — judged semantically, or, for
+// a library caller that injects `verifyRepro`, verified behaviorally by the
+// finding's own repro. There is deliberately NO "output contains a substring of the
 // changed line" shortcut: that is exactly what let a line-echoing reviewer
 // score 1.0. Pure aggregation; the hard semantic call is delegated to `judge`.
 
