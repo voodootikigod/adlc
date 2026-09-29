@@ -23,6 +23,7 @@ import {
   assertAdapterCanForceModel,
   assertNoArgvOverride,
   planSeats,
+  skippedLedgerNotice,
   previewArgv,
   quartermasterEngaged,
 } from '../lib/quartermaster.mjs';
@@ -337,6 +338,8 @@ async function buildQuartermasterPlan({ repo, dir, tickets, onlyIds, config }) {
     refuseFlags(`quartermaster: ${e.message}`); // exits 1 — fail closed, no fallback channel
   }
   for (const n of planned.notices) console.error(`notice: ${n}`);
+  const ledgerWarning = skippedLedgerNotice(planned.skippedLedger);
+  if (ledgerWarning) console.error(ledgerWarning);
 
   const seats = [];
   for (const ticket of tickets) {
@@ -368,7 +371,7 @@ async function buildQuartermasterPlan({ repo, dir, tickets, onlyIds, config }) {
       argv: { command: argv.cmd, args: argv.args.map((a) => (a === prompt ? '<prompt>' : a)) },
     });
   }
-  return { engaged: true, registryPath: planned.registryPath, notices: planned.notices, seats };
+  return { engaged: true, registryPath: planned.registryPath, notices: planned.notices, skippedLedger: planned.skippedLedger, seats };
 }
 
 /** Render a built quartermaster plan for the human-readable dry run. */
@@ -552,6 +555,8 @@ export async function runLive({ repo, dir, all, config, onlyIds, json = false },
         assertNoArgvOverride(config);
         const planned = planSeats({ tickets: all, repoDir: repo, env: io.env, adlcDir: dir });
         for (const n of planned.notices) console.error(`notice: ${n}`);
+        const ledgerWarning = skippedLedgerNotice(planned.skippedLedger);
+        if (ledgerWarning) console.error(ledgerWarning);
         console.error(`quartermaster: dispatching from ${planned.registryPath}`);
         seats = planned.seats;
       } catch (e) {
