@@ -35,7 +35,7 @@
 // scripts/test/ticket-store-boundary.test.mjs enforces that the pointer has
 // exactly one reader across the whole repo.
 
-import { existsSync, readFileSync, openSync, fstatSync, readSync, closeSync, writeSync, statSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, openSync, fstatSync, readSync, closeSync, writeSync, statSync, realpathSync, lstatSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -284,7 +284,51 @@ function allowlistedEnv(env) {
   );
 }
 
+const MANIFEST_SCAN_MAX_FILES = 500;
+const MANIFEST_SCAN_MAX_BYTES_PER_FILE = 1024 * 1024;
+const MANIFEST_SCAN_DEADLINE_MS = 1000;
+
+/**
+ * Whether any entry in `.adlc/manifest.jsonl` or `.adlc/manifest.d/*.jsonl`
+ * under `repoRoot` carries a signature. Returns true whenever that cannot be
+ * ruled out: a non-regular file, an oversized file, a malformed line, too many
+ * segments, an I/O error or an exhausted time budget. Never throws.
+ * KEEP IN SYNC with repoManifestChainIsSigned in plugins/adlc-codex/hooks/adlc-handoff-gate.mjs.
+ */
+export function manifestChainIsSigned(repoRoot) {
+  const startMs = Date.now();
+  try {
+    const files = [];
+    const root = join(repoRoot, '.adlc', 'manifest.jsonl');
+    if (existsSync(root)) files.push(root);
+    const segDir = join(repoRoot, '.adlc', 'manifest.d');
+    if (existsSync(segDir)) {
+      if (!lstatSync(segDir).isDirectory()) return true;
+      const names = readdirSync(segDir);
+      if (names.length > MANIFEST_SCAN_MAX_FILES) return true;
+      for (const name of names) if (name.endsWith('.jsonl')) files.push(join(segDir, name));
+    }
+    for (const file of files) {
+      if (Date.now() - startMs > MANIFEST_SCAN_DEADLINE_MS) return true;
+      const st = lstatSync(file);
+      if (!st.isFile() || st.size > MANIFEST_SCAN_MAX_BYTES_PER_FILE) return true;
+      for (const line of readFileSync(file, 'utf8').split('\n')) {
+        if (!line.trim()) continue;
+        const entry = JSON.parse(line);
+        if (entry && typeof entry.sig === 'string' && entry.sig.length > 0) return true;
+      }
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 export function recordBuildGateBypass(ticketId, signals, depth, sessionBytes, { cwd } = {}) {
+  // The child never receives a signing key, and an unsigned entry after a
+  // signed one corrupts the chain, so a signed chain leaves the bypass
+  // unrecorded and the gate denies.
+  if (manifestChainIsSigned(cwd ?? process.cwd())) return false;
   const adlcBinPath = resolveTrustedBinary('adlc', process.env.PATH);
   if (!adlcBinPath) return false;
   // A global install links an extensionless `adlc` to a `.mjs` target, and Node

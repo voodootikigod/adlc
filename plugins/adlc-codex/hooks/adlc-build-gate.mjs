@@ -32,6 +32,7 @@ import {
   toolNameOf,
   resolveHandoffSessionIdLocal,
   RECOVERY_AUDIT_ENV_ALLOWLIST,
+  repoManifestChainIsSigned,
 } from './adlc-handoff-gate.mjs';
 import { resolveContextHandoffEntry } from './handoff-resolve.mjs';
 import { join, dirname } from 'node:path';
@@ -218,6 +219,10 @@ function tailBytes(path, maxBytes) {
 const BYPASS_RECORD_TIMEOUT_MS = 5000;
 
 export function recordBuildGateBypass(ticketId, signals, depth, sessionBytes, { cwd } = {}) {
+  // The child never receives a signing key, and an unsigned entry after a
+  // signed one corrupts the chain, so a signed chain leaves the bypass
+  // unrecorded and the gate denies.
+  if (repoManifestChainIsSigned(cwd ?? process.cwd())) return false;
   const adlcBinPath = resolveTrustedBinary('adlc', process.env.PATH);
   if (!adlcBinPath) return false;
   // A real global install (`npm i -g @adlc/cli`) links an EXTENSIONLESS bin name
