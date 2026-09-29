@@ -6,27 +6,33 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-build-gate.mjs');
 
-// recordBuildGateBypass spawnSync's `adlc` from ambient PATH, and this test file
-// calls it IN-PROCESS — so the resolved binary is whatever the test runner's PATH
-// happens to hold. Resolve the workspace-local CLI deterministically instead
-// (same WITH_ADLC convention as the claude-code sibling): the mutation-gate CI
-// job runs these tests WITHOUT run-tests.mjs's node_modules/.bin PATH prepend
-// and has no global adlc, while a dev machine may have a stale global one —
-// either way, ambient PATH is the wrong resolver for a hermetic test (#378).
-const REPO_BIN = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', 'node_modules', '.bin');
-const NODE_DIR = dirname(process.execPath);
+// recordBuildGateBypass resolves `adlc` through resolveTrustedBinary, which
+// skips every PATH entry inside a node_modules directory (a repository can plant
+// a shim there), and this file calls it IN-PROCESS. So the hermetic PATH for
+// these tests is a plain directory holding a link to the workspace CLI — never
+// node_modules/.bin, and never whatever ambient PATH happens to hold: the
+// mutation-gate CI job has no global adlc, and a dev machine may have a stale one.
+const REAL_ADLC_SCRIPT = join(
+  dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..',
+  'node_modules', '@adlc', 'cli', 'bin', 'adlc.mjs',
+);
 
 function withAdlcOnPath(fn) {
+  const trustedBinDir = mkdtempSync(join(tmpdir(), 'adlc-copilot-trusted-bin-'));
+  symlinkSync(REAL_ADLC_SCRIPT, join(trustedBinDir, 'adlc'));
   const prev = process.env.PATH;
-  process.env.PATH = `${REPO_BIN}:${NODE_DIR}:${prev ?? ''}`;
-  try { return fn(); } finally { process.env.PATH = prev; }
+  process.env.PATH = `${trustedBinDir}:${prev ?? ''}`;
+  try { return fn(); } finally {
+    process.env.PATH = prev;
+    rmSync(trustedBinDir, { recursive: true, force: true });
+  }
 }
 
 import {
