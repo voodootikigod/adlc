@@ -173,6 +173,16 @@ export function reviewArgv({ artifactPath, reviewer, timeout = 600 } = {}) {
 }
 
 /**
+ * Seconds the parent waits beyond the reviewer's own `--timeout` before killing it.
+ *
+ * `--timeout` bounds each provider request, not the reviewer process: a stall
+ * before the first request or after the last would otherwise block the run —
+ * with the apply lock held — indefinitely. A killed reviewer has a null status,
+ * which the runner already reports as "did not run", never as a verdict.
+ */
+export const REVIEW_GRACE_S = 120;
+
+/**
  * Build the reviewer runner the gate calls.
  *
  * IN LIB, NOT THE BINARY. Left in the bin these branches are reachable only by
@@ -188,6 +198,8 @@ export function makeReviewRunner({ spawn, artifactPath, reviewer, timeout = 600 
     const res = spawn('adversarial-review', reviewArgv({ artifactPath, reviewer, timeout }), {
       encoding: 'utf8',
       maxBuffer: 64 * 1024 * 1024,
+      timeout: (timeout + REVIEW_GRACE_S) * 1000,
+      killSignal: 'SIGKILL',
     });
     // A spawn that never ran has a NULL status, and `null` is not an exit code.
     // Returning it would let the gate compare null against 0 and, on any future

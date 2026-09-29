@@ -28,17 +28,32 @@ export function issueSelector(number) {
 }
 
 /**
+ * How long one `gh` call may take.
+ *
+ * Every writer call runs while the apply lock is held. A `gh` that connects and
+ * stops answering would hang the run holding the lock, and every later apply
+ * would refuse behind it; a bound turns that into an ordinary failed write.
+ */
+export const GH_TIMEOUT_MS = 60_000;
+
+/** The message for a failed `gh` result, naming a timeout as one. */
+function ghFailure(res, args) {
+  if (res?.error?.code === 'ETIMEDOUT') return `gh ${args[0]} timed out after ${GH_TIMEOUT_MS / 1000}s`;
+  return res?.stderr?.trim() || res?.error?.message || `gh ${args[0]} failed`;
+}
+
+/**
  * @param {{spawn: Function}} io
  * @returns {{comments: Function, comment: Function, apply: Function}}
  */
 export function makeGhWriter({ spawn } = {}) {
   const gh = (args, input) => {
-    const res = spawn('gh', args, { encoding: 'utf8', input, maxBuffer: 32 * 1024 * 1024 });
+    const res = spawn('gh', args, { encoding: 'utf8', input, maxBuffer: 32 * 1024 * 1024, timeout: GH_TIMEOUT_MS, killSignal: 'SIGKILL' });
     // A non-zero status AND a spawn error are both failures. `||` rather than
     // `&&`: requiring both would let a `gh` that exited 1 without an Error
     // object — the ordinary failure shape — read as success.
     if (res?.error || res?.status !== 0) {
-      throw new Error(res?.stderr?.trim() || res?.error?.message || `gh ${args[0]} failed`);
+      throw new Error(ghFailure(res, args));
     }
     return res.stdout;
   };
