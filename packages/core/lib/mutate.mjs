@@ -417,7 +417,9 @@ const SKIP_LINE = /^\s*($|\/\/|\/\*|\*|#|import\b|export\s+\{|console\.)/;
 // nothing, which is a false gate failure. A `const` binding is single-assignment,
 // so its value is the one the rest of the scope actually sees. Measured: dropping
 // let/var removed 2 of 16 survivors in the sample, both of that exact shape.
-const VALUE_ASSIGNMENT_RE = /^(\s*const\s+[A-Za-z_$][\w$]*\s*=\s*)(.+?);\s*$/;
+// An `export` prefix changes nothing about that: an exported const is still
+// single-assignment, and substituting it breaks every importer that reads it.
+const VALUE_ASSIGNMENT_RE = /^(\s*(?:export\s+)?const\s+[A-Za-z_$][\w$]*\s*=\s*)(.+?);\s*$/;
 
 const FALLBACK_OPERATORS = [
   {
