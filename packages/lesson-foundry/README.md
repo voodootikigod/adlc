@@ -27,11 +27,13 @@ Options:
   --ledger <name>          Ledger name to read findings from (default: findings)
   --min <n>                Minimum cluster size to surface (default: 2)
   --out-dir <path>         Output directory for defense files (default: .adlc/lessons)
-  --write                  Emit files (default: dry-run — prints what WOULD be written)
+  --write                  Emit files (default: dry-run — prints what WOULD be written).
+                           An existing non-empty artifact is kept; an empty one is regenerated
   --gate                   Exit 2 if any cluster >= --min has no non-empty defense file in --out-dir
   --allow-missing-ledger   Allow missing ledger file when --gate is set (bootstrap opt-in).
   --tolerate-malformed <n> Tolerate up to <n> unparseable/malformed ledger lines before failing --gate (default: 0)
-  --llm                    Refine cluster wording via one mid-tier LLM call per cluster
+  --llm                    Refine cluster wording via one mid-tier LLM call per cluster;
+                           exits 1 (writing nothing) when no cluster could be refined
   --prompt-only            Print LLM prompts and exit 0 (works with zero API keys)
   --json                   Machine-readable output (stdout JSON, errors to stderr)
 ```
@@ -41,7 +43,7 @@ Options:
 | Code | Meaning |
 |------|---------|
 | 0 | Gate passes — no recurring unbanked lessons (or --gate not set) |
-| 1 | Operational error — bad input, unreadable ledger, write failure |
+| 1 | Operational error — bad input, unreadable ledger, write failure, or `--llm` refined no cluster |
 | 2 | Gate fails — one or more clusters have no non-empty defense file in --out-dir, or ledger contains malformed lines |
 
 ## Emitted file shapes
