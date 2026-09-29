@@ -42,6 +42,7 @@ test('git reads on the read path are bounded', () => {
   const run = (cmd, args, opts) => { seen = opts; return 'blob\n'; };
   gitRead(['cat-file', '-t', 'HEAD:x'], run);
   assertBounded(seen, GIT_READ_TIMEOUT_MS);
+  assert.ok(seen.maxBuffer >= 64 * 1024 * 1024, 'a cited file is read whole — the 1 MiB default would truncate it');
 
   seen = null;
   pathKindAtRevision('x', 'HEAD', run);
@@ -83,7 +84,7 @@ test('every gh writer call is bounded', () => {
 
 test('a gh call that times out throws, naming the timeout', () => {
   const gh = makeGhWriter({ spawn: () => ({ status: null, signal: 'SIGKILL', error: timedOut() }) });
-  assert.throws(() => gh.apply(1, 'close'), /timed out/);
+  assert.throws(() => gh.apply(1, 'close'), /^Error: gh issue timed out after 60s$/);
 });
 
 test('the reviewer spawn is bounded above its own --timeout', () => {
@@ -96,7 +97,7 @@ test('the reviewer spawn is bounded above its own --timeout', () => {
   });
   run();
   assertBounded(seen, (600 + REVIEW_GRACE_S) * 1000);
-  assert.ok(seen.timeout > 600 * 1000, 'the parent bound must sit above the child\'s own per-request timeout');
+  assert.equal(seen.timeout, (600 + 120) * 1000, 'the reviewer\'s own timeout plus a two-minute grace');
 });
 
 test('a reviewer killed by the parent bound did not run — it is never a verdict', () => {
