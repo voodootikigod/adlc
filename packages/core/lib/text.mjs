@@ -19,6 +19,24 @@ export function tail(str, maxChars = 4000) {
   return str.slice(str.length - maxChars);
 }
 
+const FENCE_OPTION_KEYS = new Set(['bias']);
+
+// Fail closed on a malformed options argument for the same reason as on a bad
+// bias value: a positional 'head' or a misspelled key would otherwise leave
+// the default tail truncation in force at a call site that meant to opt out.
+function fenceOptions(opts) {
+  if (opts == null) return {};
+  const proto = typeof opts === 'object' ? Object.getPrototypeOf(opts) : undefined;
+  if (proto !== Object.prototype && proto !== null) {
+    throw new Error(`fence: opts must be a plain object, got: ${Array.isArray(opts) ? 'array' : typeof opts}`);
+  }
+  const unknown = Object.keys(opts).filter((k) => !FENCE_OPTION_KEYS.has(k));
+  if (unknown.length > 0) {
+    throw new Error(`fence: unknown option(s): ${unknown.join(', ')}`);
+  }
+  return opts;
+}
+
 /**
  * Wrap untrusted content (prior failure logs, prosecution findings, mined
  * PR text — anything not authored by the current agent) in an unguessable
@@ -48,7 +66,7 @@ export function fence(label, content, maxChars, opts = {}) {
   if (!Number.isInteger(maxChars) || maxChars < 0) {
     throw new Error('fence: maxChars must be a non-negative integer');
   }
-  const { bias = 'tail' } = opts ?? {};
+  const { bias = 'tail' } = fenceOptions(opts);
   // Fail closed on an unrecognized bias rather than falling back to the
   // default. A silently-ignored typo ('start', 'front', 'HEAD') at a call site
   // that believed it had opted out reinstates the whole defect, invisibly.
