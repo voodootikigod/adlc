@@ -35,7 +35,7 @@ import {
   detectProvider,
   PROVIDER_NAMES,
 } from '@adlc/core';
-import { runConsensusFix } from '../lib/runner.mjs';
+import { runConsensusFix, RunAbortedError } from '../lib/runner.mjs';
 import { buildPrompt } from '../lib/prompt.mjs';
 import { takeSnapshot, restoreSnapshot, writeFileAtomic, applyWinner } from '../lib/snapshot.mjs';
 import { applyHunks } from '../lib/hunks.mjs';
@@ -168,25 +168,37 @@ async function completeFn(prompt, providerName) {
   return complete({ tier, prompt, provider: providerName ?? providerOverride });
 }
 
-// Signal handlers — restore files from snapshot on interrupt or termination (issue #600).
-// outerSnapshot is populated just before runConsensusFix starts.
+// Termination signals: stop the run, restore the original files, exit 1.
+// While the engine is running, the signal aborts it: the engine kills the
+// in-flight test or rails command's process group, restores its snapshot and
+// rejects with RunAbortedError, and the catch below restores outerSnapshot and
+// exits. Outside the engine there is no in-flight command, so the handler
+// restores and exits directly. outerSnapshot is taken before the engine starts.
 let outerSnapshot = null;
-function handleSignal() {
+let engineRunning = false;
+const abortController = new AbortController();
+
+function restoreAndExit() {
   if (outerSnapshot) {
     try {
       restoreSnapshot(outerSnapshot);
     } catch {
-      // Best effort.
+      // Best effort: the process is terminating either way.
     }
   }
   process.exit(1);
+}
+
+function handleSignal() {
+  if (abortController.signal.aborted) return;
+  abortController.abort();
+  if (!engineRunning) restoreAndExit();
 }
 
 process.on('SIGINT', handleSignal);
 process.on('SIGTERM', handleSignal);
 process.on('SIGHUP', handleSignal);
 
-// Take snapshot early so termination signals can restore if interrupted during fan.
 try {
   outerSnapshot = takeSnapshot(filePaths);
 } catch (err) {
@@ -194,6 +206,7 @@ try {
 }
 
 let result;
+engineRunning = true;
 try {
   result = await runConsensusFix({
     testCmd,
@@ -203,14 +216,17 @@ try {
     tier,
     providerNames,
     completeFn,
+    signal: abortController.signal,
     onProgress: (msg) => {
       if (!values['json']) console.log(msg);
     },
   });
 } catch (err) {
+  if (err instanceof RunAbortedError) restoreAndExit();
   if (err.isOpError) opError(err.message);
   opError(`unexpected error: ${err.message}`);
 }
+engineRunning = false;
 
 const {
   survivors,
