@@ -72,3 +72,22 @@ test('a dangling directory symlink redirects children created beneath it', (t) =
   symlinkSync('test/later', join(root, 'dirlink'));
   assert.equal(resolveRailPath('dirlink/x.mjs', root), 'test/later/x.mjs');
 });
+
+function linkChain(root, hops, target) {
+  // hop0 -> hop1 -> ... -> hop{hops-1} -> target: `hops` symlinks in all.
+  for (let i = 0; i < hops; i++) {
+    symlinkSync(i === hops - 1 ? target : `hop${i + 1}`, join(root, `hop${i}`));
+  }
+}
+
+test('a symlink chain within the kernel hop limit (40) resolves to its target', (t) => {
+  const root = makeRepo(t);
+  linkChain(root, 40, 'test');
+  assert.equal(resolveRailPath('hop0/a.test.mjs', root), 'test/a.test.mjs');
+});
+
+test('a symlink chain past the kernel hop limit falls back to the lexical path', (t) => {
+  const root = makeRepo(t);
+  linkChain(root, 41, 'test');
+  assert.equal(resolveRailPath('hop0/a.test.mjs', root), 'hop0/a.test.mjs');
+});

@@ -10,7 +10,6 @@ import { isAbsolute, join, parse, relative } from 'node:path';
 
 // The kernel's own bound on symlink hops per lookup (Linux MAXSYMLINKS).
 const MAX_SYMLINK_HOPS = 40;
-const UNRESOLVED = Symbol('unresolved');
 
 function realpathOr(p) {
   try { return realpathSync(p); } catch { return p; }
@@ -33,7 +32,7 @@ function readlinkOrNull(p) {
  * left to right, expanding each symlink (including a dangling one) before the
  * next segment, so a `..` applies to the resolved prefix it follows. Once a
  * segment does not exist nothing below it can be a link, so the rest is
- * appended lexically. Returns UNRESOLVED on a symlink loop (hop budget spent)
+ * appended lexically. Returns null on a symlink loop (hop budget spent)
  * or a link that vanishes mid-walk.
  */
 function walk(start, segments) {
@@ -49,7 +48,7 @@ function walk(start, segments) {
     const st = exists ? lstatOrNull(next) : null;
     if (st?.isSymbolicLink()) {
       const target = ++hops > MAX_SYMLINK_HOPS ? null : readlinkOrNull(next);
-      if (target === null) return UNRESOLVED;
+      if (target === null) return null;
       if (isAbsolute(target)) cur = parse(target).root;
       queue.unshift(...segmentsOf(target));
       continue;
@@ -70,9 +69,7 @@ function walk(start, segments) {
 export function resolveRailPath(filePath, root) {
   const realRoot = realpathOr(root);
   const start = isAbsolute(filePath) ? parse(filePath).root : realRoot;
-  const resolved = walk(start, segmentsOf(filePath));
-  const final = resolved === UNRESOLVED
-    ? (isAbsolute(filePath) ? filePath : join(realRoot, filePath))
-    : resolved;
+  const final = walk(start, segmentsOf(filePath))
+    ?? (isAbsolute(filePath) ? filePath : join(realRoot, filePath));
   return relative(realRoot, final).split('\\').join('/');
 }

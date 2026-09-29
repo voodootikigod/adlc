@@ -11,6 +11,8 @@ const NON_ASCII = 'señal.mjs';
 const SPACED = 'with space.mjs';
 const QUOTED = 'say "hi".mjs';
 const MARKERISH = '--COMMIT--';
+// A root file whose name is a plausible textual marker must still count as a path.
+const WORDISH = 'undefined.mjs';
 
 function repo(t) {
   const dir = tmp(t, 'adlc-git-log-nonascii-');
@@ -27,7 +29,7 @@ function repo(t) {
   commit([NON_ASCII, 'plain.mjs'], 'one');
   commit([NON_ASCII, QUOTED], 'two');
   g(['commit', '-q', '--allow-empty', '-m', 'empty']);
-  commit([SPACED, MARKERISH], 'three');
+  commit([SPACED, MARKERISH, WORDISH], 'three');
   writeFileSync(join(dir, 'plain.mjs'), 'changed\n');
   commit(['plain.mjs'], 'four');
   return dir;
@@ -41,6 +43,7 @@ test('churn counts a non-ASCII or quote-bearing path under its real name', (t) =
     [QUOTED]: 1,
     [SPACED]: 1,
     [MARKERISH]: 1,
+    [WORDISH]: 1,
   });
 });
 
@@ -53,11 +56,14 @@ test('coChange groups files per commit under their real names', (t) => {
     [QUOTED]: 1,
     [SPACED]: 1,
     [MARKERISH]: 1,
+    [WORDISH]: 1,
   });
   assert.deepEqual(pairCounts, {
     [pairKey(NON_ASCII, 'plain.mjs')]: 1,
     [pairKey(NON_ASCII, QUOTED)]: 1,
     [pairKey(SPACED, MARKERISH)]: 1,
+    [pairKey(SPACED, WORDISH)]: 1,
+    [pairKey(MARKERISH, WORDISH)]: 1,
   });
 });
 
