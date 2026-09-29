@@ -4,6 +4,8 @@
 //   e.g. node apps/docs/scripts/check-links.mjs http://localhost:3000
 //        node apps/docs/scripts/check-links.mjs https://<preview>.vercel.app
 
+import { pathToFileURL } from 'node:url';
+
 export const LEGACY_PATHS = [
   '/docs',
   '/docs/getting-started',
@@ -47,7 +49,7 @@ async function main(base) {
 const base = process.argv[2];
 if (base) {
   await main(base);
-} else if (import.meta.url === `file://${process.argv[1]}`) {
+} else if (Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href) {
   console.error('usage: node apps/docs/scripts/check-links.mjs <base-url>');
   process.exit(1);
 }

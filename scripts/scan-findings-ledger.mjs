@@ -12,6 +12,7 @@
 // Exit codes: 0 = clean (or no ledger), 2 = a line is not publishable, 1 = read error.
 
 import { readFileSync, existsSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import { assertPublishableFinding } from '@adlc/core';
 
 // Set process.exitCode and RETURN — never process.exit() here. process.exit terminates
@@ -70,6 +71,8 @@ export function scan(ledger) {
 
 // CLI entry — skipped when this module is imported (so a unit test can assert scan()'s
 // exact return value without the top-level call scanning the importer's real ledger).
-if (import.meta.url === `file://${process.argv[1]}`) {
+// pathToFileURL, not a hand-built URL: import.meta.url is percent-encoded, so
+// a raw `file://` + argv[1] never matches from a path containing a space.
+if (Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href) {
   process.exitCode = scan(process.argv[2] ?? '.adlc/findings.jsonl');
 }
