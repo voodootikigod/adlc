@@ -66,7 +66,7 @@ function fixedWorld() {
       if (!(p in FILES)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       return FILES[p];
     },
-    pathExists: (p) => p in FILES,
+    pathKind: (p) => (p in FILES ? 'blob' : null),
     lastCommitFor: () => 'cafe123',
   };
 }

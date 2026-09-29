@@ -16,7 +16,7 @@
  * decision, through the gate (§3.6) and the autonomy floor (§3.7).
  */
 
-import { unitsForIssue } from './cluster.mjs';
+import { unitsForIssue, verifiedLocations } from './cluster.mjs';
 
 /** Verdicts whose locations are established well enough to argue a move. */
 const LOCATION_VERIFIED = new Set(['valid', 'fixed']);
@@ -72,7 +72,7 @@ export function relabelProposals(rows, profile) {
     const actual = `${areaPrefix}${inUnits[0]}`;
     if (actual === currentArea) continue;
 
-    const paths = [...new Set((row.classified?.references ?? []).map((r) => r.path))];
+    const paths = verifiedLocations(row.verified, row.classified);
     out.push({
       number: row.number,
       action: 'relabel',
