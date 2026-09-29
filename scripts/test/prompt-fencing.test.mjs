@@ -98,6 +98,14 @@ const GUARDED = [
     mustNotMatch: [/\$\{excerpt\.text\}/],
     mustContain: ["fence('TEST_OUTPUT', tailedOutput", 'fence(`FILE:${path}`'],
   },
+  {
+    // The pi P5 loop sends through the host model, not complete()/fan(), so the
+    // sweep below cannot find it: the diff and the lens-authored finding come
+    // from the party under review, and the verifier's answer is the verdict.
+    file: 'plugins/adlc-pi/lib/prosecutor.mjs',
+    mustNotMatch: [/\$\{ticket\.title\}/, /^\s*diff,\s*$/m, /'=== DIFF ==='/],
+    mustContain: ["fenceWhole('DIFF', diff)", "fenceWhole('FINDING'", "fence('TICKET_TITLE'"],
+  },
 ];
 
 for (const { file, mustNotMatch, mustContain } of GUARDED) {

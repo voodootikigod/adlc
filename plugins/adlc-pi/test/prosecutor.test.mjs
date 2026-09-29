@@ -212,13 +212,13 @@ test('empty diff → zero lenses, zero children, CLEAN (the live-smoke fast path
   assert.equal(called, false, 'no runner call for an empty diff');
 });
 
-test('parseFindings tolerates fences/objects and drops fileless entries', () => {
-  assert.equal(parseFindings('garbage, no json').length, 0);
-  assert.equal(parseFindings('```json\n[]\n```').length, 0);
+test('parseFindings tolerates fences/objects, drops fileless entries, and fails closed on garbage', () => {
+  assert.deepEqual(parseFindings('garbage, no json'), { findings: [], parsed: false });
+  assert.deepEqual(parseFindings('```json\n[]\n```'), { findings: [], parsed: true });
   const one = parseFindings('```json\n[{"file":"a.ts","title":"x"}]\n```');
-  assert.equal(one.length, 1);
+  assert.equal(one.findings.length, 1);
   const wrapped = parseFindings('{"findings":[{"file":"b.ts"},{"nope":1}]}');
-  assert.equal(wrapped.length, 1, 'fileless finding dropped');
+  assert.equal(wrapped.findings.length, 1, 'fileless finding dropped');
 });
 
 test('parseVote only accepts a boolean real', () => {
