@@ -15,7 +15,8 @@
 import { existsSync } from 'node:fs';
 import { validateIssueNumber, validateOid } from './input.mjs';
 import { FLEET_BLOCKING_REASONS } from './fleet-args.mjs';
-import { createRunSteps, outcomeFor, gapsToFindings } from './round.mjs';
+import { createRunSteps, outcomeFor, gapsToFindings, RECORD_VANISHED } from './round.mjs';
+import { updateIfPresent } from './records.mjs';
 import { active } from './mutations.mjs';
 
 export { outcomeFor };
@@ -33,31 +34,11 @@ export function remainingBudget(record, config, now = null) {
 }
 
 /**
- * A best-effort record write (#992).
- *
- * `records.update` THROWS when the record is gone (lib/records.mjs). Every
- * caller below writes as bookkeeping immediately before returning the result
- * the caller is owed — three of them from inside a `catch` — so that throw
- * REPLACES the result and escapes as a rejection from a continuation whose
- * owning call has already ended. #962 fixed two occurrences of the same hazard
- * in the rounds loop and in `resumeRun`.
- *
- * A record that has VANISHED (retired/torn down concurrently) is tolerated and
- * reported by a null return; ANY other write failure is a real defect and still
- * propagates. The reload in the catch is what tells the two apart, so neither
- * is decided by matching on an error message. The write is bookkeeping; the
- * return value of the calling step is the contract.
- *
- * Returns the updated record, or null when there was no record left to update.
+ * A best-effort record write around a result the caller is already owed: a
+ * vanished record yields null instead of a throw that would replace that
+ * result (see `updateIfPresent`).
  */
-function updateRecordIfPresent(ctx, issue, patch) {
-  try {
-    return ctx.records.update(issue, patch);
-  } catch (e) {
-    if (!ctx.records.load(issue)) return null;
-    throw e;
-  }
-}
+const updateRecordIfPresent = (ctx, issue, patch) => updateIfPresent(ctx.records, issue, patch);
 
 /** The CI outcome (§6.9) → the run's terminal result, with its effects applied. */
 async function settleCi({ ctx, deps, steps, issue: n, ci, prNumber }) {
@@ -73,6 +54,7 @@ async function settleCi({ ctx, deps, steps, issue: n, ci, prNumber }) {
       if (rec) await deps.effects.applyTerminalEffects({ ctx, record: rec, outcome: 'ci-red', target: { kind: 'pr', number: prNumber }, sentinel: `<!-- adlc-autopilot:ci-red ${ci.outcome} -->`, body: ci.comment ?? ci.outcome, label: ci.label ?? 'adlc:autopilot-ci-red' });
       return { state: 'ci-red', reason: ci.outcome, prNumber, red: ci.red ?? [] };
     }
+    case 'record-vanished': return { ...RECORD_VANISHED, prNumber };
     case 'fix-round-failed': {
       const rec = ctx.records.load(n);
       return { state: rec?.state ?? 'ci-red', reason: ci.code ?? 'fix-round-failed', prNumber, round: ci.round ?? null };
@@ -110,10 +92,9 @@ export async function runIssue({ ctx, deps, issue, ticket, revision = null, auth
     return { state: code.startsWith('orphan') ? 'orphan' : 'failed', reason: code, exitCode: 1, detail: e.message };
   }
   // The shaped ticket rides the record from here on: every resume path needs its scope.
-  // #992: the record can be retired between createIssueWorktree resolving and this
-  // write; the run then has nothing left to continue, which continueRun reports as
-  // `resume-no-ticket-id` rather than throwing over it.
-  updateRecordIfPresent(ctx, n, { ticketCache: ticket, issueRevision: revision ?? record()?.issueRevision ?? null });
+  // A record retired during the staged creation leaves nothing to continue: no
+  // ticket write, coldstart or mirror build follows it.
+  if (!updateRecordIfPresent(ctx, n, { ticketCache: ticket, issueRevision: revision ?? record()?.issueRevision ?? null })) return { ...RECORD_VANISHED };
   return continueRun({ ctx, deps, issue: n, ticket, revision, authorization, from: 'evidence' });
 }
 
