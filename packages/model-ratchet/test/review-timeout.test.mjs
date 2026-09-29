@@ -109,4 +109,5 @@ test('--help documents --timeout-ms and its default', () => {
   assert.equal(res.status, 0);
   assert.match(res.stdout, /^ {2}--timeout-ms <n> {4}Kill a review-cmd run after <n> ms/m);
   assert.ok(res.stdout.includes(`(default: ${DEFAULT_REVIEW_TIMEOUT_MS})`), res.stdout);
+  assert.match(res.stdout, /Exit codes other than 0 or 2, a timeout, or a signal kill cause operational\s+error \(exit 1\); the remaining files are still reviewed\./);
 });
