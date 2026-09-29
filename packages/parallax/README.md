@@ -229,13 +229,13 @@ a file and pass `--record-verdict <file>` instead:
 ```sh
 # Does NOT work: both request and verdict want stdin — exits 1 with an
 # explanatory error instead of silently misreading input
-echo "Add a login page" | parallax --prompt-only --record-verdict -
+echo "Add a login page" | parallax --prompt-only --ticket T1 --record-verdict -
 
 # Works: request via --request, verdict via stdin
-parallax --request "Add a login page" --prompt-only --record-verdict -
+parallax --request "Add a login page" --prompt-only --ticket T1 --record-verdict -
 
 # Works: request via stdin, verdict via file
-echo "Add a login page" | parallax --prompt-only --record-verdict verdict.txt
+echo "Add a login page" | parallax --prompt-only --ticket T1 --record-verdict verdict.txt
 ```
 
 ---

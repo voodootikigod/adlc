@@ -30,10 +30,11 @@ treat it as the raw request text. There is no spec file yet at this step, so
 `--file` (which requires an existing file) is the wrong mode — use
 `--request` with the resolved text instead.
 
-Run `adlc parallax --request "<resolved text>" --prompt-only --record-verdict <file>`
-and answer it yourself. `--prompt-only` is required alongside
-`--record-verdict`, not optional — the CLI errors otherwise (keyless
-operation; recording without it is undefined). Produce the N independent
+Run `adlc parallax --request "<resolved text>" --prompt-only --record-verdict <file> --ticket <id>`
+and answer it yourself. `--prompt-only` and `--ticket` are both required
+alongside `--record-verdict`, not optional — the CLI exits 1 otherwise
+(`--prompt-only` keeps it keyless; `--ticket` binds the record to the ticket
+this spec is for, since an unbound record could satisfy any ticket's P1 gate). Produce the N independent
 readings, then the divergence analysis.
 
 ## 2. Interrogate round 1, write the draft — parallax's divergences
