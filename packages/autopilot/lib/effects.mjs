@@ -33,7 +33,7 @@ export class EffectsError extends Error {
 const failed = (args, res) => new GhError('gh-failed', `${args.join(' ')} exited ${res.status}: ${String(res.stderr ?? '').trim().slice(0, 300)}`, res);
 
 /** Post the comment unless one carrying `sentinel` already exists on the target. */
-async function commentOn(gh, target, sentinel, body, { skipRead = false, author = null } = {}) {
+async function commentOn(gh, target, sentinel, body, { skipRead, author }) {
   const n = validateIssueNumber(target.number, target.kind);
   if (target.kind === 'issue' && !skipRead) return ensureComment(gh, n, sentinel, body, { author });
   if (!skipRead) {
