@@ -86,24 +86,32 @@ for (const pkg of typedPackages()) {
 }
 
 test('test-kit declarations are real types, not an implicit any', { skip: NO_TSC }, (t) => {
-  // Each @ts-expect-error must be consumed by a genuine error; if the import
-  // were `any`, tsc reports TS2578 (unused directive) and the compile fails.
-  const { status, output } = compileConsumer(t, [
+  const header = [
     "import { tmp, gitRepo, runBin, withScopedContext } from '@adlc/core/test-kit';",
     'declare const t: { after(fn: () => void): void };',
+  ];
+  const valid = compileConsumer(t, [
+    ...header,
     'export const dir: string = tmp(t, "x-");',
     'export const repo: string = gitRepo(t, { branch: "main" }).dir;',
     'export const out: Promise<number> = withScopedContext(async (ctx) => { tmp(ctx); return 1; });',
     'export const status: number | null = runBin("bin.mjs", ["--help"]).status;',
-    '// @ts-expect-error a context is required',
-    'tmp();',
-    '// @ts-expect-error a prefix string is not a context',
-    'tmp("prefix-");',
-    '// @ts-expect-error a context without .after is rejected',
-    'gitRepo({ prefix: "p-" });',
-    '// @ts-expect-error tmp returns a string',
-    'export const wrong: number = tmp(t);',
     '',
   ].join('\n'));
-  assert.equal(status, 0, `test-kit types are missing or too loose:\n${output}`);
+  assert.equal(valid.status, 0, `valid test-kit usage does not type-check:\n${valid.output}`);
+
+  // Each misuse sits on its own line and must be reported at that line. Were
+  // the subpath an implicit any, none of them would be an error.
+  const misuses = [
+    'tmp();',
+    'tmp("prefix-");',
+    'gitRepo({ prefix: "p-" });',
+    'export const wrong: number = tmp(t);',
+  ];
+  const invalid = compileConsumer(t, [...header, ...misuses, ''].join('\n'));
+  assert.notEqual(invalid.status, 0, 'misusing the test-kit must fail to type-check');
+  misuses.forEach((misuse, i) => {
+    const line = header.length + i + 1;
+    assert.match(invalid.output, new RegExp(`consumer\\.mts\\(${line},`), `no type error reported for line ${line}: ${misuse}\n${invalid.output}`);
+  });
 });
