@@ -28,7 +28,7 @@ npm install -g @adlc/model-ratchet   # or use npx
 ## Usage
 
 ```
-model-ratchet [--top <n>] [--review-cmd <cmd>] [--churn-limit <n>] [--dry-run] [--allow-empty] [--json]
+model-ratchet [--top <n>] [--review-cmd <cmd>] [--timeout-ms <n>] [--churn-limit <n>] [--dry-run] [--allow-empty] [--json]
 ```
 
 ### Flags
@@ -37,6 +37,7 @@ model-ratchet [--top <n>] [--review-cmd <cmd>] [--churn-limit <n>] [--dry-run] [
 |------|---------|-------------|
 | `--top <n>` | `10` | Number of hotspot files to select |
 | `--review-cmd <cmd>` | — | Shell command to run per file. Use `{file}` as placeholder. |
+| `--timeout-ms <n>` | `600000` | Kill a review-cmd run after `<n>` ms; it counts as an operational error for that file and the remaining files are still reviewed |
 | `--churn-limit <n>` | `1000` | Commit history depth for churn computation |
 | `--dry-run` | `false` | Print prosecution plan only; do not run review-cmd |
 | `--allow-empty` | `false` | Allow review mode to exit 0 when zero candidate files are selected |
@@ -100,14 +101,15 @@ Each finding is appended to `.adlc/findings.jsonl`:
 ```
 
 Exit code 2 from `review-cmd` is treated as "findings present" (not an error).
-Exit codes other than 0 or 2 cause an operational error (tool exits 1).
+Exit codes other than 0 or 2, a run killed by `--timeout-ms`, or a run killed by a
+signal cause an operational error (tool exits 1); the remaining files are still reviewed.
 
 ## Exit Codes
 
 | Code | Meaning |
 |------|---------|
 | `0` | Success — plan printed or review run complete |
-| `1` | Operational error — not a git repo, bad `--review-cmd` exit code, bad args |
+| `1` | Operational error — not a git repo, bad `--review-cmd` exit code, a review-cmd timeout, bad args |
 | `2` | Gate failure — review mode with zero candidate files selected and `--allow-empty` not set |
 
 ## Examples

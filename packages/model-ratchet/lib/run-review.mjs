@@ -74,32 +74,60 @@ export function parseFindingLine(line, _file) {
 }
 
 /**
+ * Upper bound on one review-command run. The command is typically an LLM
+ * reviewer; a stalled provider call or an interactive prompt must end the run
+ * for that file rather than hang a scheduled ratchet indefinitely.
+ */
+export const DEFAULT_REVIEW_TIMEOUT_MS = 600_000;
+
+/**
  * Run the review command for a single file.
  *
  * @param {string} reviewCmd  - command template with {file} placeholder
  * @param {string} file       - repo-relative file path
- * @returns {{ stdout: string, stderr: string, exitCode: number }}
+ * @param {string} [cwd]
+ * @param {{ timeoutMs?: number }} [opts]
+ * @returns {{ stdout: string, stderr: string, exitCode: number, timedOut: boolean, signal: string|null }}
+ *   exitCode is the child's status, or 1 when it produced none (killed, not spawned).
  */
-export function runReviewCmd(reviewCmd, file, cwd) {
+export function runReviewCmd(reviewCmd, file, cwd, { timeoutMs = DEFAULT_REVIEW_TIMEOUT_MS } = {}) {
   // Tokenize the trusted template, THEN substitute the untrusted file path as
   // a discrete argv element. Run with shell:false so the filename is never
-  // re-parsed by /bin/sh — this closes the command-injection hole that existed
-  // when the template string was interpolated and run with shell:true.
+  // re-parsed by /bin/sh.
   const tokens = substituteToken(tokenizeCommand(reviewCmd), '{file}', file);
   if (tokens.length === 0) {
-    return { stdout: '', stderr: 'empty review command', exitCode: 1 };
+    return { stdout: '', stderr: 'empty review command', exitCode: 1, timedOut: false, signal: null };
   }
   const result = spawnSync(tokens[0], tokens.slice(1), {
     shell: false,
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,
+    timeout: timeoutMs,
+    killSignal: 'SIGKILL',
     ...(cwd ? { cwd } : {}),
   });
   return {
     stdout: result.stdout ?? '',
     stderr: result.stderr ?? '',
     exitCode: result.status ?? 1,
+    timedOut: result.error?.code === 'ETIMEDOUT',
+    signal: result.signal ?? null,
   };
+}
+
+/**
+ * The per-file error for a review run that did not complete normally, or null.
+ * Exit 0 is clean and exit 2 means findings; anything else is operational.
+ *
+ * @param {{ exitCode: number, timedOut: boolean, signal: string|null }} result
+ * @param {number} timeoutMs
+ * @returns {string|null}
+ */
+export function reviewRunError(result, timeoutMs) {
+  if (result.timedOut) return `review-cmd timed out after ${timeoutMs}ms`;
+  if (result.signal) return `review-cmd was killed by ${result.signal}`;
+  if (result.exitCode !== 0 && result.exitCode !== 2) return `review-cmd exited with code ${result.exitCode}`;
+  return null;
 }
 
 /**
