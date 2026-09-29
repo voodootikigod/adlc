@@ -15,6 +15,7 @@ import { fetchSignals, buildClusters } from '../lib/mine.mjs';
 import { planLensEmissions } from '../lib/lens.mjs';
 import { buildAllPrompts, refineClusters } from '../lib/llm.mjs';
 import { buildHumanReport, buildJsonResult } from '../lib/report.mjs';
+import { parsePositiveInt } from '../lib/int-flag.mjs';
 
 const { values: flags } = parseArgs({
   options: {
@@ -29,17 +30,16 @@ const { values: flags } = parseArgs({
   },
 });
 
-const limit  = parseInt(flags.limit, 10);
-const minSize = parseInt(flags.min, 10);
+function positiveIntFlag(name) {
+  const parsed = parsePositiveInt(flags[name]);
+  if (!parsed.ok) opError(`--${name} must be a positive integer (got: ${flags[name]})`);
+  return parsed.value;
+}
+
+const limit   = positiveIntFlag('limit');
+const minSize = positiveIntFlag('min');
 const outDir  = flags['out-dir'];
 const tier    = flags.tier;
-
-if (isNaN(limit) || limit < 1) {
-  opError(`--limit must be a positive integer (got: ${flags.limit})`);
-}
-if (isNaN(minSize) || minSize < 1) {
-  opError(`--min must be a positive integer (got: ${flags.min})`);
-}
 
 const VALID_TIERS = ['cheap', 'mid', 'frontier'];
 if (!VALID_TIERS.includes(tier)) {

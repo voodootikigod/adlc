@@ -45,8 +45,22 @@ Output ONLY valid JSON matching this schema (no extra text, no markdown):
 }
 
 /**
+ * The provider's reply as a refinement, or null when it is not one. Both fields
+ * must be non-empty strings: anything else would reach the report as a
+ * non-string title and a lens Charter as '[object Object]'.
+ *
+ * @param {unknown} parsed
+ * @returns {{title: string, charter: string}|null}
+ */
+export function toRefinement(parsed) {
+  const title = typeof parsed?.title === 'string' ? parsed.title.trim() : '';
+  const charter = typeof parsed?.charter === 'string' ? parsed.charter.trim() : '';
+  return title && charter ? { title, charter } : null;
+}
+
+/**
  * Refine a single cluster via LLM.
- * Returns { title, charter } or null on failure.
+ * Returns { title, charter } or null when the reply is not a valid refinement.
  *
  * @param {string} slug
  * @param {Array<{body: string}>} signals
@@ -55,9 +69,7 @@ Output ONLY valid JSON matching this schema (no extra text, no markdown):
 export async function refineCluster(slug, signals, tier = 'mid') {
   const prompt = buildRefinementPrompt(slug, signals);
   const raw = await complete({ tier, prompt, maxTokens: 512 });
-  const parsed = extractJson(raw);
-  if (parsed && parsed.title && parsed.charter) return parsed;
-  return null;
+  return toRefinement(extractJson(raw));
 }
 
 /**
