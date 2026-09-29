@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { tmp } from '@adlc/core/test-kit';
 import { buildHumanReport, buildJsonResult } from '../lib/report.mjs';
+import { toRefinement } from '../lib/llm.mjs';
 
 const BIN = resolve(new URL('../bin/lesson-foundry.mjs', import.meta.url).pathname);
 
@@ -106,4 +107,19 @@ test('report: per-cluster refined flag and a failed-N-of-M line for partial refi
 
   const clean = buildHumanReport({ clusters, skipped: 0, filtered: 0, plan: [], failedRefinements: 0 });
   assert.ok(!clean.some((l) => l.includes('LLM refinement failed')), clean.join('\n'));
+
+  const withoutLlm = buildHumanReport({ clusters, skipped: 0, filtered: 0, plan: [] });
+  assert.ok(!withoutLlm.some((l) => l.includes('LLM refinement failed')), withoutLlm.join('\n'));
+});
+
+test('toRefinement requires every field as a non-empty string and trims them', () => {
+  assert.deepEqual(
+    toRefinement({ name: ' n ', description: ' d ', rule: ' r ', extra: 1 }),
+    { name: 'n', description: 'd', rule: 'r' },
+  );
+  assert.equal(toRefinement({ name: 'n', description: 'd' }), null);
+  assert.equal(toRefinement({ name: 'n', rule: 'r' }), null);
+  assert.equal(toRefinement({ description: 'd', rule: 'r' }), null);
+  assert.equal(toRefinement({ name: 'n', description: 'd', rule: 5 }), null);
+  assert.equal(toRefinement(null), null);
 });
