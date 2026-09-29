@@ -1696,9 +1696,14 @@ ${prompt}` : prompt;
     p.stdout.on("data", (d) => out += d);
     p.stderr.on("data", (d) => err += d);
     p.on("error", (e) => reject(new Error(`agy spawn failed: ${e.message}`)));
+    let stdinError = null;
+    p.stdin.on("error", (e) => {
+      stdinError = e;
+    });
     p.stdin.end(input);
     p.on("close", (code) => {
       if (code !== 0) return reject(new Error(`agy exit ${code}: ${(err || out).slice(-400)}`));
+      if (stdinError) return reject(new Error(`agy did not read the full prompt: ${stdinError.message}`));
       if (isAgyTimeout(out)) {
         return reject(new Error("agy: timed out waiting for response"));
       }
