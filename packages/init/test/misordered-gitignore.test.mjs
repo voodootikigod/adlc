@@ -209,7 +209,11 @@ test('evaluateGitignoreContract tests individual path rules and ordering semanti
     ['.adlc/', '!.adlc/tickets/'],
     ['.adlc/tickets/.store.json', '.adlc/manifest.jsonl'],
   );
-  assert.deepEqual(ignoredAll, ['.adlc/manifest.jsonl'], 'tickets are negated, manifest is ignored');
+  assert.deepEqual(
+    ignoredAll,
+    ['.adlc/tickets/.store.json', '.adlc/manifest.jsonl'],
+    'a negation cannot re-include a path whose parent directory is excluded',
+  );
 
   const ignoredManifestSeg = evaluateGitignoreContract(
     ['!.adlc/manifest.d/**', '.adlc/*'],
@@ -302,20 +306,18 @@ test('scaffold normalizes .adlc/ placed after negations, writes update, and warn
   }
 });
 
-test('scaffold appending missing .adlc/* after pre-existing negation updates file and warns', () => {
+test('scaffold appending missing .adlc/* moves a pre-existing negation after it instead of killing it', () => {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-init-misordered-'));
   try {
     execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
-    // Pre-existing negation without .adlc/*
     writeFileSync(join(dir, '.gitignore'), '!.adlc/config.json\n');
 
     const result = scaffold({ root: dir });
     assert.ok(result.updated.includes('.gitignore'), '.gitignore must be updated when appending missing lines');
-    const gitignoreWarnings = result.warnings.filter((w) => w.toLowerCase().includes('gitignore'));
-    assert.ok(gitignoreWarnings.length > 0, 'must warn when appended .adlc/* leaves negation dead');
+    assert.deepEqual(result.warnings.filter((w) => w.toLowerCase().includes('gitignore')), []);
 
     const res = spawnSync(process.execPath, [BIN, '--root', dir, '--harness', 'codex'], { encoding: 'utf8' });
-    assert.equal(res.status, 1, 'init CLI must exit 1 when appended .adlc/* leaves negation dead');
+    assert.equal(res.status, 0, res.stderr);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

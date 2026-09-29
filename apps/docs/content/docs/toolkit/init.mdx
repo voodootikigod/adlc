@@ -32,5 +32,5 @@ not maintain a second scaffold implementation.
 Exit code `0` means initialization completed, including a no-change rerun;
 exit code `1` means an operational or input error.
 
-When `.adlc/config.json` is present but is not readable JSON, `adlc init` records a warning and exits 1 without overwriting the broken file.
-When `.gitignore` contains mis-ordered rules that cause required committable paths to be ignored, `adlc init` records a warning and exits 1 without reporting the file unchanged.
+When `.adlc/config.json` is present but is not readable JSON, `adlc init` records a warning and exits 1 without overwriting the broken file. The same holds when `--harness` is passed and the config's `harnesses` field is present but not an object: the harness cannot be registered, so the run fails instead of reporting success.
+When `.gitignore` contains mis-ordered rules that cause required committable paths to be ignored, `adlc init` records a warning and exits 1 without reporting the file unchanged. If the file has no `.adlc/*` anchor yet, `adlc init` appends the whole ADLC stanza and moves any stanza line found above it into place, so its own append never leaves a negation dead. The rules are checked with `git check-ignore`: in the repository when git can open it, otherwise in a throwaway repository holding only the `.gitignore` (for example before `git init`). Only without a git binary does a built-in matcher decide, and it follows git's rule that nothing under an ignored directory can be re-included.
