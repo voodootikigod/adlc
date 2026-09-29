@@ -8,6 +8,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { tmp } from '@adlc/core/test-kit';
 import { GATE_EXEC_KEY } from './helpers/node-test.mjs';
 import { runRegistered } from './helpers/run-registered.mjs';
@@ -54,4 +55,22 @@ test('context-taking criterion functions run the way the gate runs them leave no
   assert.ok(fns.length >= 5, `expected the context-taking criteria of ${[...FAST_FILES].join(', ')}, found ${fns.length}`);
   const left = await leftoversOf(async () => { for (const fn of fns) await runRegistered(fn); });
   assert.deepEqual(left, [], `criterion fixtures outlived the gate call: ${left.join(', ')}`);
+});
+
+test('scratch() without a context stays usable for the whole process and is removed at exit', () => {
+  const helper = pathToFileURL(join(HERE.pathname, 'helpers', 'review-ctx.mjs')).href;
+  const script = `
+    const { scratch } = await import(${JSON.stringify(helper)});
+    const { SCRATCH_SCOPE } = await import(${JSON.stringify(pathToFileURL(join(HERE.pathname, 'helpers', 'scratch-scope.mjs')).href)});
+    const a = scratch('ap-exit-scope');
+    await new Promise((r) => setTimeout(r, 10));
+    const b = scratch('ap-exit-scope');
+    SCRATCH_SCOPE.after(() => {});
+    process.stdout.write(JSON.stringify([a, b]));
+  `;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  const dirs = JSON.parse(r.stdout);
+  assert.equal(dirs.length, 2);
+  for (const d of dirs) assert.equal(existsSync(d), false, `${d} outlived the process`);
 });
