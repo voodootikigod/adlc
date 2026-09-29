@@ -73,24 +73,20 @@ Selection rules, in order:
 1. `bug` + `P1-high` (or the user's `--label`), class **false-green** first — that is the
    product's signature risk.
 2. **One lane per package.** Two issues in the same package go in ONE lane or wait.
-3. **Check tiering per candidate — it is not just `packages/**`.** `packages/prosecute/lib/tier.mjs`
-   tiers a change on ANY ticket's declared rail globs, COMPLETED tickets included (issue #905).
-   Grep every completed ticket for a rail matching the candidate's exact path before assuming a
-   plugin or script is untiered:
+3. **Check tiering per candidate.** `packages/prosecute/lib/tier.mjs` tiers a change on
+   three things, and nothing else: its package-prefix lists (`ENFORCEMENT_PREFIXES`,
+   `PRODUCER_PREFIXES`), its `TRUST_ROOT_FILES` list (all three summarised in §4b), and the
+   rail globs of ACTIVE tickets — a ticket with `completed: true` is
+   skipped, so its rails tier nothing. Grep the active tickets for a rail matching the
+   candidate's exact path before assuming a package, plugin or script is untiered:
    ```bash
    for f in $(grep -l '"rails"' .adlc/tickets/*.json); do node -e '
    (function(){const t=JSON.parse(require("fs").readFileSync(process.argv[1]));
-   if(t.completed!==true) return; const rails=(t.rails||[]).join(" ");
+   if(t.completed===true) return; const rails=(t.rails||[]).join(" ");
    if(/<candidate-path-fragment>/.test(rails)) console.log(t.id,"|",rails);})();' "$f"; done
    ```
-   In this repo, `packages/**` and `.github/workflows/**` are ALWAYS tiered (T37/T38), so any
-   `packages/*` lane needs the 4b ceremony — but plugin directories vary PER PLUGIN: T37 also
-   rails `plugins/{pi,opencode,codex,claude-code}/**` specifically (NOT copilot/cursor/gemini/
-   herdr), so a plugin lane may or may not need the ceremony depending on which plugin it is.
-   Verified empirically: `adlc-copilot`/`adlc-gemini`/`adlc-herdr` lanes shipped WITHOUT the
-   ceremony (`gate` passed clean, 19/19); an `adlc-codex` lane needed it (T37 rails
-   `plugins/adlc-codex/**`) despite looking superficially identical to the other three. Do not
-   generalize "plugins are untiered" from one or two examples — check every candidate.
+   A candidate that matches none of those lists and no active rail is untiered and needs no 4b
+   ceremony. Check every candidate: two paths that look alike can land on different sides.
 4. Skip packages under an active rail (`.adlc/tickets/*.json` with `rails` and no
    `completed: true`) and areas with an in-flight program (e.g. `area:autopilot`).
 5. **Re-verify the premise at HEAD** for every candidate: `grep -n` the cited line in the
@@ -418,11 +414,12 @@ final word — verify.
   for a trust-root lane a rebase moves the revision digest, so an attestation recorded
   before it is invalidated and has to be re-signed by the key holder. Get CI green,
   rebase, re-derive, then attest.
-- **Only `test (18)`, `test (20)` and `test (22)` are REQUIRED checks.** `gate`,
-  `rails-guard` and `mutation-gate` run and report but do not gate the merge button —
-  they are enforced by convention and review here, not by the ruleset. Two consequences:
-  do not describe them to the user as blocking; and a flaky test suite blocks EVERY merge
-  in the repo, so a flake in those three is throughput work, not test hygiene.
+- **All six contexts are REQUIRED checks:** `test (18)`, `test (20)`, `test (22)`,
+  `rails-guard`, `mutation-gate` and `gate`. `docs/ci/required-gates.json` is the
+  declaration and `scripts/gate-liveness.mjs` checks the live ruleset against it; read
+  that file, not this bullet, when they disagree. A red on any of the six blocks the
+  merge button, so report it as blocking. A flaky test suite therefore blocks EVERY merge
+  in the repo: a flake there is throughput work, not test hygiene.
 - **`gh pr checks` can report a job as `pending` that has already FAILED.** Confirm
   against the run itself (`gh run list --branch <b>`, then `gh api …/runs/<id>/jobs`)
   before concluding a PR is merely still building. Observed twice in one session.

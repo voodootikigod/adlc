@@ -65,7 +65,7 @@ AUTH-2        frontier    direct    0.000        0       category 'spec' require
 
 Applies when:
 - `ticket.category` is one of `contract`, `spec`, `architecture`
-- OR `railDensity < floor` (regardless of category — this also triggers exit 2)
+- OR `railDensity < floor` (a non-frontier-category ticket below the floor is also a P3 finding and triggers exit 2; a frontier-category ticket is routed here by its category alone and raises no finding)
 
 Result: `tier=frontier`, `mode=direct`
 
@@ -102,7 +102,7 @@ measured (#698). Give the ticket a scope to route it cheap.
 
 `rails` is the list of frozen paths that provide deterministic checks (test files, contract files). `scope` is the set of paths the ticket may touch. High density means most outputs are covered by fast, deterministic gates; errors are caught cheaply and regeneration is inexpensive.
 
-Density of `0` (no rails) means there are no automated gates — any error escapes to humans. Such tickets are routed to `frontier` regardless of category and trigger a P3 gate-fail finding.
+Density of `0` (no rails) means there are no automated gates — any error escapes to humans. Such tickets are routed to `frontier`; a non-frontier-category one also triggers a P3 gate-fail finding (exit 2), while a `contract`/`spec`/`architecture` ticket is already frontier by category and raises none.
 
 ### DAG float (CPM)
 

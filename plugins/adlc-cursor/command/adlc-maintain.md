@@ -39,8 +39,9 @@ Run `adlc ticket-prune --json`.
   it is a review aid, never a basis for a bulk write. Exit `0` either way;
   exit `1` only on an operational error.
 - List the stale tickets and recommend confirming them by hand, then re-running
-  with `adlc ticket-prune --write` to archive them into the gitignored
-  `.adlc/tickets.archive.json` (never deletes outright). Treat `--write` as a
+  with `adlc ticket-prune --write` to tombstone the rails-less ones
+  (`completed: true` in place on a legacy `.adlc/tickets.json` store; moved to
+  `.adlc/ticket-archive/` on a sharded store — never deletes outright). Treat `--write` as a
   human-confirmed action — `.adlc/tickets.json` is the shared rail trust root,
   and the commit-time CI gate (`scripts/rails-guard-ci.mjs`) hard-denies
   removing a base-ref ticket in a PR, so a prune of already-merged tickets

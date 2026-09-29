@@ -35,8 +35,9 @@ Run `adlc ticket-prune --json`.
   shipped, meaning an explicit done-shaped status. The older scope-existence inference — every declared `scope` glob resolving to a file already tracked on `HEAD` — is OFF unless you add `--infer-scope` (#779): it is true the moment a ticket is authored on a repo older than its backlog, so it is a review aid, never a basis for a bulk write. Exit `0` either way; exit `1`
   only on an operational error.
 - List the stale tickets and recommend confirming them by hand, then re-running
-  with `adlc ticket-prune --write` to archive them into the gitignored
-  `.adlc/tickets.archive.json` (never deletes outright). Treat `--write` as a
+  with `adlc ticket-prune --write` to tombstone the rails-less ones
+  (`completed: true` in place on a legacy `.adlc/tickets.json` store; moved to
+  `.adlc/ticket-archive/` on a sharded store — never deletes outright). Treat `--write` as a
   human-confirmed action — `.adlc/tickets.json` is the shared rail trust root,
   and the commit-time CI gate hard-denies removing a base-ref ticket in a PR, so
   a prune of already-merged tickets can only land through the protected-base
