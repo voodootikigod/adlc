@@ -17,6 +17,12 @@ export const REAL_GIT = '/usr/bin/git';
 export const REAL_NODE = realpathSync(process.execPath);
 export const REAL_NPM = join(dirname(REAL_NODE), 'npm');
 export const REAL_BWRAP = '/usr/bin/bwrap';
+/** Command-scope git config (GIT_CONFIG_COUNT/KEY_n/VALUE_n) that keeps auto-gc from racing fixture teardown. */
+export const NO_AUTO_GC_ENV = Object.freeze({
+  GIT_CONFIG_COUNT: '2',
+  GIT_CONFIG_KEY_0: 'gc.auto', GIT_CONFIG_VALUE_0: '0',
+  GIT_CONFIG_KEY_1: 'gc.autoDetach', GIT_CONFIG_VALUE_1: 'false',
+});
 export const TEST_KEY = 'a1b2c3d4e5f60718293a4b5c6d7e8f9001122334455667788990aabbccddeeff';
 
 /** Fake handlers by executable path; everything else spawns for real. */
@@ -42,7 +48,10 @@ export function makeCtx({ repoRoot, handlers = {}, pinned = {}, key = TEST_KEY, 
     adlc: '/fake/adlc', bwrap: REAL_BWRAP, gh: '/fake/gh', claude: '/fake/claude', ...pinned,
   };
   const env = { path: process.env.PATH, home: home ?? repoRoot, base: { PATH: process.env.PATH, HOME: home ?? repoRoot, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', TZ: 'UTC' } };
-  const gitEnv = gitBaseEnv({ path: env.path, home: env.home });
+  // Auto-gc is disabled through command-scope config in the environment, so it
+  // reaches every repository a git child touches, including those production
+  // clones under the fixture root later, while GIT_CONFIG_GLOBAL stays /dev/null.
+  const gitEnv = { ...gitBaseEnv({ path: env.path, home: env.home }), ...NO_AUTO_GC_ENV };
   const local = (cwd, args, { deadlineMs = DEADLINES.git, stdinBytes } = {}) =>
     spawn({ argv: [pinnedAll.git, ...args], cwd, env: gitEnv, stdinBytes, deadlineMs, label: `git:${args.find((a) => !a.startsWith('-'))}` });
   const localOut = async (cwd, args) => {
