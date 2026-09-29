@@ -7,6 +7,7 @@
  * @param {{
  *   recall:number, caught:number, total:number,
  *   precision:number, truePositives:number, falsePositives:number,
+ *   unsubstantiated?:number,
  *   perCategory:{[cat:string]:{caught:number,total:number,recall:number}},
  *   results:Array<{file,line,category,operator,caught,original,mutated}>,
  *   reviewExitCode:number|null, commit:string, minRecall:number,
@@ -28,6 +29,8 @@ export function buildJsonReport(scorecard) {
     precision: scorecard.precision,
     truePositives: scorecard.truePositives,
     falsePositives: scorecard.falsePositives,
+    // The part of falsePositives that located a plant but identified no defect.
+    unsubstantiated: scorecard.unsubstantiated ?? 0,
     minRecall: scorecard.minRecall,
     minPrecision: scorecard.minPrecision ?? null,
     gatePass: recallPass && precisionPass,

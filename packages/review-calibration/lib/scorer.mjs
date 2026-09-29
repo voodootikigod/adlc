@@ -19,6 +19,18 @@ export function locatingFindings(plant, findings, tolerance = DEFAULT_TOLERANCE)
 }
 
 /**
+ * Does one locating finding identify the plant's defect? A runnable repro is
+ * decisive when a `verifyRepro` is supplied (a repro that does not
+ * discriminate is not a catch); otherwise the judge decides.
+ *
+ * @returns {Promise<boolean>}
+ */
+async function identifies(plant, finding, { judge, verifyRepro }) {
+  if (finding.repro && verifyRepro) return Boolean(await verifyRepro(plant, finding));
+  return Boolean(await judge(plant, finding));
+}
+
+/**
  * Decide whether any locating finding identifies the plant's defect.
  * Per finding: a runnable repro that discriminates (model-free) wins outright;
  * otherwise the judge decides. Returns the matching finding or null.
@@ -30,15 +42,27 @@ export function locatingFindings(plant, findings, tolerance = DEFAULT_TOLERANCE)
  * @param {(plant, finding)=>(boolean|Promise<boolean>)} [deps.verifyRepro]  behavioral check for finding.repro
  * @returns {Promise<object|null>}
  */
-export async function findIdentifying(plant, located, { judge, verifyRepro }) {
+export async function findIdentifying(plant, located, deps) {
   for (const f of located) {
-    if (f.repro && verifyRepro) {
-      if (await verifyRepro(plant, f)) return f;
-      continue; // a repro that doesn't discriminate is not a catch
-    }
-    if (await judge(plant, f)) return f;
+    if (await identifies(plant, f, deps)) return f;
   }
   return null;
+}
+
+/**
+ * Every locating finding that identifies the plant's defect. Each finding gets
+ * its own verdict, because precision needs one: a finding that locates a plant
+ * but identifies nothing is an unsubstantiated claim, wherever it sits in the
+ * reviewer's output.
+ *
+ * @returns {Promise<Array<object>>}
+ */
+export async function identifyingFindings(plant, located, deps) {
+  const hits = [];
+  for (const f of located) {
+    if (await identifies(plant, f, deps)) hits.push(f);
+  }
+  return hits;
 }
 
 /**
@@ -52,7 +76,7 @@ export async function findIdentifying(plant, located, { judge, verifyRepro }) {
  * @param {number} [deps.tolerance]
  * @returns {Promise<{
  *   recall, caught, total,
- *   precision, truePositives, falsePositives,
+ *   precision, truePositives, falsePositives, unsubstantiated,
  *   perCategory, results
  * }>}
  */
@@ -64,12 +88,16 @@ export async function scorePlants(plants, findings, deps) {
   const perCategory = {};
   const results = [];
   let caught = 0;
+  const locatedSome = new Set();
+  const identifiedSome = new Set();
 
   for (const plant of plants) {
     const cat = plant.category ?? plant.operator ?? 'unknown';
     const located = locatingFindings(plant, findings, tolerance);
-    const hit = located.length ? await findIdentifying(plant, located, deps) : null;
-    const wasCaught = hit !== null;
+    const hits = located.length ? await identifyingFindings(plant, located, deps) : [];
+    for (const f of located) locatedSome.add(f);
+    for (const f of hits) identifiedSome.add(f);
+    const wasCaught = hits.length > 0;
     if (wasCaught) caught++;
 
     results.push({
@@ -94,14 +122,20 @@ export async function scorePlants(plants, findings, deps) {
   const total = plants.length;
   const recall = total > 0 ? caught / total : 0;
 
-  // Precision: a finding that locates NO plant (within tolerance) is spurious —
-  // in a clean-base + only-our-plants tree, nothing else is broken.
-  const falsePositives = countFalsePositives(findings, plants, tolerance);
+  // Precision. A false positive is a finding that locates NO plant (in a
+  // clean-base + only-our-plants tree nothing else is broken), or one that
+  // locates a plant but identifies no plant's defect — an unsubstantiated
+  // claim, such as an echo of the changed line.
+  const unsubstantiated = [...locatedSome].filter((f) => !identifiedSome.has(f)).length;
+  const falsePositives = countFalsePositives(findings, plants, tolerance) + unsubstantiated;
   const truePositives = caught;
   const precisionDenom = truePositives + falsePositives;
   const precision = precisionDenom > 0 ? truePositives / precisionDenom : null;
 
-  return { recall, caught, total, precision, truePositives, falsePositives, perCategory, results };
+  return {
+    recall, caught, total, precision, truePositives, falsePositives, unsubstantiated,
+    perCategory, results,
+  };
 }
 
 /**

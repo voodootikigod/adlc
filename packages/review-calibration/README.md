@@ -48,7 +48,8 @@ This is mutation testing aimed at the *reviewer* instead of the code (ADLC C8).
    **AND** identifies the defect — verified behaviorally (a reviewer-supplied
    `repro` that discriminates) or judged semantically by a cheap model. There is
    **no string-match shortcut**: a reviewer that echoes changed lines scores ~0.
-   Recall = caught / valid plants. Precision = true / (true + spurious findings).
+   Recall = caught / valid plants. Precision = true / (true + spurious findings),
+   where a finding that locates a plant without identifying it is spurious.
 8. **Gate**: Exit 2 if recall < `--min-recall` (or precision < `--min-precision`
    when set); exit 0 otherwise. Exit 1 on operational error or a failed control.
 
@@ -171,10 +172,14 @@ review-calibration \
 
 `precision` is real: `truePositives / (truePositives + falsePositives)`, where a
 false positive is a finding that locates no plant (in a clean base + only-our-plants
-tree, nothing else is broken). When `truePositives + falsePositives === 0` (e.g.
-a reviewer produces zero findings, or none locating plants), `precision` is `null`
-(not 1.0) because precision cannot be evaluated; configuring `--min-precision`
-will fail the gate if precision is `null`.
+tree, nothing else is broken) **or** one that locates a plant but identifies no
+plant's defect — an unsubstantiated claim such as an echo of the changed line.
+Every locating finding gets its own verdict, so padding a real catch with echoes
+lowers precision. `unsubstantiated` reports how many of the false positives were
+of the second kind. When `truePositives + falsePositives === 0` (the reviewer
+produced no findings), `precision` is `null` (not 1.0) because precision cannot
+be evaluated; configuring `--min-precision` will fail the gate if precision is
+`null`.
 
 ## Scoring logic
 
