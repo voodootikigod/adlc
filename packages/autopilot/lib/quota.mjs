@@ -12,6 +12,7 @@
 // parser and the family normalizer take data and return data; the network and
 // the subprocess are injected.
 
+import { isPlainObject } from '@adlc/core';
 import { active, registerSeams } from './mutations.mjs';
 
 registerSeams(['quota.lenientText', 'quota.unknownFamilyCollides']);
@@ -37,7 +38,6 @@ export function familyOf(x) {
   return 'unknown';
 }
 
-const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isPct = (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100;
 const isIso = (v) => typeof v === 'string' && !Number.isNaN(Date.parse(v));
 const unknown = (detail) => ({ ok: false, reason: QUOTA_UNKNOWN, detail });
