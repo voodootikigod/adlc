@@ -12,7 +12,7 @@
 // Comment bodies pass through the fail-closed redactor with the BODY sentinel
 // on failure; the label is applied regardless, so a quarantine is never silent.
 
-import { ensureComment, ensureLabel, GhError, hasComment } from './github.mjs';
+import { ensureComment, ensureLabel, GhError, hasComment, commentBody } from './github.mjs';
 import { WITHHELD_BODY } from './redact.mjs';
 import { validateIssueNumber } from './input.mjs';
 import { active, registerSeams } from './mutations.mjs';
@@ -33,15 +33,15 @@ export class EffectsError extends Error {
 const failed = (args, res) => new GhError('gh-failed', `${args.join(' ')} exited ${res.status}: ${String(res.stderr ?? '').trim().slice(0, 300)}`, res);
 
 /** Post the comment unless one carrying `sentinel` already exists on the target. */
-async function commentOn(gh, target, sentinel, body, { skipRead = false } = {}) {
+async function commentOn(gh, target, sentinel, body, { skipRead = false, author = null } = {}) {
   const n = validateIssueNumber(target.number, target.kind);
-  if (target.kind === 'issue' && !skipRead) return ensureComment(gh, n, sentinel, body);
+  if (target.kind === 'issue' && !skipRead) return ensureComment(gh, n, sentinel, body, { author });
   if (!skipRead) {
     // PR conversation comments ARE issue comments in the API: the same bounded, every-page search.
-    if (await hasComment(gh, n, sentinel)) return { posted: false };
+    if (await hasComment(gh, n, sentinel, { author })) return { posted: false };
   }
   const args = [target.kind, 'comment', String(n), '--body-file', '-'];
-  const res = await gh.run(args, { stdinBytes: `${sentinel}\n${body}`, retries: active('github.retryComments') });   // never a blind re-POST
+  const res = await gh.run(args, { stdinBytes: commentBody(sentinel, body), retries: active('github.retryComments') });   // never a blind re-POST
   if (res.status !== 0) throw failed(args, res);
   return { posted: true };
 }
@@ -96,7 +96,7 @@ export async function applyTerminalEffects({ ctx, record, outcome, target, senti
   const fail = (which, e) => { out.error = { ...(out.error ?? {}), [which]: { code: e?.code ?? 'gh-failed', message: String(e?.message ?? e) } }; ctx.log?.(`effects ${outcome} #${t.number}: ${which} ${e?.code ?? 'gh-failed'}`); };
   // Each effect is reconciled and persisted on its own: a failing comment never blocks the label.
   if (!intent.commentPosted) {
-    try { out.comment = await commentOn(ctx.gh, intent.target, intent.commentSentinel, intent.body, { skipRead }); persist({ commentPosted: true }); out.commentPosted = true; }
+    try { out.comment = await commentOn(ctx.gh, intent.target, intent.commentSentinel, intent.body, { skipRead, author: ctx.remote?.principal ?? null }); persist({ commentPosted: true }); out.commentPosted = true; }
     catch (e) { fail('comment', e); }
   }
   if (!intent.labelApplied) {

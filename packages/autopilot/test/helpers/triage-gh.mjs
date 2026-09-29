@@ -7,7 +7,8 @@ import { json } from './fake-children.mjs';
 
 const isMutation = (args) => args[1] === 'comment' || args[1] === 'edit';
 
-export function fakeGithub({ issues = [], prs = [] } = {}) {
+/** `login` is the account every comment posted through this fake is authored by (GitHub's `user.login`). */
+export function fakeGithub({ issues = [], prs = [], login = 'op' } = {}) {
   const state = { issues: new Map(), prs: new Map() };
   const add = (map, kind) => (doc) => map.set(doc.number, { kind, labels: [], comments: [], title: '', body: '', url: `https://github.com/o/r/${kind === 'issue' ? 'issues' : 'pull'}/${doc.number}`, ...doc });
   issues.forEach(add(state.issues, 'issue'));
@@ -31,7 +32,7 @@ export function fakeGithub({ issues = [], prs = [] } = {}) {
     const t = target(sub, args[2]);
     if (!t) return { status: 1, stderr: `HTTP 404: ${sub} ${args[2]} not found` };
     if (verb === 'view') return json(view(t, (args[args.indexOf('--json') + 1] ?? '').split(',')))();
-    if (verb === 'comment') { mutations.push([...args]); t.comments.push({ body: stdin, id: t.comments.length + 1 }); return json({})(); }
+    if (verb === 'comment') { mutations.push([...args]); t.comments.push({ body: stdin, id: t.comments.length + 1, user: { login } }); return json({})(); }
     if (verb === 'edit') {
       mutations.push([...args]);
       const add = args.indexOf('--add-label'); const rm = args.indexOf('--remove-label');

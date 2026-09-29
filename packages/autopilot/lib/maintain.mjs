@@ -199,7 +199,7 @@ async function lifecycleClosed({ ctx, record, deps }) {
     effects.result = await deps.applyTerminalEffects({ ctx, record: ctx.records.load(n), outcome: 'pr-closed', target: { kind: 'issue', number: n }, sentinel, body, label: SKIP_LABEL });
   } else {
     const red = ctx.redactor.redact(body, { withheld: WITHHELD_BODY });
-    effects.comment = await ensureComment(ctx.gh, n, sentinel, red.text);
+    effects.comment = await ensureComment(ctx.gh, n, sentinel, red.text, { author: ctx.remote?.principal ?? null });
     effects.label = await ensureLabel(ctx.gh, n, SKIP_LABEL, { present: true });
   }
   return { issue: n, action: 'closed', label: SKIP_LABEL, remoteDeleteCommand: command, effects, ...out };

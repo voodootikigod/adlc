@@ -159,6 +159,6 @@ export async function ac4_prCommentSearchCoversEveryPage() {
   assert.equal(await hasComment(ghc, 9, '<!-- s -->', { perPage: 3 }), true, 'a sentinel on page 2 is found');
   assert.equal(await hasComment(ghc, 9, '<!-- absent -->', { perPage: 3 }), false);
   const src = await import('node:fs').then((m) => m.readFileSync(new URL('../lib/effects.mjs', import.meta.url), 'utf8'));
-  assert.match(src, /hasComment\(gh, n, sentinel\)/, 'the PR-comment effect goes through the shared paged search');
+  assert.match(src, /hasComment\(gh, n, sentinel\b/, 'the PR-comment effect goes through the shared paged search');
 }
 test('AC4: the PR-conversation sentinel search covers every page (bounded) — a sentinel on page 2 is found, and the terminal effects use that shared search', ac4_prCommentSearchCoversEveryPage);
