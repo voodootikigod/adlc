@@ -103,3 +103,10 @@ test('reviewRunError classifies each way a run can end', () => {
 test('an empty review command is not reported as timed out', () => {
   assert.deepEqual(runReviewCmd('   ', 'x.mjs'), { stdout: '', stderr: 'empty review command', exitCode: 1, timedOut: false, signal: null });
 });
+
+test('--help documents --timeout-ms and its default', () => {
+  const res = spawnSync(process.execPath, [BIN, '--help'], { encoding: 'utf8' });
+  assert.equal(res.status, 0);
+  assert.match(res.stdout, /^ {2}--timeout-ms <n> {4}Kill a review-cmd run after <n> ms/m);
+  assert.ok(res.stdout.includes(`(default: ${DEFAULT_REVIEW_TIMEOUT_MS})`), res.stdout);
+});
