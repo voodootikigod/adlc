@@ -8,6 +8,7 @@ import { cpSync, existsSync, mkdirSync, realpathSync, rmSync, symlinkSync, write
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmp } from '@adlc/core/test-kit';
+import { SCRATCH_SCOPE } from './scratch-scope.mjs';
 
 export const REPO = realpathSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..'));
 
@@ -22,7 +23,7 @@ export function git(cwd, args, { input } = {}) {
   return execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], { cwd, env: GIT_ENV, encoding: 'utf8', input, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
 }
 
-export const scratch = (prefix, t = null) => realpathSync(tmp(t, prefix));
+export const scratch = (prefix, t = SCRATCH_SCOPE) => realpathSync(tmp(t, prefix));
 
 /** Write files ({ path: text }); a null value deletes. */
 export function writeFiles(root, files) {

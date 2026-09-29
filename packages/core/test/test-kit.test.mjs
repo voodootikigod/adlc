@@ -1,28 +1,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp, gitRepo, runBin, DEFAULT_SCRUBBED_ENV, GIT_SCRUBBED_ENV } from '../lib/test-kit.mjs';
 
-test('tmp: creates temp directory with default prefix and returns real path', () => {
-  const dir = tmp(null);
-  try {
-    assert.ok(existsSync(dir), 'temp directory must exist on disk');
-    assert.match(dir, /adlc-test-/, 'default prefix should be adlc-test-');
-  } finally {
-    // manual cleanup since no t was passed
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('tmp: creates temp directory with default prefix and returns real path', (t) => {
+  const dir = tmp(t);
+  assert.ok(existsSync(dir), 'temp directory must exist on disk');
+  assert.match(dir, /adlc-test-/, 'default prefix should be adlc-test-');
 });
 
-test('tmp: uses custom prefix when provided', () => {
-  const dir = tmp(null, 'custom-prefix-');
-  try {
-    assert.ok(existsSync(dir));
-    assert.match(dir, /custom-prefix-/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('tmp: uses custom prefix when provided', (t) => {
+  const dir = tmp(t, 'custom-prefix-');
+  assert.ok(existsSync(dir));
+  assert.match(dir, /custom-prefix-/);
 });
 
 test('tmp: registers cleanup via t.after when available', (t) => {
@@ -212,36 +203,9 @@ test('DEFAULT_SCRUBBED_ENV contains all required sensitive variables and is froz
   assert.ok(DEFAULT_SCRUBBED_ENV.includes('BASE_REF'));
   assert.ok(DEFAULT_SCRUBBED_ENV.includes('ADLC_GATE_MOCK_RESPONSE'));
 });
-
-test('gitRepo: accepts options as first argument without test context', () => {
-  const repo = gitRepo({ prefix: 'adlc-no-ctx-' });
-  try {
-    assert.ok(existsSync(repo.dir));
-    assert.match(repo.dir, /adlc-no-ctx-/);
-  } finally {
-    rmSync(repo.dir, { recursive: true, force: true });
-  }
-});
-
-test('gitRepo: accepts string prefix as first or second argument', (t) => {
-  const repo1 = gitRepo('adlc-string-pref-');
-  try {
-    assert.match(repo1.dir, /adlc-string-pref-/);
-  } finally {
-    rmSync(repo1.dir, { recursive: true, force: true });
-  }
-
-  const repo2 = gitRepo(t, 'adlc-t-string-pref-');
-  assert.match(repo2.dir, /adlc-t-string-pref-/);
-});
-
-test('tmp: accepts string prefix as first argument without test context', () => {
-  const dir = tmp('adlc-tmp-pref-');
-  try {
-    assert.match(dir, /adlc-tmp-pref-/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+test('gitRepo: accepts a string prefix as the second argument', (t) => {
+  const repo = gitRepo(t, 'adlc-t-string-pref-');
+  assert.match(repo.dir, /adlc-t-string-pref-/);
 });
 
 test('gitRepo: captures stderr on command failure', (t) => {

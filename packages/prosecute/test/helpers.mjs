@@ -8,7 +8,7 @@ import { after } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { sha256 } from '@adlc/core';
 
-import { tmp, gitRepo as coreGitRepo } from '@adlc/core/test-kit';
+import { createScope, tmp, gitRepo as coreGitRepo } from '@adlc/core/test-kit';
 
 export const FIXTURE_REVISION = 'fixture-revision';
 export const repoRoot = resolve(new URL('../../../', import.meta.url).pathname);
@@ -23,6 +23,11 @@ after(() => {
   fixtures.clear();
 });
 
+// Factories called without a per-test context register on this file-level
+// scope instead, drained by the same end-of-file hook.
+const FILE_SCOPE = createScope();
+after(() => FILE_SCOPE.dispose());
+
 function fixture(prefix) {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   fixtures.add(dir);
@@ -30,8 +35,7 @@ function fixture(prefix) {
 }
 
 export function tmpAdlc(t) {
-  const dir = tmp(t, 'adlc-prosecute-');
-  if (!t?.after) fixtures.add(dir);
+  const dir = tmp(t ?? FILE_SCOPE, 'adlc-prosecute-');
   writeFileSync(join(dir, 'tickets.json'), JSON.stringify({
     tickets: [
       { id: 'T1', title: 'Fixture ticket', scope: ['src/**'], rails: ['test/**'], edges: [] },
@@ -42,12 +46,7 @@ export function tmpAdlc(t) {
 }
 
 export function gitRepo(t) {
-  if (t) {
-    return coreGitRepo(t, { prefix: 'adlc-prosecute-git-' });
-  }
-  const repo = coreGitRepo(null, { prefix: 'adlc-prosecute-git-' });
-  fixtures.add(repo.dir);
-  return repo;
+  return coreGitRepo(t ?? FILE_SCOPE, { prefix: 'adlc-prosecute-git-' });
 }
 
 export function transcript(dir, { ticket = 'T1', revision = FIXTURE_REVISION } = {}) {

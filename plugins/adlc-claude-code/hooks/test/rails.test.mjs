@@ -48,8 +48,8 @@ function runRails(ticketsJson, relPath, options = {}, t = null) {
     ctx = options;
     opts = {};
   }
-  const { env = {}, keepDir = false, rawFilePath = null } = opts;
-  const dir = (ctx && !keepDir) ? tmp(ctx, 'adlc-rails-') : tmp(null, 'adlc-rails-');
+  const { env = {}, rawFilePath = null } = opts;
+  const dir = tmp(ctx, 'adlc-rails-');
   let manifest = '';
   mkdirSync(join(dir, '.adlc'));
   if (ticketsJson !== null) {

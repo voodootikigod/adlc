@@ -15,10 +15,6 @@ const io = (over = {}) => ({ git: () => cleanGit(), adlc: () => ({ status: 0, st
 const bwrapHost = { platform: 'linux', hasCmd: (c) => c === 'bwrap' };
 
 const base = (t, over = {}) => {
-  if (t && typeof t.after !== 'function') {
-    over = t;
-    t = null;
-  }
   return {
     repo: '/repo', config: { operatorOverride: false, gate: { test: 'npm test' } }, statusDir: over.statusDir ?? tmp(t), io: io(),
     self, probes: deadProbes, railHookInstalled: () => true, ...bwrapHost, ...over,

@@ -8,6 +8,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn as cpSpawn } from 'node:child_process';
 import { tmp } from '@adlc/core/test-kit';
+import { SCRATCH_SCOPE } from './scratch-scope.mjs';
 import { createSpawner, DEADLINES } from '../../lib/spawn.mjs';
 import { autopilotPaths } from '../../lib/paths.mjs';
 import { createRedactor } from '../../lib/redact.mjs';
@@ -29,7 +30,7 @@ export const OID = Object.freeze({ a: 'a'.repeat(40), b: 'b'.repeat(40), c: 'c'.
 export const TOKEN = 'f'.repeat(64);
 export const TICKET = 'T-01M0Z3FN7SAS4HAH7CS63YQ0DH';
 
-export const scratch = (prefix, t = null) => tmp(t, `${prefix}-`);
+export const scratch = (prefix, t = SCRATCH_SCOPE) => tmp(t, `${prefix}-`);
 export const cleanup = (dir) => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } };
 
 /** Fake children for every handled executable; the listed `real` executables run for real. */
