@@ -169,13 +169,13 @@ async function completeFn(prompt, providerName) {
 }
 
 // Termination signals: stop the run, restore the original files, exit 1.
-// While the engine is running, the signal aborts it: the engine kills the
-// in-flight test or rails command's process group, restores its snapshot and
-// rejects with RunAbortedError, and the catch below restores outerSnapshot and
-// exits. Outside the engine there is no in-flight command, so the handler
-// restores and exits directly. outerSnapshot is taken before the engine starts.
+// The signal aborts the engine, which kills the in-flight test or rails
+// command's process group, restores its snapshot and rejects with
+// RunAbortedError; the catch below then restores outerSnapshot and exits.
+// Everything before and after the engine is synchronous, so a signal can only
+// be dispatched while the engine is awaiting. outerSnapshot is taken before
+// the engine starts.
 let outerSnapshot = null;
-let engineRunning = false;
 const abortController = new AbortController();
 
 function restoreAndExit() {
@@ -190,9 +190,7 @@ function restoreAndExit() {
 }
 
 function handleSignal() {
-  if (abortController.signal.aborted) return;
   abortController.abort();
-  if (!engineRunning) restoreAndExit();
 }
 
 process.on('SIGINT', handleSignal);
@@ -206,7 +204,6 @@ try {
 }
 
 let result;
-engineRunning = true;
 try {
   result = await runConsensusFix({
     testCmd,
@@ -226,7 +223,6 @@ try {
   if (err.isOpError) opError(err.message);
   opError(`unexpected error: ${err.message}`);
 }
-engineRunning = false;
 
 const {
   survivors,

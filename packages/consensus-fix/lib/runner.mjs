@@ -13,7 +13,7 @@ import { extractJson } from '@adlc/core';
 /** How long an aborted command's process group gets after SIGTERM before SIGKILL. */
 export const ABORT_GRACE_MS = 2000;
 
-/** Exit code reported for a command that was aborted, or never started because of an abort. */
+/** Exit code reported for a command that was aborted, or never started because of an abort (128 + SIGINT). */
 const ABORTED_EXIT_CODE = 130;
 
 function killGroup(pid, signal) {
@@ -26,7 +26,8 @@ function killGroup(pid, signal) {
 
 /**
  * Run the given shell command asynchronously, resolving { exitCode, output }.
- * Never rejects — captures stderr+stdout.
+ * Never rejects — captures stderr+stdout. An aborted command resolves with
+ * exitCode 130.
  *
  * The command runs in its own process group so that aborting `signal` stops
  * the whole tree it started (SIGTERM, then SIGKILL after ABORT_GRACE_MS); the
