@@ -4,6 +4,16 @@
 import { clusterName, clusterId, clusterMembers, extractLiteralPattern, escapeRegex } from './route.mjs';
 
 /**
+ * Collapse every line terminator and control character to a space. Finding
+ * text is reviewer- or model-authored; a line break inside it would end the
+ * generated script's comment (making the rest executable) or start a new
+ * SKILL.md frontmatter key.
+ */
+export function oneLine(text) {
+  return String(text).replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, ' ');
+}
+
+/**
  * Build the grep-gate JSON descriptor for a LINT cluster.
  * Returns { path, content } where path is relative to outDir.
  */
@@ -37,7 +47,7 @@ export function buildLintDescriptor(name, findings) {
 export function buildCheckScript(name, findings) {
   const literal = extractLiteralPattern(findings);
   const pattern = literal ? escapeRegex(literal) : clusterName(findings).replace(/-/g, '.*');
-  const desc = (findings[0]?.desc ?? name).replace(/`/g, "'");
+  const desc = oneLine(findings[0]?.desc ?? name).replace(/`/g, "'");
 
   // The gate must never trip on itself. We exclude VCS/dependency dirs and the
   // generated lessons output directory, and we filter out this script's own file
@@ -103,9 +113,9 @@ process.exit(0);
 export function buildSkillStub(name, findings, llmRefinement) {
   const count = findings.length;
   const category = findings[0]?.category ?? 'pattern';
-  const desc = llmRefinement?.description ?? findings[0]?.desc ?? name;
+  const desc = oneLine(llmRefinement?.description ?? findings[0]?.desc ?? name);
   const rule = llmRefinement?.rule ?? `Avoid: ${findings[0]?.desc ?? name}`;
-  const displayName = llmRefinement?.name ?? name;
+  const displayName = oneLine(llmRefinement?.name ?? name);
 
   // Collect evidence quotes
   const evidenceQuotes = findings
