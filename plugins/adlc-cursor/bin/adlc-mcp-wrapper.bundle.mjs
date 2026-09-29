@@ -2330,6 +2330,9 @@ function resolveHostEnvRoot(env = process.env) {
 }
 
 // plugins/adlc-cursor/lib/mcp-json-rpc-bridge.mjs
+function isJsonObject(message) {
+  return message !== null && typeof message === "object" && !Array.isArray(message);
+}
 function isJsonRpcResponse(message) {
   return message && typeof message === "object" && !Object.hasOwn(message, "method") && (Object.hasOwn(message, "result") || Object.hasOwn(message, "error"));
 }
@@ -3050,6 +3053,7 @@ async function runRootsProxy({
       } catch {
         return;
       }
+      if (!isJsonObject(msg)) return;
       const isResponse = isJsonRpcResponse(msg);
       if (activeRootsRequest && msg.id === activeRootsRequest.id && activeRootsRequest.generation === generation && isResponse) {
         retireActiveRootsRequest();
