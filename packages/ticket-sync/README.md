@@ -24,6 +24,9 @@ Dry-run by default — pass `--write` to apply. `--json` on all commands.
 `--limit <n>` caps how many issues `pull`/`push`/`sync` list from the tracker
 (default 500). A listing that reaches the cap is refused as possibly truncated
 rather than synced, so raise it (or narrow `select` in config) when that happens.
+With `select.query` set, the listing goes through GitHub's search API, which
+returns at most 1000 results, so 1000 rows is refused as truncated at any
+`--limit`; narrow the query instead.
 Exit codes: `0` ok · `1` operational · `2` blocked.
 
 ```bash
