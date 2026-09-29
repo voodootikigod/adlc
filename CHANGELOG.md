@@ -11,6 +11,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Breaking
+- **tickets:** `@adlc/tickets` no longer exports the `./lib/generation-descriptor.mjs` subpath (it was published in 1.11.1). An `import '@adlc/tickets/lib/generation-descriptor.mjs'` now fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`; the remaining subpaths are `./lib/key-contract.mjs`, `./lib/durability.mjs` and `./lib/manifest-primitives.mjs`.
+- **parallax:** `parallax --prompt-only --record-verdict <file|->` now requires `--ticket <id>` and exits 1 without it, so a recorded verdict is always bound to the ticket it is evidence for.
+
 ## [1.11.1] - 2026-09-05
 
 ### Added
