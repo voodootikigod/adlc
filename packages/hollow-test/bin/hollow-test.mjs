@@ -10,10 +10,12 @@ import { resolve, relative, isAbsolute, sep } from 'node:path';
 import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
 import { gitDiff, isDirty, isGitRepo, resolveBase, mutate, git, repoRoot } from '@adlc/core';
 import {
-  filterTargetFiles, buildFileTargets, readFileSafe, changedLinesAreCommentOnly,
+  filterTargetFiles, buildFileTargets, readFileSafe, fileChangeIsCommentOnly,
   readRailsFromTicketFile, expandRailsToFiles, isMutableSource, isSupportedSourceExtension,
 } from '../lib/targets.mjs';
 import { runMutant, runTest, formatDiagnosticOutput } from '../lib/runner.mjs';
+import { deletedLinesFromDiff, readOldSource } from '../lib/diff-deletions.mjs';
+import { writeThenExit } from '../lib/exit.mjs';
 import {
   ownerStateFor, isWellFormed, decideRecovery, writeRecord, readRecord, clearRecord,
   resolveTarget, recordPathFor, writeFileAtomic, sweepStaleTemps,
@@ -278,12 +280,6 @@ if (base === undefined) {
 
 const baseline = runTest(testCmd, timeoutMs, cwd);
 if (baseline.status !== 0) {
-  if (baseline.stdout) {
-    process.stderr.write(formatDiagnosticOutput(baseline.stdout));
-  }
-  if (baseline.stderr) {
-    process.stderr.write(formatDiagnosticOutput(baseline.stderr));
-  }
   // Report `reason` when the command could not be run to completion. Without it
   // a launch/buffer failure prints as "exit null", which reads as a failing
   // suite and sends the reader looking for a broken test that does not exist.
@@ -292,9 +288,19 @@ if (baseline.status !== 0) {
     : baseline.spawnFailed
       ? `could not run the test command: ${baseline.reason}`
       : `exit ${baseline.status}`;
-  opError(
-    `baseline suite is not green (${reason}) — cannot measure mutation kill; ` +
-    'fix the suite / --test-cmd first'
+  // One write, awaited before exiting: up to 128 KiB of diagnostics outruns a
+  // piped stderr, and process.exit() drops whatever is still queued — the
+  // reason line, written last, first of all.
+  const diagnostics = [baseline.stdout, baseline.stderr]
+    .filter(Boolean)
+    .map((output) => formatDiagnosticOutput(output))
+    .join('');
+  await writeThenExit(
+    process.stderr,
+    diagnostics +
+      `error: baseline suite is not green (${reason}) — cannot measure mutation kill; ` +
+      'fix the suite / --test-cmd first\n',
+    1
   );
 }
 
@@ -318,19 +324,34 @@ const diffEligibleFilesAll = filterTargetFiles(changedLines, { testGlobs, source
 // Those files join the same "not covered" bucket as a .md file rather than
 // failing the gate.
 //
-// The predicate fails closed on every doubt (see changedLinesAreCommentOnly),
-// and a file that cannot be read stays eligible so the existing unreadable-file
-// path reports it rather than this one swallowing it.
+// Both sides of the diff are judged: a hunk that deletes code and adds only a
+// comment changes behaviour. The predicate fails closed on every doubt (see
+// fileChangeIsCommentOnly), a file missing from the old-side parse stays
+// eligible, and a file that cannot be read stays eligible so the existing
+// unreadable-file path reports it rather than this one swallowing it.
+const deletedLines = deletedLinesFromDiff(diff);
+const readGit = (args) => git(args, { cwd, stdio: ['ignore', 'pipe', 'ignore'] });
 const commentOnlyFiles = diffEligibleFilesAll.filter((f) => {
-  const content = readFileSafe(resolve(root, f));
-  if (content === null) return false;
-  return changedLinesAreCommentOnly(content, changedLines[f] ?? []);
+  const oldSide = deletedLines[f];
+  if (oldSide === undefined) return false;
+  const newSource = readFileSafe(resolve(root, f));
+  if (newSource === null) return false;
+  return fileChangeIsCommentOnly({
+    oldSource: readOldSource(readGit, base, oldSide.oldPath),
+    newSource,
+    added: changedLines[f] ?? [],
+    deleted: oldSide.lines,
+  });
 });
 const commentOnly = new Set(commentOnlyFiles);
 const diffEligibleFiles = diffEligibleFilesAll.filter((f) => !commentOnly.has(f));
 
 // Never a SILENT skip. A coverage gate that goes green by not looking is worse
-// than no gate, so say exactly what was not covered and why.
+// than no gate, so say exactly what was not covered and why — in the JSON
+// report as well as the text one.
+function skippedReport() {
+  return commentOnlyFiles.length > 0 ? { skipped: { commentOnly: [...commentOnlyFiles] } } : {};
+}
 if (commentOnlyFiles.length > 0 && !useJson) {
   console.log(
     `hollow-test: ${commentOnlyFiles.length} changed file(s) touched only comment or blank ` +
@@ -492,7 +513,11 @@ for (const f of explicitFiles) {
 // clean exit, rather than the "nothing to mutate" refusal below, which exists
 // for a diff whose source files were never eligible in the first place.
 if (diffEligibleFiles.length === 0 && explicitFiles.length === 0 && commentOnlyFiles.length > 0) {
-  pass(useJson ? undefined : 'comment-only diff — no changed behaviour to mutate');
+  if (useJson) {
+    printJson({ ...buildJsonReport([]), ...skippedReport() });
+    process.exit(0);
+  }
+  pass('comment-only diff — no changed behaviour to mutate');
 }
 
 if (diffEligibleFiles.length === 0 && explicitFiles.length === 0) {
@@ -786,6 +811,7 @@ if (useJson) {
   // --json can tell that this run began by cleaning up after an interrupted one.
   printJson({
     ...buildJsonReport(results),
+    ...skippedReport(),
     ...(recoveredInflight !== null ? { recovered: recoveredInflight } : {}),
   });
 } else {

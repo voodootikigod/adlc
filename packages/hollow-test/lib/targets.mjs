@@ -139,9 +139,79 @@ const REGEX_MAY_FOLLOW = new Set([
 ]);
 
 /**
+ * Keywords after which a `/` begins a regex literal: each one is followed by an
+ * expression, never an operand to divide. `return /`/.test(x)` is a real shape
+ * in this repository, and reading its `/` as division lets the backtick inside
+ * open a phantom template. Expression-ENDING words (`this`, `true`, `null`) are
+ * excluded because a `/` after them IS division.
+ */
+const REGEX_MAY_FOLLOW_KEYWORD = new Set([
+  'return', 'typeof', 'throw', 'case', 'instanceof', 'delete', 'void', 'yield',
+  'else', 'do', 'in', 'of', 'new', 'await', 'default', 'extends',
+]);
+
+const IDENTIFIER_CHAR = /[A-Za-z0-9_$]/;
+
+/** Whitespace weights in a program projection: a newline outranks a space. */
+const WS_SPACE = 1;
+const WS_NEWLINE = 2;
+
+/**
+ * Accumulates the PROGRAM text of a file — code, string, template and regex
+ * characters, with comments dropped and each whitespace run reduced to one
+ * space or one newline. Two sources with equal projections differ only in
+ * comments and layout. Whitespace markers are numbers, so they can never be
+ * confused with a newline that is part of a template's value.
+ */
+function createProjection() {
+  const out = [];
+  let current = '';
+  let pendingWs = 0;
+  return {
+    data(text) {
+      if (pendingWs && current) { out.push(current, pendingWs); current = ''; }
+      pendingWs = 0;
+      current += text;
+    },
+    space(weight) { pendingWs = Math.max(pendingWs, weight); },
+    tokens() { return current ? [...out, current] : [...out]; },
+  };
+}
+
+/**
+ * Consume a regex literal starting at `start` (the opening `/`). Returns the
+ * index after the closing `/`, or -1 when the line ends first.
+ */
+function skipRegexLiteral(line, start) {
+  let j = start + 1;
+  let inClass = false;
+  while (j < line.length) {
+    const c = line[j];
+    if (c === '\\') { j += 2; continue; }
+    if (inClass) { if (c === ']') inClass = false; j++; continue; }
+    if (c === '[') { inClass = true; j++; continue; }
+    if (c === '/') return j + 1;
+    j++;
+  }
+  return -1;
+}
+
+/** Consume a quoted string starting at `start`. Returns the index after the close, or -1. */
+function skipQuoted(line, start) {
+  const quote = line[start];
+  let j = start + 1;
+  while (j < line.length) {
+    if (line[j] === '\\') { j += 2; continue; }
+    if (line[j] === quote) return j + 1;
+    j++;
+  }
+  return -1;
+}
+
+/**
  * Pass 1 — stateful scan. Returns the 1-based line numbers bearing at least one
- * character of PROGRAM (as opposed to comment), plus whether the scan can be
- * trusted at all.
+ * character of PROGRAM (as opposed to comment), the program projection, and
+ * whether the scan can be trusted at all.
  *
  * `trustworthy` is false when the file ends mid-block-comment, mid-template or
  * mid-string, or a regex literal never closes: the scan has lost its place, and
@@ -150,12 +220,21 @@ const REGEX_MAY_FOLLOW = new Set([
 function scanCodeBearingLines(source) {
   const lines = String(source).split('\n');
   const codeBearing = new Set();
+  const projection = createProjection();
+  const untrusted = () => ({ codeBearing, lineCount: lines.length, trustworthy: false, projection: null });
   let state = 'code';
   let lastSignificant = '\n';
+  // True when the last token was a regex-permitting keyword (not a property
+  // name such as `x.return`).
+  let afterKeyword = false;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const lineNo = i + 1;
+    if (i > 0) {
+      if (state === 'template') projection.data('\n');
+      else projection.space(WS_NEWLINE);
+    }
     // A line that OPENS inside a template is string content before any
     // character is read — including a blank one, since whitespace inside a
     // template is part of the value it produces.
@@ -174,63 +253,71 @@ function scanCodeBearingLines(source) {
 
       if (state === 'template') {
         codeBearing.add(lineNo);
-        if (ch === '\\') { j += 2; continue; }
-        if (ch === '`') { state = 'code'; lastSignificant = '`'; j++; continue; }
+        if (ch === '\\') { projection.data(line.slice(j, j + 2)); j += 2; continue; }
+        projection.data(ch);
+        if (ch === '`') { state = 'code'; lastSignificant = '`'; afterKeyword = false; }
         j++;
         continue;
       }
 
       // state === 'code'
-      if (ch === ' ' || ch === '\t' || ch === '\r') { j++; continue; }
-      if (ch === '/' && next === '/') { j = line.length; continue; }
-      if (ch === '/' && next === '*') { state = 'block'; j += 2; continue; }
+      if (ch === ' ' || ch === '\t' || ch === '\r') { projection.space(WS_SPACE); j++; continue; }
+      if (ch === '/' && next === '/') { projection.space(WS_SPACE); j = line.length; continue; }
+      if (ch === '/' && next === '*') { projection.space(WS_SPACE); state = 'block'; j += 2; continue; }
 
       codeBearing.add(lineNo);
 
-      if (ch === '/' && REGEX_MAY_FOLLOW.has(lastSignificant)) {
+      if (ch === '/' && (afterKeyword || REGEX_MAY_FOLLOW.has(lastSignificant))) {
         // A regex literal. Consume it whole so a backtick or quote inside it —
         // `[^\s;|&`'"()]` is a real example in this repo — cannot be mistaken
-        // for the start of a template or string. Character classes are tracked
-        // because `/` inside `[...]` does not terminate the literal.
-        j++;
-        let inClass = false;
-        let closed = false;
-        while (j < line.length) {
-          const c = line[j];
-          if (c === '\\') { j += 2; continue; }
-          if (inClass) { if (c === ']') inClass = false; j++; continue; }
-          if (c === '[') { inClass = true; j++; continue; }
-          if (c === '/') { closed = true; j++; break; }
-          j++;
-        }
-        // Regex literals cannot span lines, so an unclosed one means the
-        // "is this a regex" guess was wrong and the scan is off the rails.
-        if (!closed) return { codeBearing, lineCount: lines.length, trustworthy: false };
+        // for the start of a template or string. Regex literals cannot span
+        // lines, so an unclosed one means the "is this a regex" guess was wrong
+        // and the scan is off the rails.
+        const end = skipRegexLiteral(line, j);
+        if (end === -1) return untrusted();
+        projection.data(line.slice(j, end));
+        j = end;
         lastSignificant = '/';
+        afterKeyword = false;
         continue;
       }
 
-      if (ch === '`') { state = 'template'; lastSignificant = '`'; j++; continue; }
+      if (ch === '`') {
+        projection.data(ch);
+        state = 'template'; lastSignificant = '`'; afterKeyword = false; j++;
+        continue;
+      }
 
       if (ch === "'" || ch === '"') {
-        j++;
-        let closed = false;
-        while (j < line.length) {
-          if (line[j] === '\\') { j += 2; continue; }
-          if (line[j] === ch) { closed = true; j++; break; }
-          j++;
-        }
-        if (!closed) return { codeBearing, lineCount: lines.length, trustworthy: false };
+        const end = skipQuoted(line, j);
+        if (end === -1) return untrusted();
+        projection.data(line.slice(j, end));
+        j = end;
         lastSignificant = ch;
+        afterKeyword = false;
         continue;
       }
 
+      if (IDENTIFIER_CHAR.test(ch)) {
+        let end = j;
+        while (end < line.length && IDENTIFIER_CHAR.test(line[end])) end++;
+        const word = line.slice(j, end);
+        afterKeyword = lastSignificant !== '.' && REGEX_MAY_FOLLOW_KEYWORD.has(word);
+        projection.data(word);
+        lastSignificant = line[end - 1];
+        j = end;
+        continue;
+      }
+
+      projection.data(ch);
       lastSignificant = ch;
+      afterKeyword = false;
       j++;
     }
   }
 
-  return { codeBearing, lineCount: lines.length, trustworthy: state === 'code' };
+  if (state !== 'code') return untrusted();
+  return { codeBearing, lineCount: lines.length, trustworthy: true, projection: projection.tokens() };
 }
 
 /**
@@ -302,6 +389,39 @@ export function changedLinesAreCommentOnly(source, changed) {
     if (!commentShaped.has(n)) return false;
   }
   return true;
+}
+
+/**
+ * True only when a file's change leaves its PROGRAM untouched: every added
+ * line is comment or blank in the new source, every deleted line was comment
+ * or blank in the old source, and the two sources have the same program
+ * projection.
+ *
+ * The added lines alone cannot decide this. Replacing a code line with a
+ * comment adds only a comment; wrapping live code in `/*` and `*\/` adds only
+ * comment lines; deleting the `*\/` of a block comment adds nothing at all.
+ * Each changes behaviour, and each is caught here because the deleted line was
+ * code or the projection moved.
+ *
+ * False on any doubt, including an old source that could not be read (`null`)
+ * and a change set with nothing added and nothing deleted.
+ *
+ * @param {{ oldSource: string|null, newSource: string,
+ *           added: Iterable<number>, deleted: Iterable<number> }} change
+ *   `oldSource` is '' for a file the diff creates.
+ */
+export function fileChangeIsCommentOnly({ oldSource, newSource, added, deleted }) {
+  if (typeof oldSource !== 'string' || typeof newSource !== 'string') return false;
+  const addedLines = [...(added ?? [])];
+  const deletedLines = [...(deleted ?? [])];
+  if (addedLines.length === 0 && deletedLines.length === 0) return false;
+  if (addedLines.length > 0 && !changedLinesAreCommentOnly(newSource, addedLines)) return false;
+  if (deletedLines.length > 0 && !changedLinesAreCommentOnly(oldSource, deletedLines)) return false;
+
+  const before = scanCodeBearingLines(oldSource);
+  const after = scanCodeBearingLines(newSource);
+  if (!before.trustworthy || !after.trustworthy) return false;
+  return JSON.stringify(before.projection) === JSON.stringify(after.projection);
 }
 
 export function filterTargetFiles(changedLines, { testGlobs = [], sourceGlobs = [] } = {}) {
