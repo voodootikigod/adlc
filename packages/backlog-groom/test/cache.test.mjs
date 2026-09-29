@@ -70,21 +70,21 @@ test('AC22: an unreadable referenced path yields no hash rather than a hash of n
 
 test('AC16: an issue with no referenced paths is NEVER cached as valid', () => {
   const store = {};
-  const entry = { number: 1, verdict: 'valid', route: 'mechanical' };
+  const entry = { number: 1, verdict: 'valid', route: 'mechanical', verifiedPaths: [] };
   cachePut(store, { number: 1, updatedAt: 'T1', contentHash: null }, entry);
   assert.deepEqual(store, {}, 'refusing to store it is what forces a re-verify every run');
 });
 
 test('AC16: such an issue may be cached as unverifiable — that verdict cannot go stale into a false green', () => {
   const store = {};
-  cachePut(store, { number: 2, updatedAt: 'T1', contentHash: null }, { number: 2, verdict: 'unverifiable', route: 'unverifiable' });
+  cachePut(store, { number: 2, updatedAt: 'T1', contentHash: null }, { number: 2, verdict: 'unverifiable', route: 'unverifiable', verifiedPaths: [] });
   assert.equal(cacheGet(store, { number: 2, updatedAt: 'T1', contentHash: null })?.verdict, 'unverifiable');
 });
 
 test('AC10: a cached issue whose updatedAt changed is re-verified', () => {
   const store = {};
   const key = { number: 3, updatedAt: 'T1', contentHash: 'h1' };
-  cachePut(store, key, { number: 3, verdict: 'valid', route: 'mechanical' });
+  cachePut(store, key, { number: 3, verdict: 'valid', route: 'mechanical', verifiedPaths: [] });
   assert.equal(cacheGet(store, key)?.verdict, 'valid', 'unchanged inputs hit');
   assert.equal(cacheGet(store, { ...key, updatedAt: 'T2' }), null, 'an edited issue must be re-verified');
 });
@@ -92,7 +92,7 @@ test('AC10: a cached issue whose updatedAt changed is re-verified', () => {
 test('AC10: a cached issue whose referenced-path content hash changed is re-verified', () => {
   const store = {};
   const key = { number: 4, updatedAt: 'T1', contentHash: 'h1' };
-  cachePut(store, key, { number: 4, verdict: 'valid', route: 'mechanical' });
+  cachePut(store, key, { number: 4, verdict: 'valid', route: 'mechanical', verifiedPaths: [] });
   assert.equal(cacheGet(store, { ...key, contentHash: 'h2' }), null, 'changed code must be re-verified');
 });
 
@@ -134,19 +134,19 @@ test('AC10: a cache written under an older schema version is a MISS, not a stale
   // recomputes rather than inheriting.
   const key = { number: 9, updatedAt: 'T1', contentHash: 'h1' };
   const store = {};
-  cachePut(store, key, { verdict: 'valid', route: 'mechanical' });
+  cachePut(store, key, { verdict: 'valid', route: 'mechanical', verifiedPaths: [] });
   const current = store['9'].key;
 
-  const stale = { '9': { verdict: 'valid', route: 'mechanical', key: current.replace(/^v\d+:\d+/, 'v1:1') } };
+  const stale = { '9': { verdict: 'valid', route: 'mechanical', verifiedPaths: [], key: current.replace(/^v\d+:\d+/, 'v1:1') } };
   assert.equal(cacheGet(stale, key), null, 'an older-version entry must be recomputed');
   assert.equal(cacheGet(store, key)?.verdict, 'valid', 'the current version still hits');
 });
 
-test('AC10: the cache schema version is 2 — bumping it discards every existing cache', () => {
+test('AC10: the cache schema version is 3 — bumping it discards every existing cache', () => {
   // Pinned deliberately, like the fetch cap. The value is not incidental: raising
   // it invalidates every cache anyone has on disk, so it should move when
   // verdict semantics move and at no other time.
-  assert.equal(CACHE_SCHEMA_VERSION, 2);
+  assert.equal(CACHE_SCHEMA_VERSION, 3);
 });
 
 test('AC10: the schema version is part of the key, so two versions cannot collide', () => {
@@ -183,15 +183,15 @@ test('AC10: a cache entry claiming an UNKNOWN verdict or route is a miss', () =>
   // invented route flowed straight through into a close proposal.
   const key = { number: 11, updatedAt: 'T1', contentHash: 'h1' };
   const store = {};
-  cachePut(store, key, { verdict: 'valid', route: 'mechanical' });
+  cachePut(store, key, { verdict: 'valid', route: 'mechanical', verifiedPaths: [] });
   const goodKey = store['11'].key;
 
   for (const entry of [
-    { verdict: 'fixed!', route: 'mechanical', key: goodKey },
-    { verdict: 'definitely-fixed', route: 'mechanical', key: goodKey },
+    { verdict: 'fixed!', route: 'mechanical', verifiedPaths: [], key: goodKey },
+    { verdict: 'definitely-fixed', route: 'mechanical', verifiedPaths: [], key: goodKey },
     { verdict: 'fixed', route: 'invented', key: goodKey },
-    { verdict: 'fixed', route: 'mechanical', evidence: 'a string', key: goodKey },
-    { verdict: 'fixed', route: 'mechanical', evidence: [], key: goodKey },
+    { verdict: 'fixed', route: 'mechanical', evidence: 'a string', verifiedPaths: [], key: goodKey },
+    { verdict: 'fixed', route: 'mechanical', evidence: [], verifiedPaths: [], key: goodKey },
   ]) {
     assert.equal(cacheGet({ '11': entry }, key), null, `${JSON.stringify(entry.verdict)} must not be served`);
   }
@@ -207,7 +207,7 @@ test('AC10: every verdict the verifier can produce is cacheable — including un
   for (const verdict of ['valid', 'fixed', 'moved', 'unverifiable', 'unverified']) {
     const key = { number: 20, updatedAt: 'T1', contentHash: 'h1' };
     const store = {};
-    cachePut(store, key, { verdict, route: 'mechanical' });
+    cachePut(store, key, { verdict, route: 'mechanical', verifiedPaths: [] });
     assert.equal(cacheGet(store, key)?.verdict, verdict, `${verdict} must round-trip through the cache`);
   }
 });
@@ -218,8 +218,8 @@ test('AC10: an issue with no updatedAt is never cached — nothing would notice 
   // key cannot be invalidated by an edit and the old verdict is served forever.
   const store = {};
   for (const updatedAt of [null, undefined, '']) {
-    assert.equal(cachePut(store, { number: 30, updatedAt, contentHash: 'h1' }, { verdict: 'valid', route: 'mechanical' }), false);
+    assert.equal(cachePut(store, { number: 30, updatedAt, contentHash: 'h1' }, { verdict: 'valid', route: 'mechanical', verifiedPaths: [] }), false);
   }
   assert.deepEqual(store, {});
-  assert.equal(cachePut(store, { number: 30, updatedAt: 'T1', contentHash: 'h1' }, { verdict: 'valid', route: 'mechanical' }), true);
+  assert.equal(cachePut(store, { number: 30, updatedAt: 'T1', contentHash: 'h1' }, { verdict: 'valid', route: 'mechanical', verifiedPaths: [] }), true);
 });

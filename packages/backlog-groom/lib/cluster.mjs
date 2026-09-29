@@ -29,14 +29,29 @@ export function unitFor(path, units) {
 }
 
 /**
+ * The cited paths whose own check established a location.
+ *
+ * Taken from the verification's per-citation `verifiedPaths`, never from the
+ * issue-level verdict: an issue is `valid` when ONE citation still matches, and
+ * its other citations — a path that never existed, a file cited with no excerpt
+ * — were never checked. A verification that carries no `verifiedPaths` locates
+ * nothing. Paths the issue does not itself cite are ignored.
+ */
+export function verifiedLocations(verified, classified) {
+  if (!verified || !['valid', 'fixed'].includes(verified.verdict)) return [];
+  if (!Array.isArray(verified.verifiedPaths)) return [];
+  const cited = new Set((classified?.references ?? []).map((r) => r.path));
+  return [...new Set(verified.verifiedPaths.filter((p) => cited.has(p)))];
+}
+
+/**
  * The units an issue's VERIFIED locations sit in.
  *
  * A `moved` verdict carries a real observation — the path is gone — but gives no
  * current location, so it contributes no unit.
  */
 export function unitsForIssue(verified, classified, units) {
-  if (!verified || !['valid', 'fixed'].includes(verified.verdict)) return [];
-  const paths = (classified?.references ?? []).map((r) => r.path);
+  const paths = verifiedLocations(verified, classified);
   return [...new Set(paths.map((p) => unitFor(p, units)).filter(Boolean))];
 }
 
