@@ -9,7 +9,13 @@ const projectRoot = process.argv[2] ? join(process.cwd(), process.argv[2]) : pro
 const pkgRoot = dirname(dirname(fileURLToPath(import.meta.url))); // plugins/adlc-opencode
 
 const { config, plugin, commands, agents, skills, gitignore, formatterIgnores } = scaffold(projectRoot, pkgRoot);
-console.log(`adlc-init: config.json ${config.created ? 'created' : 'present'}`);
+if (config.warning) {
+  // Left untouched (never clobbered), but the run must not report success.
+  console.error(`adlc-init: ${config.warning} — fix or remove it and re-run.`);
+  process.exitCode = 1;
+} else {
+  console.log(`adlc-init: config.json ${config.created ? 'created' : 'present'}`);
+}
 console.log(`adlc-init: plugin ${plugin.alreadyPresent ? 'already registered' : 'registered'} in .opencode/opencode.json (rails-guard hook will load)`);
 console.log(`adlc-init: deployed ${commands.length} command(s) → .opencode/commands/`);
 console.log(`adlc-init: deployed ${agents.length} agent(s) → .opencode/agents/`);
