@@ -26,6 +26,7 @@ import {
   findingKey,
   recordFinding,
   extractJson,
+  fence,
 } from '@adlc/core';
 import { scrubHookSecrets } from '@adlc/context-handoff/lib/secret-scrub.mjs';
 
@@ -95,12 +96,23 @@ export function defaultRunLens(repoRoot, { spawnFn = spawn } = {}) {
     });
 }
 
+// The diff, the finding under verification and the ticket title are authored
+// outside this repo's trust boundary, so each reaches a child prompt only
+// inside a fence(). The diff cap sits far above what argv can carry anyway.
+const MAX_DIFF_CHARS = 1_000_000;
+const MAX_FINDING_CHARS = 20_000;
+const MAX_TITLE_CHARS = 500;
+
+function ticketLine(ticket) {
+  return ticket ? `Ticket ${ticket.id}: ${fence('TICKET_TITLE', String(ticket.title ?? ''), MAX_TITLE_CHARS, { bias: 'head' })}` : '';
+}
+
 /** Build the hostile-reviewer prompt for a single lens over the diff. */
 export function buildLensPrompt(lens, diff, ticket) {
   return [
     `You are a hostile ADLC pre-merge reviewer working the "${lens.key}" lens.`,
     `Focus ONLY on: ${lens.focus}.`,
-    ticket ? `Ticket ${ticket.id}: ${ticket.title}` : '',
+    ticketLine(ticket),
     'Review the diff below and output a JSON array of findings. Each finding is an',
     'object with: severity (critical|high|medium|low), file, line_start, line_end',
     '(post-change line numbers; 0,0 = file-level), title, body, evidence (quoted',
@@ -108,7 +120,7 @@ export function buildLensPrompt(lens, diff, ticket) {
     'you find nothing. Output ONLY the JSON array.',
     '',
     '=== DIFF ===',
-    diff,
+    fence('DIFF', diff, MAX_DIFF_CHARS, { bias: 'head' }),
   ].filter(Boolean).join('\n');
 }
 
@@ -118,13 +130,13 @@ export function buildVerifierPrompt(finding, diff, ticket) {
     'You are an ADLC prosecution VERIFIER. You are given ONE finding. Try to',
     'REFUTE it, not to agree. Build the most concrete reproduction or',
     'counterexample you can, then decide whether it is a real defect.',
-    ticket ? `Ticket ${ticket.id}: ${ticket.title}` : '',
+    ticketLine(ticket),
     'Output ONLY a JSON object: { "real": true|false, "reason": "<mechanism>" }.',
     'Set real=true only with a concrete repro/mechanism; real=false only with a',
     'concrete counterexample or proof it is already handled.',
     '',
     '=== FINDING ===',
-    JSON.stringify({
+    fence('FINDING', JSON.stringify({
       severity: finding.severity,
       file: finding.file,
       line_start: finding.line_start,
@@ -132,10 +144,10 @@ export function buildVerifierPrompt(finding, diff, ticket) {
       title: finding.title,
       body: finding.body,
       evidence: finding.evidence,
-    }, null, 2),
+    }, null, 2), MAX_FINDING_CHARS, { bias: 'head' }),
     '',
     '=== DIFF ===',
-    diff,
+    fence('DIFF', diff, MAX_DIFF_CHARS, { bias: 'head' }),
   ].filter(Boolean).join('\n');
 }
 
