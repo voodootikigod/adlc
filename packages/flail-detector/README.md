@@ -63,7 +63,7 @@ tool-log patterns:
 - `Created <path>`
 - `"file_path":"<path>"` (JSON tool-log format)
 
-Path-bearing verbs (`Writing`, `Editing`, `Created`) match at line start or when preceded by whitespace (e.g. timestamp prefixes `12:03:01 Writing <path>` or indented lines); prior to #623, only line-leading verbs matched.
+Path-bearing verbs (`Writing`, `Editing`, `Created`) must open the line, optionally after indentation and log prefixes: timestamps (`12:03:01 Writing <path>`), bracketed fields (`[INFO] Editing <path>`), or upper-case level names (`WARN Created <path>`). A verb anywhere else is prose and yields no path, so a tool result such as `File created successfully at: <path>` is not read as a write to `successfully`.
 
 Any path that does not match at least one `--scope` glob is a violation.
 
