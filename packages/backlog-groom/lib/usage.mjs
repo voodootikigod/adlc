@@ -44,7 +44,7 @@ const COLUMN = 22;
 
 /** Render the usage block from the flag table. */
 export function renderUsage(flags = FLAGS) {
-  const lines = ['backlog-groom — groom a GitHub issue backlog against the code (read-only)', ''];
+  const lines = ['backlog-groom — groom a GitHub issue backlog against the code (writes to GitHub only with --apply)', ''];
   for (const f of flags) {
     const left = f.arg ? `--${f.name} <${f.arg}>` : `--${f.name}`;
     // At least ONE space, always. A bare padEnd collapses to zero padding once a
