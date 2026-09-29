@@ -34,6 +34,9 @@
   "scripts": {
     "test": "node --test test/*.test.mjs"
   },
+  "dependencies": {
+    "@adlc/core": "1.11.1"
+  },
   "engines": {
     "node": ">=18"
   },
