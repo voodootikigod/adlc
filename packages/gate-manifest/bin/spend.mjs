@@ -20,13 +20,15 @@ const { values: flags } = parseArgs({
 
 const { aggregate, skipped } = loadSpend({ ticket: flags.ticket, dir: flags.dir });
 
+// Malformed lines are excluded from every total, so both modes say how many.
+if (skipped.length > 0) {
+  console.warn(`warning: ${skipped.length} malformed manifest line(s) skipped`);
+}
+
 if (flags.json) {
-  printJson(aggregate);
+  printJson({ ...aggregate, skipped });
 } else {
   for (const line of renderSpendReport(aggregate)) console.log(line);
-  if (skipped.length > 0) {
-    console.warn(`warning: ${skipped.length} malformed manifest line(s) skipped`);
-  }
 }
 
 pass();

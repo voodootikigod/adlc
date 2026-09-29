@@ -482,7 +482,7 @@ adlc spend [--ticket id] [--dir path] [--json]
 
 - `--ticket id` — restrict to manifest entries recorded against one ticket.
 - `--dir path` — ledger directory (default `.adlc`).
-- `--json` — machine-readable aggregate: `{ byPhase, byGate, total, entriesWithUsage, entriesTotal }`.
+- `--json` — machine-readable aggregate: `{ byPhase, byGate, total, entriesWithUsage, unmeasuredCalls, entriesTotal, skipped }`. `skipped` lists the malformed ledger lines left out of every total (also warned about on stderr in both modes).
 
 Text output renders a per-phase histogram (P0–P7, `maintenance`, `unphased` for gates not yet mapped to a phase) plus any §6 diagnostics that apply — e.g. spend concentrated in P4, or heavy P5 spend with no P7 spend recorded.
 
