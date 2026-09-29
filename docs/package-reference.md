@@ -8,6 +8,7 @@ Follow each README for full options, output schemas, examples, and implementatio
 | Package | Binary | Role | Source |
 | --- | --- | --- | --- |
 | `@adlc/autopilot` | `adlc-autopilot` | Quota-gated local issue-to-PR loop: picks a GitHub issue, shapes an ADLC ticket, dispatches one sandboxed fleet run, runs the outer gates, attests with a cross-model review and opens the PR. Invoke as `adlc autopilot`. | [`packages/autopilot/README.md`](../packages/autopilot/README.md) |
+| `@adlc/backlog-groom` | `backlog-groom` | Verifies each open GitHub issue's cited premise against the code at HEAD, clusters and ranks the backlog, and emits a versioned groomed set. Read-only by default; `--apply` writes gated, floored conclusions back to GitHub and needs the ledger key. Invoke as `adlc backlog-groom`. | [`packages/backlog-groom/README.md`](../packages/backlog-groom/README.md) |
 | `@adlc/behavior-diff` | `behavior-diff` | Captures and compares HTTP/API behavior snapshots for the P6 human gate. | [`packages/behavior-diff/README.md`](../packages/behavior-diff/README.md) |
 | `@adlc/build-gate` | `build-gate` | Denies starting a high-risk ticket's build in a degraded (context-rot) session unless an audited override is recorded. | [`packages/build-gate/README.md`](../packages/build-gate/README.md) |
 | `@adlc/cli` | `adlc` | Provides the stable dispatcher surface for all public ADLC tool execution. | [`packages/cli/README.md`](../packages/cli/README.md) |
@@ -45,6 +46,8 @@ Follow each README for full options, output schemas, examples, and implementatio
 ## Command forms
 
 ```sh
+adlc backlog-groom [--threshold <n>] [--json] [--out <path>] [--no-cache]
+adlc backlog-groom --apply --set <groomed.json>
 adlc behavior-diff capture --config behavior.json --out before.json
 adlc behavior-diff compare before.json after.json [--json]
 adlc coldstart <ticket-id> [options]
@@ -87,6 +90,7 @@ Spec and ticket shaping:
 - `premortem`
 - `coldstart`
 - `ticket-prune`
+- `backlog-groom`
 
 Execution supervision and rails:
 

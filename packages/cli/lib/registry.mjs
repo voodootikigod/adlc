@@ -18,6 +18,7 @@ export const GROUPS = [
       { name: 'premortem', packageName: '@adlc/premortem', summary: 'Stress-test an approved spec before implementation.' },
       { name: 'coldstart', packageName: '@adlc/coldstart', summary: 'Check whether tickets are executable without agent guesswork.' },
       { name: 'ticket-prune', packageName: '@adlc/ticket-prune', summary: 'Report and archive stale, already-shipped tickets out of tickets.json.' },
+      { name: 'backlog-groom', packageName: '@adlc/backlog-groom', summary: 'Verify open issues against the code, then cluster and rank the backlog; --apply writes gated, floored conclusions.' },
     ],
   },
   {
