@@ -169,14 +169,10 @@ export function repoRoot(cwd = process.cwd()) {
  * (sorted), values are co-commit counts. Use pairKey() to build lookups.
  */
 export function coChange(limit = 500, cwd = process.cwd()) {
-  const out = git(
-    ['log', `-n`, String(limit), '--name-only', '--pretty=format:--COMMIT--'],
-    { cwd }
-  );
   const pairCounts = {};
   const fileCounts = {};
-  for (const block of out.split('--COMMIT--')) {
-    const files = [...new Set(block.split('\n').map((l) => l.trim()).filter(Boolean))];
+  for (const commitFiles of commitFileLists(limit, cwd)) {
+    const files = [...new Set(commitFiles)];
     // Skip mega-commits (renames, vendoring) — they assert coupling between everything.
     if (files.length === 0 || files.length > 50) continue;
     for (const f of files) fileCounts[f] = (fileCounts[f] ?? 0) + 1;
@@ -190,20 +186,43 @@ export function coChange(limit = 500, cwd = process.cwd()) {
   return { pairCounts, fileCounts };
 }
 
+// A repo-relative path never begins with '/', so a NUL-delimited field that
+// does is unambiguously the per-commit marker (optionally followed by "\n" and
+// the commit's first path).
+const COMMIT_MARKER = '/';
+
+/**
+ * Files touched by each of the last `limit` commits, newest first, as real
+ * repo-relative paths. Read with -z so git never C-quotes a name (non-ASCII,
+ * quotes, control characters): the quoted form is display text that matches no
+ * key a directory walk produces. Undecodable names throw via splitNulPaths.
+ */
+function commitFileLists(limit, cwd) {
+  const raw = git(
+    ['log', '-n', String(limit), '--name-only', '-z', `--pretty=format:${COMMIT_MARKER}`],
+    { cwd, encoding: 'buffer' }
+  );
+  const commits = [];
+  for (const field of splitNulPaths(raw)) {
+    if (!field.startsWith(COMMIT_MARKER)) {
+      commits.at(-1)?.push(field);
+      continue;
+    }
+    const nl = field.indexOf('\n');
+    commits.push(nl === -1 ? [] : [field.slice(nl + 1)]);
+  }
+  return commits;
+}
+
 export function pairKey(a, b) {
   return a < b ? `${a}\u0000${b}` : `${b}\u0000${a}`;
 }
 
 /** Commit-count churn per file over the last `limit` commits. */
 export function churn(limit = 1000, cwd = process.cwd()) {
-  const out = git(
-    ['log', '-n', String(limit), '--name-only', '--pretty=format:'],
-    { cwd }
-  );
   const counts = {};
-  for (const line of out.split('\n')) {
-    const f = line.trim();
-    if (f) counts[f] = (counts[f] ?? 0) + 1;
+  for (const files of commitFileLists(limit, cwd)) {
+    for (const f of files) counts[f] = (counts[f] ?? 0) + 1;
   }
   return counts;
 }
