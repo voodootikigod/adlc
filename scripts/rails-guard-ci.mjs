@@ -72,6 +72,10 @@ const REPO_TRUST_ROOTS = [
   // work with no opt-out.
   'package.json',
   '.npmrc',
+  // The /tmp fixture-boundary guard. Its allowlist is permanently empty and its
+  // detector is what keeps test fixtures out of the shared temp root; a ticket
+  // rail would expire when the ticket completes, so the lock lives here.
+  'scripts/test/tmp-fixture-boundary.test.mjs',
 ];
 
 const base = process.argv[2] || process.env.RAILS_BASE || 'origin/main';
