@@ -46,8 +46,10 @@ resolved revision. These are trust-boundary controls against faked review eviden
 ## Trust-root tier
 
 `tier-check` classifies a change as trust-root tier when it touches an enforcement package,
-a gated-artifact producer, an exact trust-root file, or a rails deny-path declared by any
-ticket. A **completed** ticket (`completed: true`) contributes no rails deny-path reason —
+a gated-artifact producer, an exact trust-root file (including `CODEOWNERS` in any location
+GitHub reads), a CI control surface (anything under `.github/workflows/` or
+`.github/actions/`, since a pull request runs its own copy of those), or a rails deny-path
+declared by any ticket. A **completed** ticket (`completed: true`) contributes no rails deny-path reason —
 its rails auto-expire, so a change under `packages/` is not trust-root tier forever just
 because a long-finished ticket once declared `packages/**` as a rail. Duplicate ticket ids
 across the base and worktree ticket tables are merged before classification, base tip
