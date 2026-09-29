@@ -28,6 +28,11 @@ const {
 
 const { blockingPrefixOf, BLOCKING_PREFIXES } = await import('../../packages/autopilot/lib/ci.mjs');
 
+// Source pinning and --branch validation live in their own file; importing it
+// here runs them with this suite, the target the mutation gate maps
+// scripts/gate-liveness.mjs to.
+await import('./gate-liveness-source.test.mjs');
+
 function loadJson(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
