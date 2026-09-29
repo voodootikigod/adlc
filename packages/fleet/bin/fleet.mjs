@@ -368,7 +368,7 @@ async function buildQuartermasterPlan({ repo, dir, tickets, onlyIds, config }) {
       argv: { command: argv.cmd, args: argv.args.map((a) => (a === prompt ? '<prompt>' : a)) },
     });
   }
-  return { engaged: true, registryPath: planned.registryPath, notices: planned.notices, skippedLedger: planned.skippedLedger, seats };
+  return { engaged: true, registryPath: planned.registryPath, notices: planned.notices, seats };
 }
 
 /** Render a built quartermaster plan for the human-readable dry run. */
