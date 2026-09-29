@@ -154,24 +154,19 @@ const IDENTIFIER_CHAR = /[A-Za-z0-9_$]/;
 
 /**
  * Accumulates the PROGRAM text of a file — code, string, template and regex
- * characters, with comments dropped and each whitespace run reduced to one
- * marker. Two sources with equal projections differ only in comments and
- * layout. A space and a newline share the marker because the callers only
- * compare sources whose changed lines are whole comment or blank lines, which
- * cannot join or split the code lines around them. The marker is a number, so
- * it can never be confused with whitespace inside a template's value.
+ * characters, with comments dropped — as a list of tokens split at whitespace.
+ * Two sources with equal projections differ only in comments and layout. A
+ * space and a newline split alike because the callers only compare sources
+ * whose changed lines are whole comment or blank lines, which cannot join or
+ * split the code lines around them. Whitespace inside a template is data, not
+ * a split.
  */
 function createProjection() {
   const out = [];
   let current = '';
-  let pendingWs = false;
   return {
-    data(text) {
-      if (pendingWs && current) { out.push(current, 0); current = ''; }
-      pendingWs = false;
-      current += text;
-    },
-    space() { pendingWs = true; },
+    data(text) { current += text; },
+    space() { if (current) { out.push(current); current = ''; } },
     tokens() { return current ? [...out, current] : [...out]; },
   };
 }
