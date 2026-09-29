@@ -30,6 +30,17 @@ export const DEFAULT_DEPTH_THRESHOLD = HARD_DEPTH;
 export const DEFAULT_BYTES_THRESHOLD = HARD_BYTES;
 
 /**
+ * One prose tool-log line: `Writing|Editing|Created <target>` at the start of a
+ * line, optionally after indentation and/or a clock timestamp (`12:00:01`,
+ * `[12:00:01.123]`, `2026-09-28T12:00:01Z`). Anchored to the line start so a
+ * verb mentioned mid-sentence, or inside a JSONL record's string content, is
+ * not a tool call. The hand-ported hook copies in plugins/ must match this
+ * pattern exactly (scripts/test/depth-signal-prose-parity.test.mjs).
+ */
+export const PROSE_TOOL_LINE =
+  /^[ \t]*(?:\[?(?:\d{4}-\d{2}-\d{2}[T ])?\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?\]?[ \t]+)?(?:Writing|Editing|Created)[ \t]+\S+/gim;
+
+/**
  * Count tool-invocation occurrences in transcript text. Three shapes are
  * recognized: a JSONL `"type":"tool_use"` block (the Claude Code transcript
  * shape); a Codex rollout `response_item` carrying one of the five call tags
@@ -72,7 +83,7 @@ export function countToolCalls(text) {
   if (!text) return 0;
   const toolCallRecords =
     text.match(/"type"\s*:\s*"(?:tool_use|function_call|custom_tool_call|web_search_call|tool_search_call|image_generation_call)"/g) ?? [];
-  const proseToolLines = text.match(/^(?:Writing|Editing|Created)\s+\S+/gim) ?? [];
+  const proseToolLines = text.match(PROSE_TOOL_LINE) ?? [];
   return toolCallRecords.length + proseToolLines.length;
 }
 
