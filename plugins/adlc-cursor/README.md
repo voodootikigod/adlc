@@ -38,6 +38,10 @@ existing `.cursor/hooks.json` without touching your other hooks. Prefer the
 marketplace path so hooks/skills update with the plugin instead of copied
 project files.
 
+An existing `.adlc/config.json` is never rewritten; if it is not a JSON object
+(empty, malformed, or an array), the scaffolder reports it as unreadable and
+exits 1 instead of counting it as present.
+
 ## What you get
 
 - **`sessionStart`** — ticket/rails context injection (best-effort) + session id env.
