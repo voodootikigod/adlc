@@ -16,8 +16,15 @@ export const ERROR_LINE_RE = /error|exception|failed|cannot|ENOENT/i;
  *   Editing <path>
  *   Created <path>
  *   file_path":"<path>
+ *
+ * The verb must open the line, after optional indentation and log prefixes
+ * (timestamps, bracketed fields, upper-case level names). Anywhere else it is
+ * prose — Claude Code's own "File created successfully at: <path>" result
+ * would otherwise yield the path "successfully".
  */
-const VERB_PATTERN = /(?:^|\s)(?:Writing|Editing|Created)\s+([^\s]+)/i;
+const LOG_PREFIX = String.raw`(?:(?:\[[^\]\n]*\]|\d[\d:.,+\-TZ/]*|INFO|WARN|WARNING|DEBUG|TRACE|ERROR|NOTICE):?[ \t]+)*`;
+const VERB = '(?:[Ww]riting|[Ee]diting|[Cc]reated|WRITING|EDITING|CREATED)';
+const VERB_PATTERN = new RegExp(String.raw`^[ \t]*${LOG_PREFIX}${VERB}[ \t]+(\S+)`);
 
 const PATH_EXTRACT_PATTERNS = [
   VERB_PATTERN,
