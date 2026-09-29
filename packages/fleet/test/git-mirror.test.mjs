@@ -18,27 +18,17 @@ import {
   fetchBackWorkerBranch, ensureGateWorktree, detachGateWorktree, removeMirrorWorktree,
   mirrorRefs, gitCommonDir,
 } from '../lib/git-mirror.mjs';
+import { hermeticGitEnv } from './helpers/hermetic-git.mjs';
 
 const ISSUE_BRANCH = 'adlc/autopilot/issue-7';
 const WB = 'fleet/t1';
 const TMP_REF = FETCHED_REF_PREFIX + WB;
 
-// Hermetic git: fixed identity, no user/system config (a global hooksPath or gpgsign
-// must not leak into the run), signing off.
-const env = {
-  ...process.env,
-  GIT_AUTHOR_NAME: 'fleet-test', GIT_AUTHOR_EMAIL: 'fleet@test.invalid',
-  GIT_COMMITTER_NAME: 'fleet-test', GIT_COMMITTER_EMAIL: 'fleet@test.invalid',
-  GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
-};
-// -c gc.auto=0 / -c gc.autoDetach=false: background auto-gc can hold files open under
-// .git after the invoking git command has already returned, racing this file's fixture
-// teardown (rmSync) and producing an intermittent ENOTEMPTY on the .git subdirectory
-// (issue #981). Per-invocation -c flags, not a persisted `git config` write, so they
-// never show up in `git config --list --local` (the assertion a few lines down that no
-// unexpected local config survives) while still taking effect for every command below.
+// Hermetic git (identity, no user/system config, foreground auto-maintenance) comes
+// from the shared env; see helpers/hermetic-git.mjs for why gc is pinned there.
+const env = hermeticGitEnv;
 const gitAt = (dir) => (...args) =>
-  execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'gc.auto=0', '-c', 'gc.autoDetach=false', ...args], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env }).trim();
+  execFileSync('git', ['-c', 'commit.gpgsign=false', ...args], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env }).trim();
 
 /** Records every argv and optionally injects a failure, delegating to real git otherwise. */
 function recordingGitAt(log, failWhen = () => false) {
@@ -85,7 +75,7 @@ function makeFixture() {
   gitAt(mirror)('remote', 'remove', 'origin');
   const workerPath = join(root, 'worker-wt');
   const gatePath = join(repo, '.worktrees', 'gate');
-  return { root, repo, mirror, base, otherTip, dangling, issueTip, workerPath, gatePath, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  return { root, repo, mirror, base, otherTip, dangling, issueTip, workerPath, gatePath, cleanup: () => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) };
 }
 
 /** Cut + one worker commit: the state every fetch-back test starts from. */
@@ -98,10 +88,10 @@ function cutWithWorkerCommit(f) {
 test('gitAt disables background auto-gc on every repository it touches (issue #981 — the ENOTEMPTY teardown race)', () => {
   const f = makeFixture();
   try {
-    // Reading `config gc.auto` back through the SAME gitAt (which carries the -c
-    // override on every invocation) proves the flag actually takes effect for real
-    // git, not just that the source text mentions it. `git config <key>` (no
-    // --local/--global) resolves the EFFECTIVE value including -c overrides, unlike
+    // Reading `config gc.auto` back through the SAME gitAt (whose env carries the
+    // override on every invocation) proves it actually takes effect for real git,
+    // not just that the source text mentions it. `git config <key>` (no
+    // --local/--global) resolves the EFFECTIVE value including env overrides, unlike
     // `config --list --local` a few lines up, which only reflects what is persisted
     // to the on-disk config file — the two working repo and bare mirror created by
     // makeFixture() are both exercised, since the mirror is a separate clone with its
@@ -332,7 +322,7 @@ test('the CAS null object id is as wide as the repository object format: a SHA-2
     assert.deepEqual(r, { created: true, sha: tip });
     assert.equal(execFileSync('git', ['-C', dir, 'rev-parse', `refs/heads/${WB}`], { env, encoding: 'utf8' }).trim(), tip);
     assert.deepEqual(ensureWorkerBranchInRepo({ repo: dir, workerBranch: WB, cutTip: tip }), { created: false, sha: tip });
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });
 
 test('the disposable-mirror contract is ENFORCED: a second base branch, a remote or a live hook is refused; fleet/* worker branches are allowed (codex r8)', () => {
