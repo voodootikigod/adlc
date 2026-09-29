@@ -178,6 +178,10 @@ export function testTargetFor(file, root = ROOT) {
       // drops to the slow path, whose budget cap (3 mutants) is spent across
       // the ENTIRE diff.
       'scripts/router/router-model.mjs': 'scripts/test/router-drift.test.mjs',
+      // The install smokes are named for their host; smoke-teardown.test.mjs
+      // runs both and asserts they remove every fixture they create.
+      'scripts/codex-install-smoke.mjs': 'scripts/test/smoke-teardown.test.mjs',
+      'scripts/gemini-install-smoke.mjs': 'scripts/test/smoke-teardown.test.mjs',
     };
     if (EXACT[file] && existsSync(join(root, EXACT[file]))) return EXACT[file];
     // A NESTED source may use the same-basename convention only when that

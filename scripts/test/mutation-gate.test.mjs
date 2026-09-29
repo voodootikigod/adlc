@@ -494,6 +494,25 @@ test('testTargetFor gives the router generator model no target when its drift te
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('testTargetFor maps the install smokes to the teardown test that drives them', () => {
+  // The smokes are named for the host they install into; their fixture
+  // teardown is asserted by smoke-teardown.test.mjs, which runs both scripts.
+  const root = fixtureRoot(['scripts/test'], ['scripts/test/smoke-teardown.test.mjs']);
+  try {
+    for (const smoke of ['scripts/codex-install-smoke.mjs', 'scripts/gemini-install-smoke.mjs']) {
+      assert.equal(testTargetFor(smoke, root), 'scripts/test/smoke-teardown.test.mjs', smoke);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('testTargetFor gives the install smokes no target when the teardown test is absent', () => {
+  const root = fixtureRoot(['scripts/test']);
+  try {
+    assert.equal(testTargetFor('scripts/codex-install-smoke.mjs', root), null);
+    assert.equal(testTargetFor('scripts/gemini-install-smoke.mjs', root), null);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('testTargetFor does not match a nested scripts/ path as a top-level script', () => {
   const root = fixtureRoot(['scripts/test'], ['scripts/test/mutation-gate.test.mjs']);
   try {
