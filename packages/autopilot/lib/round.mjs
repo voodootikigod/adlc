@@ -16,6 +16,7 @@ import { REASON_CODES_FLEET, buildFleetArgv } from './fleet-args.mjs';
 import { describeSecretHits } from './diffcheck.mjs';
 import { ticketFilename } from '@adlc/tickets';
 import { registerSeams, active } from './mutations.mjs';
+import { updateIfPresent } from './records.mjs';
 
 registerSeams(['run.skipRevalidation', 'run.retryOnMirrorFetchFailed', 'run.acceptUnknownReason', 'run.budgetNotGlobal', 'run.skipFastForward',
   'run.chargeAfterDispatch',
@@ -23,6 +24,13 @@ registerSeams(['run.skipRevalidation', 'run.retryOnMirrorFetchFailed', 'run.acce
   'run.refundAbandonedRound',
   'run.trustCompletionDiff',
 ]);
+
+/**
+ * The result of a step whose run record vanished while it awaited a child or
+ * the network (the run was retired or torn down concurrently). The run is no
+ * longer this process's to continue, so no further world-effect follows it.
+ */
+export const RECORD_VANISHED = Object.freeze({ state: 'unchanged', reason: 'record-vanished' });
 
 /** Gate failures that are the ENVIRONMENT's, never the worker's: no retry can fix them. */
 export const GATE_ENVIRONMENT_CODES = Object.freeze(['gate-repo-moved', 'preflight-order-drift', 'sandbox-unavailable', 'gate-deps-missing', 'gate-repo-stale', 'remote-url-changed', 'base-object-missing']);
@@ -71,28 +79,34 @@ export function createRunSteps({ ctx, deps, issue, ticket, ticketId, mirror, wor
   const issueWt = ctx.paths.issueWorktree(n);
   const record = () => ctx.records.load(n);
   const headOf = () => ctx.git.localOut(issueWt, ['rev-parse', 'HEAD']);
+  // Every record write below may follow an await, so it goes through `write`,
+  // which yields null for a vanished record. A write that precedes further
+  // world-effects stops the run on null (`vanished`); a write that is
+  // bookkeeping around a result the caller is already owed is tolerated.
+  const write = (patch) => updateIfPresent(ctx.records, n, patch);
+  const terminal = (result) => ({ status: 'terminal', result });
+  const vanished = (extra = {}) => terminal({ ...RECORD_VANISHED, ...extra });
 
   // ---- terminal outcomes (§6.10) ----
   async function block(reason, detail, deadEnd = null, findings = null) {
-    ctx.records.update(n, { state: 'blocked', reasonText: `${reason}: ${detail ?? ''}` });
+    const rec = write({ state: 'blocked', reasonText: `${reason}: ${detail ?? ''}` });
     const body = findings ?? detail ?? reason;
-    await deps.effects.applyTerminalEffects({ ctx, record: record(), outcome: 'blocked', target: { kind: 'issue', number: n }, sentinel: `<!-- adlc-autopilot:blocked ${reason} -->`, body: `Autopilot blocked (${reason}).\n\n${body}`, label: 'adlc:autopilot-blocked' });
+    // The terminal effects need a record (they persist their intent on it); without one the outcome still stands.
+    if (rec) await deps.effects.applyTerminalEffects({ ctx, record: rec, outcome: 'blocked', target: { kind: 'issue', number: n }, sentinel: `<!-- adlc-autopilot:blocked ${reason} -->`, body: `Autopilot blocked (${reason}).\n\n${body}`, label: 'adlc:autopilot-blocked' });
     log(`issue ${n} blocked: ${reason}`);
     return { state: 'blocked', reason, deadEnd };
   }
   function failed(code, detail, state = 'failed') {
-    if (record()) ctx.records.update(n, { lastError: `${code}: ${detail ?? ''}`, ...(state === 'orphan' ? { state: 'orphan' } : {}) });
+    write({ lastError: `${code}: ${detail ?? ''}`, ...(state === 'orphan' ? { state: 'orphan' } : {}) });
     log(`issue ${n} run ${state}: ${code}`);
     return { state, reason: code, exitCode: 1, detail: detail ?? null };
   }
   async function mismatch(detail, prNumber = null) {
-    const rec = record();
-    ctx.records.update(n, { state: 'oid-mismatch', reasonText: `oid-mismatch: ${detail ?? ''}` });
+    const rec = write({ state: 'oid-mismatch', reasonText: `oid-mismatch: ${detail ?? ''}` });
     const target = prNumber != null || rec?.prNumber != null ? { kind: 'pr', number: prNumber ?? rec.prNumber } : { kind: 'issue', number: n };
-    await deps.effects.applyTerminalEffects({ ctx, record: record(), outcome: 'oid-mismatch', target, sentinel: '<!-- adlc-autopilot:oid-mismatch -->', body: `Autopilot quarantined this run: oid-mismatch. ${detail ?? ''}`, label: 'adlc:autopilot-blocked' });
+    if (rec) await deps.effects.applyTerminalEffects({ ctx, record: rec, outcome: 'oid-mismatch', target, sentinel: '<!-- adlc-autopilot:oid-mismatch -->', body: `Autopilot quarantined this run: oid-mismatch. ${detail ?? ''}`, label: 'adlc:autopilot-blocked' });
     return { state: 'oid-mismatch', reason: 'oid-mismatch' };
   }
-  const terminal = (result) => ({ status: 'terminal', result });
   async function retry(text) {
     const deadEndFile = await deps.deadEnd({ ctx, issue: n, text });
     return { status: 'retry', deadEndFile };
@@ -118,13 +132,9 @@ export function createRunSteps({ ctx, deps, issue, ticket, ticketId, mirror, wor
    */
   async function round({ budget, deadEndFile = null, chargeGlobal = true }) {
     const rec = record();
-    // #962: a record that has vanished (the run was retired/torn down
-    // concurrently — e.g. after a caller's own timeout) must fail closed
-    // HERE, before any of the ctx.records.update() calls below, which throw
-    // "no run record for issue N" on a missing record (records.mjs) — an
-    // orphaned round continuing past its owner's teardown turned that throw
-    // into an unhandled rejection blamed on an unrelated, later test.
-    if (!rec) return terminal({ state: 'unchanged', reason: 'record-vanished' });
+    // A vanished record stops the round before any work: the run was retired
+    // concurrently and is no longer this process's to continue.
+    if (!rec) return vanished();
     // §6.0a again immediately before dispatch (+ the credential margin).
     if (!active('run.skipRevalidation')) {
       const rv = await deps.revalidate({ ctx, issue: n, revision, authorization, beforeDispatch: true, wallClockMs: budget.wallClockMs });
@@ -165,14 +175,16 @@ export function createRunSteps({ ctx, deps, issue, ticket, ticketId, mirror, wor
     const abandonedMs = charge && !active('run.refundAbandonedRound') && typeof rec.roundStartedAt === 'number' ? Math.max(0, started - rec.roundStartedAt) : 0;
     const usedBefore = (rec.wallClockUsedMs ?? 0) + abandonedMs;
     const provisional = charge && !active('run.chargeAfterDispatch') ? { roundsUsed: (rec.roundsUsed ?? 0) + 1, roundStartedAt: started, wallClockUsedMs: usedBefore } : {};
-    ctx.records.update(n, { state: 'dispatched', integrationStart: await ctx.git.localOut(issueWt, ['rev-parse', branch]), fleetArgv: argv, ...provisional });
+    const integrationStart = await ctx.git.localOut(issueWt, ['rev-parse', branch]);
+    if (!write({ state: 'dispatched', integrationStart, fleetArgv: argv, ...provisional })) return vanished();
     const fleet = await deps.dispatch({ ctx, issue: n, argv, cwd: issueWt, deadlineMs: budget.wallClockMs + 5 * 60_000 });
     const elapsed = ctx.now() - started;
     const strikes = Math.max(1, Number(fleet.parsed?.strikesConsumed) || 1);
-    ctx.records.update(n, {
+    const settled = write({
       fleetRunId: fleet.parsed?.fleetRunId ?? rec.fleetRunId ?? null, lastFleetResult: fleet.parsed ?? null, roundStartedAt: null,
       ...(charge ? { wallClockUsedMs: usedBefore + elapsed, roundsUsed: (rec.roundsUsed ?? 0) + strikes } : {}),
     });
+    if (!settled) return vanished();
     // A PAUSED run (quota / wall clock) must resume as the same fleet run: a fresh
     // fleetRunId after a pause means fleet silently restarted instead of resuming.
     const paused = rec.lastFleetResult?.reason === 'quota-paused' || rec.lastFleetResult?.reason === 'wall-clock';
@@ -182,20 +194,20 @@ export function createRunSteps({ ctx, deps, issue, ticket, ticketId, mirror, wor
       return terminal(await block('sandbox-policy-mismatch', JSON.stringify({ readPolicy: fleet.parsed.readPolicy, gitSource: fleet.parsed.gitSource, egress: fleet.parsed.egress })));
     }
     const outcome = outcomeFor(fleet);
-    if (outcome.state === 'quota-paused') { ctx.records.update(n, { state: 'quota-paused' }); return terminal({ state: 'quota-paused', reason: 'quota-paused' }); }
+    if (outcome.state === 'quota-paused') { write({ state: 'quota-paused' }); return terminal({ state: 'quota-paused', reason: 'quota-paused' }); }
     if (outcome.skipped) return terminal({ state: 'skipped', reason: 'lock-held' });
-    if (outcome.state === 'unchanged') { ctx.records.update(n, { lastError: outcome.error }); return terminal({ state: 'unchanged', reason: outcome.error }); }
+    if (outcome.state === 'unchanged') { write({ lastError: outcome.error }); return terminal({ state: 'unchanged', reason: outcome.error }); }
     if (outcome.state === 'blocked') {
       if (outcome.reason === 'mirror-fetch-failed' && active('run.retryOnMirrorFetchFailed')) return retry('mirror-fetch-failed');
       return terminal(await block(outcome.reason, fleet.parsed?.tickets ? JSON.stringify(fleet.parsed.tickets) : '', null, fleet.findingsText));
     }
 
     // §6.5 — ff the issue branch to the integration tip.
-    ctx.records.update(n, { state: 'built' });
+    if (!write({ state: 'built' })) return vanished();
     // Mutation seam `run.skipFastForward`: the issue branch is never advanced to the integration tip.
     const ff = active('run.skipFastForward') ? { ok: true, head: await headOf() } : await fastForward(fleet.parsed.integrationBranch);
     if (!ff.ok) return terminal(failed('ff-not-fast-forward', ff.detail));
-    ctx.records.update(n, { localHead: ff.head });
+    if (!write({ localHead: ff.head })) return vanished();
 
     // §6.5b — outer-gate environment integrity (dependency + ignored-file drift).
     const dd = await deps.deps.dependencyDiffCheck({ ctx, issue: n, baseOid: ctx.baseOid, head: ff.head, allowed: cfg.allowedWorkspaceDeps ?? [] });
@@ -204,7 +216,9 @@ export function createRunSteps({ ctx, deps, issue, ticket, ticketId, mirror, wor
     if (!ig.ok) return retry(`${ig.code}:\n${(ig.paths ?? []).join('\n')}`);
 
     // §6.5a — actual-diff check (before any outer gate).
-    const dc = await deps.diffcheck.actualDiffCheck({ ctx, issue: n, record: record(), baseOid: ctx.baseOid, head: ff.head, scope: ticket.scope, ticketId });
+    const beforeDiff = record();
+    if (!beforeDiff) return vanished();
+    const dc = await deps.diffcheck.actualDiffCheck({ ctx, issue: n, record: beforeDiff, baseOid: ctx.baseOid, head: ff.head, scope: ticket.scope, ticketId });
     if (!dc.ok) {
       if (dc.code === 'secret-in-diff') { const summary = describeSecretHits(dc.secretHits ?? []); return terminal(await block('secret-in-diff', summary, null, summary)); }
       return retry(`${dc.code}:\n${(dc.paths ?? []).join('\n')}`);
@@ -249,7 +263,7 @@ export function createRunSteps({ ctx, deps, issue, ticket, ticketId, mirror, wor
       const foreign = changed.filter((p) => !allowed(p));
       if (foreign.length) return terminal(failed('completion-diff-unexpected', `the completion commit touched ${foreign.join(', ')}; only the ticket shard may change after the gates`));
     }
-    ctx.records.update(n, { completedOnce: true, localHead: afterCompletion });
+    if (!write({ completedOnce: true, localHead: afterCompletion })) return vanished();
 
     // §6.7a — size gate → final review; §6.7b attest — on the exact tree that is pushed.
     let rr;
@@ -259,33 +273,40 @@ export function createRunSteps({ ctx, deps, issue, ticket, ticketId, mirror, wor
       if (rr.code === 'blocked') return terminal(await block('diff-too-large', rr.reason, null, rr.deadEnd ?? null));
       return retry(rr.deadEnd ?? rr.reason ?? rr.code);
     }
-    ctx.records.update(n, { reviewedHead: rr.reviewedHead });
+    if (!write({ reviewedHead: rr.reviewedHead })) return vanished();
     let attested;
     try { attested = await deps.review.attest({ ctx, cwd: issueWt, ticketId, baseOid: ctx.baseOid, reviewedHead: rr.reviewedHead, issue: n }); }
     catch (e) { return terminal(e.code === 'oid-mismatch' ? await mismatch(e.message) : failed(e.code ?? 'attest-failed', e.message)); }
-    ctx.records.update(n, { state: 'attested', attestedHead: attested.attestedHead, attestRevision: attested.revision ?? null, localHead: attested.attestedHead, ...(reason ? { lastError: `retry: ${reason}` } : {}) });
+    const attestedRec = write({ state: 'attested', attestedHead: attested.attestedHead, attestRevision: attested.revision ?? null, localHead: attested.attestedHead, ...(reason ? { lastError: `retry: ${reason}` } : {}) });
+    if (!attestedRec) return vanished();
     return { status: 'attested', attested, review: rr };
   }
 
   /** §6.8 — verify → push → verify → PR upsert. */
   async function pushAndOpen({ attested, review }) {
-    const again = await deps.diffcheck.actualDiffCheck({ ctx, issue: n, record: record(), baseOid: ctx.baseOid, head: attested.attestedHead, scope: ticket.scope, ticketId });
+    const beforeCheck = record();
+    if (!beforeCheck) return vanished();
+    const again = await deps.diffcheck.actualDiffCheck({ ctx, issue: n, record: beforeCheck, baseOid: ctx.baseOid, head: attested.attestedHead, scope: ticket.scope, ticketId });
     if (!again.ok) return terminal(await mismatch(`actual-diff check failed before push: ${again.code}`));
-    const pushed = await deps.push.verifyPushVerify({ ctx, issue: n, record: record(), attestedHead: attested.attestedHead });
+    const beforePush = record();
+    if (!beforePush) return vanished();
+    const pushed = await deps.push.verifyPushVerify({ ctx, issue: n, record: beforePush, attestedHead: attested.attestedHead });
     if (!pushed.ok) {
       if (pushed.transient) return terminal(failed('push-failed', pushed.detail));         // recovery retries from the push intent
       return terminal(pushed.state === 'orphan' ? failed(pushed.code, pushed.detail, 'orphan') : await mismatch(pushed.detail));
     }
+    const beforeUpsert = record();
+    if (!beforeUpsert) return vanished();
     let pr;
     try {
       pr = await deps.push.upsertPr({
-        ctx, issue: n, record: record(), attestedHead: attested.attestedHead,
+        ctx, issue: n, record: beforeUpsert, attestedHead: attested.attestedHead,
         title: deps.push.prTitle({ issue: n, ticket }),
-        body: deps.push.prBody({ issue: n, ticketId, attest: attested, review, quota: ctx.status.read()?.quota ?? null, baseOid: ctx.baseOid, rounds: record().roundsUsed ?? 0 }),
+        body: deps.push.prBody({ issue: n, ticketId, attest: attested, review, quota: ctx.status.read()?.quota ?? null, baseOid: ctx.baseOid, rounds: beforeUpsert.roundsUsed ?? 0 }),
       });
     } catch (e) { return terminal(failed(e.code ?? 'pr-upsert-failed', e.message)); }
     if (!pr.ok) return terminal(await mismatch(pr.detail, pr.prNumber ?? null));
-    ctx.records.update(n, { state: 'ci-watch', prNumber: pr.prNumber, prState: 'OPEN' });
+    if (!write({ state: 'ci-watch', prNumber: pr.prNumber, prState: 'OPEN' })) return vanished({ prNumber: pr.prNumber });
     return { status: 'ok', prNumber: pr.prNumber, pushedOid: pushed.pushedOid };
   }
 

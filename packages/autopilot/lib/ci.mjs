@@ -13,6 +13,7 @@
 import { branchFor } from './input.mjs';
 import { redactStream, CHUNK_BYTES, WITHHELD_DEAD_END } from './redact.mjs';
 import { registerSeams, active } from './mutations.mjs';
+import { updateIfPresent } from './records.mjs';
 
 registerSeams([
   'ci.ignoreHeadBinding',     // polls no longer compare headRefOid with attestedHead
@@ -29,6 +30,8 @@ export const MAX_RE_EVALUATIONS = 3;
 export const MAX_LOG_BYTES = 4 * 1024 * 1024;
 export const KEEP_LOG_CHARS = 64 * 1024;
 export const POLL_MS = 60_000;
+/** The watch outcome for a run whose record vanished: no further charge, fix round or push follows. */
+export const RECORD_VANISHED_OUTCOME = Object.freeze({ outcome: 'record-vanished' });
 
 /** bucket → pass | red | wait | skipped (state only disambiguates skipping). */
 export function normalizeRow(row) {
@@ -123,18 +126,24 @@ async function pollChecks(ctx, prNumber) {
  * The watch loop. `runFixRound({ red, budget, fleetArgs, deadEnd })` is the
  * caller's retry protocol (fleet re-dispatch → … → fresh attestation → push)
  * and must return `{ ok, attestedHead }`. `sleep`/`ctx.now` are injectable.
+ *
+ * A missing `record` (or one that vanishes during the watch) ends it as
+ * `record-vanished` wherever more work would follow; a write that only records
+ * an outcome already decided (done, oid-mismatch, re-evaluation) is tolerated.
  */
 export async function watchCi({ ctx, record, attestedHead, budgetMs, poll = POLL_MS, runFixRound, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), maxReEvaluations = MAX_RE_EVALUATIONS }) {
+  if (!record) return { ...RECORD_VANISHED_OUTCOME };
   const n = record.issue; const pr = record.prNumber;
+  const write = (patch) => updateIfPresent(ctx.records, n, patch);
   const config = ctx.config?.autopilot ?? {};
   const budget = budgetMs ?? (config.ciWatchMinutes ?? 30) * 60_000;
   const fixLimit = config.ciFixRounds ?? DEFAULT_CI_FIX_ROUNDS;
   let head = attestedHead; let deadline = ctx.now() + budget; let cur = ctx.records.load(n) ?? record;
-  ctx.records.update(n, { state: 'ci-watch', attestedHead: head });
+  if (!write({ state: 'ci-watch', attestedHead: head })) return { ...RECORD_VANISHED_OUTCOME };
   for (;;) {
     const view = await ctx.gh.json(['pr', 'view', String(pr), '--json', 'headRefOid']);
     if (!active('ci.ignoreHeadBinding') && view?.headRefOid !== head) {
-      ctx.records.update(n, { state: 'oid-mismatch', lastError: `oid-mismatch: PR #${pr} head ${view?.headRefOid ?? 'unknown'} != attestedHead ${head}` });
+      write({ state: 'oid-mismatch', lastError: `oid-mismatch: PR #${pr} head ${view?.headRefOid ?? 'unknown'} != attestedHead ${head}` });
       return { outcome: 'oid-mismatch', expected: head, observed: view?.headRefOid ?? null, comment: `oid-mismatch: PR #${pr} head ${view?.headRefOid ?? 'unknown'} != attested ${head}` };
     }
     const rows = await pollChecks(ctx, pr);
@@ -150,22 +159,22 @@ export async function watchCi({ ctx, record, attestedHead, budgetMs, poll = POLL
       if (!quota.ok) { const pausedAt = ctx.now(); await sleep(poll); deadline += ctx.now() - pausedAt; continue; }
       const fix = ciFixRoundBudget({ record: cur, config });
       if (fix.maxStrikes <= 0 || fix.wallClockMinutes <= 0) return { outcome: 'ci-red', red: norm.red, label: 'adlc:autopilot-ci-red', comment: `CI fix budget exhausted: ${norm.red.join(', ')}` };
-      ctx.records.update(n, { ciRoundsUsed: used + 1 }); // charged BEFORE the round starts
+      if (!write({ ciRoundsUsed: used + 1 })) return { ...RECORD_VANISHED_OUTCOME }; // charged BEFORE the round starts
       const deadEnd = await collectFailedLogs({ ctx, issue: n, head, red: norm.red });
       const res = await runFixRound({ red: norm.red, budget: fix, fleetArgs: ciFixFleetArgs(fix), deadEnd, round: used + 1 });
       if (!res?.ok) return { outcome: 'fix-round-failed', code: res?.code ?? 'fix-round-failed', red: norm.red, round: used + 1 };
       head = res.attestedHead; deadline = ctx.now() + budget; cur = ctx.records.load(n) ?? cur;
-      ctx.records.update(n, { state: 'ci-watch', attestedHead: head });
+      if (!write({ state: 'ci-watch', attestedHead: head })) return { ...RECORD_VANISHED_OUTCOME };
       continue;
     }
     if (norm.verdict === 'pass' && (active('ci.ignoreHeadBinding') || view?.headRefOid === head)) {
-      ctx.records.update(n, { state: 'done' });
+      write({ state: 'done' });
       return { outcome: 'done', head };
     }
     if (expired) {
       const re = (cur.ciReEvaluations ?? 0) + 1;
       if (re >= maxReEvaluations) return { outcome: 'ci-incomplete', label: 'adlc:autopilot-ci-red', waiting: norm.waiting, missing: norm.missing, comment: `ci-incomplete: still waiting on ${[...norm.waiting, ...norm.missing].join(', ')}` };
-      ctx.records.update(n, { state: 'ci-watch', ciReEvaluations: re });
+      write({ state: 'ci-watch', ciReEvaluations: re });
       return { outcome: 'ci-watch', reEvaluations: re, waiting: norm.waiting, missing: norm.missing };
     }
     await sleep(poll);
