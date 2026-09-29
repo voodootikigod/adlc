@@ -23,10 +23,15 @@ regression-tested against a real binary).
 - **Native tools:** `adlc_gate` (the model runs a lifecycle gate, LLM-backed
   ones keyless through the host model) and `adlc_prosecute` (the **deterministic
   first-party P5 loop**: fan-out → dedupe → verify → loop-until-dry over
-  write-disabled child sessions).
+  write-disabled child sessions). A gate that timed out or was killed by a
+  signal returns `exitCode: null` and a "did not complete" error, never an
+  exit code.
 - **Advisory session/compaction hooks:** `session.created` preflight, a
   `session.idle` gate-manifest audit, per-turn + at-compaction context injection,
-  and slash-command lifecycle/tamper advisories. They warn, never throw.
+  and slash-command lifecycle/tamper advisories. They warn, never throw. Every
+  `git`/`adlc` child they (and the `file.edited` watcher) spawn is bounded
+  (5 s, SIGKILL), since the plugin runs inside the host process; a verifier
+  that did not finish is reported as unverified, not as a clean chain.
 - **Commands:** `/adlc-init`, `/adlc-ticket`, `/adlc-spec`, `/adlc-approve-spec`,
   `/adlc-decompose`, `/adlc-verify-build`, `/adlc-prosecute`, `/adlc-distill`,
   `/adlc-maintain`.
