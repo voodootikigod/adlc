@@ -22,6 +22,11 @@ import {
   reviewCommand,
   isRenderableRef,
 } from '../ceremony-drift.mjs';
+import { tmp } from '@adlc/core/test-kit';
+import { runAsProgram, importFromInlineModule } from './helpers/entry-guard.mjs';
+import { fileURLToPath } from 'node:url';
+
+const SCRIPT = fileURLToPath(new URL('../ceremony-drift.mjs', import.meta.url));
 
 // Heuristic evidence: scope globs already resolve. Indistinguishable from an
 // ACTIVE ticket whose work touches existing paths, so it must never be swept
@@ -956,4 +961,16 @@ test('a ref may NOT start with a separator or punctuation', () => {
   for (const ref of ['-oProxyCommand=x', '.hidden', '/abs', '_lead', '@at', '=eq', ',comma', '+plus']) {
     assert.equal(isRenderableRef(ref), false, `must reject leading punctuation: ${ref}`);
   }
+});
+
+test('run as a program, it computes drift and fails loudly without a ticket store', (t) => {
+  const r = runAsProgram(SCRIPT, { cwd: tmp(t, 'adlc-drift-entry-') });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /ceremony-drift: could not compute drift/);
+});
+
+test('imported by another module, the entry guard neither throws nor runs the CLI', (t) => {
+  const r = importFromInlineModule(SCRIPT, { cwd: tmp(t, 'adlc-import-entry-') });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout + r.stderr, '');
 });

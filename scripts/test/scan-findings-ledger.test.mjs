@@ -4,11 +4,16 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { scan as scanInProcess } from '../scan-findings-ledger.mjs';
+import { tmp } from '@adlc/core/test-kit';
+import { runAsProgram, importFromInlineModule } from './helpers/entry-guard.mjs';
+import { fileURLToPath } from 'node:url';
+
+const SCRIPT = fileURLToPath(new URL('../scan-findings-ledger.mjs', import.meta.url));
 
 const SCANNER = new URL('../scan-findings-ledger.mjs', import.meta.url).pathname;
 
@@ -74,4 +79,19 @@ test('FAILS on a malformed line even with no secret — readEntries would silent
 
 test('tolerates a missing ledger (exit 0, nothing to scan)', () => {
   assert.equal(scan('/nonexistent/path/findings.jsonl').code, 0);
+});
+
+test('run as a program with no arguments, it scans the ledger in the working directory', (t) => {
+  const cwd = tmp(t, 'adlc-scan-entry-');
+  mkdirSync(join(cwd, '.adlc'));
+  writeFileSync(join(cwd, '.adlc', 'findings.jsonl'), 'not json\n');
+  const r = runAsProgram(SCRIPT, { cwd });
+  assert.equal(r.status, 2, r.stdout + r.stderr);
+  assert.match(r.stdout + r.stderr, /scan-findings-ledger: 1 line\(s\) in \.adlc\/findings\.jsonl are not publishable/);
+});
+
+test('imported by another module, the entry guard neither throws nor runs the CLI', (t) => {
+  const r = importFromInlineModule(SCRIPT, { cwd: tmp(t, 'adlc-import-entry-') });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout + r.stderr, '');
 });
