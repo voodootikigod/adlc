@@ -66,10 +66,10 @@ if (selfContained) ok('plugin is self-contained (node: + relative imports only, 
 // The fixture is removed whether or not the shim behaves.
 const repo = mkdtempSync(join(tmpdir(), 'gemini-smoke-'));
 try {
-  mkdirSync(join(repo, '.adlc'), { recursive: true });
+  mkdirSync(join(repo, '.adlc'));
   writeFileSync(join(repo, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 't', body: 'b', scope: ['src/**'], rails: ['src/frozen.js'] }] }));
   writeFileSync(join(repo, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
-  mkdirSync(join(repo, 'src'), { recursive: true });
+  mkdirSync(join(repo, 'src'));
   const SHIM = join(PLUGIN, 'hooks', 'adlc-rails-guard.cjs');
   const drive = (name, args) => {
     const out = execFileSync(process.execPath, [SHIM], { input: JSON.stringify({ toolCall: { name, args } }), env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' }, encoding: 'utf8' });
