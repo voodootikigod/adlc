@@ -49,8 +49,12 @@ ticket or a PR is enough.
   `packages/coldstart/lib/prompt.mjs` (ticket JSON, reviewed as data) and
   `packages/fleet/lib/charters.mjs` (dead-end logs as data; the ticket
   specification is fenced too, but framed as the builder's task — see below)
-  are the JS-level call sites; `scripts/test/prompt-fencing.test.mjs` greps
-  for regressions.
+  are two of the call sites. `scripts/test/prompt-fencing.test.mjs` greps each
+  known builder for regressions, and requires every module that
+  `scripts/prompt-senders.mjs` detects as sending a prompt (a static or
+  dynamic import of core's `complete`/`fan`/`fanProviders`, or a host-harness
+  session or print-mode CLI send, under `packages/*/{lib,bin}` or `plugins/*`)
+  to be either guarded or recorded as reviewed with a reason.
 - **Role-appropriate framing, not blanket "never obey."** A ticket body sent
   to a *builder* is legitimately instructional — executing it is the
   builder's job. Fencing it there is for provenance and length, not to
