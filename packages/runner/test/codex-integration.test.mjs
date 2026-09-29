@@ -1,9 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { tmpdir } from 'node:os';
 import { resolveRevision, sha256 } from '@adlc/core';
 import { tmp } from '@adlc/core/test-kit';
 
@@ -32,17 +31,32 @@ describe('codex plugin smoke script', () => {
     assert.match(result.stderr, /mutated the caller real HOME\/XDG Codex state/);
   });
 
-  it('cleans every temporary root when live setup fails partway through', () => {
-    const prefixes = ['adlc-codex-home-', 'adlc-codex-user-', 'adlc-codex-smoke-'];
-    const snapshot = () => readdirSync(tmpdir()).filter((name) => prefixes.some((prefix) => name.startsWith(prefix))).sort();
-    const before = snapshot();
+  it('cleans every temporary root when live setup fails partway through', (t) => {
+    // A private TMPDIR makes "nothing left behind" exact: another process creating
+    // or removing same-prefixed roots in the shared tmpdir cannot move the result.
+    const privateTmp = tmp(t, 'adlc-codex-cleanup-');
     const result = spawnSync(process.execPath, [join(repoRoot, 'scripts/codex-install-smoke.mjs'), repoRoot], {
-      env: { ...process.env, ADLC_CODEX_LIVE_INSTALL: '1', ADLC_CODEX_SMOKE_FAIL_AFTER_TEMP: '1' },
+      env: { ...process.env, TMPDIR: privateTmp, ADLC_CODEX_LIVE_INSTALL: '1', ADLC_CODEX_SMOKE_FAIL_AFTER_TEMP: '1' },
       encoding: 'utf8',
     });
     assert.equal(result.status, 2);
     assert.match(result.stderr, /injected failure after temporary setup/);
-    assert.deepEqual(snapshot(), before);
+    assert.deepEqual(readdirSync(privateTmp), []);
+  });
+
+  it('creates its temporary roots under TMPDIR, so the cleanup check above observes them', (t) => {
+    // An unwritable TMPDIR must stop the live setup before the injected failure:
+    // proof that the roots land in the directory the cleanup check lists.
+    if (process.getuid?.() === 0) { t.skip('root ignores directory permissions'); return; }
+    const privateTmp = tmp(t, 'adlc-codex-roots-');
+    chmodSync(privateTmp, 0o500);
+    const result = spawnSync(process.execPath, [join(repoRoot, 'scripts/codex-install-smoke.mjs'), repoRoot], {
+      env: { ...process.env, TMPDIR: privateTmp, ADLC_CODEX_LIVE_INSTALL: '1', ADLC_CODEX_SMOKE_FAIL_AFTER_TEMP: '1' },
+      encoding: 'utf8',
+    });
+    assert.notEqual(result.status, 0);
+    assert.doesNotMatch(result.stderr, /injected failure after temporary setup/);
+    assert.match(result.stderr, /EACCES/);
   });
 });
 
