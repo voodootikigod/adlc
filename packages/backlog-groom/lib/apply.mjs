@@ -32,6 +32,19 @@ import { assertFloor, assertFloorNotWidened, assertFrozenPathsNotNarrowed, asser
 export const EXECUTABLE_ACTIONS = Object.freeze(['close', 'relabel']);
 
 /**
+ * Actions a set's `proposals[]` may carry — a subset of EXECUTABLE_ACTIONS.
+ *
+ * A close is DERIVED from a `fixed` verdict and never taken from `proposals[]`.
+ * That list is caller-editable, and a proposal's `field` is part of the one-shot
+ * key, so a close accepted from it with any field string is a fresh review slot
+ * for the same close at the same revision — asked again until one approves.
+ */
+export const PROPOSABLE_ACTIONS = Object.freeze(['relabel']);
+
+/** A full git object id: SHA-1 (40 hex) or SHA-256 (64 hex). */
+const COMMIT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/**
  * Actions the emitted set proposes, in the shape the gate and executor expect.
  *
  * `close` is derived from a `fixed` verdict; the set's own `proposals` carry
@@ -66,7 +79,7 @@ export function actionsFromSet(set) {
     if (issue.frozen === true) continue;
     // Refused HERE, before a comment is written — not at the writer, which would
     // leave a rationale on an issue nothing then happened to.
-    if (!EXECUTABLE_ACTIONS.includes(p.action)) continue;
+    if (!PROPOSABLE_ACTIONS.includes(p.action)) continue;
     out.push({
       number: p.number,
       action: p.action,
@@ -237,16 +250,25 @@ export function applyRun({ set, profile, baseFloor, basePolicy, ledger = {}, run
   // one closes issues on evidence that no longer describes the code: the cited
   // file may have changed, or the defect may have been reintroduced, since the
   // verdict was computed.
-  // REQUIRED, not merely checked when present: a set that omits generatedFor
-  // would otherwise skip the staleness check entirely, which is the shape a
-  // hand-crafted set takes.
-  if (revision && !set?.generatedFor) {
+  // The revision itself is REQUIRED and must be a commit id. A run that could
+  // not establish its own commit would otherwise skip the staleness check and
+  // read a moving HEAD — the fail-open direction, taken exactly when git is
+  // already misbehaving.
+  if (typeof revision !== 'string' || !COMMIT_ID.test(revision)) {
+    throw Object.assign(
+      new Error(`backlog-groom: could not establish the repository's commit (got ${JSON.stringify(revision ?? null)}) — refusing to act on a set whose revision cannot be checked`),
+      { isOpError: true }
+    );
+  }
+  // generatedFor is REQUIRED too: a set that omits it would otherwise skip the
+  // staleness check entirely, which is the shape a hand-crafted set takes.
+  if (!set?.generatedFor) {
     throw Object.assign(
       new Error('backlog-groom: this groomed set declares no generatedFor revision — refusing to act on evidence whose revision cannot be checked'),
       { isOpError: true }
     );
   }
-  if (revision && set.generatedFor !== revision) {
+  if (set.generatedFor !== revision) {
     throw Object.assign(
       new Error(
         `backlog-groom: this groomed set was generated for ${set.generatedFor}, but the repository is at ${revision} — re-run the read path before applying`
@@ -257,7 +279,7 @@ export function applyRun({ set, profile, baseFloor, basePolicy, ledger = {}, run
 
   // `revision` spread LAST so a supplied io cannot unpin the snapshot every read
   // in this run is supposed to share — the same rule the read pipeline uses.
-  const pinnedIo = revision ? { ...io, revision } : io;
+  const pinnedIo = { ...io, revision };
 
   const proposed = actionsFromSet(set);
 

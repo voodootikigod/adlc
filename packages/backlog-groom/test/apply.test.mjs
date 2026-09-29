@@ -6,10 +6,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { actionsFromSet, applyRun, revalidateAction } from '../lib/apply.mjs';
+import { actionsFromSet, applyRun as applyRunAtRevision, revalidateAction } from '../lib/apply.mjs';
 import { contentHash } from '../lib/content-hash.mjs';
 import { REVIEW_APPROVE, REVIEW_NEEDS_ATTENTION } from '../lib/gate.mjs';
 import { sealLedgerEntry } from '../lib/ledger-sig.mjs';
+
+// Every run acts at a commit its set was generated for. Tests that are not about
+// the revision act at one fixed commit; tests that are pass their own.
+const TEST_REV = 'e'.repeat(40);
+const applyRun = (o) => applyRunAtRevision('revision' in o ? o : { ...o, revision: TEST_REV, set: { generatedFor: TEST_REV, ...o.set } });
 
 // Ledger entries are signed now (#1035): a fixture must seal what it writes, and
 // every call that reads authorization must be given the key.
@@ -20,7 +25,7 @@ const TEST_KEY = 'unit-test-ledger-key-0123456789ab';
 const FILES = { 'src/a.mjs': 'something else\n', 'src/b.mjs': 'still here\n' };
 const IO = {
   readFile: (f) => { if (!(f in FILES)) throw new Error('ENOENT'); return FILES[f]; },
-  pathExists: (f) => f in FILES,
+  pathKind: (f) => (f in FILES ? 'blob' : null),
   lastCommitFor: () => 'abc1234',
 };
 const BODIES = {
@@ -256,7 +261,7 @@ test('a stale set is refused before anything is gated', () => {
         ledger: {},
         fetchIssue,
         io: IO,
-        revision: 'newsha',
+        revision: '2'.repeat(40),
         runReview: () => { reviewed += 1; return { code: REVIEW_APPROVE }; },
         gh,
       }),
@@ -269,13 +274,13 @@ test('a stale set is refused before anything is gated', () => {
 test('a set generated for the current revision proceeds', () => {
   const gh = fakeGh();
   const out = applyRun({ key: TEST_KEY,
-    set: { ...set(), generatedFor: 'samesha' },
+    set: { ...set(), generatedFor: '3'.repeat(40) },
     profile: profile(), basePolicy: profile(),
     baseFloor: [],
     ledger: {},
     fetchIssue,
     io: IO,
-    revision: 'samesha',
+    revision: '3'.repeat(40),
     runReview: () => ({ code: REVIEW_APPROVE }),
     gh,
   });
@@ -340,7 +345,7 @@ test('an issue that cannot be re-read is refused rather than assumed unchanged',
 test('a set whose claims match the repository is accepted', () => {
   // A genuinely fixed issue: the cited snippet is gone from the file at HEAD.
   const fetchIssue = () => ({ number: 1, title: 't', body: '**Location** `src/a.mjs:1`\n\n```\ngone\n```\n', labels: [], updatedAt: 'u1' });
-  const io = { readFile: () => 'something else\n', pathExists: () => true, lastCommitFor: () => 'abc1234' };
+  const io = { readFile: () => 'something else\n', pathKind: () => 'blob', lastCommitFor: () => 'abc1234' };
   const hash = contentHash(['src/a.mjs'], io);
   const out = revalidateAction({ number: 1, action: 'close', contentHash: hash, updatedAt: 'u1' }, { fetchIssue, profile: { frozenPaths: [] }, io });
   assert.equal(out.ok, true, out.reason);
@@ -351,7 +356,7 @@ test('a close for an issue that re-verifies as VALID is refused', () => {
   // prove the set describes the right thing, and say nothing about whether its
   // conclusion is right. A hand-written set can claim `fixed` for a live bug.
   const fetchIssue = () => ({ number: 1, title: 't', body: '**Location** `src/a.mjs:1`\n\n```\nstill here\n```\n', labels: [], updatedAt: 'u1' });
-  const io = { readFile: () => 'still here\n', pathExists: () => true, lastCommitFor: () => 'abc1234' };
+  const io = { readFile: () => 'still here\n', pathKind: () => 'blob', lastCommitFor: () => 'abc1234' };
   const hash = contentHash(['src/a.mjs'], io);
   const out = revalidateAction(
     { number: 1, action: 'close', contentHash: hash, updatedAt: 'u1', verdict: 'fixed' },
@@ -363,7 +368,7 @@ test('a close for an issue that re-verifies as VALID is refused', () => {
 
 test('a set omitting updatedAt is refused rather than skipping the check', () => {
   const fetchIssue = () => ({ number: 1, title: 't', body: '**Location** `src/a.mjs:1`\n\n```\ngone\n```\n', labels: [], updatedAt: 'u1' });
-  const io = { readFile: () => 'other\n', pathExists: () => true, lastCommitFor: () => 'abc1234' };
+  const io = { readFile: () => 'other\n', pathKind: () => 'blob', lastCommitFor: () => 'abc1234' };
   const hash = contentHash(['src/a.mjs'], io);
   const out = revalidateAction({ number: 1, action: 'close', contentHash: hash }, { fetchIssue, profile: { frozenPaths: [] }, io });
   assert.equal(out.ok, false);
@@ -373,7 +378,7 @@ test('a set omitting updatedAt is refused rather than skipping the check', () =>
 test('a set with no generatedFor is refused when a revision is known', () => {
   const gh = fakeGh();
   assert.throws(
-    () => applyRun({ key: TEST_KEY, set: { issues: [], proposals: [] }, profile: profile(), basePolicy: profile(), baseFloor: [], ledger: {}, revision: 'abc', runReview: () => ({ code: REVIEW_APPROVE }), gh }),
+    () => applyRun({ key: TEST_KEY, set: { issues: [], proposals: [] }, profile: profile(), basePolicy: profile(), baseFloor: [], ledger: {}, revision: '4'.repeat(40), runReview: () => ({ code: REVIEW_APPROVE }), gh }),
     (err) => err.isOpError === true
   );
 });
@@ -420,7 +425,7 @@ test('revalidation reads the PINNED revision, not a moving HEAD', () => {
   let seenRevision = null;
   const io = {
     readFile: (f) => { if (!(f in FILES)) throw new Error('ENOENT'); return FILES[f]; },
-    pathExists: (f) => f in FILES,
+    pathKind: (f) => (f in FILES ? 'blob' : null),
     lastCommitFor: () => 'abc1234',
   };
   const spyIo = new Proxy(io, {
@@ -431,13 +436,13 @@ test('revalidation reads the PINNED revision, not a moving HEAD', () => {
   });
   const gh = fakeGh();
   applyRun({ key: TEST_KEY,
-    set: { ...set(), generatedFor: 'pinned-sha' },
+    set: { ...set(), generatedFor: '5'.repeat(40) },
     profile: profile(), basePolicy: profile(),
     baseFloor: [],
     ledger: {},
     fetchIssue,
     io: spyIo,
-    revision: 'pinned-sha',
+    revision: '5'.repeat(40),
     runReview: () => ({ code: REVIEW_APPROVE }),
     gh,
   });
@@ -495,7 +500,7 @@ test('an area relabel may target the declared unit its verified locations sit in
   // a declared label was treated as enough. An area move is mechanically
   // provable (§3.4a), so the target must be the unit the location proves.
   const files = { 'packages/review/x.mjs': 'something else\n' };
-  const io = { readFile: (f) => { if (!(f in files)) throw new Error('ENOENT'); return files[f]; }, pathExists: (f) => f in files, lastCommitFor: () => 'abc1234' };
+  const io = { readFile: (f) => { if (!(f in files)) throw new Error('ENOENT'); return files[f]; }, pathKind: (f) => (f in files ? 'blob' : null), lastCommitFor: () => 'abc1234' };
   const hash = contentHash(['packages/review/x.mjs'], io);
   const profile = { ...labelProfile(), units: [...labelProfile().units, { name: 'docs', paths: ['docs/**'] }] };
   const out = revalidateAction(
