@@ -183,9 +183,15 @@ export function resolveSessionId({ payload, env = process.env } = {}) {
 
 const loadedSecretCache = new Map();
 
-function resolveUserHome(env = process.env) {
-  const isTest = env?.ADLC_TEST_MODE === '1' || process.env.ADLC_TEST_MODE === '1';
-  if (isTest && env?.ADLC_HOME_DIR) return env.ADLC_HOME_DIR;
+/**
+ * The user's home for `env`, resolved the way Node's `os.homedir()` resolves
+ * it for the process: the platform home variable, then the account database.
+ * Reading it from `env` rather than `process.env` keeps the hook's injected
+ * environment the single source of truth for every path it protects.
+ */
+export function resolveUserHome(env = process.env) {
+  const fromEnv = process.platform === 'win32' ? env?.USERPROFILE : env?.HOME;
+  if (typeof fromEnv === 'string' && fromEnv.length > 0) return fromEnv;
   try {
     return homedir() || tmpdir();
   } catch {
@@ -259,9 +265,6 @@ export function rotateMasterKey(env = process.env) {
 }
 
 export function getOrCreateSessionSecret(root, env = process.env) {
-  const isTest = env?.ADLC_TEST_MODE === '1' || process.env.ADLC_TEST_MODE === '1';
-  if (isTest && env?.ADLC_SESSION_SECRET && env?.ADLC_P4_ENFORCEMENT !== '1') return env.ADLC_SESSION_SECRET;
-
   const userHome = resolveUserHome(env);
   const adlcPrivateDir = join(userHome, '.config', 'adlc', 'secrets');
   const masterKeyFile = join(adlcPrivateDir, '.auth-key');

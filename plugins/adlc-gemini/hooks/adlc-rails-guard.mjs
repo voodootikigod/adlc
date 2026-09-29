@@ -37,7 +37,7 @@ function realpathOr(p) {
 import { checkRail, classifyTool, isShellTool, hasCommandLineArgs, hasCodeExecutionArgs, resolveActiveTicketId, railPreconditions, TRUST_ROOT_RAILS, extractCommandString } from '../rails-checker.mjs';
 export { extractCommandString };
 import { loadTicketStoreReadOnly } from '../generated-ticket-reader.mjs';
-import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId, computePrefixHash, readTranscriptPrefixBounded, readTextFileBounded, getTestFilesMap, hasDiscoverableTests, getOrCreateSessionSecret, getMasterKeyRaw, rotateMasterKey } from '../build-gate-inline.mjs';
+import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId, computePrefixHash, readTranscriptPrefixBounded, readTextFileBounded, getTestFilesMap, hasDiscoverableTests, getOrCreateSessionSecret, getMasterKeyRaw, rotateMasterKey, resolveUserHome } from '../build-gate-inline.mjs';
 import { flailMessage, resolveTranscriptPath, parseTranscriptSteps, parseTranscriptRecords, analyzeFlail } from '../flail-inline.mjs';
 
 // agy nests the call under toolCall; args is the parameter bag. Read defensively.
@@ -238,9 +238,13 @@ export function extractCwdFromArgs(args) {
   return null;
 }
 
+/**
+ * Homes whose ADLC secret stores are protected: the process's own home and the
+ * home the injected environment names, which is where the build gate reads
+ * and writes the master key.
+ */
 export function getTrustRootSecretHomes(env = process.env) {
-  const isTest = env?.ADLC_TEST_MODE === '1' || process.env.ADLC_TEST_MODE === '1';
-  const customHome = (isTest ? env?.ADLC_HOME_DIR || '' : '').replace(/\\/g, '/');
+  const customHome = (resolveUserHome(env) || '').replace(/\\/g, '/');
   let realHome = '';
   try {
     realHome = (homedir() || tmpdir() || '').replace(/\\/g, '/');

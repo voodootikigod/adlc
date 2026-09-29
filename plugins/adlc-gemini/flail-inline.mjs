@@ -1,9 +1,9 @@
 // flail-inline.mjs — self-contained target-file edit churn and error flail tracking for adlc-gemini.
 // Uses ONLY Node builtins (no npm @adlc/* runtime dependencies).
 
-import { existsSync, readFileSync, openSync, readSync, closeSync, statSync, lstatSync, fstatSync, realpathSync, constants as fsConstants } from 'node:fs';
-import { join, relative, isAbsolute, dirname, parse, basename } from 'node:path';
-import { homedir, tmpdir } from 'node:os';
+import { readFileSync, openSync, readSync, closeSync, statSync, lstatSync, fstatSync, realpathSync, constants as fsConstants } from 'node:fs';
+import { join, relative, isAbsolute, basename } from 'node:path';
+import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 
 export const DEFAULT_FLAIL_THRESHOLD = 3;
@@ -115,14 +115,8 @@ export function resolveTranscriptPath({ payload, conversationId, env = process.e
         const lstat = lstatSync(direct);
         if (!lstat.isSymbolicLink() && lstat.isFile()) {
           const real = realpathSync(direct);
-          const isTest = (env?.ADLC_TEST_MODE === '1' || process.env.ADLC_TEST_MODE === '1');
-          const allowedRoots = [
-            appDataDir,
-            env?.ANTIGRAVITY_WORKSPACE,
-            env?.WORKSPACE_ROOT,
-            ...(isTest ? [tmpdir(), ...(Array.isArray(payload?.workspacePaths) ? payload.workspacePaths : [])] : []),
-          ];
-          let isAllowed = allowedRoots.filter(Boolean).some((r) => {
+          const allowedRoots = [appDataDir, env?.ANTIGRAVITY_WORKSPACE, env?.WORKSPACE_ROOT];
+          const isAllowed = allowedRoots.filter(Boolean).some((r) => {
             try {
               const realR = realpathSync(r);
               const rel = relative(realR, real);
@@ -131,17 +125,6 @@ export function resolveTranscriptPath({ payload, conversationId, env = process.e
               return false;
             }
           });
-          if (!isAllowed && isTest) {
-            let cur = dirname(real);
-            const { root: fsRoot } = parse(cur);
-            while (cur && cur !== fsRoot) {
-              if (existsSync(join(cur, '.adlc', 'tickets.json')) || existsSync(join(cur, '.adlc', 'tickets', '.store.json'))) {
-                isAllowed = true;
-                break;
-              }
-              cur = dirname(cur);
-            }
-          }
           if (isAllowed) return real;
         }
       } catch {
