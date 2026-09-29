@@ -8,6 +8,8 @@ This document describes the declaration of merge-blocking status checks in `docs
 - **blocking: true** — with its required status-check `contexts` as reported by GitHub Actions (`integration_id` 15368).
 - **blocking: false** — with a one-line `why` explaining why the check is advisory or covered elsewhere.
 
+The top-level `integrationId` (15368, GitHub Actions) is the source every blocking context must be pinned to in the live ruleset. `gate-liveness` exits 2 when a declared context is required but no rule pins it to that source, because an unpinned context can be satisfied by anyone able to post a commit status. It must equal the `integration_id` used in `docs/github-rulesets/main-branch-ruleset.json` (`scripts/test/gate-liveness-source.test.mjs` pins this). `--branch` must name one branch of this repository: `..`, empty segments and segments starting with `.` are refused with exit 1.
+
 `scripts/test/gate-liveness.test.mjs` enforces bijectivity in both directions: every PR workflow and job in `.github/workflows/` must be classified, and every classified job must exist in the YAML.
 
 The `scripts/gate-liveness.mjs` tool is strictly read-only: it queries the GitHub ruleset API and never writes to GitHub.
@@ -66,6 +68,6 @@ Note: `docs/github-rulesets/apply.sh` now applies the same six contexts from `ma
 
 Once `rails-guard` is a required status check:
 
-1. **Immutable Trust Root Changes**: In a single-collaborator repository where separation-of-duties review cannot occur, a pull request modifying an immutable trust root (`.github/workflows/ci.yml`, `CODEOWNERS`, `scripts/rails-guard-ci.mjs`, `scripts/preflight.mjs`, `package.json`) remains red on `rails-guard` by design. An admin must merge such PRs using the admin bypass.
+1. **Immutable Trust Root Changes**: In a single-collaborator repository where separation-of-duties review cannot occur, a pull request modifying an immutable trust root (`.github/workflows/ci.yml`, `CODEOWNERS`, `scripts/rails-guard-ci.mjs`, `scripts/preflight.mjs`, `package.json`) is red on `rails-guard` by design while the PR leaves the `rails-guard` job intact, and an admin must merge such PRs using the admin bypass. Because `ci.yml` runs from the PR's own merge ref, a PR that edits the job itself (for example `continue-on-error: true`) can turn `rails-guard` green; `rails-guard`, `mutation-gate` and `test` therefore do not protect their own definition. What does is the base-controlled `gate` check: every path under `.github/workflows/` and `.github/actions/`, and `CODEOWNERS`, is trust-root tier (`packages/prosecute/lib/tier.mjs`), so `gate` stays red until a cross-model review from a distinct provider is recorded for the revision.
 2. **Direct Push Manifest Updates**: Direct pushes to `main` (e.g. `adlc ticket complete` adding a manifest segment) make existing open PRs show `rails-guard` red until their branches are rebased or merged with `main`.
 3. **Fork Pull Requests**: A pull request from a fork that touches a trust root requires the `trust-root-change` label applied before the contributor's last push (the workflow evaluates labels from the event payload), followed by an approving review from the repository owner and a re-run of the check.

@@ -23,6 +23,20 @@ Options:
   -h, --help              Show this help message and exit
 `;
 
+function isIntegrationId(value) {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
+/**
+ * A branch name is one ref of this repository: non-empty `/`-separated
+ * segments, none starting with `.` and no `..` anywhere. GitHub normalizes dot
+ * segments in the API path, so a `..` would query a different resource.
+ */
+export function isBranchName(name) {
+  if (typeof name !== 'string' || !/^[A-Za-z0-9._\/-]+$/.test(name) || name.includes('..')) return false;
+  return name.split('/').every((segment) => segment !== '' && !segment.startsWith('.'));
+}
+
 /**
  * Extracts declared merge-blocking contexts in file order from required-gates.json.
  * Throws if the document is invalid.
@@ -33,6 +47,9 @@ export function declaredContexts(gates) {
   }
   if (!VALID_REVIEW_MODES.includes(gates.pullRequestReview)) {
     throw new Error(`Invalid pullRequestReview mode: "${gates.pullRequestReview}". Must be one of ${VALID_REVIEW_MODES.join(', ')}`);
+  }
+  if ('integrationId' in gates && !isIntegrationId(gates.integrationId)) {
+    throw new Error(`Invalid integrationId: ${JSON.stringify(gates.integrationId)}. Must be a positive integer`);
   }
   if (!gates.workflows || typeof gates.workflows !== 'object') {
     throw new Error('Invalid required-gates document: missing workflows object');
@@ -113,8 +130,26 @@ export function requiredContexts(rules) {
 }
 
 /**
+ * Declared contexts that are required but that no required_status_checks rule
+ * pins to `integrationId`. Any actor able to post a commit status can satisfy
+ * an unpinned context, so a source mismatch is a DENY. Returns [] when the
+ * declaration names no integrationId (sources not asserted).
+ */
+export function weaklySourcedContexts({ declared, required, rules, integrationId }) {
+  if (integrationId === undefined) return [];
+  const pinned = new Set();
+  for (const rule of rules) {
+    if (rule?.type !== 'required_status_checks') continue;
+    for (const check of rule.parameters?.required_status_checks ?? []) {
+      if (check?.integration_id === integrationId) pinned.add(check.context);
+    }
+  }
+  return declared.filter((c) => required.includes(c) && !pinned.has(c));
+}
+
+/**
  * Evaluates live rules against declared gates.
- * Returns { ok, missing, undeclared, review: { mode, ok, observed } }.
+ * Returns { ok, missing, undeclared, weakSource, review: { mode, ok, observed } }.
  */
 export function evaluate({ gates, rules }) {
   const declared = declaredContexts(gates);
@@ -122,6 +157,7 @@ export function evaluate({ gates, rules }) {
 
   const missing = declared.filter((c) => !required.includes(c));
   const undeclared = required.filter((c) => !declared.includes(c));
+  const weakSource = weaklySourcedContexts({ declared, required, rules, integrationId: gates.integrationId });
 
   const mode = gates.pullRequestReview;
   const prRules = rules.filter((r) => r?.type === 'pull_request');
@@ -135,12 +171,13 @@ export function evaluate({ gates, rules }) {
         ? prRules.some((r) => typeof r.parameters?.required_approving_review_count === 'number' && r.parameters.required_approving_review_count >= 1)
         : prRules.some((r) => r.parameters?.require_code_owner_review === true || (typeof r.parameters?.required_approving_review_count === 'number' && r.parameters.required_approving_review_count >= 1));
 
-  const ok = missing.length === 0 && undeclared.length === 0 && reviewOk;
+  const ok = missing.length === 0 && undeclared.length === 0 && weakSource.length === 0 && reviewOk;
 
   return {
     ok,
     missing,
     undeclared,
+    weakSource,
     review: {
       mode,
       ok: reviewOk,
@@ -269,7 +306,7 @@ export function main(
   }
 
   const effectiveBranch = branch || gates.branch;
-  if (!effectiveBranch || !/^[A-Za-z0-9._\/-]+$/.test(effectiveBranch)) {
+  if (!isBranchName(effectiveBranch)) {
     stderr(`gate-liveness: cannot verify the ruleset (invalid --branch "${effectiveBranch}") - failing closed\n`);
     return 1;
   }
@@ -309,6 +346,7 @@ export function main(
       required: requiredContexts(rules),
       missing: verdict.missing,
       undeclared: verdict.undeclared,
+      weakSource: verdict.weakSource,
       review: verdict.review,
     };
     stdout(JSON.stringify(payload, null, 2) + '\n');
@@ -327,6 +365,9 @@ export function main(
     }
     if (verdict.undeclared.length > 0) {
       stderr(`gate-liveness: DENY - context(s) required on ${effectiveBranch} but not declared in docs/ci/required-gates.json: ${verdict.undeclared.join(', ')}\n`);
+    }
+    if (verdict.weakSource.length > 0) {
+      stderr(`gate-liveness: DENY - required context(s) not pinned to integration ${gates.integrationId} on ${effectiveBranch}: ${verdict.weakSource.join(', ')}\n`);
     }
     if (!verdict.review.ok) {
       stderr(`gate-liveness: DENY - pull-request review policy "${verdict.review.mode}" not satisfied on ${effectiveBranch}\n`);
