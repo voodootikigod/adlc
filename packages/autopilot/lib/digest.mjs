@@ -7,7 +7,7 @@
 // absent, and `digestPosted:true` is written only after gh confirms. A failure
 // leaves the intent for the next iteration; the digest never blocks work.
 
-import { ensureComment } from './github.mjs';
+import { ensureComment, commentBody } from './github.mjs';
 import { WITHHELD_BODY } from './redact.mjs';
 import { validateIssueNumber } from './input.mjs';
 import { registerSeams, active } from './mutations.mjs';
@@ -87,10 +87,10 @@ export async function postDigest({ ctx, record: given, outcome, issue = null, pr
     const body = ctx.redactor.redact(digestBody({ record, outcome, prUrl, quota }), { withheld: WITHHELD_BODY }).text;
     let posted;
     if (active('digest.skipSentinelSearch')) {
-      const r = await ctx.gh.run(['issue', 'comment', String(loc.number), '--body-file', '-'], { stdinBytes: `${sentinel}\n${body}`, retries: false });   // never a blind re-POST
+      const r = await ctx.gh.run(['issue', 'comment', String(loc.number), '--body-file', '-'], { stdinBytes: commentBody(sentinel, body), retries: false });   // never a blind re-POST
       if (r.status !== 0) throw new Error(`gh issue comment exited ${r.status}: ${String(r.stderr ?? '').trim().slice(0, 200)}`);
       posted = true;
-    } else posted = (await ensureComment(ctx.gh, loc.number, sentinel, body)).posted;
+    } else posted = (await ensureComment(ctx.gh, loc.number, sentinel, body, { author: ctx.remote?.principal ?? null })).posted;
     if (ctx.records.load(n)) ctx.records.update(n, { digestPosted: true });
     return { ok: true, posted, logIssue: loc.number, created: loc.created, reported: loc.reported };
   } catch (e) {
