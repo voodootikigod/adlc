@@ -63,11 +63,13 @@ test('every gate is invoked EXACTLY as ci.yml invokes it', async () => {
   assert.deepEqual(appendOnly.argv[1], ['scripts/guard-findings-ledger-append-only.mjs', 'origin/main']);
   assert.deepEqual(reviewerDirected.argv[1], ['scripts/check-reviewer-directed-comments.mjs', 'origin/main']);
 
-  // ...and CI really does use the positional + --max form.
+  // ...and CI really does use the positional + --max form. The rails-guard
+  // job's gates take the base its `Resolve diff base` step chose (origin/<base>
+  // on a pull_request); scripts/test/ci-push-diff-base.test.mjs pins that step.
   assert.match(ci, /mutation-gate\.mjs "origin\/\$BASE_REF" --max 12/);
-  assert.match(ci, /rails-guard-ci\.mjs "origin\/\$BASE_REF"/);
-  assert.match(ci, /guard-findings-ledger-append-only\.mjs "origin\/\$BASE_REF"/);
-  assert.match(ci, /check-reviewer-directed-comments\.mjs "origin\/\$BASE_REF"/);
+  assert.match(ci, /rails-guard-ci\.mjs "\$DIFF_BASE"/);
+  assert.match(ci, /guard-findings-ledger-append-only\.mjs "\$DIFF_BASE"/);
+  assert.match(ci, /check-reviewer-directed-comments\.mjs "\$DIFF_BASE"/);
 });
 
 test('the findings gates name their ADR basis (pins the ADR 0014 reference against drift)', async () => {
