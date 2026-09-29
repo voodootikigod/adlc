@@ -7,7 +7,7 @@
 // exit 2 = gate-fail (isError FALSE — a failing gate is a RESULT, not a tool
 // error), an exec/timeout failure throws (a real tool error). A timeout reaches
 // us as a RESOLVED result (`{ code: 0, killed: true }`), not a rejection, so
-// execFailureReason below is what makes that promise true. Every run that
+// verdictFailureReason below is what makes that promise true. Every run that
 // produced a verdict records an 'adlc-gate-run' evidence entry.
 //
 // TypeBox (a pi-runtime-only peer) builds the parameter schema via the shared
@@ -80,6 +80,29 @@ function tryParseJson(stdout) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Why the result of an `adlc … --json` exec cannot be trusted as a verdict, or
+ * null when it can.
+ *
+ * Beyond execFailureReason: a child killed by a signal pi did not send (the
+ * OOM killer, an operator's `kill`) resolves as `{ code: 0, killed: false }`,
+ * indistinguishable by its fields from a pass. Every command run with `--json`
+ * prints a JSON document when it completes, so exit 0 without one on stdout is
+ * a run that ended before its verdict. A non-zero exit stays a result either
+ * way: it can only ever be read as a failure.
+ *
+ * @param {{code?: unknown, killed?: unknown, stdout?: unknown}|null|undefined} res
+ * @returns {string|null}
+ */
+export function verdictFailureReason(res) {
+  const failure = execFailureReason(res);
+  if (failure !== null) return failure;
+  if (res.code === 0 && tryParseJson(res.stdout) === null) {
+    return 'exit 0 with no JSON verdict on stdout (killed by a signal or truncated)';
+  }
+  return null;
 }
 
 /** Compact human-readable rendering of a gate result for the tool content. */
@@ -155,13 +178,13 @@ export function makeGateExecute({ pi, getActive, getCwd, exec, note, timeoutMs =
       throw new Error(`adlc_gate(${gate}) failed to execute: ${err.message}`);
     }
 
-    // A killed or codeless exec produced NO verdict, so it is a tool error for
+    // A killed, codeless or JSON-less exec produced NO verdict, so it is a tool error for
     // the same reason a throw from run() is — and it must be raised BEFORE
     // record(), matching the file's existing precedent that only a decided
     // outcome (a policy deny, a real exit code) leaves an evidence entry. A
     // code-0 'adlc-gate-run' entry for a hang would be read downstream as a
     // state-resolving gate pass.
-    const failure = execFailureReason(res);
+    const failure = verdictFailureReason(res);
     if (failure !== null) {
       throw new Error(`adlc_gate(${gate}) failed to execute: ${failure}`);
     }
