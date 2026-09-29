@@ -147,6 +147,26 @@ Within diff-derived eligible files, only lines changed in the diff are
 targeted; `--target`/`--rails` files are mutated in their entirety. Lines that
 are blank, comments, imports, `export {`, or `console.*` calls are skipped.
 
+### Comment-only changes are reported as not covered
+
+A changed file whose change leaves its program untouched — only comments or blank
+lines added, reworded or removed — has no behaviour to mutate. It is not failed; it
+is listed on stdout as not covered, and when it is the only change the run exits
+`0` with `comment-only diff — no changed behaviour to mutate`. With `--json` the
+same files appear under `"skipped": { "commentOnly": [...] }`, on that early exit
+and in the normal report alike.
+
+Both sides of the diff are judged, so these are **not** comment-only and stay
+mutation targets (failing closed when nothing mutable remains):
+
+- a code line deleted and replaced by a comment or a blank line;
+- live code wrapped in an added `/*` … `*/`;
+- a deleted `*/` that turns the code after it into comment text;
+- a `// ...` line inside a multi-line template literal, which is string data.
+
+Any doubt — an unreadable file, an old side that cannot be read from `--base`, a
+scan that loses its place — keeps the file a target.
+
 ### Invalid mutants
 
 A mutation that produces code Node cannot parse is **discarded**, not scored.
@@ -226,9 +246,12 @@ the unit is what earns the mask — `MAX_BUFFER_SIZE_BYTES` is masked where
       "original": "  return a + b;",
       "mutated": "  return null;"
     }
-  ]
+  ],
+  "skipped": { "commentOnly": ["src/notes.mjs"] }
 }
 ```
+
+`skipped` is present only when a changed file was left out as comment-only.
 
 ## Relationship to sibling tools
 
