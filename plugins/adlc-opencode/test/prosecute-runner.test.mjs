@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  runProsecution, lensToolsMap, LENS_READ_TOOLS, makeLensAsk,
+  runProsecution, lensPermissions, LENS_READ_TOOLS, makeLensAsk,
   parseFindings, parseVerdict, parseFenced,
 } from '../lib/prosecute-runner.mjs';
 import { LENSES, VERIFIER } from '../lib/prosecutor.mjs';
@@ -40,44 +40,47 @@ test('parseFenced/parseFindings/parseVerdict extract fenced JSON; fail closed on
 });
 
 // ---- AC2: lens sessions provably cannot write (fail-CLOSED allowlist) ----
-test('AC2: lensToolsMap is a wildcard-deny-first ALLOWLIST — unlisted tools fail closed', () => {
-  const map = lensToolsMap();
-  // "*": false MUST be the FIRST key (opencode findLast: a later read:true wins,
-  // but "*" must exist as the deny floor for everything else).
-  const keys = Object.keys(map);
-  assert.equal(keys[0], '*', `"*" must be the first key, got ${keys[0]}`);
-  assert.equal(map['*'], false, 'wildcard denies everything by default');
-  // read-only tools re-allowed (from the rail guard's single source of truth)
-  for (const t of READONLY_TOOLS) assert.equal(map[t], true, `read-only ${t} allowed`);
+// OpenCode v2 evaluates permission rules last-match-wins over the agent's rules
+// followed by the session's (core `Permission.evaluate`: `findLast`, `*` glob).
+const globMatch = (pattern, value) =>
+  new RegExp(`^${pattern.split('*').map((p) => p.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`).test(value);
+const effectOf = (action, rules) =>
+  rules.findLast((r) => globMatch(r.action, action) && globMatch(r.resource, 'x.mjs'))?.effect ?? 'ask';
+// The default `build` agent allows everything — the case the session rules must override.
+const ALLOW_ALL_AGENT = [{ action: '*', resource: '*', effect: 'allow' }];
+
+test('AC2: lensPermissions is a wildcard-deny-first ALLOWLIST — unlisted actions fail closed', () => {
+  const rules = lensPermissions();
+  assert.deepEqual(rules[0], { action: '*', resource: '*', effect: 'deny' }, 'the deny floor comes first');
   assert.deepEqual(new Set(LENS_READ_TOOLS), new Set(READONLY_TOOLS), 'allowlist derives from rails-checker READONLY_TOOLS');
-  // write / sub-agent / unknown tools are NOT enabled → they inherit the "*" deny
-  for (const t of ['edit', 'write', 'patch', 'multiedit', 'apply_patch', 'bash', 'shell', 'task', 'some_mcp_write_tool', 'a-tool-that-does-not-exist-yet']) {
-    assert.notEqual(map[t], true, `${t} must NOT be allowed (fails closed via "*")`);
+  const effective = [...ALLOW_ALL_AGENT, ...rules];
+  for (const t of READONLY_TOOLS) assert.equal(effectOf(t, effective), 'allow', `read-only ${t} allowed`);
+  // write (edit/write/patch all request `edit`), shell, sub-agent, MCP, unknown → deny
+  for (const t of ['edit', 'shell', 'bash', 'subagent', 'task', 'question', 'skill', 'some_mcp_write_tool', 'a-tool-that-does-not-exist-yet']) {
+    assert.equal(effectOf(t, effective), 'deny', `${t} must be denied (fails closed via "*")`);
   }
 });
 
-test('AC2: makeLensAsk passes the allowlist AND the system override to session.prompt', async () => {
-  const promptCalls = [];
-  const client = {
-    session: {
-      create: async () => ({ data: { id: 'child' } }),
-      prompt: async (req) => { promptCalls.push(req); return { data: { parts: [{ type: 'text', text: 'ok' }] } }; },
-      delete: async () => ({ data: true }),
-    },
+test('AC2: makeLensAsk creates the child with lensPermissions and leads the prompt with the system text', async () => {
+  const calls = { create: [], prompt: [] };
+  const session = {
+    create: async (req) => { calls.create.push(req); return { id: 'ses_lens' }; },
+    prompt: async (req) => { calls.prompt.push(req); return { id: 'inb_1' }; },
+    wait: async () => {},
+    context: async () => [{ type: 'assistant', content: [{ type: 'text', text: 'ok' }] }],
   };
-  const ask = makeLensAsk(client, { parentID: 'parent' });
-  await ask({ system: 'LENS SYSTEM PROMPT', prompt: 'find bugs' });
-  const body = promptCalls[0].body;
-  assert.equal(body.system, 'LENS SYSTEM PROMPT');
-  assert.equal(Object.keys(body.tools)[0], '*');
-  assert.equal(body.tools['*'], false, 'deny-all floor set in the real call');
-  for (const t of ['edit', 'write', 'bash', 'task', 'apply_patch']) assert.notEqual(body.tools[t], true, `${t} not enabled`);
-  assert.deepEqual(body.parts, [{ type: 'text', text: 'find bugs' }]);
+  const ask = makeLensAsk(session, { directory: '/repo' });
+  assert.equal(await ask({ system: 'LENS SYSTEM PROMPT', prompt: 'find bugs' }), 'ok');
+  assert.deepEqual(calls.create, [{ title: 'adlc-prosecute', permissions: lensPermissions(), location: { directory: '/repo' } }]);
+  assert.deepEqual(calls.prompt, [{ sessionID: 'ses_lens', text: 'LENS SYSTEM PROMPT\n\n---\n\nfind bugs' }]);
+  await ask({ prompt: 'no system' });
+  assert.equal(calls.prompt[1].text, 'no system');
 });
 
-test('AC2: makeLensAsk returns null when the client lacks the session API (caller falls back)', () => {
+test('AC2: makeLensAsk returns null when the session API is incomplete (caller falls back)', () => {
   assert.equal(makeLensAsk({}), null);
-  assert.equal(makeLensAsk({ session: { create: () => {} } }), null); // no prompt
+  assert.equal(makeLensAsk(undefined), null);
+  assert.equal(makeLensAsk({ create: () => {}, prompt: () => {} }), null); // no wait/context
 });
 
 // ---- AC1: the loop ----

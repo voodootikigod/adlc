@@ -6,7 +6,7 @@ import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFlailTracker, flailMessage } from '../lib/flail.mjs';
-import { adlcRailsGuard } from '../index.mjs';
+import { loadPlugin, captureStderr } from './helpers/fake-ctx.mjs';
 
 // ---- tracker ----
 test('flags a file only once it crosses the churn threshold (>=3)', () => {
@@ -66,84 +66,88 @@ test('warned set is bounded per session', () => {
 });
 
 // ---- REAL handler ----
-test('tool.execute.after handler toasts a churn warning on the 3rd edit', async () => {
+/** Load the plugin with stderr captured; `warnings` collects every operator line. */
+async function churnPlugin(dir) {
+  const warnings = [];
+  const plugin = await loadPlugin({ root: dir });
+  const after = plugin.after;
+  plugin.after = async (...args) => {
+    const { lines } = await captureStderr(() => after(...args));
+    warnings.push(...lines);
+  };
+  return { warnings, plugin };
+}
+
+test('execute.after handler warns on stderr about churn on the 3rd edit', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'oc-flail-'));
   mkdirSync(join(dir, '.adlc'), { recursive: true });
-  const toasts = [];
-  const client = { tui: { showToast: async (r) => { toasts.push(r.body); } } };
-  const hooks = await adlcRailsGuard({ worktree: dir, client });
+  const { warnings, plugin } = await churnPlugin(dir);
   try {
-    const after = (fp) => hooks['tool.execute.after']({ tool: 'edit', sessionID: 's', callID: 'c', args: { filePath: fp } }, {});
+    const after = (fp) => plugin.after('edit', { path: fp });
     await after('churn.mjs');
     await after('churn.mjs');
-    assert.equal(toasts.length, 0, 'no warning before threshold');
+    assert.equal(warnings.length, 0, 'no warning before threshold');
     await after('churn.mjs');
-    assert.equal(toasts.length, 1);
-    assert.equal(toasts[0].variant, 'warning');
-    assert.match(toasts[0].message, /flail check.*churn\.mjs/);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /^\[adlc\] warning: .*flail check.*churn\.mjs/);
     await after('churn.mjs'); // no repeat
-    assert.equal(toasts.length, 1);
+    assert.equal(warnings.length, 1);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('tool.execute.after counts apply_patch envelope churn (GPT-5-class mutator)', async () => {
+test('execute.after counts v2 patch envelope churn (patchText)', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'oc-flail-'));
   mkdirSync(join(dir, '.adlc'), { recursive: true });
-  const toasts = [];
-  const client = { tui: { showToast: async (r) => { toasts.push(r.body); } } };
-  const hooks = await adlcRailsGuard({ worktree: dir, client });
+  const { warnings, plugin } = await churnPlugin(dir);
   try {
     const patch = (f) => `*** Begin Patch\n*** Update File: ${f}\n@@\n-old\n+new\n*** End Patch`;
-    const after = () => hooks['tool.execute.after']({ tool: 'apply_patch', sessionID: 's', callID: 'c', args: { patch: patch('svc.mjs') } }, {});
+    const after = () => plugin.after('patch', { patchText: patch('svc.mjs') });
     await after(); await after();
-    assert.equal(toasts.length, 0);
-    await after(); // 3rd apply_patch to svc.mjs → churn warning
-    assert.equal(toasts.length, 1);
-    assert.match(toasts[0].message, /flail check.*svc\.mjs/);
+    assert.equal(warnings.length, 0);
+    await after(); // 3rd patch to svc.mjs → churn warning
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /flail check.*svc\.mjs/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('tool.execute.after counts multiedit (edits[]) and patch (files[]) churn', async () => {
+test('execute.after counts multiedit (edits[]) and patch (files[]) churn', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'oc-flail-'));
   mkdirSync(join(dir, '.adlc'), { recursive: true });
   for (const [tool, mkArgs] of [
     ['multiedit', () => ({ edits: [{ filePath: 'm.mjs' }] })],
     ['patch', () => ({ files: ['p.mjs'] })],
   ]) {
-    const toasts = [];
-    const client = { tui: { showToast: async (r) => { toasts.push(r.body); } } };
-    const hooks = await adlcRailsGuard({ worktree: dir, client });
-    const after = () => hooks['tool.execute.after']({ tool, sessionID: 's', callID: 'c', args: mkArgs() }, {});
+    const { warnings, plugin } = await churnPlugin(dir);
+    const after = () => plugin.after(tool, mkArgs());
     await after(); await after();
-    assert.equal(toasts.length, 0, `${tool}: no warning before threshold`);
+    assert.equal(warnings.length, 0, `${tool}: no warning before threshold`);
     await after();
-    assert.equal(toasts.length, 1, `${tool}: one churn warning at 3`);
+    assert.equal(warnings.length, 1, `${tool}: one churn warning at 3`);
   }
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('tool.execute.after dedupes duplicate targets within one call (no overcount)', async () => {
+test('execute.after dedupes duplicate targets within one call (no overcount)', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'oc-flail-'));
   mkdirSync(join(dir, '.adlc'), { recursive: true });
-  const toasts = [];
-  const client = { tui: { showToast: async (r) => { toasts.push(r.body); } } };
-  const hooks = await adlcRailsGuard({ worktree: dir, client });
+  const { warnings, plugin } = await churnPlugin(dir);
   try {
     // one multiedit call naming the same file 3× must count as ONE churn event
-    const dupCall = () => hooks['tool.execute.after']({ tool: 'multiedit', sessionID: 's', callID: 'c', args: { edits: [{ filePath: 'd.mjs' }, { filePath: 'd.mjs' }, { filePath: 'd.mjs' }] } }, {});
+    const dupCall = () => plugin.after('multiedit', { edits: [{ filePath: 'd.mjs' }, { filePath: 'd.mjs' }, { filePath: 'd.mjs' }] });
     await dupCall();
     await dupCall();
-    assert.equal(toasts.length, 0, 'two calls (deduped) is below the 3-call threshold');
+    assert.equal(warnings.length, 0, 'two calls (deduped) is below the 3-call threshold');
     await dupCall();
-    assert.equal(toasts.length, 1, 'third distinct call crosses threshold exactly once');
+    assert.equal(warnings.length, 1, 'third distinct call crosses threshold exactly once');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('tool.execute.after never throws on a malformed payload', async () => {
+test('execute.after never throws on a malformed payload', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'oc-flail-'));
-  const hooks = await adlcRailsGuard({ worktree: dir });
+  const plugin = await loadPlugin({ root: dir });
   try {
-    await hooks['tool.execute.after'](undefined);
-    await hooks['tool.execute.after']({});
+    const after = plugin.registrations.tool.get('execute.after');
+    await after(undefined);
+    await after({});
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

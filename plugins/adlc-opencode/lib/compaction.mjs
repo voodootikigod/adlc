@@ -1,10 +1,10 @@
 // compaction.mjs — T32: keep ADLC enforcement context alive across compaction,
 // and stop a context-degraded high-risk session from auto-continuing past it.
 //
-// Two pure, injectable helpers wired into the experimental compaction hooks in
-// index.mjs (signatures verified against @opencode-ai/plugin 1.17.17):
-//   experimental.session.compacting(input, output:{ context: string[] })
-//   experimental.compaction.autocontinue(input, output:{ enabled: boolean })
+// Two pure, injectable helpers. buildCompactionContext feeds the OpenCode v2
+// `ctx.session.hook('compaction')` system parts in index.mjs. decideAutocontinue
+// has no v2 host hook to drive (v2 exposes no autocontinue control); the
+// build-gate deny on the next structured mutation is the fallback.
 // No SDK, no host api — unit-testable offline.
 
 import { buildSystemContext } from './context-inject.mjs';

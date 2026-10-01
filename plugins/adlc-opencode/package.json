@@ -33,10 +33,10 @@
     "node": ">=18"
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": ">=1.17.13"
+    "@opencode/plugin": ">=2.0.20 <3"
   },
   "peerDependenciesMeta": {
-    "@opencode-ai/plugin": {
+    "@opencode/plugin": {
       "optional": true
     }
   },

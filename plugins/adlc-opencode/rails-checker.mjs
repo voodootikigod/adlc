@@ -8,7 +8,7 @@
 // freeze) that adlc-codex and adlc-pi already implement.
 
 import { existsSync, statSync } from 'node:fs';
-import { isAbsolute, join, relative } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { loadTickets, globMatch, classifyShellCommand, collectPatchPaths, resolveRailPath, ticketStoreExists, TICKET_TRUST_ROOT_RAILS } from '@adlc/core';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
 
@@ -48,7 +48,8 @@ export const READONLY_TOOLS = ['read', 'grep', 'glob', 'list', 'ls', 'webfetch',
 // diff and spawns WRITE-DISABLED child sessions — it never mutates through
 // OpenCode's edit tools, and its only arg is a git base ref (no file target),
 // so the ungated spoof guard is a no-op for it.
-export const UNGATED_TOOLS = ['task', 'skill', 'todowrite', 'question', 'adlc_gate', 'adlc_prosecute'];
+// `subagent` is OpenCode v2's name for v1's `task`.
+export const UNGATED_TOOLS = ['task', 'subagent', 'skill', 'todowrite', 'question', 'adlc_gate', 'adlc_prosecute'];
 
 // Gates that may run through adlc_gate while rails are FROZEN: read-only by
 // default ("writers default to dry-run" is the repo-wide gate contract; the
@@ -230,7 +231,8 @@ function extractTargetsKeyed(args) {
   // ("*** Update File: x"). Parse them so apply_patch — the ONLY file mutator
   // OpenCode enables for GPT-5-class models — is path-transparent rather than
   // blanket-denied. A body with no parseable targets still fails closed.
-  for (const body of [args.patch, args.input]) {
+  // OpenCode v2's `patch` tool carries the envelope as `patchText`.
+  for (const body of [args.patch, args.input, args.patchText]) {
     if (typeof body === 'string' && body.includes('*** ')) {
       const out = new Set();
       collectPatchPaths(body, out);
@@ -657,7 +659,7 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
     return { decision: 'allow', reason: `tool "${name}" is read-only` };
   }
   if (SHELL_TOOLS.includes(name)) {
-    return checkShellCall({ command: args?.command, root, env });
+    return checkShellCall({ command: args?.command, workdir: args?.workdir, root, env });
   }
   // Operators can extend the ungated list for benign third-party tools that a
   // railed build legitimately needs (e.g. ADLC_UNGATED_TOOLS="symbols_index").
@@ -899,9 +901,12 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
  *   mutation that changes cwd / expands    → deny (path resolution unverifiable)
  *   mutation with no literal paths         → deny (fail closed)
  *   literal paths → deny only on a frozen-rail hit, else allow
+ * A `workdir` (OpenCode v2's shell tool argument) that resolves anywhere but
+ * the root is a cwd change the command text does not show, so it takes the
+ * same deny as `cd`.
  * The CI diff gate remains the unbypassable backstop.
  */
-export function checkShellCall({ command, root = process.cwd(), env = process.env }) {
+export function checkShellCall({ command, workdir, root = process.cwd(), env = process.env }) {
   const force = resolveRailsInForce(root, env);
   if (!force.active) return { decision: 'allow', reason: force.reason };
   if (force.conflict) return { decision: 'deny', reason: force.reason };
@@ -919,7 +924,9 @@ export function checkShellCall({ command, root = process.cwd(), env = process.en
   if (c.opaque) {
     return { decision: 'deny', reason: 'mutating shell command uses an opaque form (git apply/checkout/patch/tar…); use a structured edit tool or a literal path-transparent mutation' };
   }
-  if (c.changesCwd) {
+  const movesWorkdir = typeof workdir === 'string' && workdir.trim() !== ''
+    && resolve(root, workdir.trim()) !== resolve(root);
+  if (c.changesCwd || movesWorkdir) {
     return { decision: 'deny', reason: 'mutating shell command changes cwd; target paths cannot be verified against the frozen rails' };
   }
   if (c.expands) {

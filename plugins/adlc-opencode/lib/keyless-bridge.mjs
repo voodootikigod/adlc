@@ -8,11 +8,10 @@
 //
 // The model call itself is the only SDK-dependent piece, so it is INJECTED (`ask`)
 // and capability-gated (`makeAsk`). That keeps the protocol pure and unit-testable
-// offline. makeAsk is now wired to the REAL, source-verified SDK
-// (client.session.create + client.session.prompt, v1.17.13) — an isolated child
-// session runs the gate Q&A without polluting the active thread. There is NO
-// server-side structured-output mode, so the answer is the concatenated text of
-// the reply's text parts (the gate prompts already specify their own output shape).
+// offline. makeAsk is wired to the OpenCode v2 `ctx.generate.text` — a stateless,
+// tool-less generation that answers the gate Q&A without touching the active
+// thread. There is NO structured-output mode, so the answer is the returned
+// text (the gate prompts already specify their own output shape).
 
 import { spawnSync } from 'node:child_process';
 
@@ -73,76 +72,90 @@ export async function runGateKeyless({ bin, args = [], ask, spawnImpl = spawnSyn
 }
 
 /**
- * Extract the text answer from a session.prompt response. The SDK returns
- * `{ data: { info, parts } }`; the reply text is the concatenation of the
- * TextPart parts (there is no structured-output field on the response).
+ * Extract the text answer from v2 session messages (`session.context` resolves
+ * to `SessionMessageInfo[]`): the concatenated `text` content of the LAST
+ * assistant message. Reasoning and tool content are not the answer.
  */
-export function answerFromPrompt(res) {
-  const parts = res?.data?.parts ?? res?.parts ?? [];
-  return parts
+export function answerFromMessages(messages) {
+  if (!Array.isArray(messages)) return '';
+  const reply = [...messages].reverse().find((m) => m?.type === 'assistant');
+  return (reply?.content ?? [])
     .filter((p) => p?.type === 'text' && typeof p.text === 'string')
     .map((p) => p.text)
     .join('')
     .trim();
 }
 
-/**
- * Build the keyless "ask" function from the host SDK client (source-verified
- * v1.17.13). Each ask spins up an ISOLATED child session (parentID = the active
- * session) so the gate Q&A is side-effect-free, prompts it with the gate text
- * (tools disabled — pure Q&A), returns the reply text, and best-effort deletes
- * the child. Returns null when the client lacks the session API, so the caller
- * fails closed rather than silently skipping a gate.
- *
- * @param {object} client  the plugin's input.client (OpencodeClient)
- * @param {object} [opts]
- * @param {string} [opts.parentID]  active session id → child's parent
- * @param {{providerID:string, modelID:string}} [opts.model]  child model; omit
- *   to inherit the session default
- */
 /** Per-child-prompt timeout — a hung provider must not hang the tool turn. */
 export const PROMPT_TIMEOUT_MS = 120_000;
 
-function withTimeout(promise, ms, onTimeoutMessage) {
+export function withTimeout(promise, ms, onTimeoutMessage) {
   if (!ms || ms <= 0) return promise;
   let timer;
   const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(onTimeoutMessage)), ms); });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-export function makeAsk(client, { parentID, model, timeoutMs = PROMPT_TIMEOUT_MS } = {}) {
-  const session = client?.session;
-  // NOTE: call the methods ON `session` (session.create(...)), never via a
-  // destructured reference — the SDK methods are `this`-bound (they read
-  // `this._client`), so a detached `const create = session.create` call throws.
-  if (typeof session?.create !== 'function' || typeof session?.prompt !== 'function') return null;
+/** v1 `{ providerID, modelID }` and v2 `{ providerID, id }` model refs → v2. */
+function toModelRef(model) {
+  if (!model || typeof model !== 'object' || !model.providerID) return null;
+  const id = model.id ?? model.modelID;
+  return id ? { providerID: model.providerID, id, ...(model.variant ? { variant: model.variant } : {}) } : null;
+}
 
+/**
+ * A child-session ask for work that needs tools (prosecution lenses). Each call
+ * creates an ISOLATED v2 session with `permissions`, prompts it, waits for it to
+ * go idle, and reads the last assistant reply from `session.context`. Returns
+ * null when `session` lacks any of those methods, so the caller fails closed
+ * rather than silently skipping work.
+ *
+ * The plugin `ctx.session` domain has no `remove`, so the child session stays
+ * in the session list after the call.
+ *
+ * Methods are called ON `session` — the client's methods may read `this`.
+ */
+export function makeSessionAsk(session, { title, permissions, directory, model, timeoutMs = PROMPT_TIMEOUT_MS, label = 'keyless' } = {}) {
+  if (typeof session?.create !== 'function' || typeof session?.prompt !== 'function'
+    || typeof session?.wait !== 'function' || typeof session?.context !== 'function') return null;
+  const modelRef = toModelRef(model);
   return async (text) => {
     const created = await withTimeout(
-      session.create({ body: { ...(parentID ? { parentID } : {}), title: 'adlc-gate' } }),
-      timeoutMs, 'keyless: child session.create timed out');
-    const childId = created?.data?.id ?? created?.id;
-    try {
-      const res = await withTimeout(
-        session.prompt({
-          path: { id: childId },
-          body: {
-            ...(model ? { model } : {}),
-            // A pure Q/A turn needs NO tools. `tools: {}` is NOT "no tools" —
-            // opencode treats an empty map as "no overrides" → all tools inherit
-            // the base agent default (`"*": "allow"`) = ALL ENABLED. Deny
-            // everything with the wildcard rule so the gate child can't act.
-            tools: { '*': false },
-            parts: [{ type: 'text', text }],
-          },
-        }),
-        timeoutMs, 'keyless: child session.prompt timed out');
-      return answerFromPrompt(res);
-    } finally {
-      // Runs on success, error, AND timeout — so a stalled prompt still deletes
-      // the child rather than leaking it.
-      try { if (childId && typeof session.delete === 'function') await session.delete({ path: { id: childId } }); }
-      catch { /* best-effort cleanup — never fail the gate on teardown */ }
-    }
+      session.create({
+        title,
+        permissions: [...permissions],
+        ...(directory ? { location: { directory } } : {}),
+        ...(modelRef ? { model: modelRef } : {}),
+      }),
+      timeoutMs, `${label}: child session.create timed out`);
+    const sessionID = created?.id;
+    if (!sessionID) throw new Error(`${label}: child session.create returned no session id`);
+    const messages = await withTimeout((async () => {
+      await session.prompt({ sessionID, text });
+      await session.wait({ sessionID });
+      return session.context({ sessionID });
+    })(), timeoutMs, `${label}: child session reply timed out`);
+    return answerFromMessages(messages);
+  };
+}
+
+/**
+ * Build the keyless "ask" function from the v2 generate API (`ctx.generate`):
+ * one stateless, tool-less text generation per gate prompt — nothing for the
+ * model to act with, and no child session left behind.
+ *
+ * @param {object} generate  the plugin context's `ctx.generate`
+ * @param {object} [opts]
+ * @param {{providerID:string, id?:string, modelID?:string}} [opts.model]
+ *   model; omit to use the host default
+ */
+export function makeAsk(generate, { model, timeoutMs = PROMPT_TIMEOUT_MS } = {}) {
+  if (typeof generate?.text !== 'function') return null;
+  const modelRef = toModelRef(model);
+  return async (text) => {
+    const res = await withTimeout(
+      generate.text({ prompt: text, ...(modelRef ? { model: modelRef } : {}) }),
+      timeoutMs, 'keyless: generate.text timed out');
+    return typeof res?.text === 'string' ? res.text.trim() : '';
   };
 }

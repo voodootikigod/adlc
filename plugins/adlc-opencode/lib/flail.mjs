@@ -2,10 +2,10 @@
 //
 // The CC flail-detector reads a transcript; OpenCode has none, so we synthesize
 // the same "Editing <path>" log lines the detector already understands from
-// tool.execute.after events and feed them to the CANONICAL
+// v2 `execute.after` tool events and feed them to the CANONICAL
 // @adlc/flail-detector detectEditChurn (reuse, not re-implement — churn
-// threshold and path-extraction stay in one place). Advisory only: it toasts a
-// warning once per churning file, never blocks.
+// threshold and path-extraction stay in one place). Advisory only: it warns
+// once per churning file, never blocks.
 
 // No barrel export on @adlc/flail-detector — import the lib module directly
 // (same pattern as @adlc/build-gate/lib/*).
@@ -55,7 +55,7 @@ export function createFlailTracker({
 
   return {
     /**
-     * Feed one tool.execute.after event. Returns { churning: [{path,count}] }
+     * Feed one `execute.after` tool event. Returns { churning: [{path,count}] }
      * for files that JUST crossed the threshold (not already warned), else [].
      */
     record({ sessionID, tool, filePath }) {

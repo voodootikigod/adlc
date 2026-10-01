@@ -11,6 +11,9 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+- **opencode:** BREAKING — `@adlc/opencode` now targets the OpenCode v2 plugin API only (default export `{ id: "adlc", setup(ctx) }`) and requires OpenCode >= 2.0.20; it no longer loads on OpenCode 1.x. The optional peer dependency moves from `@opencode-ai/plugin` to `@opencode/plugin` `>=2.0.20 <3`, `/adlc-init` writes the v2 `"plugins"` key (migrating an existing v1 `"plugin"` entry), and notices go to stderr instead of TUI toasts. Fixes "Plugin must export a default definition with an id and an effect or setup function".
+
 ## [1.11.1] - 2026-09-05
 
 ### Added

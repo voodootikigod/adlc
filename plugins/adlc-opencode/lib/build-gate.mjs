@@ -6,7 +6,7 @@
 // cannot resolve npm at runtime; this plugin can, so it must not fork).
 // The only OpenCode-specific part is the context-fitness SIGNAL: OpenCode has
 // no transcript path a hook could scan, so the depth proxy is an in-plugin
-// per-session tool-call counter, and a `session.compacted` event marks the
+// per-session tool-call counter, and a `session.compaction.ended` event marks the
 // session degraded outright (compaction IS the context-rot event).
 
 import { isAbsolute, join } from 'node:path';
@@ -20,8 +20,8 @@ import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 
 /**
  * Per-session context-fitness tracker. Pure state; the plugin instantiates one
- * per plugin load and feeds it from `tool.execute.before` (depth) and the
- * `session.compacted` event (hard degradation).
+ * per plugin load and feeds it from `execute.before` (depth) and the
+ * `session.compaction.ended` event (hard degradation).
  */
 export function createDepthTracker() {
   const depth = new Map();

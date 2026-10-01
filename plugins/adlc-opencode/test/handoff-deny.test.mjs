@@ -1,6 +1,6 @@
 // handoff-deny.test.mjs — OpenCode context-rot handoff deny (slice 5).
-// Drives the REAL exported plugin factory's `tool.execute.before` /
-// `permission.ask` handlers, never a re-implementation of them.
+// Drives the REAL plugin's registered `execute.before` / `permission.evaluate`
+// hooks (via `setup(fakeCtx)`), never a re-implementation of them.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,7 +10,7 @@ import { join } from 'node:path';
 
 import { ensureDenyMarker, writeDenyRecord, HANDOFF_DEPTH } from '@adlc/context-handoff';
 
-import { adlcRailsGuard } from '../index.mjs';
+import { loadPlugin } from './helpers/fake-ctx.mjs';
 import {
   checkHandoff,
   createInitLatch,
@@ -23,11 +23,11 @@ import {
   toRepoRelative,
 } from '../lib/handoff-gate.mjs';
 
-// The handoff call site in adlcRailsGuard defaults off
+// The handoff call site in the plugin's setup defaults off
 // (CONTEXT_ROT_HANDOFF_ENABLED reads env.ADLC_CONTEXT_ROT_HANDOFF_ENABLED,
 // see ../index.mjs); this whole suite exercises the real deny-set, so it
 // opts in once for the file's process rather than at each of its ~26
-// adlcRailsGuard() call sites. No production caller sets this env var, so
+// loadPlugin() call sites. No production caller sets this env var, so
 // real sessions stay unaffected.
 process.env.ADLC_CONTEXT_ROT_HANDOFF_ENABLED = '1';
 
@@ -90,7 +90,7 @@ function seedForeignDeny(root, name = 'denier-1') {
 async function pumpDepth(hooks, sessionID, n) {
   for (let i = 0; i < n; i += 1) {
     try {
-      await hooks['tool.execute.before']({ tool: 'read', sessionID, callID: 'c' }, { args: {} });
+      await hooks.before('read', {}, { sessionID });
     } catch {
       /* read is never gated; depth still counts */
     }
@@ -338,17 +338,11 @@ test('a directory contaminated by the OLD bug does not activate enforcement afte
       schema: 1,
     }),
   );
-  const hooks = await adlcRailsGuard({ worktree: dir });
+  const hooks = await loadPlugin({ root: dir });
   for (let i = 0; i < 40; i += 1) {
-    await hooks['tool.execute.before'](
-      { tool: 'edit', sessionID: 'after-upgrade', callID: `c${i}` },
-      { args: { filePath: 'src/app.mjs' } },
-    );
+    await hooks.before('edit', { filePath: 'src/app.mjs' }, { sessionID: 'after-upgrade' });
   }
-  await hooks['tool.execute.before'](
-    { tool: 'bash', sessionID: 'after-upgrade', callID: 'shell' },
-    { args: { command: 'rm -rf .adlc' } },
-  );
+  await hooks.before('bash', { command: 'rm -rf .adlc' }, { sessionID: 'after-upgrade' });
 });
 
 test('an external ticket-store override is enforced even with no local .adlc', (t) => {
@@ -389,14 +383,11 @@ test('an external-store repo is ARMED end to end: the band denies and writes a m
   });
   process.env.ADLC_TICKET_STORE = join(store, 'tickets.json');
   writeFileSync(process.env.ADLC_TICKET_STORE, JSON.stringify({ tickets: [{ id: 'T1', rails: [] }] }));
-  const hooks = await adlcRailsGuard({ worktree: dir });
+  const hooks = await loadPlugin({ root: dir });
   await pumpDepth(hooks, 'ext-sess', HANDOFF_DEPTH);
   await assert.rejects(
     () =>
-      hooks['tool.execute.before'](
-        { tool: 'edit', sessionID: 'ext-sess', callID: 'c' },
-        { args: { filePath: 'src/ok.mjs' } },
-      ),
+      hooks.before('edit', { filePath: 'src/ok.mjs' }, { sessionID: 'ext-sess' }),
     /ADLC context-handoff/,
     'the deny-set must be armed wherever the rail guard is',
   );
@@ -414,20 +405,14 @@ test('deleting the ticket store mid-session cannot disarm the deny-set', async (
   // ADLC_P4_ENFORCEMENT. Without a latch an agent could delete the store below
   // the band and then edit freely forever, never writing a deny.
   const dir = repo(t);
-  const hooks = await adlcRailsGuard({ worktree: dir });
+  const hooks = await loadPlugin({ root: dir });
   // Arm the latch with calls made while the repo is genuinely initialized.
-  await hooks['tool.execute.before'](
-    { tool: 'edit', sessionID: 'evader', callID: 'c0' },
-    { args: { filePath: 'src/ok.mjs' } },
-  );
+  await hooks.before('edit', { filePath: 'src/ok.mjs' }, { sessionID: 'evader' });
   rmSync(join(dir, '.adlc', 'tickets.json'), { force: true });
   await pumpDepth(hooks, 'evader', HANDOFF_DEPTH);
   await assert.rejects(
     () =>
-      hooks['tool.execute.before'](
-        { tool: 'edit', sessionID: 'evader', callID: 'c' },
-        { args: { filePath: 'src/ok.mjs' } },
-      ),
+      hooks.before('edit', { filePath: 'src/ok.mjs' }, { sessionID: 'evader' }),
     /ADLC context-handoff/,
     'removing the containment signal must not buy an exit from the deny-set',
   );
@@ -446,20 +431,14 @@ test('deleting the store on the VERY FIRST call still cannot disarm the deny-set
   // filePath shapes alike) are all ALLOWED — the structured route is the one
   // that can actually remove the containment signal.
   const dir = repo(t);
-  const hooks = await adlcRailsGuard({ worktree: dir });
-  await hooks['tool.execute.before'](
-    { tool: 'custom_deleter', sessionID: 'evader-0', callID: 'c0' },
-    { args: { path: '.adlc/tickets.json' } },
-  );
+  const hooks = await loadPlugin({ root: dir });
+  await hooks.before('custom_deleter', { path: '.adlc/tickets.json' }, { sessionID: 'evader-0' });
   rmSync(join(dir, '.adlc', 'tickets.json'), { force: true });
   assert.equal(existsSync(join(dir, '.adlc', 'tickets.json')), false, 'store really is gone');
   await pumpDepth(hooks, 'evader-0', HANDOFF_DEPTH);
   await assert.rejects(
     () =>
-      hooks['tool.execute.before'](
-        { tool: 'edit', sessionID: 'evader-0', callID: 'c1' },
-        { args: { filePath: 'src/ok.mjs' } },
-      ),
+      hooks.before('edit', { filePath: 'src/ok.mjs' }, { sessionID: 'evader-0' }),
     /ADLC context-handoff/,
     'the latch armed on the deleting call itself',
   );
@@ -559,23 +538,17 @@ test('a foreign deny still prints the owner command when this session has no saf
 
 test('clean repo without deny/handoff → the edit runs', async (t) => {
   const dir = repo(t);
-  const hooks = await adlcRailsGuard({ worktree: dir });
-  await hooks['tool.execute.before'](
-    { tool: 'edit', sessionID: 's1', callID: 'c' },
-    { args: { filePath: 'src/ok.mjs' } },
-  );
+  const hooks = await loadPlugin({ root: dir });
+  await hooks.before('edit', { filePath: 'src/ok.mjs' }, { sessionID: 's1' });
 });
 
 test('an open deny for another session aborts the edit', async (t) => {
   const dir = repo(t);
   seedForeignDeny(dir);
-  const hooks = await adlcRailsGuard({ worktree: dir });
+  const hooks = await loadPlugin({ root: dir });
   await assert.rejects(
     () =>
-      hooks['tool.execute.before'](
-        { tool: 'edit', sessionID: 's1', callID: 'c' },
-        { args: { filePath: 'src/ok.mjs' } },
-      ),
+      hooks.before('edit', { filePath: 'src/ok.mjs' }, { sessionID: 's1' }),
     /ADLC context-handoff.*D3:unauthorized_open:denier-1/s,
   );
 });
@@ -583,13 +556,10 @@ test('an open deny for another session aborts the edit', async (t) => {
 test('the shell is fail-closed-all under the deny-set', async (t) => {
   const dir = repo(t);
   seedForeignDeny(dir, 'denier-2');
-  const hooks = await adlcRailsGuard({ worktree: dir });
+  const hooks = await loadPlugin({ root: dir });
   await assert.rejects(
     () =>
-      hooks['tool.execute.before'](
-        { tool: 'bash', sessionID: 's1', callID: 'c' },
-        { args: { command: 'ls' } },
-      ),
+      hooks.before('bash', { command: 'ls' }, { sessionID: 's1' }),
     /bash_fail_closed_under_deny/,
   );
 });
@@ -597,13 +567,10 @@ test('the shell is fail-closed-all under the deny-set', async (t) => {
 test('an agent shell `adlc handoff repair` is tagged mutating-cli under the deny-set', async (t) => {
   const dir = repo(t);
   seedForeignDeny(dir, 'denier-3');
-  const hooks = await adlcRailsGuard({ worktree: dir });
+  const hooks = await loadPlugin({ root: dir });
   await assert.rejects(
     () =>
-      hooks['tool.execute.before'](
-        { tool: 'bash', sessionID: 's1', callID: 'c' },
-        { args: { command: 'adlc handoff repair --write' } },
-      ),
+      hooks.before('bash', { command: 'adlc handoff repair --write' }, { sessionID: 's1' }),
     /bash_handoff_mutating_cli/,
   );
 });
@@ -611,11 +578,8 @@ test('an agent shell `adlc handoff repair` is tagged mutating-cli under the deny
 test('read-only tools still run under the deny-set', async (t) => {
   const dir = repo(t);
   seedForeignDeny(dir, 'denier-4');
-  const hooks = await adlcRailsGuard({ worktree: dir });
-  await hooks['tool.execute.before'](
-    { tool: 'read', sessionID: 's1', callID: 'c' },
-    { args: { filePath: 'src/ok.mjs' } },
-  );
+  const hooks = await loadPlugin({ root: dir });
+  await hooks.before('read', { filePath: 'src/ok.mjs' }, { sessionID: 's1' });
 });
 
 test('the denier stays denied after its record is consumed (D2)', async (t) => {
@@ -630,27 +594,21 @@ test('the denier stays denied after its record is consumed (D2)', async (t) => {
     host: 'test',
     schema: 1,
   });
-  const hooks = await adlcRailsGuard({ worktree: dir });
+  const hooks = await loadPlugin({ root: dir });
   await assert.rejects(
     () =>
-      hooks['tool.execute.before'](
-        { tool: 'edit', sessionID: 'denier-sticky', callID: 'c' },
-        { args: { filePath: 'src/ok.mjs' } },
-      ),
+      hooks.before('edit', { filePath: 'src/ok.mjs' }, { sessionID: 'denier-sticky' }),
     /D2:denier_session/,
   );
 });
 
 test('the in-process depth tracker drives the band and writes a deny marker', async (t) => {
   const dir = repo(t);
-  const hooks = await adlcRailsGuard({ worktree: dir });
+  const hooks = await loadPlugin({ root: dir });
   await pumpDepth(hooks, 'deep-sess', HANDOFF_DEPTH);
   await assert.rejects(
     () =>
-      hooks['tool.execute.before'](
-        { tool: 'edit', sessionID: 'deep-sess', callID: 'c' },
-        { args: { filePath: 'src/ok.mjs' } },
-      ),
+      hooks.before('edit', { filePath: 'src/ok.mjs' }, { sessionID: 'deep-sess' }),
     /ADLC context-handoff/,
   );
   const marker = join(dir, '.adlc', 'handoffs', 'denies', 'deep-sess.json');
@@ -660,24 +618,18 @@ test('the in-process depth tracker drives the band and writes a deny marker', as
 
 test('a fresh session is denied by the open record, not by its own depth', async (t) => {
   const dir = repo(t);
-  const hooks = await adlcRailsGuard({ worktree: dir });
+  const hooks = await loadPlugin({ root: dir });
   await pumpDepth(hooks, 'deep-sess', HANDOFF_DEPTH);
   await assert.rejects(
     () =>
-      hooks['tool.execute.before'](
-        { tool: 'edit', sessionID: 'deep-sess', callID: 'c' },
-        { args: { filePath: 'src/ok.mjs' } },
-      ),
+      hooks.before('edit', { filePath: 'src/ok.mjs' }, { sessionID: 'deep-sess' }),
     /ADLC context-handoff/,
   );
   // The fresh session is denied too — but by D3 (an open foreign deny), not
   // by its own depth. That distinction is the whole point of the deny-set.
   await assert.rejects(
     () =>
-      hooks['tool.execute.before'](
-        { tool: 'edit', sessionID: 'fresh-sess', callID: 'c' },
-        { args: { filePath: 'src/ok.mjs' } },
-      ),
+      hooks.before('edit', { filePath: 'src/ok.mjs' }, { sessionID: 'fresh-sess' }),
     /D3:unauthorized_open:deep-sess/,
   );
 });
@@ -685,35 +637,26 @@ test('a fresh session is denied by the open record, not by its own depth', async
 test('no usable sessionID fails closed under an active deny store', async (t) => {
   const dir = repo(t);
   seedForeignDeny(dir, 'denier-5');
-  const hooks = await adlcRailsGuard({ worktree: dir });
+  const hooks = await loadPlugin({ root: dir });
   await assert.rejects(
     () =>
-      hooks['tool.execute.before'](
-        { tool: 'edit', callID: 'c' },
-        { args: { filePath: 'src/ok.mjs' } },
-      ),
+      hooks.before('edit', { filePath: 'src/ok.mjs' }, { sessionID: undefined }),
     /D0:invalid_session_id/,
   );
 });
 
 test('no usable sessionID on a clean repo still allows the edit', async (t) => {
   const dir = repo(t);
-  const hooks = await adlcRailsGuard({ worktree: dir });
-  await hooks['tool.execute.before'](
-    { tool: 'edit', callID: 'c' },
-    { args: { filePath: 'src/ok.mjs' } },
-  );
+  const hooks = await loadPlugin({ root: dir });
+  await hooks.before('edit', { filePath: 'src/ok.mjs' }, { sessionID: undefined });
 });
 
 test('writing a handoff trust-root artifact is denied even with a cold store', async (t) => {
   const dir = repo(t);
-  const hooks = await adlcRailsGuard({ worktree: dir });
+  const hooks = await loadPlugin({ root: dir });
   await assert.rejects(
     () =>
-      hooks['tool.execute.before'](
-        { tool: 'write', sessionID: 's1', callID: 'c' },
-        { args: { filePath: '.adlc/handoffs/denies/s1.json' } },
-      ),
+      hooks.before('write', { filePath: '.adlc/handoffs/denies/s1.json' }, { sessionID: 's1' }),
     /path_protected/,
   );
 });
@@ -721,34 +664,31 @@ test('writing a handoff trust-root artifact is denied even with a cold store', a
 test('advisoryHooks downgrades the rail guard but NOT the handoff deny', async (t) => {
   const dir = repo(t);
   seedForeignDeny(dir, 'denier-6');
-  const hooks = await adlcRailsGuard({ worktree: dir }, { advisoryHooks: true });
+  const hooks = await loadPlugin({ root: dir, options: { advisoryHooks: true } });
   await assert.rejects(
     () =>
-      hooks['tool.execute.before'](
-        { tool: 'edit', sessionID: 's1', callID: 'c' },
-        { args: { filePath: 'src/ok.mjs' } },
-      ),
+      hooks.before('edit', { filePath: 'src/ok.mjs' }, { sessionID: 's1' }),
     /ADLC context-handoff/,
     'the deny-set has no CI backstop — an env/option downgrade must not clear it',
   );
 });
 
-test('the dormant permission.ask lever denies under the deny-set', async (t) => {
+test('the permission.evaluate lever denies under the deny-set', async (t) => {
   const dir = repo(t);
   seedForeignDeny(dir, 'denier-7');
-  const hooks = await adlcRailsGuard({ worktree: dir });
-  const output = {};
-  await hooks['permission.ask']({ type: 'edit', sessionID: 's1' }, output);
-  assert.equal(output.status, 'deny');
+  const hooks = await loadPlugin({ root: dir });
+  const e = await hooks.permission({ action: 'edit', resources: ['src/ok.mjs'], sessionID: 's1' });
+  assert.equal(e.effect, 'deny');
+  assert.match(e.message, /ADLC context-handoff: denied permission "edit"/);
 });
 
-test('permission.ask leaves read-only kinds alone', async (t) => {
+test('permission.evaluate leaves read-only kinds alone', async (t) => {
   const dir = repo(t);
   seedForeignDeny(dir, 'denier-8');
-  const hooks = await adlcRailsGuard({ worktree: dir });
-  const output = {};
-  await hooks['permission.ask']({ type: 'read', sessionID: 's1' }, output);
-  assert.equal(output.status, undefined);
+  const hooks = await loadPlugin({ root: dir });
+  const e = await hooks.permission({ action: 'read', resources: ['src/ok.mjs'], sessionID: 's1' });
+  assert.equal(e.effect, 'ask');
+  assert.equal(e.message, undefined);
 });
 
 test('the manifest key is threaded so a signed resume-auth can be verified', (t) => {
@@ -799,17 +739,14 @@ test('a custom tool naming a trust-root artifact via target is denied', async (t
   // which it does not read. Those reached the handoff core with an empty path
   // list and were allowed on a cold store.
   const dir = repo(t);
-  const hooks = await adlcRailsGuard({ worktree: dir });
+  const hooks = await loadPlugin({ root: dir });
   for (const args of [
     { target: '.adlc/.deny-store' },
     { targetPath: '.adlc/handoffs/denies/s1.json' },
   ]) {
     await assert.rejects(
       () =>
-        hooks['tool.execute.before'](
-          { tool: 'custom_writer', sessionID: 's1', callID: 'c' },
-          { args },
-        ),
+        hooks.before('custom_writer', args, { sessionID: 's1' }),
       /path_protected/,
       `must deny: ${JSON.stringify(args)}`,
     );
@@ -818,12 +755,9 @@ test('a custom tool naming a trust-root artifact via target is denied', async (t
 
 test('a custom tool naming an ordinary target is still allowed', async (t) => {
   const dir = repo(t);
-  const hooks = await adlcRailsGuard({ worktree: dir });
+  const hooks = await loadPlugin({ root: dir });
   for (const args of [{ target: 'src/app.mjs' }, {}]) {
-    await hooks['tool.execute.before'](
-      { tool: 'custom_writer', sessionID: 's1', callID: 'c' },
-      { args },
-    );
+    await hooks.before('custom_writer', args, { sessionID: 's1' });
   }
 });
 
@@ -833,7 +767,7 @@ test('a directory that never opted into ADLC is inert for a whole long session',
   // created .adlc/.deny-store + .adlc/handoffs/denies/<session>.json in a repo
   // that never asked for any of it.
   const dir = plainDir(t);
-  const hooks = await adlcRailsGuard({ worktree: dir });
+  const hooks = await loadPlugin({ root: dir });
   const calls = [
     { tool: 'edit', args: { filePath: 'src/app.mjs' } },
     { tool: 'bash', args: { command: 'ls -la' } },
@@ -843,11 +777,10 @@ test('a directory that never opted into ADLC is inert for a whole long session',
   ];
   for (let i = 0; i < 45; i += 1) {
     const { tool, args } = calls[i % calls.length];
-    await hooks['tool.execute.before']({ tool, sessionID: 'plain-sess', callID: `c${i}` }, { args });
+    await hooks.before(tool, args, { sessionID: 'plain-sess' });
   }
-  const permission = {};
-  await hooks['permission.ask']({ type: 'edit', sessionID: 'plain-sess' }, permission);
-  assert.equal(permission.status, undefined, 'permission.ask must be inert outside an ADLC repo too');
+  const permission = await hooks.permission({ action: 'edit', resources: ['src/app.mjs'], sessionID: 'plain-sess' });
+  assert.equal(permission.effect, 'ask', 'permission.evaluate must be inert outside an ADLC repo too');
   assert.equal(
     existsSync(join(dir, '.adlc')),
     false,
@@ -861,14 +794,11 @@ test('the deny marker is bound to the active ticket, so host repair/resume can a
   const dir = repo(t);
   await withActiveTicket('T1', async () => {
     writeFileSync(join(dir, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
-    const hooks = await adlcRailsGuard({ worktree: dir });
+    const hooks = await loadPlugin({ root: dir });
     await pumpDepth(hooks, 'bound-sess', HANDOFF_DEPTH);
     await assert.rejects(
       () =>
-        hooks['tool.execute.before'](
-          { tool: 'edit', sessionID: 'bound-sess', callID: 'c' },
-          { args: { filePath: 'src/ok.mjs' } },
-        ),
+        hooks.before('edit', { filePath: 'src/ok.mjs' }, { sessionID: 'bound-sess' }),
       /ADLC context-handoff/,
     );
     const marker = JSON.parse(
@@ -885,14 +815,11 @@ test('a conflicting active-ticket signal binds the marker to nothing, never to a
   const dir = repo(t);
   await withActiveTicket('T1', async () => {
     writeFileSync(join(dir, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T-OTHER' }));
-    const hooks = await adlcRailsGuard({ worktree: dir });
+    const hooks = await loadPlugin({ root: dir });
     await pumpDepth(hooks, 'conflict-sess', HANDOFF_DEPTH);
     await assert.rejects(
       () =>
-        hooks['tool.execute.before'](
-          { tool: 'edit', sessionID: 'conflict-sess', callID: 'c' },
-          { args: { filePath: 'src/ok.mjs' } },
-        ),
+        hooks.before('edit', { filePath: 'src/ok.mjs' }, { sessionID: 'conflict-sess' }),
       /ADLC context-handoff/,
     );
     const marker = JSON.parse(
@@ -909,13 +836,10 @@ test('the deny message carries the session id and a recovery command against the
   // pinned the bug it was supposed to catch.
   const dir = repo(t);
   seedForeignDeny(dir, 'denier-tail');
-  const hooks = await adlcRailsGuard({ worktree: dir });
+  const hooks = await loadPlugin({ root: dir });
   await assert.rejects(
     () =>
-      hooks['tool.execute.before'](
-        { tool: 'edit', sessionID: 'tail-sess', callID: 'c' },
-        { args: { filePath: 'src/ok.mjs' } },
-      ),
+      hooks.before('edit', { filePath: 'src/ok.mjs' }, { sessionID: 'tail-sess' }),
     (err) => {
       assert.match(err.message, /tail-sess/, 'the operator must be told which session is blocked');
       assert.match(err.message, /adlc handoff repair --session denier-tail/);
@@ -936,13 +860,10 @@ test('the deny message carries the session id and a recovery command against the
 test('the full assembled deny message never carries a write-enabled recovery command (D6)', async (t) => {
   const dir = repo(t);
   seedForeignDeny(dir, 'denier-write-check');
-  const hooks = await adlcRailsGuard({ worktree: dir });
+  const hooks = await loadPlugin({ root: dir });
   await assert.rejects(
     () =>
-      hooks['tool.execute.before'](
-        { tool: 'edit', sessionID: 'consumer-write-check', callID: 'c' },
-        { args: { filePath: 'src/ok.mjs' } },
-      ),
+      hooks.before('edit', { filePath: 'src/ok.mjs' }, { sessionID: 'consumer-write-check' }),
     (err) => {
       // Check the literal, copy-pasteable command spans specifically (not
       // the whole message): the prose legitimately SAYS "--write" when
@@ -984,13 +905,10 @@ test('D2 alone (consumed self-record, no open record left): the message correctl
     host: 'test',
     schema: 1,
   });
-  const hooks = await adlcRailsGuard({ worktree: dir });
+  const hooks = await loadPlugin({ root: dir });
   await assert.rejects(
     () =>
-      hooks['tool.execute.before'](
-        { tool: 'edit', sessionID: 'denier-sticky-fresh', callID: 'c' },
-        { args: { filePath: 'src/ok.mjs' } },
-      ),
+      hooks.before('edit', { filePath: 'src/ok.mjs' }, { sessionID: 'denier-sticky-fresh' }),
     (err) => {
       assert.doesNotMatch(err.message, /D3:/, 'sanity: the consumed record must not also carry an open-record reason');
       const freshSessionIdx = err.message.indexOf('fresh session');
@@ -1008,13 +926,10 @@ test('D2 alone (consumed self-record, no open record left): the message correctl
 test('D3 (foreign open deny): the message does not overclaim that a fresh session escapes it', async (t) => {
   const dir = repo(t);
   seedForeignDeny(dir, 'denier-ordering');
-  const hooks = await adlcRailsGuard({ worktree: dir });
+  const hooks = await loadPlugin({ root: dir });
   await assert.rejects(
     () =>
-      hooks['tool.execute.before'](
-        { tool: 'edit', sessionID: 'consumer-ordering', callID: 'c' },
-        { args: { filePath: 'src/ok.mjs' } },
-      ),
+      hooks.before('edit', { filePath: 'src/ok.mjs' }, { sessionID: 'consumer-ordering' }),
     (err) => {
       assert.match(err.message, /D3:unauthorized_open:denier-ordering/, 'sanity: a foreign open record carries D3');
       assert.match(err.message, /hits the same deny/, 'must say a fresh session does not escape an open record');
@@ -1028,14 +943,11 @@ test('D3 (foreign open deny): the message does not overclaim that a fresh sessio
 
 test('a depth-band self-deny recovers this session, through the real hook', async (t) => {
   const dir = repo(t);
-  const hooks = await adlcRailsGuard({ worktree: dir });
+  const hooks = await loadPlugin({ root: dir });
   await pumpDepth(hooks, 'self-sess', HANDOFF_DEPTH);
   await assert.rejects(
     () =>
-      hooks['tool.execute.before'](
-        { tool: 'edit', sessionID: 'self-sess', callID: 'c' },
-        { args: { filePath: 'src/ok.mjs' } },
-      ),
+      hooks.before('edit', { filePath: 'src/ok.mjs' }, { sessionID: 'self-sess' }),
     (err) => {
       assert.match(err.message, /adlc handoff repair --session self-sess/);
       assert.match(err.message, /--deny-session self-sess/);
@@ -1048,14 +960,11 @@ test('a custom tool naming a protected directory is denied', async (t) => {
   // The structured classifier had no ancestor coverage, so a delete/move tool
   // handed the handoffs directory got through while `rm -rf` on it did not.
   const dir = repo(t);
-  const hooks = await adlcRailsGuard({ worktree: dir });
+  const hooks = await loadPlugin({ root: dir });
   for (const args of [{ target: '.adlc/handoffs' }, { path: '.adlc' }]) {
     await assert.rejects(
       () =>
-        hooks['tool.execute.before'](
-          { tool: 'custom_deleter', sessionID: 's1', callID: 'c' },
-          { args },
-        ),
+        hooks.before('custom_deleter', args, { sessionID: 's1' }),
       /path_protected/,
       `must deny: ${JSON.stringify(args)}`,
     );
