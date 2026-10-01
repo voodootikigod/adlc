@@ -110,6 +110,11 @@ test('AC1: bin/cli.mjs executable displays help output on --help', () => {
   assert.equal(res.status, 0);
   assert.match(res.stdout, /ADLC Pi Extension Helper/);
   assert.match(res.stdout, /pi install -l npm:@adlc\/pi/);
+  // `adlc-pi` is the BIN name inside @adlc/pi, not an npm package. `npx adlc-pi`
+  // 404s against the registry on any machine without the package installed, so
+  // the help text must advertise the package spelling.
+  assert.match(res.stdout, /npx @adlc\/pi install/);
+  assert.doesNotMatch(res.stdout, /npx adlc-pi/);
 });
 
 test('AC1: bin/cli.mjs runs install command and does not trigger help mode', () => {

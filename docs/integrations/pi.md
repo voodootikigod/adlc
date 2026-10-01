@@ -229,7 +229,7 @@ npm install -g @adlc/cli
 pi install -l npm:@adlc/pi
 
 # Or helper one-liner via npx:
-npx adlc-pi install
+npx @adlc/pi install
 
 # Or user-global install:
 pi install npm:@adlc/pi
