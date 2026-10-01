@@ -14,27 +14,26 @@ import {
   LENSES, VERIFIER, findingKey, dedupeFindings, survivesVerification, shouldContinue,
 } from './prosecutor.mjs';
 import { READONLY_TOOLS } from '../rails-checker.mjs';
-import { PROMPT_TIMEOUT_MS } from './keyless-bridge.mjs';
+import { PROMPT_TIMEOUT_MS, makeSessionAsk } from './keyless-bridge.mjs';
 
-// A lens/verifier session must READ but never MUTATE. The session.prompt `tools`
-// map compiles to opencode PERMISSION RULES (session/prompt.ts): each key → one
-// rule, `findLast` match wins, unmatched → the agent default (base `build` =
-// `"*": "allow"`). So a DENYLIST fails OPEN — a write tool not in the list
-// (`task` sub-agent spawner, MCP tools, any future tool) stays enabled.
+// A lens/verifier session must READ but never MUTATE. OpenCode v2 session
+// `permissions` are rules over permission ACTIONS (a tool's action is its name;
+// edit/write/patch all request `edit`), evaluated `findLast` over the agent's
+// rules then the session's; unmatched → `ask`. So a DENYLIST fails OPEN — a
+// write action not in the list (`subagent`, MCP tools, any future tool) keeps
+// the agent's allow.
 //
-// The fix is a wildcard-deny-first ALLOWLIST — the exact shape opencode's own
-// read-only `explore`/`compaction` agents use: `{ "*": false, <read tools>: true }`.
-// `"*": false` denies everything; the read tools re-allow themselves via a LATER
-// rule (findLast). Anything unlisted — edit/write/patch, `task`, MCP, unknown —
-// matches only `*` → HARD DENY (an explicit deny rule, enforced even in a
-// headless child with no interactive approver). ORDER IS LOAD-BEARING: `"*"`
-// MUST be the first key, or the deny wins for everything.
+// The fix is a wildcard-deny-first ALLOWLIST: `*` deny, then one allow per
+// read-only action. Anything unlisted matches only `*` → HARD DENY (enforced
+// even in a headless child with no interactive approver). ORDER IS
+// LOAD-BEARING: the `*` rule MUST come first, or the deny wins for everything.
 export const LENS_READ_TOOLS = READONLY_TOOLS; // single source: the rail guard's read-only set
 
-export function lensToolsMap() {
-  const map = { '*': false };            // deny-all first (insertion order preserved)
-  for (const t of LENS_READ_TOOLS) map[t] = true; // re-allow only read-only tools
-  return map;
+export function lensPermissions() {
+  return [
+    { action: '*', resource: '*', effect: 'deny' },
+    ...LENS_READ_TOOLS.map((action) => ({ action, resource: '*', effect: 'allow' })),
+  ];
 }
 
 /**
@@ -76,41 +75,18 @@ export function parseVerdict(text) {
 }
 
 /**
- * Build the real lens/verifier `ask` from the host SDK client: each call spins
- * up an isolated child session (parentID = active session) with a per-call
- * SYSTEM override (the agent prompt) and the WRITE-DISABLED tools map, returns
- * the reply text, and best-effort deletes the child. Returns null when the
- * client lacks the session API (caller falls back to the prose protocol).
- * Mirrors keyless-bridge makeAsk, adding `system` + the tools disable-map.
+ * Build the real lens/verifier `ask` from the v2 session API (`ctx.session`):
+ * each call runs an isolated READ-ONLY child session (lensPermissions), returns
+ * the reply text, and best-effort removes the child. v2 `session.prompt` has no
+ * system override, so the agent prompt leads the user text. Returns null when
+ * the session API is missing (caller falls back to the prose protocol).
  */
-export function makeLensAsk(client, { parentID, model, timeoutMs = PROMPT_TIMEOUT_MS, withTimeout } = {}) {
-  const session = client?.session;
-  if (typeof session?.create !== 'function' || typeof session?.prompt !== 'function') return null;
-  const race = withTimeout ?? ((p) => p);
-  return async ({ system, prompt }) => {
-    const created = await race(
-      session.create({ body: { ...(parentID ? { parentID } : {}), title: 'adlc-prosecute' } }),
-      timeoutMs, 'prosecute: child session.create timed out');
-    const childId = created?.data?.id ?? created?.id;
-    try {
-      const res = await race(
-        session.prompt({
-          path: { id: childId },
-          body: {
-            ...(model ? { model } : {}),
-            ...(system ? { system } : {}),
-            tools: lensToolsMap(),
-            parts: [{ type: 'text', text: prompt }],
-          },
-        }),
-        timeoutMs, 'prosecute: child session.prompt timed out');
-      const parts = res?.data?.parts ?? res?.parts ?? [];
-      return parts.filter((p) => p?.type === 'text').map((p) => p.text).join('') || '';
-    } finally {
-      try { if (childId && typeof session.delete === 'function') await session.delete({ path: { id: childId } }); }
-      catch { /* best-effort cleanup */ }
-    }
-  };
+export function makeLensAsk(session, { directory, model, timeoutMs = PROMPT_TIMEOUT_MS } = {}) {
+  const ask = makeSessionAsk(session, {
+    title: 'adlc-prosecute', permissions: lensPermissions(), directory, model, timeoutMs, label: 'prosecute',
+  });
+  if (!ask) return null;
+  return ({ system, prompt }) => ask(system ? `${system}\n\n---\n\n${prompt}` : prompt);
 }
 
 const DEFAULTS = { maxRounds: 4, maxSessions: 40, maxDry: 2, verifierVotes: 1 };

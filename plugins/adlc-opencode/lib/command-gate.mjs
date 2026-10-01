@@ -1,7 +1,7 @@
 // command-gate.mjs — T32: advisory checks on slash-command execution, wired to
-// experimental command.execute.before(input:{command,sessionID,arguments}, ...).
+// the v2 `prompt` session hook (a prompt starting with `/adlc-<name>`).
 // ADVISORY ONLY — commands are human-invoked; these WARN, never block. Two pure,
-// injectable helpers so index.mjs just surfaces the returned message via a toast.
+// injectable helpers so index.mjs just surfaces the returned message on stderr.
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';

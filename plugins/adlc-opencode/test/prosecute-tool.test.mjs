@@ -10,71 +10,76 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildProsecuteTool, captureDiff, makeAgentPromptReader } from '../lib/prosecute-tool.mjs';
 import { checkToolCall } from '../rails-checker.mjs';
+import { lensPermissions } from '../lib/prosecute-runner.mjs';
+import { VERIFIER } from '../lib/prosecutor.mjs';
 
 const PKG = dirname(dirname(fileURLToPath(import.meta.url)));
-const fakeSchema = {
-  string: () => ({ _t: 'string', optional() { return this; }, describe() { return this; } }),
-};
 const fenced = (obj) => '```json\n' + JSON.stringify(obj) + '\n```';
+const TOOL_CTX = { sessionID: 'ses_parent', agent: 'build', messageID: 'msg_1', id: 'call_1' };
+const VERIFIER_PROMPT = makeAgentPromptReader(PKG)(VERIFIER.agent);
 
-// a session client whose child prompt replies are scripted by agent title
-function mockClient(reply) {
-  const calls = { prompts: [] };
+// a v2 `ctx.session` whose child replies are scripted from the prompt text
+function mockSession(reply) {
+  const calls = { creates: [], prompts: [] };
+  const pending = new Map();
+  let n = 0;
   return {
     calls,
-    session: {
-      create: async () => ({ data: { id: 'child' } }),
-      prompt: async (req) => { calls.prompts.push(req); return { data: { parts: [{ type: 'text', text: reply(req) }] } }; },
-      delete: async () => ({ data: true }),
-    },
+    create: async (req) => { calls.creates.push(req); return { id: `ses_child_${++n}` }; },
+    prompt: async (req) => { calls.prompts.push(req); pending.set(req.sessionID, reply(req.text)); return { id: 'inb' }; },
+    wait: async () => {},
+    context: async ({ sessionID }) => [{ type: 'assistant', content: [{ type: 'text', text: pending.get(sessionID) }] }],
   };
 }
+const isVerifier = (text) => VERIFIER_PROMPT.length > 0 && text.startsWith(VERIFIER_PROMPT);
 
-test('buildProsecuteTool shapes an adlc_prosecute ToolDefinition with an optional base arg', () => {
-  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG });
-  assert.ok(def.adlc_prosecute);
-  assert.match(def.adlc_prosecute.description, /P5 prosecution|WRITE-DISABLED/);
-  assert.ok(def.adlc_prosecute.args.base);
-  assert.equal(typeof def.adlc_prosecute.execute, 'function');
+test('buildProsecuteTool shapes an adlc_prosecute v2 Tool.Info with an optional base input', () => {
+  const def = buildProsecuteTool({ root: '/p', pkgRoot: PKG });
+  assert.equal(def.name, 'adlc_prosecute');
+  assert.match(def.description, /P5 prosecution|WRITE-DISABLED/);
+  assert.deepEqual(def.input, {
+    type: 'object',
+    properties: { base: { type: 'string', description: def.input.properties.base.description } },
+    additionalProperties: false,
+  });
+  assert.equal(typeof def.execute, 'function');
 });
 
-test('execute: no session client → structured "use the prose protocol" fallback (not silent)', async () => {
-  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG }); // no client
-  const r = await def.adlc_prosecute.execute({}, {});
+test('execute: no session API → structured "use the prose protocol" fallback (not silent)', async () => {
+  const def = buildProsecuteTool({ root: '/p', pkgRoot: PKG }); // no session
+  const r = await def.execute({}, TOOL_CTX);
   assert.equal(r.metadata.error, 'no-session-api');
   assert.equal(r.metadata.deterministic, false);
-  assert.match(r.output, /\/adlc-prosecute/);
+  assert.match(r.content, /\/adlc-prosecute/);
 });
 
 test('execute: empty diff → reports nothing to prosecute (does not spawn lenses)', async () => {
-  const client = mockClient(() => fenced([]));
-  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG, client, diffImpl: () => '' });
-  const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
+  const session = mockSession(() => fenced([]));
+  const diffCalls = [];
+  const def = buildProsecuteTool({ root: '/p', pkgRoot: PKG, session, diffImpl: (o) => { diffCalls.push(o); return ''; } });
+  const r = await def.execute({ base: 'main' }, TOOL_CTX);
   assert.equal(r.metadata.confirmed, 0);
-  assert.match(r.output, /no changes to prosecute/);
-  assert.equal(client.calls.prompts.length, 0, 'no lens sessions spawned');
+  assert.match(r.content, /no changes to prosecute/);
+  assert.equal(session.calls.prompts.length, 0, 'no lens sessions spawned');
+  assert.deepEqual(diffCalls, [{ base: 'main', cwd: '/p' }], 'the diff is taken in the plugin root');
 });
 
 test('execute: a real diff drives the deterministic loop and returns a structured verdict', async () => {
   // lenses find a bug; verifier confirms it
-  const client = mockClient((req) => {
-    const sys = req.body.system ?? '';
-    if (sys.includes('verifier')) return fenced({ real: true, reason: 'reproduced' });
+  const session = mockSession((text) => {
+    if (isVerifier(text)) return fenced({ real: true, reason: 'reproduced' });
     return fenced([{ title: 'planted-bug', severity: 'high', file: 'x.mjs' }]);
   });
-  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG, client, diffImpl: () => 'diff --git a/x b/x' });
-  const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
+  const def = buildProsecuteTool({ root: '/p', pkgRoot: PKG, session, diffImpl: () => 'diff --git a/x b/x' });
+  const r = await def.execute({ base: 'main' }, TOOL_CTX);
   assert.equal(r.metadata.deterministic, true);
   assert.equal(r.metadata.confirmed, 1);
   assert.match(r.metadata.verdict, /NO-SHIP/);
-  assert.match(r.output, /planted-bug/);
+  assert.match(r.content, /planted-bug/);
   // the child sessions were fail-CLOSED (AC2, end-to-end through the tool):
-  // "*": false floor, and no write/sub-agent tool re-enabled.
-  for (const p of client.calls.prompts) {
-    assert.equal(Object.keys(p.body.tools)[0], '*');
-    assert.equal(p.body.tools['*'], false);
-    for (const t of ['edit', 'write', 'bash', 'apply_patch', 'task']) assert.notEqual(p.body.tools[t], true);
-  }
+  // every one was created with the read-only lens permissions.
+  assert.ok(session.calls.creates.length > 1, 'lenses and verifier ran');
+  for (const c of session.calls.creates) assert.deepEqual(c.permissions, lensPermissions());
 });
 
 test('captureDiff distinguishes a git FAILURE from a clean empty tree', () => {
@@ -84,28 +89,27 @@ test('captureDiff distinguishes a git FAILURE from a clean empty tree', () => {
 });
 
 test('execute: a git-capture FAILURE fails CLOSED (NO-SHIP), not a false empty-diff SHIP', async () => {
-  const client = mockClient(() => fenced([]));
-  const def = buildProsecuteTool(fakeSchema, {
-    root: '/p', pkgRoot: PKG, client,
+  const session = mockSession(() => fenced([]));
+  const def = buildProsecuteTool({
+    root: '/p', pkgRoot: PKG, session,
     diffImpl: () => ({ diff: '', error: 'fatal: bad revision main...HEAD' }),
   });
-  const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
+  const r = await def.execute({ base: 'main' }, TOOL_CTX);
   assert.equal(r.metadata.error, 'diff-capture-failed');
   assert.match(r.metadata.verdict, /NO-SHIP/);
-  assert.equal(client.calls.prompts.length, 0, 'did not run lenses on a broken diff');
+  assert.equal(session.calls.prompts.length, 0, 'did not run lenses on a broken diff');
 });
 
 test('execute: a bounded/incomplete run with zero findings is NO-SHIP (INCOMPLETE), never a false SHIP', async () => {
   // never converges → hits maxRounds; still zero confirmed → must NOT SHIP
   let n = 0;
-  const client = mockClient((req) => {
-    const sys = req.body.system ?? '';
-    if (sys.includes('verifier')) return fenced({ real: false }); // everything refuted → zero confirmed
+  const session = mockSession((text) => {
+    if (isVerifier(text)) return fenced({ real: false }); // everything refuted → zero confirmed
     n += 1;
     return fenced([{ title: `ephemeral-${n}`, severity: 'low', file: 'x' }]); // new finding every round → never dry
   });
-  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG, client, diffImpl: () => 'diff x' });
-  const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
+  const def = buildProsecuteTool({ root: '/p', pkgRoot: PKG, session, diffImpl: () => 'diff x' });
+  const r = await def.execute({ base: 'main' }, TOOL_CTX);
   assert.equal(r.metadata.confirmed, 0);
   assert.ok(r.metadata.hitBound, 'the run hit a bound');
   assert.match(r.metadata.verdict, /NO-SHIP.*INCOMPLETE/);

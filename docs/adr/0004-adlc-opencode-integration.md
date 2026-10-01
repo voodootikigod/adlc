@@ -2,7 +2,8 @@
 
 **Status:** **Accepted — MVP shipped (P3 rail guard); Phases A/B/C/E follow-on.
 Amended 2026-07-05: enforcement contract verified against `@opencode-ai/plugin`
-v1.17.13 — the hook now ENFORCES BY DEFAULT (see Amendment).**
+v1.17.13 — the hook now ENFORCES BY DEFAULT (see Amendment). Amended 2026-10-01:
+v2-only — the plugin targets the OpenCode v2 plugin API (see that Amendment).**
 The detailed design is the [OpenCode integration plan](../integrations/../opencode-integration-plan.md);
 this ADR records the decisions for the first shippable increment (ticket T1) and
 the verified facts the build rests on.
@@ -190,6 +191,38 @@ since the Phase-1 amendment:
    meta-agent (7th agent) port the CC maintenance surface; gate-fuzzing
    calibration is neither host- nor deterministic-cron-run (needs a separate
    model+sandbox job).
+
+## Amendment — 2026-10-01: v2-only (OpenCode v2 plugin API)
+
+OpenCode 2 replaced the plugin API, and a v1 plugin function does not load at
+all: the host fails with `Plugin must export a default definition with an id and
+an effect or setup function`. Decisions:
+
+1. **v2-only, no dual export.** `index.mjs` default-exports
+   `{ id: "adlc", setup(ctx) }`; the v1 `adlcRailsGuard` export and the
+   `@opencode-ai/plugin` / `opencode-ai@1.17.13` pins are gone. The optional peer
+   is `@opencode/plugin` `>=2.0.20 <3`; CI pins `@opencode/cli@2.0.20` (required)
+   and canaries `@latest` (advisory).
+2. **Enforcement registers first.** `setup` awaits `execute.before` and
+   `permission.evaluate` before resolving, and a failure to register either
+   rejects `setup`; advisory registrations log and continue. The
+   enforce-by-default posture and the advisory escape hatch are unchanged.
+3. **Closest v2 equivalent per hook, or a documented gap.** The hook map and the
+   gaps (no toasts — notices go to stderr; autocontinue not ported, the build
+   gate denies the next high-risk edit after `session.compaction.ended`; rail
+   notice fixed at load; lens child sessions not removable; keyless gates on
+   `ctx.generate.text`) are in `docs/integrations/opencode.md`.
+4. **Observed, not assumed.** The live deny proof (`write` and `patch`, against
+   the installed `npm pack` tarball) records that `permission.evaluate` is
+   dispatched after `execute.before`. The live tool proof found that v2 plugin
+   tools default to Code Mode (reachable only through `execute`, which the rails
+   guard denies while rails are in force), so `adlc_gate` and `adlc_prosecute`
+   are registered as direct tools (`codemode: false`).
+5. **Lens sessions keep a fail-closed boundary.** The v1 `tools` map became v2
+   ordered `permissions`: a wildcard deny followed by read-only allows, which
+   v2's last-match-wins evaluation keeps closed for any unlisted tool.
+6. **Scaffold writes v2 config.** `/adlc-init` registers under `"plugins"` and
+   migrates this package's v1 `"plugin"` entry, leaving other plugins' entries.
 
 ## Consequences
 

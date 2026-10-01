@@ -2,8 +2,8 @@
 //
 // Context-rot defense (pi F1/F3 parity): the frozen rails, scope, and active
 // ticket id are re-stated to the model every turn via the system prompt
-// (experimental.chat.system.transform), named in the edit/write tool
-// descriptions (tool.definition), and shown as a session-start statusline toast
+// (the v2 `context` session hook), named in the mutating tools' descriptions
+// (a v2 tool transform), and written as a session-start statusline on stderr
 // — so the model is reminded of the constraints it must not violate BEFORE it
 // tries, not only denied after.
 //
@@ -92,9 +92,8 @@ export function buildToolRailNotice(root, env = process.env) {
 }
 
 /**
- * A short session-start statusline, surfaced as an info toast via the confirmed
- * client.tui.showToast channel (the verifiable native touch — the persistent
- * JSX statusline slot is deferred, see docs). Returns null when inert.
+ * A short session-start statusline, written to stderr on `session.created`
+ * (the v2 server plugin has no toast channel). Returns null when inert.
  */
 export function buildStatusLine(root, env = process.env) {
   const ctx = resolveTicketContext(root, env);
