@@ -22,6 +22,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 
 export const LEDGER = '.adlc/findings.jsonl';
 
@@ -125,7 +126,9 @@ export function guard(baseRef, { run = defaultGit, read = readFileSync, exists =
 }
 
 // CLI entry — skipped when this module is imported by a test.
-if (import.meta.url === `file://${process.argv[1]}`) {
+// pathToFileURL, not a hand-built URL: import.meta.url is percent-encoded, so
+// a raw `file://` + argv[1] never matches from a path containing a space.
+if (Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const baseRef = process.argv[2];
   if (!baseRef) {
     console.error('usage: guard-findings-ledger-append-only.mjs <base-ref>');

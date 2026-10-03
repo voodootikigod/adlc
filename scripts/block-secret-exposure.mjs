@@ -43,6 +43,8 @@
  * it is not a containment boundary and is not offered as one.
  */
 
+import { pathToFileURL } from 'node:url';
+
 const SECRET_FILE = /(^|[\s'"`/=(])\.env(\.[\w.-]+)?\b|\bid_[rd]sa\b|\.pem\b|\bcredentials(\.\w+)?\b|\bsecrets?\.(json|ya?ml|txt|env)\b/;
 
 // `set -x`, `set -ex`, `set -o xtrace`, `bash -x`, `sh -exc`. Deliberately NOT
@@ -128,6 +130,9 @@ function main() {
   });
 }
 
-// Importable for the test; only reads stdin when run as the hook.
+// Importable for the test; only reads stdin when run as the hook. An install
+// path the guard cannot match would exit 0 silently, which the harness reads
+// as allow, so the comparison must survive percent-encoding.
 export { violations };
-if (import.meta.url === `file://${process.argv[1]}`) main();
+const isMain = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) main();
