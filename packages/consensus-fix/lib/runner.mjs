@@ -3,28 +3,105 @@
  * Depends on an injectable `completeFn` to keep LLM boundary isolated.
  */
 
-import { execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { takeSnapshot, restoreSnapshot, applyChanges } from './snapshot.mjs';
 import { totalHunkChangedLines } from './hunks.mjs';
 import { groupByChangeset, selectWinner, isAllDivergent } from './agreement.mjs';
 import { buildPrompt } from './prompt.mjs';
 import { extractJson } from '@adlc/core';
 
-/**
- * Run the given shell command, returning { exitCode, output }.
- * Never throws — captures stderr+stdout.
- */
-export function runCommand(cmd) {
+/** How long an aborted command's process group gets after SIGTERM before SIGKILL. */
+export const ABORT_GRACE_MS = 2000;
+
+/** Exit code reported for a command that was aborted, or never started because of an abort (128 + SIGINT). */
+const ABORTED_EXIT_CODE = 130;
+
+function killGroup(pid, signal) {
   try {
-    const stdout = execFileSync('sh', ['-c', cmd], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    return { exitCode: 0, output: stdout };
-  } catch (err) {
-    const output = (err.stdout ?? '') + (err.stderr ?? '');
-    return { exitCode: err.status ?? 1, output };
+    process.kill(-pid, signal);
+  } catch {
+    // The group has already exited.
   }
+}
+
+/**
+ * Run the given shell command asynchronously, resolving { exitCode, output }.
+ * Never rejects — captures stderr+stdout. An aborted command resolves with
+ * exitCode 130.
+ *
+ * The command runs in its own process group so that aborting `signal` stops
+ * the whole tree it started (SIGTERM, then SIGKILL after ABORT_GRACE_MS); the
+ * promise resolves only once the command has exited, so no candidate write can
+ * land after the caller restores its snapshot. Asynchronous on purpose: a
+ * blocking spawn would leave the event loop unable to dispatch a termination
+ * signal for as long as the command runs.
+ */
+export function runCommand(cmd, { signal } = {}) {
+  if (signal?.aborted) {
+    return Promise.resolve({ exitCode: ABORTED_EXIT_CODE, output: 'aborted before start' });
+  }
+  return new Promise((resolvePromise) => {
+    const child = spawn('sh', ['-c', cmd], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    let escalation = null;
+    child.stdout.on('data', (chunk) => { output += chunk; });
+    child.stderr.on('data', (chunk) => { output += chunk; });
+    const onAbort = () => {
+      killGroup(child.pid, 'SIGTERM');
+      escalation = setTimeout(() => killGroup(child.pid, 'SIGKILL'), ABORT_GRACE_MS);
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    let settled = false;
+    const finish = (exitCode) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      if (escalation) clearTimeout(escalation);
+      resolvePromise({ exitCode, output });
+    };
+    child.on('error', (err) => {
+      output += err.message;
+      finish(127);
+    });
+    child.on('close', (code) => {
+      if (signal?.aborted) {
+        // A group member may still hold a candidate file open; make sure none survive.
+        killGroup(child.pid, 'SIGKILL');
+        finish(ABORTED_EXIT_CODE);
+        return;
+      }
+      finish(code ?? 1);
+    });
+  });
+}
+
+/** Thrown out of runConsensusFix when its `signal` is aborted. */
+export class RunAbortedError extends Error {
+  constructor() {
+    super('consensus-fix run aborted');
+    this.name = 'RunAbortedError';
+  }
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw new RunAbortedError();
+}
+
+/** Resolve `promise`, or reject with RunAbortedError as soon as `signal` aborts. */
+function unlessAborted(promise, signal) {
+  if (!signal) return promise;
+  return new Promise((resolvePromise, reject) => {
+    const onAbort = () => reject(new RunAbortedError());
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => { signal.removeEventListener('abort', onAbort); resolvePromise(value); },
+      (err) => { signal.removeEventListener('abort', onAbort); reject(err); },
+    );
+  });
 }
 
 /**
@@ -108,6 +185,9 @@ export function validateCandidate(parsed, allowedPaths) {
  *                                       warning is surfaced via onProgress and
  *                                       the returned railsChecked=false flag).
  * @param {Function} [opts.onProgress] — optional callback for progress messages
+ * @param {AbortSignal} [opts.signal] — aborting it kills the in-flight test or
+ *                                       rails command, restores the snapshot and
+ *                                       rejects with RunAbortedError.
  * @returns {Promise<RunResult>}
  */
 export async function runConsensusFix({
@@ -119,6 +199,7 @@ export async function runConsensusFix({
   providerNames,
   railsCmd,
   onProgress = () => {},
+  signal,
 }) {
   // Fan width: one candidate per named provider when --providers is supplied,
   // otherwise the usual n resamples of the single auto-detected provider.
@@ -133,7 +214,8 @@ export async function runConsensusFix({
   }
   // 1. Run test once — must fail.
   onProgress('Running test to confirm failure...');
-  const initialRun = runCommand(testCmd);
+  const initialRun = await runCommand(testCmd, { signal });
+  throwIfAborted(signal);
   if (initialRun.exitCode === 0) {
     throw Object.assign(new Error('test already passes — nothing to fix'), { isOpError: true });
   }
@@ -154,11 +236,11 @@ export async function runConsensusFix({
       ? `Fanning ${fanWidth} completions across providers [${providerNames.join(', ')}] (tier: ${tier})...`
       : `Fanning ${fanWidth} completions (tier: ${tier})...`
   );
-  const rawResponses = await Promise.allSettled(
+  const rawResponses = await unlessAborted(Promise.allSettled(
     providerNames
       ? providerNames.map((name) => completeFn(prompt, name))
       : Array.from({ length: fanWidth }, () => completeFn(prompt))
-  );
+  ), signal);
 
   // 5. Evaluate each candidate SEQUENTIALLY.
   const results = [];  // { index, changes, changedLines, passed, discarded, reason, provider? }
@@ -230,7 +312,7 @@ export async function runConsensusFix({
       if (!applyResult.ok) {
         applyError = applyResult.error;
       } else {
-        const testRun = runCommand(testCmd);
+        const testRun = await runCommand(testCmd, { signal });
         testPassed = testRun.exitCode === 0;
         testRunOutput = testRun.output;
 
@@ -241,7 +323,7 @@ export async function runConsensusFix({
         } else if (testPassed) {
           // Only spend the rails run when the repro already passed; a candidate
           // that fails the repro can never survive regardless of the rails.
-          const railsRun = runCommand(railsCmd);
+          const railsRun = await runCommand(railsCmd, { signal });
           railsPassed = railsRun.exitCode === 0;
           railsRunOutput = railsRun.output;
         }
@@ -249,6 +331,7 @@ export async function runConsensusFix({
     } finally {
       restoreSnapshot(snapshot);
     }
+    throwIfAborted(signal);
 
     if (applyError) {
       results.push({

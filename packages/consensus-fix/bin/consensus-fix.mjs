@@ -35,7 +35,7 @@ import {
   detectProvider,
   PROVIDER_NAMES,
 } from '@adlc/core';
-import { runConsensusFix } from '../lib/runner.mjs';
+import { runConsensusFix, RunAbortedError } from '../lib/runner.mjs';
 import { buildPrompt } from '../lib/prompt.mjs';
 import { takeSnapshot, restoreSnapshot, writeFileAtomic, applyWinner } from '../lib/snapshot.mjs';
 import { applyHunks } from '../lib/hunks.mjs';
@@ -168,25 +168,35 @@ async function completeFn(prompt, providerName) {
   return complete({ tier, prompt, provider: providerName ?? providerOverride });
 }
 
-// Signal handlers — restore files from snapshot on interrupt or termination (issue #600).
-// outerSnapshot is populated just before runConsensusFix starts.
+// Termination signals: stop the run, restore the original files, exit 1.
+// The signal aborts the engine, which kills the in-flight test or rails
+// command's process group, restores its snapshot and rejects with
+// RunAbortedError; the catch below then restores outerSnapshot and exits.
+// Everything before and after the engine is synchronous, so a signal can only
+// be dispatched while the engine is awaiting. outerSnapshot is taken before
+// the engine starts.
 let outerSnapshot = null;
-function handleSignal() {
+const abortController = new AbortController();
+
+function restoreAndExit() {
   if (outerSnapshot) {
     try {
       restoreSnapshot(outerSnapshot);
     } catch {
-      // Best effort.
+      // Best effort: the process is terminating either way.
     }
   }
   process.exit(1);
+}
+
+function handleSignal() {
+  abortController.abort();
 }
 
 process.on('SIGINT', handleSignal);
 process.on('SIGTERM', handleSignal);
 process.on('SIGHUP', handleSignal);
 
-// Take snapshot early so termination signals can restore if interrupted during fan.
 try {
   outerSnapshot = takeSnapshot(filePaths);
 } catch (err) {
@@ -203,11 +213,13 @@ try {
     tier,
     providerNames,
     completeFn,
+    signal: abortController.signal,
     onProgress: (msg) => {
       if (!values['json']) console.log(msg);
     },
   });
 } catch (err) {
+  if (err instanceof RunAbortedError) restoreAndExit();
   if (err.isOpError) opError(err.message);
   opError(`unexpected error: ${err.message}`);
 }

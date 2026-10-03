@@ -67,7 +67,7 @@ exit 0
 
 - **Dirty-tree guard**: refuses to run against a dirty git tree unless `--allow-dirty`. Prevents accidental loss of unstaged work.
 - **Snapshot + restore in `finally`**: every candidate evaluation restores all `--files` to their original content, even if the test crashes or the LLM returns garbage.
-- **Termination signal restore**: process cancellation on SIGINT, SIGTERM, or SIGHUP restores the original files from the snapshot before exit.
+- **Termination signal restore**: SIGINT, SIGTERM or SIGHUP at any point before the report (including while a candidate's test or rails command is running) stops the run: the in-flight command's process group gets SIGTERM, then SIGKILL after 2 s, the original files are restored from the snapshot, no winner is applied, and the process exits 1. SIGKILL sent to consensus-fix itself cannot be handled, so it can leave a candidate's hunks on disk; recover with `git checkout -- <files>`.
 - **Atomic writes**: file restoration, candidate hunk application, and winning candidate --apply writes are atomic (write temp file in same directory, then renameSync) to guard against partial writes or truncation.
 - **File-list enforcement**: any candidate that references a file outside `--files` is discarded with a diagnostic message, never written.
 

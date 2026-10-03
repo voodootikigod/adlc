@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import {
   closeSync,
   constants,
@@ -12,6 +11,13 @@ import {
 import { dirname, join, relative, resolve } from 'node:path';
 import { ACTIVE_DIRECTORY, ARCHIVE_DIRECTORY, LEGACY_FILE, LegacyTicketStore, activeDirectoryStore, archiveDirectoryStore, initializeTicketStores } from '@adlc/tickets';
 import { ADLC_GITIGNORE_LINES } from './gitignore-defaults.mjs';
+import { evaluateEffectiveGitignoreContract } from './gitignore-contract.mjs';
+
+export {
+  REQUIRED_COMMITTABLE_PATHS,
+  evaluateGitignoreContract,
+  evaluateEffectiveGitignoreContract,
+} from './gitignore-contract.mjs';
 
 // Every harness --harness may name (bin/adlc-init.mjs validates against this
 // same list before scaffold() ever sees a value — this module trusts its
@@ -294,13 +300,13 @@ function isPlainObject(value) {
  * targeted merge, not a rewrite, so an operator's own customizations to
  * fields this function does not touch survive.
  *
- * When the file doesn't parse as JSON, or doesn't parse to a plain object,
- * records a warning and leaves it untouched without reporting 'unchanged'
- * (do not attempt to merge into something already broken or a shape this
- * function does not understand — an array/string/number top level).
- * Reported 'unchanged' when valid JSON and: `harness` is null (still just a
- * guess, nothing to reconcile toward); or the requested harness is already
- * registered.
+ * When the file doesn't parse as JSON, doesn't parse to a plain object, or —
+ * with `harness` given — carries a `harnesses` field that is not a plain
+ * object, records a warning (which fails the run) and leaves the file
+ * untouched, still listing it as 'unchanged': this function never merges into
+ * a shape it does not understand. Reported 'unchanged' without a warning when
+ * valid JSON and: `harness` is null (still just a guess, nothing to reconcile
+ * toward); or the requested harness is already registered.
  */
 function writeOrReconcileConfig(root, harness, result) {
   const relativePath = '.adlc/config.json';
@@ -327,20 +333,23 @@ function writeOrReconcileConfig(root, harness, result) {
     record(result, 'unchanged', relativePath);
     return;
   }
-  if (harness !== null) {
-    if (parsed.harnesses === undefined || isPlainObject(parsed.harnesses)) {
-      const existingHarnesses = parsed.harnesses ?? {};
-      if (!(harness in existingHarnesses)) {
-        const merged = {
-          ...parsed,
-          harnesses: { ...existingHarnesses, [harness]: { railEnforcement: 'auto' } },
-        };
-        rejectSymlinkComponents(root, relativePath);
-        writeFileNoFollow(path, `${JSON.stringify(merged, null, 2)}\n`, { exclusive: false });
-        record(result, 'updated', relativePath);
-        return;
-      }
-    }
+  if (harness !== null && parsed.harnesses !== undefined && !isPlainObject(parsed.harnesses)) {
+    recordWarning(
+      result,
+      `${relativePath} exists but \`harnesses\` is not an object; cannot register --harness ${harness}`,
+    );
+    record(result, 'unchanged', relativePath);
+    return;
+  }
+  if (harness !== null && !(harness in (parsed.harnesses ?? {}))) {
+    const merged = {
+      ...parsed,
+      harnesses: { ...parsed.harnesses, [harness]: { railEnforcement: 'auto' } },
+    };
+    rejectSymlinkComponents(root, relativePath);
+    writeFileNoFollow(path, `${JSON.stringify(merged, null, 2)}\n`, { exclusive: false });
+    record(result, 'updated', relativePath);
+    return;
   }
   record(result, 'unchanged', relativePath);
 }
@@ -358,76 +367,6 @@ function writeMissing(root, relativePath, content, result) {
   record(result, 'created', relativePath);
 }
 
-export const REQUIRED_COMMITTABLE_PATHS = Object.freeze([
-  '.adlc/config.json',
-  '.adlc/manifest.jsonl',
-  `${ACTIVE_DIRECTORY}/.store.json`,
-  '.adlc/manifest.d/seg-1.jsonl',
-]);
-
-function gitCheckIgnore(root, relPath) {
-  const res = spawnSync('git', ['check-ignore', '--no-index', '-q', '--', relPath], {
-    cwd: root,
-    stdio: 'ignore',
-  });
-  return res.status;
-}
-
-function gitignorePatternMatches(pattern, path) {
-  const p = pattern.startsWith('/') ? pattern.slice(1) : pattern;
-  if (p.endsWith('/')) {
-    const dirPrefix = p.slice(0, -1);
-    const segs = path.split('/');
-    if (!dirPrefix.includes('/')) {
-      const re = new RegExp(`^${dirPrefix.replace(/\./g, '\\.').replace(/\*\*/g, '.*').replace(/(?<!\.)\*(?!\*)/g, '[^/]*')}$`);
-      return segs.slice(0, -1).some((seg) => re.test(seg));
-    }
-    const re = new RegExp(`^${dirPrefix.replace(/\./g, '\\.').replace(/\*\*/g, '.*').replace(/(?<!\.)\*(?!\*)/g, '[^/]*')}`);
-    return re.test(path);
-  }
-  const segments = path.split('/');
-  const regexStr = `^${p.replace(/\./g, '\\.').replace(/\*\*/g, '.*').replace(/(?<!\.)\*(?!\*)/g, '[^/]*')}$`;
-  const re = new RegExp(regexStr);
-  if (!pattern.includes('/')) {
-    return segments.some((seg) => re.test(seg));
-  }
-  return segments.some((_, idx) => re.test(segments.slice(0, idx + 1).join('/')));
-}
-
-export function evaluateGitignoreContract(lines, paths = REQUIRED_COMMITTABLE_PATHS) {
-  const ignoredPaths = [];
-  for (const path of paths) {
-    let ignored = false;
-    for (const rawLine of lines) {
-      const line = rawLine.trim();
-      if (!line) continue;
-      if (line.startsWith('#')) continue;
-      const isNegation = line.startsWith('!');
-      const pattern = isNegation ? line.slice(1).trim() : line;
-      if (gitignorePatternMatches(pattern, path)) {
-        ignored = !isNegation;
-      }
-    }
-    if (ignored) ignoredPaths.push(path);
-  }
-  return ignoredPaths;
-}
-
-export function evaluateEffectiveGitignoreContract(root, lines, paths = REQUIRED_COMMITTABLE_PATHS) {
-  const [firstPath] = paths;
-  const probe = gitCheckIgnore(root, firstPath);
-  if (probe !== 0 && probe !== 1) {
-    return evaluateGitignoreContract(lines, paths);
-  }
-  const ignoredWithGit = [];
-  for (const p of paths) {
-    if (gitCheckIgnore(root, p) === 0) {
-      ignoredWithGit.push(p);
-    }
-  }
-  return ignoredWithGit;
-}
-
 function warnIfIgnored(root, lines, result) {
   const ignoredPaths = evaluateEffectiveGitignoreContract(root, lines);
   if (ignoredPaths.length > 0) {
@@ -439,18 +378,33 @@ function warnIfIgnored(root, lines, result) {
   return ignoredPaths;
 }
 
+/**
+ * The existing lines to keep (whole-directory ignores rewritten to the
+ * `.adlc/*` anchor) and the stanza lines to append after them. Without an
+ * anchor the whole stanza is appended and any stanza line already in the file
+ * is dropped first: gitignore is last-match-wins, so a negation left above a
+ * newly appended anchor would be dead.
+ */
+function plannedGitignoreLines(original) {
+  const lines = original.split(/\r?\n/).map((line) => (
+    WHOLE_ADLC_IGNORES.has(line.trim()) ? '.adlc/*' : line
+  ));
+  if (!lines.includes('.adlc/*')) {
+    const stanza = new Set(ADLC_GITIGNORE_LINES);
+    return { lines: lines.filter((line) => !stanza.has(line)), missing: [...ADLC_GITIGNORE_LINES] };
+  }
+  const present = new Set(lines);
+  return { lines, missing: ADLC_GITIGNORE_LINES.filter((line) => !present.has(line)) };
+}
+
 function ensureGitignore(root, result) {
   const relativePath = '.gitignore';
   const path = join(root, relativePath);
   rejectSymlinkComponents(root, relativePath);
   const existed = lstatIfPresent(path) !== null;
   const original = existed ? readFileSync(path, 'utf8') : '';
-  const normalizedLines = original.split(/\r?\n/).map((line) => (
-    WHOLE_ADLC_IGNORES.has(line.trim()) ? '.adlc/*' : line
-  ));
+  const { lines: normalizedLines, missing } = plannedGitignoreLines(original);
   const normalized = normalizedLines.join('\n');
-  const present = new Set(normalizedLines);
-  const missing = ADLC_GITIGNORE_LINES.filter((line) => !present.has(line));
   if (missing.length === 0 && normalized === original) {
     const ignored = warnIfIgnored(root, normalizedLines, result);
     if (ignored.length === 0) {
