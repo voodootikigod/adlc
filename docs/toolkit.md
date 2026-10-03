@@ -92,9 +92,10 @@ statement.
    For the narrow **trust-root tier** — a change whose working tree vs `<base>` (tracked
    changes incl. uncommitted, unioned with untracked files)
    touches an enforcement package (`packages/rails-guard|prosecute|gate-manifest|build-gate/`),
-   a gated-artifact producer (`packages/ticket-prune|ticket-sync/`), a rails deny-path, or a
-   trust-root file (`scripts/rails-guard-ci.mjs`, `docs/ci/rails-guard.yml`,
-   `scripts/test/rails-guard-workflow-hashes.json`, `.adlc/tickets.json`) — cross-model
+   a gated-artifact producer (`packages/ticket-prune|ticket-sync/`), a rails deny-path, a CI
+   control surface (`.github/workflows/`, `.github/actions/`), or a trust-root file
+   (`scripts/rails-guard-ci.mjs`, `docs/ci/rails-guard.yml`, the root install manifests,
+   `CODEOWNERS`; full list in `packages/prosecute/lib/tier.mjs`) — cross-model
    review is no longer advisory but **GATED**: `adlc prosecute` (given `--base`) exits 2
    unless the manifest holds a `cross-model-review` **`approve`** from a provider distinct
    from the author, bound to the reviewed revision. Record it with

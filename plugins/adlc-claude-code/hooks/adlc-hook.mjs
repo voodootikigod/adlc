@@ -1504,11 +1504,11 @@ const BUILD_GATE_SCAN_BYTES = 8 * 1024 * 1024;
  * Full rationale — including which event_msg mirrors are deliberately
  * excluded — lives on the canonical copy.
  */
-function countToolCallsForBuildGate(text) {
+export function countToolCallsForBuildGate(text) {
   if (!text) return 0;
   const toolCallRecords =
     text.match(/"type"\s*:\s*"(?:tool_use|function_call|custom_tool_call|web_search_call|tool_search_call|image_generation_call)"/g) ?? [];
-  const proseToolLines = text.match(/^(?:Writing|Editing|Created)\s+\S+/gim) ?? [];
+  const proseToolLines = text.match(/^[ \t]*(?:\[?(?:\d{4}-\d{2}-\d{2}[T ])?\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?\]?[ \t]+)?(?:Writing|Editing|Created)[ \t]+\S+/gim) ?? [];
   return toolCallRecords.length + proseToolLines.length;
 }
 

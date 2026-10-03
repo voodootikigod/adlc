@@ -110,9 +110,14 @@ revision, so a three-dot `<base>...HEAD` diff (committed only) would miss an **u
 edit to a trust-root file and let a converged P5 exit 0 with no attestation. A change is
 trust-root tier iff it touches an enforcement package
 (`packages/rails-guard|prosecute|gate-manifest|build-gate/`), a gated-artifact producer
-(`packages/ticket-prune|ticket-sync/`), a declared rails deny-path of any ticket, or a
-trust-root file (`scripts/rails-guard-ci.mjs`, `docs/ci/rails-guard.yml`,
-`scripts/test/rails-guard-workflow-hashes.json`, `.adlc/tickets.json`). The ticket table for
+(`packages/ticket-prune|ticket-sync/`), a declared rails deny-path of any ticket, a CI
+control surface (anything under `.github/workflows/` or `.github/actions/`, test paths
+included — a pull request runs its own copy of these, so an edit there can make a required
+check pass without running), or a trust-root file (`scripts/rails-guard-ci.mjs`,
+`docs/ci/rails-guard.yml`, the root `package.json`/`package-lock.json`/`.npmrc`,
+`CODEOWNERS` in any location GitHub reads, and the repo guard files listed in
+`lib/tier.mjs`). The ticket store is not a tier surface: rails-guard-ci already refuses
+any change to an existing ticket. The ticket table for
 rails-deny-path tiering is read from the **same `--dir`** the prosecution uses (falling back
 to `.adlc/tickets.json`), so rails declared under a custom `--dir` are not invisible to the
 tier. A **completed** ticket's rails (`completed: true`, strict boolean) contribute no

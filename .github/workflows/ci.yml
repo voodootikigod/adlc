@@ -216,7 +216,8 @@ jobs:
   rails-guard:
     # The unbypassable commit-time backstop for the in-session rail hook: rejects
     # a PR whose diff touches a frozen rail, including via shell write forms the
-    # hook does not recognize. No-ops when no rails are declared.
+    # hook does not recognize. No-ops when no rails are declared. On push it
+    # judges the pushed range, so a direct push to main is checked too.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -265,12 +266,33 @@ jobs:
             echo "tracked files were modified between checkout and the gates:"; echo "$dirty"; exit 1
           fi
 
-      - name: Fetch base ref
-        # env (not direct interpolation) + explicit refspec so origin/<base> is
-        # created as a remote-tracking ref the gate can resolve.
+      - name: Resolve diff base
+        id: diff-base
+        # A pull_request run judges the PR against its base branch, fetched with
+        # an explicit refspec so origin/<base> resolves. A push run judges exactly
+        # the pushed range (event.before..HEAD): a freshly fetched origin/main
+        # equals HEAD when nothing raced (a vacuous pass) and includes a LATER
+        # push when one did (a false red). With no usable `before` (branch
+        # creation's all-zero sha, or an old tip absent after a force push) the
+        # push run falls back to HEAD^1, and fails closed when HEAD has no parent.
+        # Values reach the script through env, never direct interpolation.
         env:
-          BASE_REF: ${{ github.base_ref || 'main' }}
-        run: git fetch --no-tags origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ -n "$BASE_REF" ]; then
+            git fetch --no-tags origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
+            base="origin/$BASE_REF"
+          elif [[ "$BEFORE" =~ ^[0-9a-f]{40}$ ]] && [[ ! "$BEFORE" =~ ^0+$ ]] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            base="$BEFORE"
+          elif git rev-parse --quiet --verify 'HEAD^1^{commit}' >/dev/null; then
+            echo "::warning::push has no usable before-sha; judging HEAD^1..HEAD"
+            base="$(git rev-parse 'HEAD^1')"
+          else
+            echo "::error::push has no usable before-sha and HEAD has no parent; no diff base to judge against"
+            exit 1
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
 
       - name: Rail-freeze gate
         # #141 trust-root change ceremony: on a PR, fetch the review state so the
@@ -279,7 +301,7 @@ jobs:
         # an admin-override. Author + labels come from the event payload; the
         # un-forgeable merge gate remains branch-protection CODEOWNERS review.
         env:
-          BASE_REF: ${{ github.base_ref || 'main' }}
+          DIFF_BASE: ${{ steps.diff-base.outputs.base }}
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
@@ -288,23 +310,23 @@ jobs:
             ADLC_PR_REVIEWS="$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate 2>/dev/null || echo '[]')"
             export ADLC_PR_REVIEWS
           fi
-          node scripts/rails-guard-ci.mjs "origin/$BASE_REF"
+          node scripts/rails-guard-ci.mjs "$DIFF_BASE"
 
       # The durable findings ledger (.adlc/findings.jsonl, ADR 0014) is append-only P5->P7
       # memory. The single-tree secret scanner cannot see a DELETION (nothing left to scan),
       # so this base-diff backstop fails a PR that removes, truncates, or rewrites it.
       - name: Findings-ledger append-only gate
         env:
-          BASE_REF: ${{ github.base_ref || 'main' }}
-        run: node scripts/guard-findings-ledger-append-only.mjs "origin/$BASE_REF"
+          DIFF_BASE: ${{ steps.diff-base.outputs.base }}
+        run: node scripts/guard-findings-ledger-append-only.mjs "$DIFF_BASE"
 
       # Repository content (a comment) must never instruct a future reviewer — human
       # or model — how to classify a finding. Recurred three times before this gate
       # existed; mirrors the `check-reviewer-directed-comments` gate in preflight.mjs.
       - name: Reviewer-directed-comment gate
         env:
-          BASE_REF: ${{ github.base_ref || 'main' }}
-        run: node scripts/check-reviewer-directed-comments.mjs "origin/$BASE_REF"
+          DIFF_BASE: ${{ steps.diff-base.outputs.base }}
+        run: node scripts/check-reviewer-directed-comments.mjs "$DIFF_BASE"
 
   mutation-gate:
     # C4 hollow-test, diff-scoped. Catches a guard added without a test that
