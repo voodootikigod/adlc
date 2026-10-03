@@ -1,6 +1,6 @@
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 
 export const DEFAULT_SCRUBBED_ENV = Object.freeze([
@@ -162,7 +162,12 @@ export function gitRepo(t, options = {}) {
       }
     }
 
-    return execFileSync('git', callArgs, {
+    // Without its directory, execFileSync would run git in process.cwd() and
+    // write this fixture's identity into the repository the tests run in.
+    if (typeof dir !== 'string' || !isAbsolute(dir)) {
+      throw new TypeError(`gitRepo: refusing to run git outside its fixture (directory is ${String(dir)})`);
+    }
+    return execFileSync('git', ['-C', dir, ...callArgs], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
       ...callOpts,
