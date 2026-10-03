@@ -183,9 +183,15 @@ export function resolveSessionId({ payload, env = process.env } = {}) {
 
 const loadedSecretCache = new Map();
 
-function resolveUserHome(env = process.env) {
-  const isTest = env?.ADLC_TEST_MODE === '1' || process.env.ADLC_TEST_MODE === '1';
-  if (isTest && env?.ADLC_HOME_DIR) return env.ADLC_HOME_DIR;
+/**
+ * The user's home for `env`, resolved the way Node's `os.homedir()` resolves
+ * it for the process: the platform home variable, then the account database.
+ * Reading it from `env` rather than `process.env` keeps the hook's injected
+ * environment the single source of truth for every path it protects.
+ */
+export function resolveUserHome(env = process.env) {
+  const fromEnv = process.platform === 'win32' ? env?.USERPROFILE : env?.HOME;
+  if (typeof fromEnv === 'string' && fromEnv.length > 0) return fromEnv;
   try {
     return homedir() || tmpdir();
   } catch {
@@ -259,9 +265,6 @@ export function rotateMasterKey(env = process.env) {
 }
 
 export function getOrCreateSessionSecret(root, env = process.env) {
-  const isTest = env?.ADLC_TEST_MODE === '1' || process.env.ADLC_TEST_MODE === '1';
-  if (isTest && env?.ADLC_SESSION_SECRET && env?.ADLC_P4_ENFORCEMENT !== '1') return env.ADLC_SESSION_SECRET;
-
   const userHome = resolveUserHome(env);
   const adlcPrivateDir = join(userHome, '.config', 'adlc', 'secrets');
   const masterKeyFile = join(adlcPrivateDir, '.auth-key');
@@ -426,6 +429,77 @@ function computeBaselineSig(sessionID, s, root = process.cwd(), env = process.en
   return createHmac('sha256', secretKey).update(payload).digest('hex');
 }
 
+/** Identity and mtime of a lock directory, or null when it cannot be read. */
+function lockStat(lockDir) {
+  try {
+    const st = lstatSync(lockDir);
+    return { ino: st.ino, mtimeMs: st.mtimeMs };
+  } catch {
+    return null;
+  }
+}
+
+function readOwnerRaw(lockDir) {
+  try {
+    return readFileSync(join(lockDir, 'owner.json'), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Snapshot of the lock at `lockDir` when it is stale, or null when it is live
+ * or absent. Stale means an owner older than LOCK_TTL_MS whose pid is dead, or
+ * a directory older than LOCK_TTL_MS whose owner file is missing or
+ * unparseable. The snapshot is what `reclaimJudgedLock` proves it removed.
+ */
+export function judgeStaleLock(lockDir, now = Date.now()) {
+  const stat = lockStat(lockDir);
+  if (stat === null) return null;
+  const ownerRaw = readOwnerRaw(lockDir);
+  let owner = null;
+  try { owner = ownerRaw === null ? null : JSON.parse(ownerRaw); } catch { owner = null; }
+  const stale = owner && typeof owner === 'object'
+    ? now - (owner.time ?? 0) > LOCK_TTL_MS && !isPidAlive(owner.pid)
+    : now - stat.mtimeMs > LOCK_TTL_MS;
+  return stale ? { ownerRaw, stat } : null;
+}
+
+/**
+ * True when the directory at `claimed` is the lock `judged` describes: the
+ * same owner file byte for byte, or for an owner-less lock the same inode and
+ * mtime. A fresh holder always writes a new nonce, so its owner file differs.
+ */
+function isJudgedLock(claimed, judged) {
+  const ownerRaw = readOwnerRaw(claimed);
+  if (ownerRaw !== judged.ownerRaw) return false;
+  if (ownerRaw !== null) return true;
+  const now = lockStat(claimed);
+  return Boolean(now && judged.stat && now.ino === judged.stat.ino && now.mtimeMs === judged.stat.mtimeMs);
+}
+
+/**
+ * Remove the stale lock `judged` described, and nothing else. The lock is
+ * first renamed to a name only this process knows (rename is atomic, so one
+ * reclaimer wins); if what was moved is not the judged lock, another
+ * reclaimer already replaced it with a live one, and it is renamed back.
+ * Returns true only when the judged lock was removed.
+ */
+export function reclaimJudgedLock(lockDir, judged) {
+  const claimed = `${lockDir}.stale-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  try {
+    renameSync(lockDir, claimed);
+  } catch {
+    return false;
+  }
+  if (!isJudgedLock(claimed, judged)) {
+    try { renameSync(claimed, lockDir); } catch { /* the live holder's release clears its own path */ }
+    return false;
+  }
+  try { rmSync(claimed, { recursive: true, force: true }); } catch { /* the claim is what mattered */ }
+  return true;
+}
+
 const inMemorySessionSnapshots = new Map();
 
 /**
@@ -461,32 +535,8 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
         break;
       } catch (err) {
         if (err.code === 'EEXIST') {
-          try {
-            let isStaleAndDead = false;
-            if (existsSync(ownerFile)) {
-              try {
-                const raw = readFileSync(ownerFile, 'utf8');
-                const owner = JSON.parse(raw);
-                const isStale = Date.now() - (owner.time ?? 0) > LOCK_TTL_MS;
-                const isDead = !isPidAlive(owner.pid);
-                if (isStale && isDead) isStaleAndDead = true;
-              } catch {
-                // Malformed owner.json (crashed/partial write)
-                const stat = lstatSync(lockDir);
-                if (Date.now() - stat.mtimeMs > LOCK_TTL_MS) isStaleAndDead = true;
-              }
-            } else {
-              const stat = lstatSync(lockDir);
-              if (Date.now() - stat.mtimeMs > LOCK_TTL_MS) isStaleAndDead = true;
-            }
-            if (isStaleAndDead) {
-              const tombstone = `${lockDir}.stale-${pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-              try {
-                renameSync(lockDir, tombstone);
-                rmSync(tombstone, { recursive: true, force: true });
-              } catch {}
-            }
-          } catch {}
+          const judged = judgeStaleLock(lockDir);
+          if (judged) reclaimJudgedLock(lockDir, judged);
         }
       }
       sleepSyncWithJitter(25);

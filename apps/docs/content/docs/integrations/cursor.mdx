@@ -68,6 +68,10 @@ npm install -g @adlc/cli
 npx adlc-cursor .
 ```
 
+An existing `.adlc/config.json` is never rewritten; if it is not a JSON object
+(empty, malformed, or an array), the scaffolder reports it as unreadable and
+exits 1 instead of counting it as present.
+
 ## Rail enforcement: two layers
 
 1. **In-session (advisory).** `permission: "deny"` is best-effort; `failClosed: false`.

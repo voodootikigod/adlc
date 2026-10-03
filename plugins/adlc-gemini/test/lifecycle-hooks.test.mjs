@@ -1,17 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, readFileSync, rmSync, renameSync, symlinkSync, unlinkSync, utimesSync, existsSync, lstatSync, chmodSync, statSync } from 'node:fs';
+import { copyFileSync, mkdirSync, writeFileSync, readFileSync, rmSync, renameSync, symlinkSync, unlinkSync, utimesSync, existsSync, lstatSync, chmodSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-process.env.ADLC_TEST_MODE = '1';
+import { tmp } from '@adlc/core/test-kit';
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const HOME_VAR = process.platform === 'win32' ? 'USERPROFILE' : 'HOME';
 import { preInvocation, onStop, findAdlcRoot, runFromStdin, isReadonlyCommand, isVerificationCommand, postToolUse, getTrustRootSecretHomes, isTrustRootOrSecretPath } from '../hooks/adlc-rails-guard.mjs';
 import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker, checkBuildGate, resolveSessionId, getTestFilesMap, hasDiscoverableTests, getOrCreateSessionSecret, getMasterKeyRaw, rotateMasterKey } from '../build-gate-inline.mjs';
 import { parseTranscriptRecords } from '../flail-inline.mjs';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
 import { isShellTool } from '../rails-checker.mjs';
+import { plainWorkspaceEnv } from './plain-workspace-env.mjs';
 
 function setupTempRepo(t, options = {}) {
   let testCtx = t;
@@ -50,10 +52,12 @@ function setupTempRepo(t, options = {}) {
   const testHome = join(root, '.home');
   mkdirSync(testHome, { recursive: true });
 
+  // The hook reads its home and transcript roots from the injected env, so
+  // the key store and transcripts stay inside this fixture.
   const env = {
     ADLC_P4_ENFORCEMENT: enforcement,
-    ADLC_TEST_MODE: '1',
-    ADLC_HOME_DIR: testHome,
+    [HOME_VAR]: testHome,
+    ANTIGRAVITY_APP_DATA_DIR: root,
   };
 
   const cleanup = () => {
@@ -677,17 +681,17 @@ test('onStop: fails closed under enforcement when workspace root is unresolvable
 });
 
 test('onStop: discovers repo root from transcript paths in headless mode with empty workspacePaths', (t) => {
-  const { root, env } = setupTempRepo(t, { enforcement: '1' });
-  const transcriptFile = join(tmpdir(), `headless-transcript-${Date.now()}.jsonl`);
+  const { root, env: repoEnv } = setupTempRepo(t, { enforcement: '1' });
+  // A headless transcript lives in the host app-data dir, outside the repo.
+  const appData = tmp(t, 'gemini-headless-appdata-');
+  const env = { ...repoEnv, ANTIGRAVITY_APP_DATA_DIR: appData };
+  const transcriptFile = join(appData, 'headless-transcript.jsonl');
   const lines = [
     JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'write_to_file', args: { TargetFile: join(root, 'src', 'app.js') } }], }),
     JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } }], exit_code: 0, }),
     JSON.stringify({ content: 'Finished.' }),
   ];
   writeFileSync(transcriptFile, lines.join('\n') + '\n');
-  t.after(() => {
-    try { rmSync(transcriptFile, { force: true }); } catch (_) {}
-  });
   const payload = { workspacePaths: [], transcriptPath: transcriptFile, conversationId: 'test-session-headless-discovery' };
   preInvocation({ ...payload, workspacePaths: [root] }, { env });
   const tracker = createPersistentTracker(root, env);
@@ -1703,7 +1707,7 @@ test('onStop: shell command under nested Cwd with relative traversal to auth-key
   const transcriptFile = join(root, 'transcript.jsonl');
   const subDir = join(root, 'packages', 'deep', 'sub');
   mkdirSync(subDir, { recursive: true });
-  const authKey = join(env.ADLC_HOME_DIR, '.config', 'adlc', 'secrets', '.auth-key');
+  const authKey = join(env[HOME_VAR], '.config', 'adlc', 'secrets', '.auth-key');
   const relTraversal = relative(subDir, authKey);
   const cid = 'sess-stop-nested-cwd';
   const payload = { workspacePaths: [root], transcriptPath: transcriptFile, conversationId: cid };
@@ -1765,15 +1769,14 @@ test('preInvocation: includes trust-root rails in frozen rails reminder', (t) =>
 });
 
 test('preInvocation: discovers repo root from transcript paths in headless mode with empty workspacePaths', (t) => {
-  const { root, env } = setupTempRepo(t, { activeTicket: 'T1' });
-  const headlessTranscript = join(tmpdir(), `headless-preinv-transcript-${Date.now()}.jsonl`);
+  const { root, env: repoEnv } = setupTempRepo(t, { activeTicket: 'T1' });
+  const appData = tmp(t, 'gemini-headless-appdata-');
+  const env = { ...repoEnv, ANTIGRAVITY_APP_DATA_DIR: appData };
+  const headlessTranscript = join(appData, 'headless-preinv-transcript.jsonl');
   const lines = [
     JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'view_file', args: { AbsolutePath: join(root, 'src/index.js') } }], }),
   ];
   writeFileSync(headlessTranscript, lines.join('\n') + '\n');
-  t.after(() => {
-    try { rmSync(headlessTranscript, { force: true }); } catch (_) {}
-  });
   const payload = { workspacePaths: [], transcriptPath: headlessTranscript, conversationId: 'test-session-headless-preinv' };
   const res = preInvocation(payload, { env: { ...env, ANTIGRAVITY_WORKSPACE: '' } });
   assert.equal(res.injectSteps.length, 1);
@@ -2119,20 +2122,12 @@ test('decide: custom in-repo ticket store path is protected as a frozen trust ro
 });
 
 test('decide: plain workspace without .git or .adlc enforces rails under external ticket store', (t) => {
-  const plainWs = join(tmpdir(), `adlc-plain-ws-${Date.now()}`);
+  const plainWs = tmp(t, 'adlc-plain-ws-');
   mkdirSync(join(plainWs, 'src'), { recursive: true });
   writeFileSync(join(plainWs, 'src', 'frozen.js'), '// frozen');
-  const externalStore = join(tmpdir(), `adlc-plain-ext-store-${Date.now()}.json`);
-  t.after(() => {
-    try { unlinkSync(externalStore); } catch {}
-    try { rmSync(plainWs, { recursive: true, force: true }); } catch {}
-  });
+  const externalStore = join(tmp(t, 'adlc-plain-ext-store-'), 'tickets.json');
   writeFileSync(externalStore, JSON.stringify({ version: 1, tickets: [{ id: 'T1', title: 'External Ticket', rails: ['src/frozen.js'] }], }));
-  const env = {
-    ADLC_P4_ENFORCEMENT: '1',
-    ADLC_TICKET_STORE: externalStore,
-    ADLC_TICKET: 'T1',
-  };
+  const env = plainWorkspaceEnv({ workspace: plainWs, store: externalStore, home: tmp(t, 'adlc-plain-home-') });
   const payload = {
     workspacePaths: [plainWs],
     toolCall: { name: 'write_to_file', args: { TargetFile: join(plainWs, 'src/frozen.js') } },
@@ -2144,24 +2139,15 @@ test('decide: plain workspace without .git or .adlc enforces rails under externa
 });
 
 test('lifecycle: full lifecycle on plain workspace with external ticket store', (t) => {
-  const plainWs = join(tmpdir(), `adlc-plain-lifecycle-${Date.now()}`);
+  const plainWs = tmp(t, 'adlc-plain-lifecycle-');
   mkdirSync(join(plainWs, 'src'), { recursive: true });
   writeFileSync(join(plainWs, 'src', 'editable.js'), '// work');
   mkdirSync(join(plainWs, 'test'), { recursive: true });
   writeFileSync(join(plainWs, 'test', 'sample.test.js'), 'import test from "node:test"; test("ok", () => {});\n');
   const transcriptFile = join(plainWs, 'transcript.jsonl');
-  const externalStore = join(tmpdir(), `adlc-plain-life-store-${Date.now()}.json`);
-  t.after(() => {
-    try { unlinkSync(externalStore); } catch {}
-    try { rmSync(plainWs, { recursive: true, force: true }); } catch {}
-  });
+  const externalStore = join(tmp(t, 'adlc-plain-life-store-'), 'tickets.json');
   writeFileSync(externalStore, JSON.stringify({ version: 1, tickets: [{ id: 'T1', title: 'External Ticket', rails: ['src/frozen.js'] }], }));
-  const env = {
-    ADLC_P4_ENFORCEMENT: '1',
-    ADLC_TEST_MODE: '1',
-    ADLC_TICKET_STORE: externalStore,
-    ADLC_TICKET: 'T1',
-  };
+  const env = plainWorkspaceEnv({ workspace: plainWs, store: externalStore, home: tmp(t, 'adlc-plain-home-') });
   const lines = [
     JSON.stringify({
       type: 'PLANNER_RESPONSE',
@@ -2231,11 +2217,10 @@ test('decide and onStop: mixed command/path arguments targeting frozen rails are
 });
 
 test('discoverRootFromTranscriptRecords: discovers root in headless mode using dest_file, outputPath, and nested payloads', (t) => {
-  const { root, env } = setupTempRepo(t, { enforcement: '1', activeTicket: 'T1', scope: ['src/**', 'dist/**'] });
-  const externalTranscript = join(tmpdir(), `headless-transcript-${Date.now()}.jsonl`);
-  t.after(() => {
-    try { unlinkSync(externalTranscript); } catch {}
-  });
+  const { root, env: repoEnv } = setupTempRepo(t, { enforcement: '1', activeTicket: 'T1', scope: ['src/**', 'dist/**'] });
+  const appData = tmp(t, 'gemini-headless-appdata-');
+  const env = { ...repoEnv, ANTIGRAVITY_APP_DATA_DIR: appData };
+  const externalTranscript = join(appData, 'headless-transcript.jsonl');
   // 1. Transcript with dest_file and outputPath
   const lines = [
     JSON.stringify({
@@ -2836,7 +2821,7 @@ test('getOrCreateSessionSecret: rejects world-readable legacy master key with mo
   mkdirSync(legacyDir, { recursive: true });
   writeFileSync(legacyKey, 'a'.repeat(64), { mode: 0o644 });
   chmodSync(legacyKey, 0o644);
-  const testEnv = { ...env, ADLC_HOME_DIR: tmpHome };
+  const testEnv = { ...env, [HOME_VAR]: tmpHome };
   const secret = getOrCreateSessionSecret(root, testEnv);
   assert.ok(secret);
   assert.ok(existsSync(authKey));
@@ -3073,10 +3058,13 @@ test('adlc-rails-guard.cjs posttooluse: exits 0 and emits allow verdict without 
   const out1 = JSON.parse(res1.stdout);
   assert.equal(out1.decision, 'allow');
   assert.equal(out1.allow_tool, true);
-  // Adapter error also fails safe to allow so host turn is not aborted
-  const res2 = spawnSync(process.execPath, [cjsPath, 'posttooluse'], {
+  // Adapter error also fails safe to allow so host turn is not aborted: a copy
+  // of the shim with no sibling adapter module cannot load one.
+  const shimCopy = join(tmp(t, 'gemini-shim-no-adapter-'), 'adlc-rails-guard.cjs');
+  copyFileSync(cjsPath, shimCopy);
+  const res2 = spawnSync(process.execPath, [shimCopy, 'posttooluse'], {
     input: JSON.stringify({  }),
-    env: { ...process.env, ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1', ADLC_AGY_ADAPTER_OVERRIDE: '/nonexistent/adapter.mjs' },
+    env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' },
     encoding: 'utf8',
   });
   assert.equal(res2.status, 0);
@@ -3087,7 +3075,7 @@ test('adlc-rails-guard.cjs posttooluse: exits 0 and emits allow verdict without 
 
 test('getOrCreateSessionSecret: handles EEXIST race recovery and derives secret cleanly', (t) => {
   const { root, env } = setupTempRepo(t, { enforcement: '1' });
-  const userHome = env.ADLC_HOME_DIR;
+  const userHome = env[HOME_VAR];
   const adlcPrivateDir = join(userHome, '.config', 'adlc', 'secrets');
   const masterKeyFile = join(adlcPrivateDir, '.auth-key');
   mkdirSync(adlcPrivateDir, { recursive: true, mode: 0o700 });
@@ -3133,34 +3121,22 @@ test('postToolUse: master key disclosure inside structured non-string output tri
   assert.equal(tracker.isInvalidated('sess-structured-output-leak'), true, 'Expected session to be marked invalidated');
 });
 
-test('adlc-rails-guard.cjs: ignores ADLC_AGY_ADAPTER_OVERRIDE outside test mode and honors it inside', (t) => {
+test('adlc-rails-guard.cjs: ignores ADLC_AGY_ADAPTER_OVERRIDE whatever ADLC_TEST_MODE says', (t) => {
   const cjsPath = join(__dirname, '../hooks/adlc-rails-guard.cjs');
-  const stubFile = join(tmpdir(), `stub-adapter-${Date.now()}.mjs`);
+  const stubFile = join(tmp(t, 'gemini-stub-adapter-'), 'stub-adapter.mjs');
   writeFileSync(stubFile, 'export function postToolUse() { return { decision: "stub-special-decision", allow_tool: true }; }\n');
-  t.after(() => {
-    try { unlinkSync(stubFile); } catch {}
-  });
-  const envWithoutTest = { ...process.env };
-  delete envWithoutTest.ADLC_TEST_MODE;
-  delete envWithoutTest.NODE_ENV;
-  // 1. Outside test mode -> real adapter loaded (decision: 'allow')
-  const resReal = spawnSync(process.execPath, [cjsPath, 'posttooluse'], {
-    input: JSON.stringify({  }),
-    env: { ...envWithoutTest, ADLC_AGY_ADAPTER_OVERRIDE: stubFile },
-    encoding: 'utf8',
-  });
-  assert.equal(resReal.status, 0);
-  const outReal = JSON.parse(resReal.stdout);
-  assert.equal(outReal.decision, 'allow');
-  // 2. Inside test mode -> stub adapter loaded (decision: 'stub-special-decision')
-  const resStub = spawnSync(process.execPath, [cjsPath, 'posttooluse'], {
-    input: JSON.stringify({  }),
-    env: { ...process.env, ADLC_TEST_MODE: '1', ADLC_AGY_ADAPTER_OVERRIDE: stubFile },
-    encoding: 'utf8',
-  });
-  assert.equal(resStub.status, 0);
-  const outStub = JSON.parse(resStub.stdout);
-  assert.equal(outStub.decision, 'stub-special-decision');
+  for (const testMode of [undefined, '1']) {
+    const env = { ...process.env, ADLC_AGY_ADAPTER_OVERRIDE: stubFile };
+    if (testMode === undefined) delete env.ADLC_TEST_MODE;
+    else env.ADLC_TEST_MODE = testMode;
+    const res = spawnSync(process.execPath, [cjsPath, 'posttooluse'], {
+      input: JSON.stringify({  }),
+      env,
+      encoding: 'utf8',
+    });
+    assert.equal(res.status, 0);
+    assert.equal(JSON.parse(res.stdout).decision, 'allow', `ADLC_TEST_MODE=${testMode}`);
+  }
 });
 
 test('invalidateSession: invalidating session A does not lock out session B', (t) => {
@@ -3193,7 +3169,7 @@ test('invalidateSession: invalidating session A does not lock out session B', (t
 });
 
 test('getTrustRootSecretHomes: resolves safely when homedir is empty and protects tmpdir fallback', (t) => {
-  const customEnv = { ADLC_TEST_MODE: '1' };
+  const customEnv = {};
   const homes = getTrustRootSecretHomes(customEnv);
   assert.ok(Array.isArray(homes) && homes.length >= 1, 'Should resolve at least one secret home');
   const tmpHome = homes[0];

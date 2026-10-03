@@ -33,10 +33,8 @@ async function readStdinBounded(maxBytes) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+/* The adapter is always the sibling module; nothing in the environment selects it. */
 function resolveAdapterPath() {
-  if (process.env.ADLC_TEST_MODE === '1' && process.env.ADLC_AGY_ADAPTER_OVERRIDE) {
-    return process.env.ADLC_AGY_ADAPTER_OVERRIDE;
-  }
   return __dirname + '/adlc-rails-guard.mjs';
 }
 

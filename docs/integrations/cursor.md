@@ -104,6 +104,10 @@ otherwise they fall back to absolute paths into the scaffolder install so
 `.adlc/config.json`. Prefer the marketplace path so hooks and skills update with
 the plugin instead of drifting project copies.
 
+An existing `.adlc/config.json` is never rewritten; if it is not a JSON object
+(empty, malformed, or an array), the scaffolder reports it as unreadable and
+exits 1 instead of counting it as present.
+
 From a source checkout:
 
 ```sh

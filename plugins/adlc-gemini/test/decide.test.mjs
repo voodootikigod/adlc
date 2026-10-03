@@ -283,7 +283,7 @@ test('decide(): unclassified code executors with code/script args fail closed un
 
 test('decide(): shell tool carrying both trust-root secret CommandLine AND benign TargetFile is denied under enforcement', (t) => {
   const root = tmp(t, 'gemini-decide-');
-  const ENF = { ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' };
+  const ENF = { ADLC_P4_ENFORCEMENT: '1' };
   const res = decide({
     workspacePaths: [root],
     toolCall: {
@@ -301,7 +301,7 @@ test('decide(): shell tool carrying both trust-root secret CommandLine AND benig
 
 test('decide(): shell command reading master key or trust-root secret is denied even with ADLC_P4_ENFORCEMENT unset', (t) => {
   const root = tmp(t, 'gemini-decide-');
-  const ADVISORY_ENV = { ADLC_TEST_MODE: '1' }; // No ADLC_P4_ENFORCEMENT
+  const ADVISORY_ENV = {}; // No ADLC_P4_ENFORCEMENT
   const res = decide({
     workspacePaths: [root],
     toolCall: {
@@ -341,7 +341,7 @@ test('decide(): shell command with relative symlink under non-default Cwd target
   const symlinkPath = join(subDir, 'secret-link');
   symlinkSync(fakeAuthKey, symlinkPath);
 
-  const env = { ADLC_HOME_DIR: join(root, 'fake-home'), ADLC_TEST_MODE: '1' };
+  const env = { HOME: join(root, 'fake-home') };
   const res = decide({
     workspacePaths: [root],
     toolCall: {
@@ -367,7 +367,7 @@ test('decide(): shell command with wildcard .master-k?y is denied', (t) => {
         CommandLine: 'cat .master-k?y',
       },
     },
-  }, { env: { ADLC_TEST_MODE: '1' } });
+  }, { env: {} });
   assert.equal(res.allow_tool, false);
   assert.equal(res.decision, 'deny');
 });
@@ -382,7 +382,7 @@ test('decide(): shell tool with array-valued command argument is denied for secr
         cmd: ['cat', '~/.config/adlc/secrets/.auth-key'],
       },
     },
-  }, { env: { ADLC_TEST_MODE: '1' } });
+  }, { env: {} });
   assert.equal(res.allow_tool, false);
   assert.equal(res.decision, 'deny');
 });
@@ -397,7 +397,7 @@ test('decide(): extractCwdFromArgs prioritizes top-level Cwd over decoy nested d
   const symlinkPath = join(root, 'decoy-secret-link');
   symlinkSync(fakeAuthKey, symlinkPath);
 
-  const env = { ADLC_HOME_DIR: join(root, 'fake-home'), ADLC_TEST_MODE: '1' };
+  const env = { HOME: join(root, 'fake-home') };
   const res = decide({
     workspacePaths: [root],
     toolCall: {
@@ -425,7 +425,7 @@ test('decide(): structured write targeting node binary is denied as trust root v
         CodeContent: '#!/bin/sh\necho "fake node"\nexit 0\n',
       },
     },
-  }, { env: { ADLC_TEST_MODE: '1' } });
+  }, { env: {} });
   assert.equal(res.allow_tool, false);
   assert.equal(res.decision, 'deny');
   assert.match(res.deny_reason, /strictly prohibited|trust-root/i);
@@ -441,7 +441,7 @@ test('decide(): shell command with bare .. (e.g. cd ..) is denied under enforcem
         CommandLine: 'cd ..; ls',
       },
     },
-  }, { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' } });
+  }, { env: { ADLC_P4_ENFORCEMENT: '1' } });
   assert.equal(res.allow_tool, false);
   assert.equal(res.decision, 'deny');
   assert.match(res.deny_reason, /outside workspace|escapes/i);
@@ -458,7 +458,7 @@ test('decide(): shell command with absolute path outside workspace is denied und
         Cwd: root,
       },
     },
-  }, { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' } });
+  }, { env: { ADLC_P4_ENFORCEMENT: '1' } });
   assert.equal(res.allow_tool, false);
   assert.equal(res.decision, 'deny');
   assert.match(res.deny_reason, /outside workspace/i);
@@ -475,7 +475,7 @@ test('decide(): structured write targeting node_modules/.bin/mocha or test runne
         CodeContent: '#!/bin/sh\nexit 0\n',
       },
     },
-  }, { env: { ADLC_TEST_MODE: '1' } });
+  }, { env: {} });
   assert.equal(res1.allow_tool, false);
   assert.equal(res1.decision, 'deny');
   assert.match(res1.deny_reason, /strictly prohibited|trust-root/i);
@@ -489,7 +489,7 @@ test('decide(): structured write targeting node_modules/.bin/mocha or test runne
         CodeContent: '{"timeout": 1000}\n',
       },
     },
-  }, { env: { ADLC_TEST_MODE: '1' } });
+  }, { env: {} });
   assert.equal(res2.allow_tool, false);
   assert.equal(res2.decision, 'deny');
   assert.match(res2.deny_reason, /strictly prohibited|trust-root/i);
@@ -509,7 +509,7 @@ test('checkRail: denies write to absolute out-of-repo ADLC_TICKET_STORE path on 
     tool: 'write_to_file',
     toolArgs: { TargetFile: extStore },
     root,
-    env: { ADLC_TICKET_STORE: extStore, ADLC_TICKET: 'T-EXT', ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' },
+    env: { ADLC_TICKET_STORE: extStore, ADLC_TICKET: 'T-EXT', ADLC_P4_ENFORCEMENT: '1' },
   });
   assert.equal(res.decision, 'deny');
   assert.match(res.reason, /frozen rail/i);
@@ -525,7 +525,7 @@ test('decide: PURE_READS tool carrying write-target or command args degrades to 
         TargetFile: join(root, 'frozen.txt'),
       },
     },
-  }, { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' } });
+  }, { env: { ADLC_P4_ENFORCEMENT: '1' } });
   assert.equal(res.allow_tool, false);
   assert.equal(res.decision, 'deny');
   assert.match(res.deny_reason, /frozen rail/i);
@@ -552,7 +552,7 @@ test('checkBuildGate and decide: under ADLC_P4_ENFORCEMENT=1 with transcript con
         Cwd: root,
       },
     },
-  }, { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TEST_MODE: '1' } });
+  }, { env: { ADLC_P4_ENFORCEMENT: '1' } });
   assert.equal(res.allow_tool, true);
 });
 
