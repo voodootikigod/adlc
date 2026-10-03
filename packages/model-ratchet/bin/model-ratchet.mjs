@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { parseArgs, opError, printJson, appendEntry, isGitRepo, churn, repoRoot } from '@adlc/core';
 import { walkSourceFiles, computeInDegree } from '../lib/walk.mjs';
 import { computeScores, topN } from '../lib/score.mjs';
-import { runReviewCmd, parseFindingsFromOutput } from '../lib/run-review.mjs';
+import { runReviewCmd, reviewRunError, parseFindingsFromOutput, DEFAULT_REVIEW_TIMEOUT_MS } from '../lib/run-review.mjs';
 import { formatPlan, formatReviewSummary } from '../lib/format.mjs';
 
 // ---------------------------------------------------------------------------
@@ -18,6 +18,7 @@ const { values } = parseArgs({
     top:          { type: 'string',  default: '10' },
     'review-cmd': { type: 'string' },
     'churn-limit':{ type: 'string',  default: '1000' },
+    'timeout-ms': { type: 'string',  default: String(DEFAULT_REVIEW_TIMEOUT_MS) },
     'dry-run':    { type: 'boolean', default: false },
     'allow-empty':{ type: 'boolean', default: false },
     json:         { type: 'boolean', default: false },
@@ -26,7 +27,7 @@ const { values } = parseArgs({
 });
 
 if (values.help) {
-  console.log(`model-ratchet [--top <n>] [--review-cmd <cmd>] [--churn-limit <n>] [--dry-run] [--allow-empty] [--json]
+  console.log(`model-ratchet [--top <n>] [--review-cmd <cmd>] [--timeout-ms <n>] [--churn-limit <n>] [--dry-run] [--allow-empty] [--json]
 
 Scheduled re-prosecution of hot paths (ADLC C12) — every model release is a
 free re-audit. Identifies hotspot files (churn × criticality) and either
@@ -36,6 +37,8 @@ Options:
   --top <n>           Number of hotspot files to select (default: 10)
   --review-cmd <cmd>  Shell command to run per file. Use {file} as placeholder.
                       Example: --review-cmd "adversarial-review --file {file}"
+  --timeout-ms <n>    Kill a review-cmd run after <n> ms and record it as an
+                      operational error for that file (default: ${DEFAULT_REVIEW_TIMEOUT_MS})
   --churn-limit <n>   Commit history depth for churn computation (default: 1000)
   --dry-run           Print plan only, do not run review-cmd (default when no
                       --review-cmd is supplied)
@@ -53,11 +56,12 @@ Default (no --review-cmd, or --dry-run):
   Plus suggested charter line per file.
 
 With --review-cmd:
-  Runs command per file (spawnSync, shell=true).
+  Runs command per file (argv tokens, no shell), bounded by --timeout-ms.
   Lines matching /\\S+:\\d+/ or starting with '- ' are parsed as findings.
   Findings are appended to the .adlc/findings ledger.
   Exit code 2 from review-cmd is treated as "findings present" (not an error).
-  Exit codes other than 0 or 2 cause operational error (exit 1).
+  Exit codes other than 0 or 2, a timeout, or a signal kill cause operational
+  error (exit 1); the remaining files are still reviewed.
 
 Exit codes:
   0  Success (plan printed or review run complete)
@@ -95,6 +99,11 @@ if (!Number.isInteger(topCount) || topCount < 1) {
 const churnLimit = parseInt(values['churn-limit'], 10);
 if (!Number.isInteger(churnLimit) || churnLimit < 1) {
   opError('--churn-limit must be a positive integer');
+}
+
+const timeoutMs = /^[1-9][0-9]*$/.test(values['timeout-ms']) ? Number(values['timeout-ms']) : NaN;
+if (!Number.isSafeInteger(timeoutMs)) {
+  opError(`--timeout-ms must be a positive integer (got: ${values['timeout-ms']})`);
 }
 
 const reviewCmd = values['review-cmd'];
@@ -187,21 +196,16 @@ let operationalError = false;
 for (const row of selected) {
   let result;
   try {
-    result = runReviewCmd(reviewCmd, row.file, root);
+    result = runReviewCmd(reviewCmd, row.file, root, { timeoutMs });
   } catch (err) {
     fileResults.push({ file: row.file, findings: [], exitCode: -1, error: err.message });
     operationalError = true;
     continue;
   }
 
-  // Exit codes: 0 = clean, 2 = findings (acceptable). Other codes = op error.
-  if (result.exitCode !== 0 && result.exitCode !== 2) {
-    fileResults.push({
-      file: row.file,
-      findings: [],
-      exitCode: result.exitCode,
-      error: `review-cmd exited with code ${result.exitCode}`,
-    });
+  const runError = reviewRunError(result, timeoutMs);
+  if (runError) {
+    fileResults.push({ file: row.file, findings: [], exitCode: result.exitCode, error: runError });
     operationalError = true;
     continue;
   }

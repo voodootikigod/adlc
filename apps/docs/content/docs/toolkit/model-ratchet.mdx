@@ -21,13 +21,14 @@ When run from any subdirectory of a git repository, candidate files, churn metri
 ## Usage
 
 ```sh
-adlc model-ratchet [--top <n>] [--review-cmd <cmd>] [--churn-limit <n>] [--dry-run] [--allow-empty] [--json]
+adlc model-ratchet [--top <n>] [--review-cmd <cmd>] [--timeout-ms <n>] [--churn-limit <n>] [--dry-run] [--allow-empty] [--json]
 ```
 
 | Flag | Description |
 | --- | --- |
 | `--top <n>` | Number of hotspot files to select (default `10`). |
 | `--review-cmd <cmd>` | Command to run per file; `{file}` is substituted. Omit it and the tool prints the plan only. |
+| `--timeout-ms <n>` | Kill a review-cmd run after `<n>` ms and record it as an operational error for that file (default `600000`). |
 | `--churn-limit <n>` | Commit-history depth for the churn computation (default `1000`). |
 | `--dry-run` | Print the prosecution plan even when `--review-cmd` is supplied. |
 | `--allow-empty` | Allow review mode to exit 0 when zero candidate files are selected. |
@@ -37,7 +38,7 @@ adlc model-ratchet [--top <n>] [--review-cmd <cmd>] [--churn-limit <n>] [--dry-r
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
   <span style={{ color: 'var(--adlc-pass)' }}>**0**: success. Plan printed, or the review ran and findings were appended to the ledger.</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error. Not a git repo, a `--review-cmd` exit outside {0,2}, or bad arguments.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error. Not a git repo, a `--review-cmd` exit outside {0,2}, a review-cmd timeout, or bad arguments.</span>
   <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate failure. Review mode with zero candidate files selected and `--allow-empty` not set.</span>
 </div>
 

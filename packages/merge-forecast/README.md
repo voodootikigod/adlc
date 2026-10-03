@@ -21,6 +21,8 @@ Options:
   --help                     Show this help
 ```
 
+The forecast walks the tree and mines co-change from the git repository root, so it gives the same result from any subdirectory; `--tickets` and `--graph-coupling` paths resolve from the working directory. Outside a git repository the working directory is the root and co-change is skipped with a warning.
+
 ## Exit Codes
 
 | Code | Meaning |

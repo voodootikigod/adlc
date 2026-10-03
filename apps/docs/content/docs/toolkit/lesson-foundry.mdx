@@ -31,11 +31,11 @@ adlc lesson-foundry [--ledger <name>] [--min <n>] [--out-dir <path>] [--write] [
 | `--ledger <name>` | Ledger name under `.adlc/` to read findings from (default `findings`). |
 | `--min <n>` | Minimum cluster size to surface (default `2`). |
 | `--out-dir <path>` | Output directory for defense files (default `.adlc/lessons`). |
-| `--write` | Emit files (default is dry-run, which prints what would be written). |
+| `--write` | Emit files (default is dry-run, which prints what would be written). An existing non-empty artifact is kept; an empty one is regenerated. |
 | `--gate` | Exit 2 if any cluster ≥ `--min` has no non-empty defense file in `--out-dir`. |
 | `--allow-missing-ledger` | Allow missing ledger file when --gate is set (bootstrap opt-in). |
 | `--tolerate-malformed <n>` | Tolerate up to `<n>` unparseable/malformed ledger lines before failing `--gate` (default `0`). |
-| `--llm` | Refine cluster wording via one mid-tier LLM call per cluster. |
+| `--llm` | Refine cluster wording via one mid-tier LLM call per cluster. Exits 1, writing nothing, when no cluster could be refined. |
 | `--tier cheap\|mid\|frontier` | Model tier for the `--llm` pass (default `mid`). |
 | `--prompt-only` | Print the LLM prompts and exit 0 (zero API keys). |
 | `--json` | Machine-readable output. |
@@ -44,7 +44,7 @@ adlc lesson-foundry [--ledger <name>] [--min <n>] [--out-dir <path>] [--write] [
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
   <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes. No recurring unbanked lessons (or `--gate` not set).</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error. Bad input, unreadable ledger, or a write failure.</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error. Bad input, unreadable ledger, a write failure, or `--llm` refined no cluster.</span>
   <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails. One or more clusters have no non-empty defense file in `--out-dir`, or ledger contains malformed lines.</span>
 </div>
 

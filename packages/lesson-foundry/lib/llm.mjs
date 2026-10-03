@@ -36,14 +36,32 @@ Output ONLY valid JSON matching this schema (no extra text):
 }`;
 }
 
+const REFINEMENT_FIELDS = ['name', 'description', 'rule'];
+
+/**
+ * The provider's reply as a refinement, or null when it is not one. Every field
+ * must be a non-empty string; anything else would reach a SKILL stub as
+ * '[object Object]' or a bare number.
+ *
+ * @param {unknown} parsed
+ * @returns {{name: string, description: string, rule: string}|null}
+ */
+export function toRefinement(parsed) {
+  const entries = REFINEMENT_FIELDS.map((key) => {
+    const value = parsed?.[key];
+    return [key, typeof value === 'string' ? value.trim() : ''];
+  });
+  return entries.every(([, value]) => value) ? Object.fromEntries(entries) : null;
+}
+
 /**
  * Refine a single cluster via LLM.
- * Returns { name, description, rule } or null on failure.
+ * Returns { name, description, rule } or null when the reply is not a valid refinement.
  */
 export async function refineCluster(clusterName, findings, tier = 'mid') {
   const prompt = buildRefinementPrompt(clusterName, findings);
   const raw = await complete({ tier, prompt, maxTokens: 512 });
-  return extractJson(raw);
+  return toRefinement(extractJson(raw));
 }
 
 /**
@@ -58,9 +76,7 @@ export async function refineClusters(clusters, allFindings, tier = 'mid') {
     const findings = cluster.indices.map((i) => allFindings[i]);
     try {
       const refined = await refineCluster(cluster.name, findings, tier);
-      if (refined && refined.name && refined.description && refined.rule) {
-        results.set(idx, refined);
-      }
+      if (refined) results.set(idx, refined);
     } catch (err) {
       // Non-fatal — cluster proceeds with unrefined wording
       console.error(`lesson-foundry: LLM refinement failed for cluster "${cluster.name}": ${err.message}`);
