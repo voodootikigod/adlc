@@ -29,7 +29,7 @@ function world(files, lastCommit = 'abc1234', everExisted = () => true) {
       if (!(p in files)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       return files[p];
     },
-    pathExists: (p) => p in files,
+    pathKind: (p) => (p in files ? 'blob' : null),
     lastCommitFor: () => lastCommit,
     everExisted,
   };
@@ -343,7 +343,7 @@ test('AC1: verification reads HEAD, not the working tree', () => {
   const reads = [];
   const io = {
     readFile: (p) => { reads.push(p); return headContent; },  // stands in for HEAD
-    pathExists: () => true,
+    pathKind: () => 'blob',
     lastCommitFor: () => 'abc',
     everExisted: () => true,
   };

@@ -19,6 +19,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { gitRead, readFileAtRevision } from './git-read.mjs';
 
 /**
  * Normalise for comparison: trim each line and collapse internal whitespace
@@ -131,23 +132,28 @@ export function matchSnippet(content, snippet, prepared = null) {
  * commit get the same answer whatever their working trees look like.
  */
 function defaultReadFileAtHead(path, rev = 'HEAD', run = execFileSync) {
-  return String(run('git', ['show', `${rev}:${path}`], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }));
+  return readFileAtRevision(path, rev, run);
 }
 
-/** Whether `path` exists AT HEAD — again, not in the working tree. */
-function defaultPathExistsAtHead(path, rev = 'HEAD', run = execFileSync) {
+/**
+ * The git object type `path` names AT `rev` — `blob`, `tree`, `commit` — or
+ * null when there is no such object. Again, not the working tree.
+ *
+ * The TYPE, not mere existence: a directory resolves too, and `git show` of a
+ * tree prints a listing an excerpt never matches, which would read as `fixed`.
+ */
+export function pathKindAtRevision(path, rev = 'HEAD', run = execFileSync) {
   try {
-    run('git', ['cat-file', '-e', `${rev}:${path}`], { stdio: ['ignore', 'ignore', 'ignore'] });
-    return true;
+    return gitRead(['cat-file', '-t', `${rev}:${path}`], run).trim() || null;
   } catch {
-    return false;
+    return null;
   }
 }
 
 /** The commit HEAD points at, so a run can say what it described. */
 export function headCommit(run = execFileSync) {
   try {
-    return String(run('git', ['rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).trim() || null;
+    return gitRead(['rev-parse', 'HEAD'], run).trim() || null;
   } catch {
     return null;
   }
@@ -156,7 +162,7 @@ export function headCommit(run = execFileSync) {
 /** The commit that last touched `path`, or null when git cannot say. */
 function defaultLastCommitFor(path, rev = 'HEAD', run = execFileSync) {
   try {
-    return String(run('git', ['log', '-1', '--format=%h', rev, '--', path], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).trim() || null;
+    return gitRead(['log', '-1', '--format=%h', rev, '--', path], run).trim() || null;
   } catch {
     return null;
   }
@@ -181,9 +187,7 @@ function defaultEverExisted(path, rev = 'HEAD', run = execFileSync) {
     // branch after the described commit has not "existed" as far as this run is
     // concerned, and treating it as deleted would report `moved` for a file that
     // never was.
-    const out = String(
-      run('git', ['log', '--oneline', '-1', rev, '--', path], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
-    ).trim();
+    const out = gitRead(['log', '--oneline', '-1', rev, '--', path], run).trim();
     return out.length > 0;
   } catch {
     return false;
@@ -194,8 +198,11 @@ function defaultEverExisted(path, rev = 'HEAD', run = execFileSync) {
  * Verify one classified issue.
  *
  * @param {{number:number, route:string, references:object[]}} classified
- * @param {object} [io] - injected filesystem/git seams
- * @returns {{number:number, route:string, verdict:string, evidence:object|null, reason?:string}}
+ * @param {object} [io] - injected git seams: `readFile`, `pathKind` (the object
+ *   type at the revision, or null), `lastCommitFor`, `everExisted`, `revision`
+ * @returns {{number:number, route:string, verdict:string, evidence:object|null,
+ *   reason?:string, verifiedPaths:string[]}} `verifiedPaths` names the cited
+ *   paths whose own check was `valid` or `fixed` — the issue's verified locations
  */
 export function verifyIssue(classified, io = {}) {
   const {
@@ -205,7 +212,7 @@ export function verifyIssue(classified, io = {}) {
     // verdict from the later revision under the earlier one's hash.
     revision = 'HEAD',
     readFile = (p) => defaultReadFileAtHead(p, revision),
-    pathExists = (p) => defaultPathExistsAtHead(p, revision),
+    pathKind = (p) => pathKindAtRevision(p, revision),
     lastCommitFor = (p) => defaultLastCommitFor(p, revision),
     everExisted = (p) => defaultEverExisted(p, revision),
   } = io;
@@ -215,118 +222,141 @@ export function verifyIssue(classified, io = {}) {
   // The model route is judged by the skill, not here. It is returned as
   // `unverified` — explicitly NOT `valid` — so nothing downstream can mistake
   // "we have not looked" for "we looked and it holds".
-  if (route === 'model') return { number, route, verdict: 'unverified', evidence: null };
-  if (route === 'unverifiable') return { number, route, verdict: 'unverifiable', evidence: null };
+  if (route === 'model') return { number, route, verdict: 'unverified', evidence: null, verifiedPaths: [] };
+  if (route === 'unverifiable') return { number, route, verdict: 'unverifiable', evidence: null, verifiedPaths: [] };
 
-  const outcomes = [];
-  for (const ref of references) {
-    if (!pathExists(ref.path)) {
-      // A path git has never tracked is not a deleted file — it is prose that
-      // happened to look like a path. Calling it `moved` would flood the report
-      // with citations the repository never had.
-      if (!everExisted(ref.path)) {
-        outcomes.push({ verdict: 'not-a-reference', reason: `${ref.path} has never existed in this repository` });
-        continue;
-      }
-      outcomes.push({ verdict: 'moved', evidence: { path: ref.path, citedLine: ref.line, reason: 'the cited path existed and no longer does' } });
-      continue;
-    }
-    // An EMPTY or whitespace-only fence is discarded before matching. It
-    // normalises to zero lines, which the matcher reports as `none`, which maps
-    // to `fixed` — a close candidate manufactured from a malformed citation
-    // carrying no evidence at all.
-    const declared = ref.snippets ?? (ref.snippet ? [ref.snippet] : []);
-    const snippets = declared.filter((sn) => String(sn ?? '').trim().length > 0);
-    if (snippets.length === 0) {
-      outcomes.push({
-        verdict: 'unverifiable',
-        reason: declared.length > 0
-          ? `${ref.path} is cited with an empty excerpt — nothing to compare`
-          : `no snippet to compare for ${ref.path}`,
-      });
-      continue;
-    }
-    let content;
-    try {
-      content = readFile(ref.path);
-    } catch (err) {
-      outcomes.push({ verdict: 'unverifiable', reason: `${ref.path} is unreadable: ${err.code ?? err.message}` });
-      continue;
-    }
-    // EVERY excerpt attached to this citation is evaluated, and the best
-    // outcome wins: a single surviving excerpt means the cited code is still
-    // there, whatever happened to the others. Judging only one excerpt is how an
-    // issue that quotes a location twice — once removed, once live — verifies
-    // `fixed` and gets closed.
-    const prepared = prepareContent(content);
-    const matches = snippets.map((sn) => matchSnippet(content, sn, prepared));
-    const best = matches.find((x) => x.kind === 'all')
-      ?? matches.find((x) => x.kind === 'partial')
-      ?? matches[0];
-    const m = best;
-    if (m.kind === 'none') {
-      outcomes.push({
-        verdict: 'fixed',
-        evidence: {
-          path: ref.path,
-          citedLine: ref.line,
-          revision,
-          // NAMED for what it is. This is the last commit to touch the path, not
-          // necessarily the one that removed the cited lines — finding that
-          // would need a pickaxe search per citation. Calling it the removing
-          // commit in close evidence would be a claim the tool never checked.
-          lastCommitTouchingPath: lastCommitFor(ref.path),
-          reason: snippets.length > 1
-            ? `no line of any of the ${snippets.length} cited excerpts survives anywhere in the file`
-            : 'no line of the cited snippet survives anywhere in the file',
-        },
-      });
-    } else if (m.kind === 'partial') {
-      // The code CHANGED, and "changed" is not "fixed". Concluding otherwise
-      // here is how an elided excerpt or a partial refactor closes a live issue.
-      outcomes.push({
-        verdict: 'unverifiable',
-        reason: `only ${m.matched} of ${m.total} cited line(s) survive in ${ref.path} — changed, but not demonstrably fixed`,
-      });
-    } else {
-      outcomes.push({
-        verdict: 'valid',
-        evidence: {
-          path: ref.path,
-          citedLine: ref.line,
-          foundAtLine: m.firstLine,
-          movedWithinFile: ref.line != null && m.firstLine !== ref.line,
-        },
-      });
-    }
+  const outcomes = references.map((ref) => ({ path: ref.path, ...verifyCitation(ref, { revision, readFile, pathKind, lastCommitFor, everExisted }) }));
+  return { number, route, ...aggregate(outcomes, referencesTruncated), verifiedPaths: verifiedPathsOf(outcomes) };
+}
+
+/** Outcomes that established where the cited code is (or was, and is gone from). */
+const LOCATING = new Set(['valid', 'fixed']);
+
+/**
+ * The paths whose OWN check established a location. The issue's verdict can be
+ * `valid` on one citation while another names a path that never existed or
+ * carries no excerpt; only the checked ones say where the work is.
+ */
+function verifiedPathsOf(outcomes) {
+  return [...new Set(outcomes.filter((o) => LOCATING.has(o.verdict)).map((o) => o.path))];
+}
+
+/** Verify one citation: `{verdict, evidence?, reason?}`. */
+function verifyCitation(ref, { revision, readFile, pathKind, lastCommitFor, everExisted }) {
+  const kind = pathKind(ref.path);
+  if (!kind) {
+    // A path git has never tracked is not a deleted file — it is prose that
+    // happened to look like a path. Calling it `moved` would flood the report
+    // with citations the repository never had.
+    if (!everExisted(ref.path)) return { verdict: 'not-a-reference', reason: `${ref.path} has never existed in this repository` };
+    return { verdict: 'moved', evidence: { path: ref.path, citedLine: ref.line, reason: 'the cited path existed and no longer does' } };
   }
+  if (kind !== 'blob') {
+    return { verdict: 'unverifiable', reason: `${ref.path} is a ${kind} at this revision, not a file — there is nothing to compare an excerpt against` };
+  }
+  // An EMPTY or whitespace-only fence is discarded before matching. It
+  // normalises to zero lines, which the matcher reports as `none`, which maps
+  // to `fixed` — a close candidate manufactured from a malformed citation
+  // carrying no evidence at all.
+  const declared = ref.snippets ?? (ref.snippet ? [ref.snippet] : []);
+  const snippets = declared.filter((sn) => String(sn ?? '').trim().length > 0);
+  if (snippets.length === 0) {
+    return {
+      verdict: 'unverifiable',
+      reason: declared.length > 0
+        ? `${ref.path} is cited with an empty excerpt — nothing to compare`
+        : `no snippet to compare for ${ref.path}`,
+    };
+  }
+  let content;
+  try {
+    content = readFile(ref.path);
+  } catch (err) {
+    return { verdict: 'unverifiable', reason: `${ref.path} is unreadable: ${err.code ?? err.message}` };
+  }
+  return judgeExcerpts(ref, content, snippets, { revision, lastCommitFor });
+}
 
-  // PRECEDENCE, and every step of it fails towards NOT closing:
-  //   moved > valid > unverifiable > fixed
-  //
-  // `unverifiable` outranking `fixed` is the subtle one, raised in cross-model
-  // review. An issue citing two locations — one whose snippet is gone, one with
-  // no excerpt or temporarily unreadable — has NOT been shown to be fixed: one
-  // citation could not be checked at all. Returning `fixed` there would close on
-  // incomplete evidence, which is the same defect as closing on a shifted line,
-  // reached by a different route.
-  // An issue whose citations were CAPPED has not been fully read, so it can
-  // never verify `fixed` — the same rule as a citation that could not be
-  // checked, reached by a different route.
+/**
+ * Compare every excerpt attached to one citation against the file.
+ *
+ * The best outcome wins: a single surviving excerpt means the cited code is
+ * still there, whatever happened to the others. Judging only one excerpt is how
+ * an issue that quotes a location twice — once removed, once live — verifies
+ * `fixed` and gets closed.
+ */
+function judgeExcerpts(ref, content, snippets, { revision, lastCommitFor }) {
+  const prepared = prepareContent(content);
+  const matches = snippets.map((sn) => matchSnippet(content, sn, prepared));
+  const m = matches.find((x) => x.kind === 'all')
+    ?? matches.find((x) => x.kind === 'partial')
+    ?? matches[0];
+  if (m.kind === 'none') {
+    return {
+      verdict: 'fixed',
+      evidence: {
+        path: ref.path,
+        citedLine: ref.line,
+        revision,
+        // NAMED for what it is. This is the last commit to touch the path, not
+        // necessarily the one that removed the cited lines — finding that
+        // would need a pickaxe search per citation. Calling it the removing
+        // commit in close evidence would be a claim the tool never checked.
+        lastCommitTouchingPath: lastCommitFor(ref.path),
+        reason: snippets.length > 1
+          ? `no line of any of the ${snippets.length} cited excerpts survives anywhere in the file`
+          : 'no line of the cited snippet survives anywhere in the file',
+      },
+    };
+  }
+  if (m.kind === 'partial') {
+    // The code CHANGED, and "changed" is not "fixed". Concluding otherwise
+    // here is how an elided excerpt or a partial refactor closes a live issue.
+    return {
+      verdict: 'unverifiable',
+      reason: `only ${m.matched} of ${m.total} cited line(s) survive in ${ref.path} — changed, but not demonstrably fixed`,
+    };
+  }
+  return {
+    verdict: 'valid',
+    evidence: {
+      path: ref.path,
+      citedLine: ref.line,
+      foundAtLine: m.firstLine,
+      movedWithinFile: ref.line != null && m.firstLine !== ref.line,
+    },
+  };
+}
+
+/**
+ * Fold per-citation outcomes into the issue's verdict.
+ *
+ * PRECEDENCE, and every step of it fails towards NOT closing:
+ *   moved > valid > unverifiable > fixed
+ *
+ * `unverifiable` outranking `fixed` is the subtle one. An issue citing two
+ * locations — one whose snippet is gone, one with no excerpt or temporarily
+ * unreadable — has NOT been shown to be fixed: one citation could not be checked
+ * at all. Returning `fixed` there would close on incomplete evidence, which is
+ * the same defect as closing on a shifted line, reached by a different route.
+ * An issue whose citations were CAPPED has not been fully read, so it can never
+ * verify `fixed` either.
+ */
+function aggregate(outcomes, referencesTruncated) {
   const order = referencesTruncated ? ['moved', 'valid', 'unverifiable'] : ['moved', 'valid', 'unverifiable', 'fixed'];
   for (const want of order) {
     const hit = outcomes.find((o) => o.verdict === want);
     if (!hit) continue;
     if (want === 'unverifiable') {
-      return { number, route, verdict: 'unverifiable', evidence: null, reason: hit.reason ?? 'a citation could not be checked' };
+      return { verdict: 'unverifiable', evidence: null, reason: hit.reason ?? 'a citation could not be checked' };
     }
-    return { number, route, verdict: want, evidence: hit.evidence ?? null };
+    return { verdict: want, evidence: hit.evidence ?? null };
   }
 
   const why = referencesTruncated
     ? 'the issue cites more locations than one sweep will read; its evidence is incomplete'
     : (outcomes.find((o) => o.reason)?.reason ?? 'no citation could be checked');
-  return { number, route, verdict: 'unverifiable', evidence: null, reason: why };
+  return { verdict: 'unverifiable', evidence: null, reason: why };
 }
 
 /** Verify a whole classified backlog. */

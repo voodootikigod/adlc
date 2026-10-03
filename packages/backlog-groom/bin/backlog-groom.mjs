@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
- * backlog-groom — the read path.
+ * backlog-groom — groom a GitHub issue backlog against the code.
  *
- * Grooms a GitHub issue backlog against the code and emits a ranked, clustered,
- * premise-verified set. This half WRITES NOTHING: the gate, the autonomy floor
- * and execution live in the write path, and proposals are emitted for it rather
- * than applied here.
+ * Without --apply: grooms the backlog and emits a ranked, clustered,
+ * premise-verified set, writing nothing to GitHub. With --apply --set: acts on
+ * a groomed set through the gate, the autonomy floor and comment-first
+ * execution; writes need ADLC_MANIFEST_KEY.
  *
  * Exit codes follow the toolkit convention: 0 = ran, 1 = operational error.
- * There is no gate-fail exit, because a read-only sweep has no verdict to fail.
+ * There is no gate-fail exit: a demoted action is a proposal, not a failure.
  */
 
 import { parseArgs } from 'node:util';

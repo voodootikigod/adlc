@@ -7,7 +7,12 @@ import { artifactDigest, buildActionArtifact, entryBindsAction, gateAction, ledg
 import { ledgerEntryBytes, signLedgerEntry } from '../lib/ledger-sig.mjs';
 import { executeActions, renderComment } from '../lib/execute.mjs';
 import { assertFloorNotWidened, assertFrozenPathsNotNarrowed, assertPolicyUnchanged } from '../lib/floor.mjs';
-import { applyRun } from '../lib/apply.mjs';
+import { applyRun as applyRunAtRevision } from '../lib/apply.mjs';
+
+// Every run acts at a commit its set was generated for. Tests that are not about
+// the revision act at one fixed commit; tests that are pass their own.
+const TEST_REV = 'e'.repeat(40);
+const applyRun = (o) => applyRunAtRevision('revision' in o ? o : { ...o, revision: TEST_REV, set: { generatedFor: TEST_REV, ...o.set } });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

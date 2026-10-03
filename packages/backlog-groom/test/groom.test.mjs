@@ -31,7 +31,7 @@ function world({ updatedAt = 'T1', content = 'const tag = one;\n' } = {}) {
         reads.push(p);
         return content;
       },
-      pathExists: () => true,
+      pathKind: () => 'blob',
       lastCommitFor: () => 'abc',
       everExisted: () => true,
     },
@@ -112,7 +112,7 @@ test('a sweep enforces a GLOBAL citation budget, and says the run was incomplete
   const io = {
     fetchIssues: () => ({ issues, unconsultable: null, truncated: null }),
     readFile: (p) => { reads.push(p); return 'const tag = one;\n'; },
-    pathExists: () => true,
+    pathKind: () => 'blob',
     lastCommitFor: () => 'abc',
     everExisted: () => true,
     headCommit: () => 'rev',
@@ -141,7 +141,7 @@ test('an issue that would CROSS the budget is refused entirely, not partly proce
     io: {
       fetchIssues: () => ({ issues, unconsultable: null, truncated: null }),
       readFile: () => { reads += 1; return 'const tag = one;\n'; },
-      pathExists: () => true,
+      pathKind: () => 'blob',
       lastCommitFor: () => 'abc',
       everExisted: () => true,
       headCommit: () => 'rev',

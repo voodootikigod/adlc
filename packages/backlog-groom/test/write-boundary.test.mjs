@@ -13,7 +13,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rename
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { applyRun, revalidateAction } from '../lib/apply.mjs';
+import { applyRun as applyRunAtRevision, revalidateAction } from '../lib/apply.mjs';
 import { executeActions, marker } from '../lib/execute.mjs';
 import { gateAction, REVIEW_APPROVE } from '../lib/gate.mjs';
 import { sealLedgerEntry } from '../lib/ledger-sig.mjs';
@@ -24,12 +24,17 @@ const TEST_KEY = 'unit-test-ledger-key-0123456789ab';
 import { contentHash } from '../lib/content-hash.mjs';
 import { acquireApplyLock, STALE_LOCK_MS } from '../lib/io.mjs';
 
+// Every run acts at a commit its set was generated for. Tests that are not about
+// the revision act at one fixed commit; tests that are pass their own.
+const TEST_REV = 'e'.repeat(40);
+const applyRun = (o) => applyRunAtRevision('revision' in o ? o : { ...o, revision: TEST_REV, set: { generatedFor: TEST_REV, ...o.set } });
+
 // A repository where `src/a.mjs`'s cited snippet is gone (so the issue verifies
 // as `fixed`, a location-verified verdict) and the path sits in unit `review`.
 const FILES = { 'src/a.mjs': 'something else\n', 'packages/review/x.mjs': 'something else\n' };
 const IO = {
   readFile: (f) => { if (!(f in FILES)) throw new Error('ENOENT'); return FILES[f]; },
-  pathExists: (f) => f in FILES,
+  pathKind: (f) => (f in FILES ? 'blob' : null),
   lastCommitFor: () => 'abc1234',
 };
 const REVIEW_BODY = '**Location** `packages/review/x.mjs:1`\n\n```\ngone\n```\n';
@@ -183,7 +188,7 @@ test('a working copy declaring an extra unit cannot sanction a relabel into it',
   // copy, adding `{ name: "anything" }` sanctions `area:anything`.
   assert.throws(
     () => applyRun({ key: TEST_KEY,
-      set: { schemaVersion: 4, generatedFor: null, issues: [], proposals: [] },
+      set: { schemaVersion: 4, issues: [], proposals: [] },
       profile: profile({ units: [...POLICY.units, { name: 'anything', paths: ['**'] }] }),
       baseFloor: [],
       basePolicy: POLICY,
