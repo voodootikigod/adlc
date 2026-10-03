@@ -12,6 +12,7 @@ test('no defeats + dry streak → exit 0 clean', () => {
     stoppedBy: 'dry',
     inconclusiveRounds: 0,
     rounds: 5,
+    candidatesClassified: 4,
     strictBudget: false,
     failOnBehavioral: false,
     independenceConfigured: true,
@@ -29,6 +30,7 @@ test('contract-derived defeat → exit 2', () => {
     stoppedBy: 'dry',
     inconclusiveRounds: 0,
     rounds: 4,
+    candidatesClassified: 4,
     strictBudget: false,
     failOnBehavioral: false,
   });
@@ -45,6 +47,7 @@ test('behavioral-only defeat → exit 0 (REPORT) without --fail-on-behavioral', 
     stoppedBy: 'dry',
     inconclusiveRounds: 0,
     rounds: 4,
+    candidatesClassified: 4,
     strictBudget: false,
     failOnBehavioral: false,
   });
@@ -62,6 +65,7 @@ test('behavioral-only defeat + --fail-on-behavioral → exit 2', () => {
     stoppedBy: 'dry',
     inconclusiveRounds: 0,
     rounds: 4,
+    candidatesClassified: 4,
     strictBudget: false,
     failOnBehavioral: true,
   });
@@ -74,6 +78,7 @@ test('all rounds inconclusive + no defeats → inconclusive verdict', () => {
     stoppedBy: 'maxRounds',
     inconclusiveRounds: 5,
     rounds: 5,
+    candidatesClassified: 4,
     strictBudget: false,
     failOnBehavioral: false,
   });
@@ -88,6 +93,7 @@ test('all rounds inconclusive + strictBudget → exit 1', () => {
     stoppedBy: 'maxRounds',
     inconclusiveRounds: 5,
     rounds: 5,
+    candidatesClassified: 4,
     strictBudget: true,
     failOnBehavioral: false,
   });
@@ -102,6 +108,7 @@ test('partial inconclusive rounds with some dry rounds + no defeats → clean', 
     stoppedBy: 'dry',
     inconclusiveRounds: 2,
     rounds: 5,
+    candidatesClassified: 4,
     strictBudget: false,
     failOnBehavioral: false,
     independenceConfigured: true,
@@ -117,6 +124,7 @@ test('budget stop + strictBudget + no defeats → exit 1', () => {
     stoppedBy: 'budget',
     inconclusiveRounds: 0,
     rounds: 3,
+    candidatesClassified: 4,
     strictBudget: true,
     failOnBehavioral: false,
   });
@@ -134,6 +142,7 @@ test('mixed defeats: contract + behavioral → exit 2 (contract takes precedence
     stoppedBy: 'dry',
     inconclusiveRounds: 0,
     rounds: 5,
+    candidatesClassified: 4,
     strictBudget: false,
     failOnBehavioral: false,
   });
@@ -151,6 +160,7 @@ test('verdict includes witnessSource breakdown', () => {
     stoppedBy: 'dry',
     inconclusiveRounds: 0,
     rounds: 5,
+    candidatesClassified: 4,
     strictBudget: false,
     failOnBehavioral: false,
   });

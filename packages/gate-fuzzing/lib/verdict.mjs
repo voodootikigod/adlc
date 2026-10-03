@@ -53,6 +53,9 @@ function isRunInconclusive(runState) {
  * @param {number} opts.rounds - Total rounds run
  * @param {boolean} opts.strictBudget - --strict-budget flag
  * @param {boolean} opts.failOnBehavioral - --fail-on-behavioral flag (Fix 5)
+ * @param {number} opts.candidatesClassified - Candidates classified across the
+ *   run. Required: a missing or non-integer count yields exit 2 (inconclusive).
+ * @param {boolean} [opts.allowEmpty] - --allow-empty: a verified zero count exits 0
  * @param {boolean} opts.independenceConfigured - true only when a real oracle
  *   independence mechanism is wired (a non-null independentApprovalFn, or
  *   genuine contract-derivation). Without one, a clean run cannot distinguish
@@ -69,23 +72,9 @@ export function computeVerdict(opts) {
     strictBudget,
     failOnBehavioral,
     independenceConfigured,
+    candidatesClassified,
     allowEmpty = false,
   } = opts;
-
-  const candidatesClassified = opts.candidatesClassified ?? opts.totalCandidates ?? opts.candidatesGenerated ?? opts.candidatesCount;
-
-  // Zero candidates evaluated across run: refuse clean/exhaustive verdict.
-  // Must return inconclusive and exit non-zero (exit 2) unless --allow-empty is set.
-  if (candidatesClassified !== undefined && candidatesClassified === 0) {
-    return {
-      exitCode: allowEmpty ? 0 : 2,
-      summary: 'inconclusive',
-      defeats: [],
-      contractDefeats: 0,
-      behavioralDefeats: 0,
-      inconclusive: true,
-    };
-  }
 
   // Categorize defeats by source
   const contractDefeats = defeats.filter((d) => classifyDefeatSource(d) === 'contract');
@@ -127,6 +116,21 @@ export function computeVerdict(opts) {
       contractDefeats: 0,
       behavioralDefeats: behavioralDefeats.length,
       inconclusive: false,
+    };
+  }
+
+  // No defeats: absence is certified only against a known, non-zero count of
+  // classified candidates. An unknown count fails closed exactly like a
+  // verified zero, except that --allow-empty forgives only the verified zero.
+  const countKnown = Number.isSafeInteger(candidatesClassified) && candidatesClassified >= 0;
+  if (!countKnown || candidatesClassified === 0) {
+    return {
+      exitCode: countKnown && allowEmpty ? 0 : 2,
+      summary: 'inconclusive',
+      defeats: [],
+      contractDefeats: 0,
+      behavioralDefeats: 0,
+      inconclusive: true,
     };
   }
 

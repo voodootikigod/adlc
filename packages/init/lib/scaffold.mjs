@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
+import { isPlainObject } from '@adlc/core';
 import { ACTIVE_DIRECTORY, ARCHIVE_DIRECTORY, LEGACY_FILE, LegacyTicketStore, activeDirectoryStore, archiveDirectoryStore, initializeTicketStores } from '@adlc/tickets';
 import { ADLC_GITIGNORE_LINES } from './gitignore-defaults.mjs';
 
@@ -274,11 +275,6 @@ function writeFileNoFollow(path, content, { exclusive = false } = {}) {
   } finally {
     closeSync(descriptor);
   }
-}
-
-/** A plain JSON object, not an array/null — the only shape a merge can target. */
-function isPlainObject(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 /**
