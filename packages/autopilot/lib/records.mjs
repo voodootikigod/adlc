@@ -100,6 +100,23 @@ export function createRecordStore({ paths, redactor, now = () => new Date().toIS
   return { load, save, update, remove, tombstone, pruneTombstones, all };
 }
 
+/**
+ * Update the record of `issue` if it still exists.
+ *
+ * A record can be retired or torn down while a step awaits a child or the
+ * network, and `records.update` throws on a missing record. A vanished record
+ * yields null so the caller decides what it means; any OTHER write failure
+ * propagates. The reload tells the two apart, never the error message.
+ */
+export function updateIfPresent(records, issue, patch) {
+  try {
+    return records.update(issue, patch);
+  } catch (e) {
+    if (!records.load(issue)) return null;
+    throw e;
+  }
+}
+
 function listFiles(dir, re, basenameOnly = false) {
   if (!existsSync(dir)) return [];
   return readdirSync(dir).filter((n) => re.test(n)).map((n) => join(dir, n)).filter(() => true).filter((p) => (basenameOnly ? re.test(p.slice(p.lastIndexOf('/') + 1)) : true));

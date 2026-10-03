@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { createFixture, FAKE, GIT } from './recover-fixture.mjs';
 import { fakeGithub } from './recover-gh.mjs';
 import { buildContext } from '../../lib/context.mjs';
+import * as realGates from '../../lib/gates.mjs';
 import { acquireLock, selfIdentity, defaultProbes } from '../../lib/lock.mjs';
 import { ticketFilename } from '../../../tickets/lib/filename.mjs';
 import { AUTOPILOT_DEFAULTS } from '../../lib/config.mjs';
@@ -24,6 +25,13 @@ import { globMatch } from '@adlc/core';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
 export const FAKE_TOOLS = Object.freeze({ ...FAKE, bwrap: '/fake/bin/bwrap', 'adversarial-review': '/fake/bin/adversarial-review' });
+/**
+ * The sandbox backend the fake bwrap stands for. The outer gates otherwise probe
+ * the HOST for a backend, which would make these fixtures fail on any host
+ * without bubblewrap although the real binary is never run.
+ */
+export const FAKE_BACKEND = Object.freeze({ name: 'bubblewrap', platform: 'linux' });
+const fixtureGates = Object.freeze({ ...realGates, runOuterGates: (args) => realGates.runOuterGates({ backend: FAKE_BACKEND, ...args }) });
 export const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 export const fakeTicketId = () => `T-${Array.from(randomBytes(26)).map((b) => CROCKFORD[b % 32]).join('')}`;
@@ -230,7 +238,7 @@ export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, r
   state.quotaRead = quotaRead === null ? null : (quotaRead ?? (async () => ({ ok: true, fiveHour: 10, sevenDay: 10, scoped: new Map([['opus', 10], ['sonnet', 10]]), resetsAt: { fiveHour: null } })));
   const ctx = await buildContext({
     flags, env: { PATH: process.env.PATH, HOME: fx.ctx.env.home }, cwd: repoRoot, local, dryRun,
-    overrides: { spawn: fx.ctx.spawn, recorder: fx.recorder, repoRoot, now: () => fx.clock.value, key, log: (l) => fx.logs.push(l), iterationToken: 'e'.repeat(64), iterationId: 'it-seq-1', ...(state.quotaRead ? { quota: { read: () => state.quotaRead(state) } } : {}), ...(fetchImpl ? { fetchImpl } : {}), sleep: async () => { fx.advance(1000); } },
+    overrides: { modules: { gates: fixtureGates }, spawn: fx.ctx.spawn, recorder: fx.recorder, repoRoot, now: () => fx.clock.value, key, log: (l) => fx.logs.push(l), iterationToken: 'e'.repeat(64), iterationId: 'it-seq-1', ...(state.quotaRead ? { quota: { read: () => state.quotaRead(state) } } : {}), ...(fetchImpl ? { fetchImpl } : {}), sleep: async () => { fx.advance(1000); } },
   });
   ctx.pinned = { ...fx.ctx.pinned, ...FAKE_TOOLS, git: GIT, 'git:realpath': GIT, node: FAKE.node, specLintBin: join(repoRoot, 'packages', 'spec-lint', 'bin', 'spec-lint.mjs') };
   ctx.remote = fx.ctx.remote;

@@ -121,7 +121,11 @@ export function assertNoArgvOverride(config = {}) {
  * `assign.mjs` is consumed exactly as it emits — float comes from the assignment,
  * never from the ticket.
  *
- * @returns {{ registryPath, registryDigest, notices, seats: Map<string, {job, route, seat, assignment, registryDigest}> }}
+ * `skippedLedger` lists the malformed ledger lines the priors were built
+ * without (the ledger read is lenient); when there are any, `notices` carries
+ * the operator warning for them, so every caller that prints notices says so.
+ *
+ * @returns {{ registryPath, registryDigest, notices, skippedLedger, seats: Map<string, {job, route, seat, assignment, registryDigest}> }}
  * @throws on a disabled/missing/invalid registry, or an unroutable ticket (fail closed)
  */
 export function planSeats({
@@ -143,7 +147,7 @@ export function planSeats({
   });
 
   const seats = new Map();
-  if (!Array.isArray(tickets) || tickets.length === 0) return { registryPath, registryDigest, notices, seats };
+  if (!Array.isArray(tickets) || tickets.length === 0) return { registryPath, registryDigest, notices, skippedLedger: [], seats };
 
   // CPM float is a property of the WHOLE active DAG, never of a selection from
   // it. `tickets` must therefore be every active ticket, and a `--tickets`
@@ -180,7 +184,7 @@ export function planSeats({
 
   const cpm = computeFloat(routable);
   if (cpm.error) throw new Error(`quartermaster: cannot route — ${cpm.error}`);
-  const { entries } = readManifestForest(adlcDir);
+  const { entries, skipped: skippedLedger } = readManifestForest(adlcDir);
   const assignments = assignAll(routable, cpm, buildPriors(entries), floor);
   const assignmentById = new Map(assignments.map((a) => [a.id, a]));
 
@@ -199,7 +203,19 @@ export function planSeats({
       .map((channel) => ({ channel, seat: resolveRoute(registry, { channel }) }));
     seats.set(ticket.id, { job, route, seat: resolveRoute(registry, route), assignment, registryDigest, escalation });
   }
-  return { registryPath, registryDigest, notices, seats };
+  const ledgerNotice = skippedLedgerNotice(skippedLedger);
+  return { registryPath, registryDigest, notices: ledgerNotice ? [...notices, ledgerNotice] : notices, skippedLedger, seats };
+}
+
+/**
+ * The operator warning for ledger lines the routing priors were built without,
+ * or null when none were skipped.
+ */
+export function skippedLedgerNotice(skipped) {
+  if (!Array.isArray(skipped) || skipped.length === 0) return null;
+  const where = skipped.map((s) => (s.line == null ? s.segment : `${s.segment}:${s.line}`)).join(', ');
+  const noun = skipped.length === 1 ? 'line' : 'lines';
+  return `quartermaster: ${skipped.length} malformed ledger ${noun} skipped; seat priors exclude them (${where})`;
 }
 
 /**
