@@ -5,31 +5,71 @@
 // pass a lexical check. Falls back to the lexical path for anything that
 // cannot be resolved.
 
-import { existsSync, realpathSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative } from 'node:path';
+import { lstatSync, readlinkSync, realpathSync } from 'node:fs';
+import { isAbsolute, join, parse, relative } from 'node:path';
+
+// The kernel's own bound on symlink hops per lookup (Linux MAXSYMLINKS).
+const MAX_SYMLINK_HOPS = 40;
 
 function realpathOr(p) {
   try { return realpathSync(p); } catch { return p; }
 }
 
+function segmentsOf(p) {
+  return p.split(/[\\/]+/).filter(Boolean);
+}
+
+function lstatOrNull(p) {
+  try { return lstatSync(p); } catch { return null; }
+}
+
+function readlinkOrNull(p) {
+  try { return readlinkSync(p); } catch { return null; }
+}
+
 /**
- * Resolve symlinks on the target and on its existing parent segments before
- * comparing to a frozen rail set, returning a forward-slash path relative to
- * the (also realpath-resolved) root. The file may not exist yet (a `write`
- * creating it): resolve the deepest existing ancestor (catches a symlinked
- * parent dir), then re-append the tail. Falls back to the lexical path for
- * anything that can't be resolved.
+ * Walk `segments` from the real directory `start` the way path lookup does:
+ * left to right, expanding each symlink (including a dangling one) before the
+ * next segment, so a `..` applies to the resolved prefix it follows. Once a
+ * segment does not exist nothing below it can be a link, so the rest is
+ * appended lexically. Returns null on a symlink loop (hop budget spent)
+ * or a link that vanishes mid-walk.
+ */
+function walk(start, segments) {
+  const queue = [...segments];
+  let cur = start;
+  let exists = true;
+  let hops = 0;
+  while (queue.length > 0) {
+    const seg = queue.shift();
+    if (seg === '.') continue;
+    if (seg === '..') { cur = join(cur, '..'); continue; }
+    const next = join(cur, seg);
+    const st = exists ? lstatOrNull(next) : null;
+    if (st?.isSymbolicLink()) {
+      const target = ++hops > MAX_SYMLINK_HOPS ? null : readlinkOrNull(next);
+      if (target === null) return null;
+      if (isAbsolute(target)) cur = parse(target).root;
+      queue.unshift(...segmentsOf(target));
+      continue;
+    }
+    if (!st) exists = false;
+    cur = next;
+  }
+  return cur;
+}
+
+/**
+ * Resolve `filePath` against `root` in kernel order — each existing segment's
+ * symlink expanded before the next segment (`..` included) is applied, and a
+ * dangling symlink followed to the file a write through it would create — and
+ * return it as a forward-slash path relative to the realpath-resolved root.
+ * The file may not exist yet. A symlink loop or vanished link falls back to the lexical path.
  */
 export function resolveRailPath(filePath, root) {
-  const abs = isAbsolute(filePath) ? filePath : join(root, filePath);
-  const tail = [];
-  let cur = abs;
-  while (!existsSync(cur)) {
-    const parent = dirname(cur);
-    if (parent === cur) break;
-    tail.unshift(basename(cur));
-    cur = parent;
-  }
-  const resolved = tail.length ? join(realpathOr(cur), tail.join('/')) : realpathOr(cur);
-  return relative(realpathOr(root), resolved).split('\\').join('/');
+  const realRoot = realpathOr(root);
+  const start = isAbsolute(filePath) ? parse(filePath).root : realRoot;
+  const final = walk(start, segmentsOf(filePath))
+    ?? (isAbsolute(filePath) ? filePath : join(realRoot, filePath));
+  return relative(realRoot, final).split('\\').join('/');
 }
