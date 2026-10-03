@@ -4,7 +4,7 @@
 // back instead of deleting it.
 
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnHook } from './helpers/run-hook.mjs';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -13,7 +13,7 @@ import { tmp } from '@adlc/core/test-kit';
 import { LOCK_TTL_MS, judgeStaleLock, reclaimJudgedLock } from '../build-gate-inline.mjs';
 
 function deadPid() {
-  const r = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' });
+  const r = spawnHook(['-e', 'process.stdout.write(String(process.pid))']);
   return Number(r.stdout);
 }
 

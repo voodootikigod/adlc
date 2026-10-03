@@ -106,7 +106,7 @@ const PENDING_CONVERSION = new Map([
   ['plugins/adlc-cursor/test/session-start.test.mjs', 2],
   ['plugins/adlc-cursor/test/shell-advisory.test.mjs', 2],
   ['plugins/adlc-gemini/test/build-gate.test.mjs', 2],
-  ['plugins/adlc-gemini/test/lifecycle-hooks.test.mjs', 8],
+  ['plugins/adlc-gemini/test/lifecycle-hooks.test.mjs', 7],
   ['plugins/adlc-gemini/test/packaging.test.mjs', 12],
   ['plugins/adlc-gemini/test/shim.test.mjs', 5],
   ['plugins/adlc-herdr/test/action-dispatch.test.mjs', 1],

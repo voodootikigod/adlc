@@ -1,21 +1,8 @@
-// run-hook.mjs — the ONE place these tests spawn a child Node process (#1042).
-//
-// WHAT THIS IS, STATED HONESTLY. Defence in depth, not a fix for an observed
-// hang. The test call sites were investigated and CLEARED: every one either
-// passes `input:`, which makes Node write the payload and close the pipe
-// deterministically, or uses pipe/ignore stdio — none inherits stdin, and the
-// hung leaves seen in the wild were parked on a UNIX SOCKET, which these call
-// sites never hand a child. The hook's own unbounded `git`/`adlc` spawns were
-// bounded in #1044/#1045, and what remains of the diagnosis is tracked in
-// #1048. A timeout here is enforced by the PARENT process while the observed
-// orphans had no live parent, so this file would not have prevented them.
-//
-// It earns its place anyway: `spawnSync` with no `timeout` waits forever on a
-// child that never exits, and a directory whose whole subject is spawning hooks
-// is exactly where the next unbounded spawn gets written. Centralising the
-// spawn means the bound cannot be forgotten by a new test.
+// run-hook.mjs — the one place tests in this directory spawn a child Node
+// process. Every spawn gets a SIGKILL deadline, and a killed run's output
+// throws instead of reading as an empty result.
 
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 
 /**
  * Wall-clock ceiling for one hook run. Deliberately generous: the value is the
@@ -100,18 +87,4 @@ export function runHook(args, opts = {}) {
 export function spawnHook(args, opts = {}) {
   const options = resolveSpawnOptions(opts);
   return refuseKilledOutput(spawnSync(process.execPath, args, options), options.timeout);
-}
-
-/**
- * spawn a long-running child Node process (a server the test talks to over
- * stdio). The child is SIGKILLed if it is still running at the deadline, so a
- * test that forgets to close it cannot hold the runner open.
- */
-export function launchHook(args, opts = {}) {
-  const { timeout, killSignal, encoding: _encoding, ...rest } = resolveSpawnOptions(opts);
-  const child = spawn(process.execPath, args, rest);
-  const timer = setTimeout(() => child.kill(killSignal), timeout);
-  timer.unref();
-  child.once('exit', () => clearTimeout(timer));
-  return child;
 }

@@ -5,7 +5,7 @@
 // dir) and through the real shim layout.
 
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnHook } from './helpers/run-hook.mjs';
 import { copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -95,7 +95,7 @@ test('the .cjs shim loads only its sibling adapter, whatever ADLC_AGY_ADAPTER_OV
   const dir = tmp(t, 'gemini-shim-override-');
   const stub = join(dir, 'stub-adapter.mjs');
   writeFileSync(stub, 'export function postToolUse() { return { decision: "stub-adapter-loaded", allow_tool: true }; }\n');
-  const res = spawnSync(process.execPath, [join(PLUGIN, 'hooks', 'adlc-rails-guard.cjs'), 'posttooluse'], {
+  const res = spawnHook([join(PLUGIN, 'hooks', 'adlc-rails-guard.cjs'), 'posttooluse'], {
     input: '{}',
     encoding: 'utf8',
     env: { ...process.env, ...SWITCH, ADLC_AGY_ADAPTER_OVERRIDE: stub },
@@ -111,7 +111,7 @@ test('the .cjs shim resolves the adapter beside itself', (t) => {
     join(dir, 'adlc-rails-guard.mjs'),
     'export function postToolUse() { return { decision: "sibling-adapter", allow_tool: true }; }\n',
   );
-  const res = spawnSync(process.execPath, [join(dir, 'adlc-rails-guard.cjs'), 'posttooluse'], {
+  const res = spawnHook([join(dir, 'adlc-rails-guard.cjs'), 'posttooluse'], {
     input: '{}',
     encoding: 'utf8',
   });

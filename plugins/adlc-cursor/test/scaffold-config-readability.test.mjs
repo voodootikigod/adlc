@@ -3,7 +3,7 @@
 // warns, leaves the file untouched, and the CLI exits non-zero.
 
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnHook } from './helpers/run-hook.mjs';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -58,7 +58,7 @@ test('ensureConfig: an absent config is created with defaults and no warning', (
 
 test('scaffold-cli: an empty config.json fails the run and names the file', (t) => {
   const root = repoWithConfig(t, '');
-  const r = spawnSync(process.execPath, [CLI, root], { encoding: 'utf8' });
+  const r = spawnHook([CLI, root]);
   assert.equal(r.status, 1, `stdout=${r.stdout}\nstderr=${r.stderr}`);
   assert.doesNotMatch(r.stdout, /config\.json\s+— present/);
   assert.match(r.stderr, /\.adlc\/config\.json exists but is not readable JSON/);
@@ -67,7 +67,7 @@ test('scaffold-cli: an empty config.json fails the run and names the file', (t) 
 
 test('scaffold-cli: a readable config.json is present and the run succeeds', (t) => {
   const root = repoWithConfig(t, '{"securityMode":"signed"}\n');
-  const r = spawnSync(process.execPath, [CLI, root], { encoding: 'utf8' });
+  const r = spawnHook([CLI, root]);
   assert.equal(r.status, 0, `stdout=${r.stdout}\nstderr=${r.stderr}`);
   assert.match(r.stdout, /\.adlc\/config\.json\s+— present/);
 });
