@@ -1,8 +1,9 @@
 name: Actionlint
 
-# Lints every .github/workflows/*.yml and .github/actions/**/*.yml for syntax
-# errors, unknown keys, bad expressions, and shellcheck issues inside `run:`
-# blocks. This catches malformed workflow YAML before it merges — it does NOT
+# Lints every .github/workflows/*.yml for syntax errors, unknown keys, bad
+# expressions, and shellcheck issues inside `run:` blocks. actionlint reads
+# workflow files only: composite actions under .github/actions are not linted,
+# so the shell in their `run:` steps gets no shellcheck pass here. This catches malformed workflow YAML before it merges — it does NOT
 # catch behavioral drift between two workflows that both parse fine but do
 # different things (that class of bug — publish.yml missing a step ci.yml had —
 # is what the install-bubblewrap composite action fixes structurally instead).

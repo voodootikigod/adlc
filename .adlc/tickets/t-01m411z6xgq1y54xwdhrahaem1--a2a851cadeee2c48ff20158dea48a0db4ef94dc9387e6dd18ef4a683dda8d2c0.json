@@ -1,0 +1,32 @@
+{
+  "body": "Source: release review of v1.11.1..main. Re-verified on claude-review @ e4b58abe:\n- scripts/changelog.mjs parseSubject matches the `!` breaking marker and discards it; SECTIONS has no Breaking bucket and git log is read with %s only, so a breaking change is filed under its type (or dropped for chore/ci). CHANGELOG.md [Unreleased] is empty although @adlc/tickets dropped the `./lib/generation-descriptor.mjs` subpath export published in 1.11.1 and `parallax --record-verdict` now exits 1 without `--ticket`.\n- scripts/release.mjs hostMarketplacePaths only matches `.<host>-plugin/marketplace.json`, so `.github/plugin/marketplace.json` (the Copilot CLI listing) is neither bumped nor drift-checked and still says 1.6.0 while the suite is 1.11.1.\n- .claude/skills/issue-lanes/SKILL.md section 1 says completed tickets' rails tier a change and every packages/* lane needs the attestation ceremony; packages/prosecute/lib/tier.mjs skips `completed === true` tickets. Its gotchas say only test (18/20/22) are required; docs/ci/required-gates.json declares rails-guard, mutation-gate and gate blocking too.\n- packages/ticket-prune/README.md and apps/docs/content/docs/toolkit/ticket-prune.mdx document `--archive <path>`, which the CLI rejects (strict parseArgs), describe `--write` as writing `.adlc/tickets.archive.json`, omit `--allow-unsigned`, and show example output renderReport never emits. The cursor and pi adlc-maintain prompts and the codex adlc-distill skill repeat the tickets.archive.json claim.\n- packages/model-router/README.md says a below-floor ticket triggers exit 2 regardless of category; router.mjs excludes frontier categories from the P3 finding set.\n- docs/specs/operating-stack.md status says proposed although packages/quartermaster implements its sections 4-5.\n- CODEOWNERS says the rails-guard and tickets subtrees rely on branch-protection review; required-gates.json declares pullRequestReview none. .github/workflows/actionlint.yml says it lints .github/actions/**, which actionlint never reads.\n\nCONTEXT FOR THE BUILDER. scripts/changelog.mjs (generator, tests scripts/test/changelog.test.mjs), scripts/release.mjs (bump + findVersionDrift, tests scripts/test/release.test.mjs); the mutation gate maps each script to exactly that test file, so new cases go there. Docs claims are pinned by a new scripts/test/docs-release-claims.test.mjs that reads each source of truth (bin USAGE, required-gates.json, tier.mjs, router.mjs) rather than echoing prose.\n\nNORMATIVE BEHAVIOUR.\n1. changelog.mjs exports isBreaking(commit) and parseLog(raw); a commit with `type!:` or a line-initial `BREAKING CHANGE:`/`BREAKING-CHANGE:` footer goes to a `### Breaking` section placed above all others, whatever its type; the footer text is appended to the bullet. buildSections accepts subject strings or {subject, body}; plain strings keep today's grouping. main reads `%s%x1f%b%x1e`.\n2. CHANGELOG.md [Unreleased] carries a Breaking section naming the removed subpath and the new --ticket requirement.\n3. hostMarketplacePaths also returns `.github/plugin/marketplace.json` when it exists (never creates it), so the bump and findVersionDrift share it; the file is set to the suite version.\n4. Docs: issue-lanes rule 3 names tier.mjs's prefix and trust-root lists plus active rails and inverts the grep loop; the required-checks bullet names all six contexts and points at required-gates.json. ticket-prune README and mdx flag tables equal the CLI's accepted flags (the usage synopsis omits the deprecated --ceremony so the ceremony-safety guard stays green). Plugin prompts describe tombstone/shard-archive. model-router README, operating-stack status, CODEOWNERS and actionlint headers state the real behaviour.\n\nACCEPTANCE CRITERIA.\n- AC1 Breaking commits are surfaced. verify: `node --test scripts/test/changelog.test.mjs`\n- AC2 The Copilot marketplace is a bump and drift surface at the suite version. verify: `node --test scripts/test/release.test.mjs`\n- AC3 Every docs claim above matches its source of truth, and [Unreleased] records both breaking changes. verify: `node --test scripts/test/docs-release-claims.test.mjs`\n- AC4 Adjacent guards stay green. verify: `node --test scripts/test/ceremony-command-safety.test.mjs scripts/test/docs-truth.test.mjs scripts/test/codex-skill-depth-parity.test.mjs packages/ticket-prune/test/json-shape-docs.test.mjs`\n- AC5 Mutation gate green. verify: `node scripts/mutation-gate.mjs origin/main --max 12` exits 0\n\nOUT OF SCOPE: the matching review-backstop comments inside packages/rails-guard/lib/ci/*.mjs (frozen rails of an active ticket); adding a shellcheck step for composite actions; turning code-owner review on in the ruleset; routing parseArgs unknown-option errors to the usage path in @adlc/core.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M411Z6XGQ1Y54XWDHRAHAEM1",
+  "rails": [
+    "packages/ticket-prune/lib/format.mjs",
+    "packages/model-router/lib/router.mjs",
+    "scripts/test/docs-truth.test.mjs"
+  ],
+  "scope": [
+    "scripts/changelog.mjs",
+    "scripts/release.mjs",
+    "scripts/test/changelog.test.mjs",
+    "scripts/test/release.test.mjs",
+    "scripts/test/docs-release-claims.test.mjs",
+    "CHANGELOG.md",
+    ".github/plugin/marketplace.json",
+    ".github/workflows/actionlint.yml",
+    "CODEOWNERS",
+    ".claude/skills/issue-lanes/SKILL.md",
+    "packages/ticket-prune/README.md",
+    "apps/docs/content/docs/toolkit/ticket-prune.mdx",
+    "packages/model-router/README.md",
+    "docs/specs/operating-stack.md",
+    "plugins/adlc-cursor/command/adlc-maintain.md",
+    "plugins/adlc-pi/prompts/adlc-maintain.md",
+    "plugins/adlc-codex/skills/adlc-distill/SKILL.md"
+  ],
+  "title": "release: bind release surfaces and operator docs to what the code does"
+}
