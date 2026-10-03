@@ -16,9 +16,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promptSendingModules as sendersUnder } from '../prompt-senders.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -98,6 +99,24 @@ const GUARDED = [
     mustNotMatch: [/\$\{excerpt\.text\}/],
     mustContain: ["fence('TEST_OUTPUT', tailedOutput", 'fence(`FILE:${path}`'],
   },
+  {
+    // Gate docs and the baseline manifest come from the operator's gate suite;
+    // prior-defeat rationale is the adversary model's own earlier output.
+    file: 'packages/gate-fuzzing/lib/fan.mjs',
+    mustNotMatch: [/lines\.push\(gate\.docs\.join/, /lines\.push\(baselineManifest\)/, /lines\.push\(`- \$\{d\.strategy\}/],
+    mustContain: ["fence('GATE_DOCS'", "fence('BASELINE_MANIFEST'", "fence('PRIOR_DEFEATS'"],
+  },
+  {
+    // The diff under prosecution and the finding a verifier refutes.
+    file: 'plugins/adlc-pi/lib/prosecutor.mjs',
+    mustNotMatch: [/^\s*diff,\s*$/m, /\$\{ticket\.title\}/],
+    mustContain: ["fence('DIFF', diff", "fence('FINDING'", "fence('TICKET_TITLE'"],
+  },
+  {
+    file: 'plugins/adlc-opencode/lib/prosecute-runner.mjs',
+    mustNotMatch: [/\\n\\n\$\{diff\}`/, /Finding: \$\{JSON\.stringify\(f\)\}/],
+    mustContain: ["fence('DIFF'", "fence('FINDING'"],
+  },
 ];
 
 for (const { file, mustNotMatch, mustContain } of GUARDED) {
@@ -115,40 +134,17 @@ for (const { file, mustNotMatch, mustContain } of GUARDED) {
 
 // ── completeness sweep (#1005) ────────────────────────────────────────────
 //
-// `GUARDED.length >= 3` was the only completeness assertion here, and it cannot
-// notice a prompt builder nobody remembered to add. So derive the candidate set
-// MECHANICALLY instead: every module under packages/*/lib/ or packages/*/bin/
-// whose import list from @adlc/core pulls in a prompt-SENDING function. Each
-// candidate must appear in GUARDED, or in UNGUARDED_REVIEWED with a stated
-// reason. A module in neither fails this test by name — so a newly added prompt
-// builder cannot ship silently, and skipping the guard requires writing down why.
+// The candidate set is derived MECHANICALLY by scripts/prompt-senders.mjs:
+// every shipped module under packages/*/{lib,bin} or plugins/* that imports a
+// prompt-sending core function (statically or dynamically) or sends through a
+// host harness session. Each candidate must appear in GUARDED, or in
+// UNGUARDED_REVIEWED with a stated reason. A module in neither fails this test
+// by name, so a new prompt sender cannot ship unclassified.
 //
 // Deliberately NOT a source-text heuristic for "embeds untrusted content": that
 // judgement is exactly what UNGUARDED_REVIEWED records.
 
-const PROMPT_SENDERS = ['complete', 'fan', 'fanProviders'];
-const CORE_IMPORT_RE =
-  /import\s*\{([^}]*)\}\s*from\s*['"]([^'"]*(?:@adlc\/core|core\/index\.mjs|\.\.\/core))['"]/g;
-
-function promptSendingModules() {
-  const found = [];
-  for (const pkg of readdirSync(join(REPO_ROOT, 'packages'))) {
-    for (const sub of ['lib', 'bin']) {
-      const dir = join(REPO_ROOT, 'packages', pkg, sub);
-      if (!existsSync(dir)) continue;
-      for (const entry of readdirSync(dir)) {
-        if (!entry.endsWith('.mjs')) continue;
-        const rel = `packages/${pkg}/${sub}/${entry}`;
-        const src = readFileSync(join(dir, entry), 'utf8');
-        for (const m of src.matchAll(CORE_IMPORT_RE)) {
-          const names = m[1].split(',').map((s) => s.trim().split(/\s+as\s+/)[0].trim());
-          if (names.some((n) => PROMPT_SENDERS.includes(n))) { found.push(rel); break; }
-        }
-      }
-    }
-  }
-  return found.sort();
-}
+const promptSendingModules = () => sendersUnder(REPO_ROOT);
 
 /**
  * Prompt-sending modules deliberately NOT in GUARDED, each with the reason.
@@ -165,6 +161,12 @@ const UNGUARDED_REVIEWED = [
     reason: 'sends only; the prompt is built by packages/premortem/lib/prompt.mjs, which is GUARDED above (#1010).' },
   { file: 'packages/consensus-fix/bin/consensus-fix.mjs',
     reason: 'sends only; the prompt is built by packages/consensus-fix/lib/prompt.mjs, which is GUARDED above (#1010).' },
+  ...['claude-code', 'copilot', 'cursor', 'gemini', 'pi'].map((a) => ({
+    file: `packages/fleet/lib/adapters/${a}.mjs`,
+    reason: 'sends only; the prompt is the charter built by packages/fleet/lib/charters.mjs, which is GUARDED above.',
+  })),
+  { file: 'plugins/adlc-opencode/lib/keyless-bridge.mjs',
+    reason: 'sends only; relays the prompts an adlc gate prints under --prompt-only, each built by that gate\'s own prompt builder.' },
 ];
 
 test('AC: every prompt-sending module is GUARDED or explicitly reviewed (#1005)', () => {

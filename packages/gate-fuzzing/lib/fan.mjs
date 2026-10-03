@@ -3,7 +3,15 @@
 // The adversary is N fanned cheap/mid models (frontier-free, E2).
 // Each call is stateless — fresh contexts by construction.
 
+import { fence } from '@adlc/core';
 import { sampleSeeds, NOVEL_SEED } from './seeds.mjs';
+
+// Gate docs, the baseline manifest and prior-round rationale are not written
+// by the harness (the rationale is the adversary model's own output), so each
+// reaches the prompt only inside a fence(). Caps bound one oversized source.
+const MAX_DOCS_CHARS = 200_000;
+const MAX_MANIFEST_CHARS = 50_000;
+const MAX_DEFEATS_CHARS = 8_000;
 
 /**
  * Build the adversary system prompt for a specific gate target.
@@ -49,9 +57,9 @@ export function buildSystemPrompt(gate, priorDefeats = []) {
   if (priorDefeats.length > 0) {
     lines.push('');
     lines.push(`Prior confirmed defeats (${priorDefeats.length}) — find ADJACENT classes:`);
-    for (const d of priorDefeats.slice(-3)) { // last 3 defeats as feedback
-      lines.push(`- ${d.strategy}: ${d.rationale ?? d.verdict?.reason ?? ''}`);
-    }
+    const recent = priorDefeats.slice(-3) // last 3 defeats as feedback
+      .map((d) => `- ${d.strategy}: ${d.rationale ?? d.verdict?.reason ?? ''}`);
+    lines.push(fence('PRIOR_DEFEATS', recent.join('\n'), MAX_DEFEATS_CHARS));
   }
 
   return lines.join('\n');
@@ -86,13 +94,13 @@ export function buildUserPrompt(gate, seed, baselineManifest = '') {
   if (baselineManifest) {
     lines.push('');
     lines.push('Baseline tree (gate surface files):');
-    lines.push(baselineManifest);
+    lines.push(fence('BASELINE_MANIFEST', baselineManifest, MAX_MANIFEST_CHARS, { bias: 'head' }));
   }
 
   if (gate.docs && gate.docs.length > 0) {
     lines.push('');
     lines.push('Gate source/docs (open-box — attack the actual implementation):');
-    lines.push(gate.docs.join('\n---\n'));
+    lines.push(fence('GATE_DOCS', gate.docs.join('\n---\n'), MAX_DOCS_CHARS, { bias: 'head' }));
   }
 
   return lines.join('\n');
@@ -122,8 +130,7 @@ export function buildUserPrompt(gate, seed, baselineManifest = '') {
  * @param {string} [opts.tier] - Model tier, default 'mid'
  * @param {number} [opts.maxTokens] - Max tokens per response, default 4096
  * @param {Function|null} [opts.completeFn] - Injectable: async (fanOpts) => string,
- *   called once per fan instance. If null, uses core `complete()` per instance
- *   (dynamic import keeps @adlc/core optional for pure prompt-builder tests).
+ *   called once per fan instance. If null, uses core `complete()` per instance.
  * @returns {Promise<Array<{ok:boolean, value?:string, error?:string, provider?:string, promptChars:number}>>}
  *   `promptChars` is the system+user prompt length actually SENT for that
  *   instance (system and prompt differ per instance — different gate/seed

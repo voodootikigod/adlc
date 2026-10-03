@@ -15,6 +15,13 @@ import {
 } from './prosecutor.mjs';
 import { READONLY_TOOLS } from '../rails-checker.mjs';
 import { PROMPT_TIMEOUT_MS } from './keyless-bridge.mjs';
+import { fence } from '@adlc/core';
+
+// The diff and the finding under verification are authored outside this
+// repo's trust boundary, so each reaches a child session only inside a fence().
+const MAX_DIFF_CHARS = 1_000_000;
+const MAX_FINDING_CHARS = 20_000;
+const fencedDiff = (diff) => fence('DIFF', String(diff ?? ''), MAX_DIFF_CHARS, { bias: 'head' });
 
 // A lens/verifier session must READ but never MUTATE. The session.prompt `tools`
 // map compiles to opencode PERMISSION RULES (session/prompt.ts): each key → one
@@ -204,7 +211,7 @@ export async function runProsecution({ ask, agentPrompt, diff, bounds = {} } = {
 
     // Fan out every lens for this round (each in its own write-disabled session).
     const lensReplies = await Promise.all(LENSES.map(async (lens) => {
-      const text = await askOne(lens.agent, `Prosecute this change through the ${lens.focus} lens. Return findings as a fenced \`\`\`json array of {title, severity, file, detail}.\n\n${diff}`);
+      const text = await askOne(lens.agent, `Prosecute this change through the ${lens.focus} lens. Return findings as a fenced \`\`\`json array of {title, severity, file, detail}.\n\n${fencedDiff(diff)}`);
       if (text == null) return { lens, findings: [], parsed: false }; // bound hit / no reply → fail closed
       const p = parseFindings(text);
       return { lens, findings: p.findings, parsed: p.parsed };
@@ -233,7 +240,7 @@ export async function runProsecution({ ask, agentPrompt, diff, bounds = {} } = {
       const votes = [];
       let unparsedVote = false;
       for (let i = 0; i < verifierVotes; i += 1) {
-        const text = await askOne(VERIFIER.agent, `Try to REFUTE this finding — reproduce it or prove it false. Return a fenced \`\`\`json {"real": boolean, "reason": string}.\n\nFinding: ${JSON.stringify(f)}\n\n${diff}`);
+        const text = await askOne(VERIFIER.agent, `Try to REFUTE this finding — reproduce it or prove it false. Return a fenced \`\`\`json {"real": boolean, "reason": string}.\n\nFinding: ${fence('FINDING', JSON.stringify(f), MAX_FINDING_CHARS, { bias: 'head' })}\n\n${fencedDiff(diff)}`);
         if (hitBound) break;
         const v = parseVerdict(text);
         if (v) votes.push(v); else unparsedVote = true;
