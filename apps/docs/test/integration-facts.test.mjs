@@ -280,7 +280,41 @@ test('Pi marketing facts emphasize proactive/reactive gates and team install', (
   assert.ok(pi?.surfaces.some((s) => s.key === 'gates' && s.count === 2));
   assert.match(pi?.note ?? '', /teammates|trusted startup/i);
   assert.match(pi?.note ?? '', /Requires Node >= 22\.19/);
-  assert.match(pi?.note ?? '', /npx adlc-pi install/);
+  assert.match(pi?.note ?? '', /npx @adlc\/pi install/);
+});
+
+test('no advertised npx command names a bare harness bin instead of its @adlc package', () => {
+  // `adlc-opencode`, `adlc-pi`, `adlc-cursor`, `adlc-gemini` are BIN names inside
+  // their @adlc/* packages, not npm package names. `npx adlc-<harness> …` resolves
+  // against the registry on any machine without the package installed and 404s —
+  // and it points at an unclaimed npm name that someone else's package could
+  // answer to. The gemini guard below caught this once; this generalizes it so a
+  // regression in any harness's install copy fails here. `--package=@adlc/<x>
+  // adlc-<x>` is the one legitimate way to spell a bin name after `npx`.
+  const bareBin = /npx\s+adlc-[a-z-]+/;
+  for (const integration of INTEGRATIONS) {
+    const advertised = [integration.note ?? '', ...integration.install, ...integration.operate.lines];
+    for (const line of advertised) {
+      assert.ok(
+        !bareBin.test(line),
+        `${integration.slug}: advertised command names an unpublished npm package: ${line}`,
+      );
+    }
+  }
+  const guides = [
+    ...listEntries('docs/integrations', { files: true, ext: '.md' }).map((e) => path.join('docs/integrations', e.name)),
+    ...listEntries('apps/docs/content/docs/integrations', { files: true, ext: '.mdx' }).map((e) => path.join('apps/docs/content/docs/integrations', e.name)),
+  ];
+  assert.ok(guides.length > 0, 'expected integration guides to scan');
+  for (const rel of guides) {
+    const lines = readFileSync(path.join(repoRoot, rel), 'utf8').split('\n');
+    lines.forEach((line, i) => {
+      assert.ok(
+        !bareBin.test(line),
+        `${rel}:${i + 1}: documents an unpublished npm package: ${line.trim()}`,
+      );
+    });
+  }
 });
 
 test('Gemini marketing facts keep CI as the real backstop', () => {

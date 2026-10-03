@@ -10,9 +10,9 @@ if (command === '--help' || command === '-h' || command === 'help') {
 ADLC Pi Extension Helper
 
 Usage:
-  npx adlc-pi install             Install the ADLC extension into Pi (per-project -l)
-  npx adlc-pi install --global    Install globally for all Pi projects
-  adlc-pi --help                  Display this help message
+  npx @adlc/pi install            Install the ADLC extension into Pi (per-project -l)
+  npx @adlc/pi install --global   Install globally for all Pi projects
+  npx @adlc/pi --help             Display this help message
 
 Description:
   Registers @adlc/pi with the pi coding agent.
@@ -55,6 +55,6 @@ if (command === 'install' || command === '--install') {
   }
 } else {
   console.error(`Unknown command: ${command}`);
-  console.error('Run `npx adlc-pi --help` for available commands.');
+  console.error('Run `npx @adlc/pi --help` for available commands.');
   process.exit(1);
 }

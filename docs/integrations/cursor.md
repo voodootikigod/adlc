@@ -93,7 +93,7 @@ this repo is already structured for it.
 
 ```sh
 npm install -g @adlc/cli
-npx adlc-cursor .
+npx @adlc/cursor .
 ```
 
 The scaffolder merges hooks (including `stop` / `beforeSubmitPrompt` by
