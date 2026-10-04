@@ -593,6 +593,7 @@ test('the Copilot marketplace listing is at the suite version', () => {
 /** Minimal repo: a root package.json and a stale .github/plugin marketplace. */
 function makeMarketplaceRepo() {
   const root = mkdtempSync(join(tmpdir(), 'adlc-release-marketplace-'));
+  fixtureDirs.add(root);
   const packagesDir = join(root, 'packages');
   const pluginsDir = join(root, 'plugins');
   mkdirSync(packagesDir);
