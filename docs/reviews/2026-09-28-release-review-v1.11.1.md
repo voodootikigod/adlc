@@ -41,15 +41,16 @@ CRITICAL, HIGH and MEDIUM findings were fixed, each with a test that fails witho
 
 Every PR carries its own P0 ticket. #1162, #1167 and #1168 touch trust-root paths and merged with a distinct-provider cross-model attestation.
 
-## Not fixed here
+## Follow-ups and items left as they are
 
-| Finding | Why |
+| Finding | Outcome |
 |---|---|
-| Seven tickets behind PRs #1087 to #1094 were never marked complete, so their rails still freeze 13 paths repo-wide. | Completing a ticket is a direct push to main by the owner. |
-| Commit 50eb558c rewrote three trust-root test files by direct push, so no PR gate ran on it. | History; the owner should decide whether to re-review it. |
-| 44 tickets created in the range carry no signed create entry, and CI never checks that a new shard has one. | Needs a design decision on whether rails-guard-ci should require creation evidence. |
-| Eleven tickets declared rails on paths that never existed, so their freeze protected nothing. No gate rejects a rail that matches nothing. | Needs a decision on whether ticket create or coldstart should reject rails that match no file. |
-| Claude Code's build-gate bypass recorder still hands the signing key to a PATH-resolved `adlc`. | That spawn helper is shared with the rails-bypass recorder, and keeping signed entries signed needs the key. The owner should pick between signing and isolation. |
+| Eleven tickets declared rails on paths that never existed, so their freeze protected nothing. | Fixed in #1175: ticket create, batch create and update refuse a rail that matches no file. |
+| Claude Code's hook handed the signing key to whatever `adlc` came first on PATH, for every call. | Fixed in #1176: `adlc` is resolved with `node_modules` entries skipped, and only the calls that sign or verify receive the key. |
+| Thirteen tickets whose work had shipped (including the seven behind #1087 to #1094, and the 1.11.0 and 1.11.1 release tickets) were never completed, so their rails kept freezing paths. | Completed together with this review's 19 tickets by the owner's direct push. Three autopilot-program tickets stay open while that program's closure steps are outstanding. |
+| 44 tickets created in the range carry no signed create entry, and CI never checks that a new shard has one. | Left as a report by owner decision: enforcing it is a trust-root change to rails-guard-ci and would reject seeded-ticket PRs. |
+| Commit 50eb558c rewrote three trust-root test files by direct push, so no PR gate ran on it. | History. |
+| 67 commits on main are authored `tester <test@adlc.local>`, made while the test-kit fixture leak (fixed in #1151) had rewritten the shared git identity. | History: correcting them would mean rewriting main. |
 
 ## Fixes by area
 
