@@ -1,0 +1,21 @@
+{
+  "body": "Source: the release review of v1.11.1..main. Eleven tickets created in that range declared rails on nine paths that never existed (for example packages/model-ratchet/lib/scoring.mjs and graph.mjs, where the package has score.mjs and walk.mjs), so their P3 freeze protected nothing while the build edited the real files. Neither ticket creation nor coldstart checked that a rail matches anything: lib/schema.mjs only requires an array of strings.\n\nNORMATIVE BEHAVIOUR.\n1. TicketService.planCreate, planCreateBatch and planUpdate refuse, with code RAIL_MATCHES_NOTHING, any rail being added that matches no file git lists for the repository (tracked, plus untracked files git does not ignore). The message names every offending rail.\n2. Only rails being added are checked: an update keeps a rail the ticket already had even if its file has since gone.\n3. A store whose root is not a git work tree is not checked, matching the manifest-rail guard.\n4. The rails help entry, and the schema generated from it, state the rule.\n\nACCEPTANCE CRITERIA.\n- AC1 create and batch create refuse a rail matching nothing, naming it. verify: `node --test packages/tickets/test/rail-existence.test.mjs`\n- AC2 existing, untracked and matching-glob rails are accepted; outside a git repository nothing is checked. verify: `node --test packages/tickets/test/rail-existence.test.mjs`\n- AC3 update refuses an added phantom rail and keeps a pre-existing one. verify: `node --test packages/tickets/test/rail-existence.test.mjs`\n- AC4 the tickets suite and the packages that create tickets stay green. verify: `node --test packages/tickets/test/*.test.mjs packages/fleet/test/complete.test.mjs`\n\nOUT OF SCOPE: re-validating rails on tickets already in the store; enforcing the rule in CI.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M43MTHGHH354S1GF1W3PCD05",
+  "rails": [
+    "packages/tickets/lib/manifest-rails.mjs",
+    "packages/tickets/test/manifest-rails.test.mjs"
+  ],
+  "scope": [
+    "packages/tickets/lib/rail-existence.mjs",
+    "packages/tickets/lib/service.mjs",
+    "packages/tickets/lib/help.mjs",
+    "packages/tickets/schemas/ticket.schema.json",
+    "packages/tickets/test/rail-existence.test.mjs",
+    "packages/fleet/test/complete.test.mjs",
+    "plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs"
+  ],
+  "title": "tickets: refuse a rail that matches no file in the repository"
+}
