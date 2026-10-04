@@ -1,0 +1,15 @@
+{
+  "body": "Source: the full review of the 119 PRs merged between v1.11.1 and main, whose verified CRITICAL, HIGH and MEDIUM findings shipped as PRs #1151-#1168 and #1172.\n\nNORMATIVE BEHAVIOUR.\n1. docs/reviews/2026-09-28-release-review-v1.11.1.md records the review scope and counts, the PR that landed each fix area, the fixes made while landing them, what was deliberately left unfixed and why, and every verified LOW finding.\n2. It is a record, not a contract: no code, test, or other doc changes.\n\nACCEPTANCE CRITERIA.\n- AC1 The report names the PR for every fix area. verify: `grep -c \"(#11\" docs/reviews/2026-09-28-release-review-v1.11.1.md` is at least 18\n- AC2 Repo guards pass with the report present. verify: `node --test scripts/test/*.test.mjs`\n\nOUT OF SCOPE: fixing the LOW findings or the items listed as not fixed.",
+  "category": "docs",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M43MTJHWZ7WZ4KTESK4AWXFS",
+  "rails": [
+    "packages/core/lib/test-kit.mjs",
+    "scripts/test/tmp-fixture-boundary.test.mjs"
+  ],
+  "scope": [
+    "docs/reviews/2026-09-28-release-review-v1.11.1.md"
+  ],
+  "title": "docs(reviews): record the v1.11.1-to-main release review and where each fix landed"
+}
