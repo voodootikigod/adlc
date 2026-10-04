@@ -98,7 +98,8 @@ test('an extensionless node script runs under the hook\'s own node, not the inte
   const dumps = tmp(t, 'adlc-cc-dumps-');
   writeFileSync(join(dir, 'adlc'), [
     '#!/nonexistent/bin/node',
-    "import { writeFileSync } from 'node:fs';",
+    // CommonJS: Node 18 runs an extensionless file as CommonJS, without module detection.
+    "const { writeFileSync } = require('node:fs');",
     `writeFileSync(${JSON.stringify(dumps)} + '/' + process.argv[2] + '.json', '{}');`,
     "process.stdout.write('{\"failedNames\":[]}');",
   ].join('\n'));
