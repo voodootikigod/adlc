@@ -21,8 +21,10 @@ import { resolveRunConfig } from '../lib/config.mjs';
 import { completeTicketOnIntegration, revertCompletionCommit } from '../lib/complete.mjs';
 
 // Every fixture the factories below mint; removed once this file's tests finish.
+/** Removal that retries a transient ENOTEMPTY/EBUSY from a git child exiting during teardown. */
+const RM_OPTIONS = Object.freeze({ recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
 const fixtureDirs = new Set();
-after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+after(() => { for (const dir of fixtureDirs) rmSync(dir, RM_OPTIONS); });
 
 function gitRunner(cwd) {
   return (...args) =>
@@ -39,6 +41,9 @@ function makeRepo(ticket = { id: 'T1', title: 'first' }, { bootstrapManifest = t
   fixtureDirs.add(root);
   const git = gitRunner(root);
   git('init', '-b', 'main');
+  // No automatic or detached gc: a maintenance child still writing into .git makes removal fail with ENOTEMPTY.
+  git('config', 'gc.auto', '0');
+  git('config', 'gc.autoDetach', 'false');
   // A realistic .gitignore (mirrors this repo's own .adlc/* block, spec §4.8): without
   // it, completeTicketOnIntegration's explicit `git add -- ... artifact.rel` for a
   // segment path is untested against the actual ignore rules that gate whether `git
@@ -115,7 +120,7 @@ test('completeTicketOnIntegration marks completed:true and commits it onto the r
     // The stray build output stays untracked (never staged by the scoped commit).
     assert.match(git('status', '--porcelain'), /\?\? dist-leaked-build-artifact\.js/, 'the build artifact remains untracked');
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, RM_OPTIONS);
   }
 });
 
@@ -132,7 +137,7 @@ test('completeTicketOnIntegration is idempotent — a re-run over an already-com
     assert.equal(commitCount(git), after, 'no second commit is created');
     assert.equal(isCompleted(root, 'T1'), true, 'ticket stays completed');
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, RM_OPTIONS);
   }
 });
 
@@ -158,7 +163,7 @@ test('a failed completion commit is rolled back — the shared integration check
     // fleet step must not find orphaned completion state to sweep into a commit.
     assert.equal(git('status', '--porcelain'), '', 'the integration checkout is clean after the failed completion');
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, RM_OPTIONS);
   }
 });
 
@@ -178,7 +183,7 @@ test('a RAILED ticket completes normally — rails are enforced by rails-guard-c
     const res = completeTicketOnIntegration({ repo: root, ticketId: 'T1', integrationBranch, git, key: 'test-manifest-key' });
     assert.equal(res.completed, true, 'a railed ticket is not silently left open');
     assert.equal(isCompleted(root, 'T1'), true);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, RM_OPTIONS); }
 });
 
 test('completion REFUSES when the shared checkout is not on the integration branch', () => {
@@ -196,7 +201,7 @@ test('completion REFUSES when the shared checkout is not on the integration bran
     );
     assert.equal(isCompleted(root, 'T1'), false, 'and mutates nothing');
     assert.equal(git('status', '--porcelain'), '', 'leaving the checkout clean');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, RM_OPTIONS); }
 });
 
 test('a checkout switch DURING the commit is detected, not silently accepted', () => {
@@ -223,7 +228,7 @@ test('a checkout switch DURING the commit is detected, not silently accepted', (
     // And it must NOT have written files into whatever checkout we ended up on.
     assert.equal(git('symbolic-ref', '--short', 'HEAD'), 'main', 'we ended up on the other branch');
     assert.equal(git('status', '--porcelain'), '', 'no paths were restored into the unknown checkout');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, RM_OPTIONS); }
 });
 
 test('runFleet QUARANTINES when the checkout switched during the completion commit', async () => {
@@ -260,7 +265,7 @@ test('completion REFUSES without an integrationBranch to verify against', () => 
       'the verification target is mandatory — it cannot be silently skipped',
     );
     assert.equal(isCompleted(root, 'T1'), false);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, RM_OPTIONS); }
 });
 
 test('the completion commit is CI-shaped — completed:true-only shard + append-only manifest (rails-guard-ci)', () => {
@@ -283,7 +288,7 @@ test('the completion commit is CI-shaped — completed:true-only shard + append-
     // Manifest diff is append-only — what rails-guard-ci requires (HEAD starts with base).
     const headManifest = git('show', 'HEAD:.adlc/manifest.jsonl');
     assert.ok(headManifest.startsWith(baseManifest), 'the manifest is append-only');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, RM_OPTIONS); }
 });
 
 // The assertion above independently RE-IMPLEMENTS what rails-guard-ci accepts. A model of
@@ -306,7 +311,7 @@ test('PRODUCER→CONSUMER: a fleet completion commit is ACCEPTED by the real rai
       r.status, 0,
       `the real rails-guard-ci must accept the fleet completion commit (exit ${r.status}):\n--- stdout ---\n${r.stdout}\n--- stderr ---\n${r.stderr}`,
     );
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, RM_OPTIONS); }
 });
 
 test('on a repo with NO manifest baseline, completion is skipped — it never creates a manifest CI would reject', () => {
@@ -318,7 +323,7 @@ test('on a repo with NO manifest baseline, completion is skipped — it never cr
     assert.equal(isCompleted(root, 'T1'), false, 'the ticket stays open');
     assert.ok(!existsSync(join(root, '.adlc', 'manifest.jsonl')), 'no manifest was created');
     assert.equal(git('status', '--porcelain'), '', 'the checkout is untouched');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, RM_OPTIONS); }
 });
 
 // ---- T-MANIFEST-FOREST: segmented repo (adversarial-review finding) ----
@@ -361,7 +366,7 @@ test('completeTicketOnIntegration in a segmented repo commits the SEGMENT, never
     const segFile = openSegmentFile(root);
     const firstEntry = JSON.parse(readFileSync(segFile, 'utf8').trim().split('\n')[0]);
     assert.equal(Object.hasOwn(firstEntry, 'anchor'), true, 'the segment\'s first entry must carry the anchor');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, RM_OPTIONS); }
 });
 
 test('withdrawing a segmented completion removes the freshly-minted segment entirely — no stray evidence left behind', () => {
@@ -381,7 +386,7 @@ test('withdrawing a segmented completion removes the freshly-minted segment enti
     assert.equal(isCompleted(root, 'T1'), false, 'the completion annotation is withdrawn');
     assert.equal(git('rev-parse', 'HEAD'), res.preCompletionSha);
     assert.equal(existsSync(segFile), false, 'a freshly-minted segment must be removed entirely on withdrawal, not left with a withdrawn entry a later commit could sweep in');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, RM_OPTIONS); }
 });
 
 test('a second segmented completion continues the SAME open segment, not a fresh one', () => {
@@ -402,7 +407,7 @@ test('a second segmented completion continues the SAME open segment, not a fresh
     const segDir = join(root, '.adlc', 'manifest.d');
     const segments = readdirSync(segDir).filter((n) => n.endsWith('.jsonl'));
     assert.equal(segments.length, 1, 'both completions must land in the SAME segment, not mint a second one');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, RM_OPTIONS); }
 });
 
 test('a failed SECOND segmented completion (already-open segment) rolls back to the exact prior bytes, not to empty', () => {
@@ -433,7 +438,7 @@ test('a failed SECOND segmented completion (already-open segment) rolls back to 
     assert.ok(existsSync(segFile), 'an already-open segment must NOT be deleted on rollback — only a freshly-minted one is');
     assert.deepEqual(readFileSync(segFile), priorBytes, 'the segment is restored to its exact prior bytes, not truncated to empty');
     assert.equal(isCompleted(root, 'T2'), false);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, RM_OPTIONS); }
 });
 
 // Adversarial-review finding: an external checkout switch between resolveManifestArtifact's
@@ -489,7 +494,7 @@ test('a checkout switch mid-transaction is detected and quarantined, never silen
     assert.equal(isCompleted(root, 'T2'), false, 'the ticket store itself is still safely reverted (covered by the ticket lock, not the raced segment)');
   } finally {
     execFileSync('git', ['symbolic-ref', 'HEAD', `refs/heads/${integrationBranch}`], { cwd: root, stdio: 'ignore' });
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, RM_OPTIONS);
   }
 });
 
@@ -530,7 +535,7 @@ test('a checkout switch during a PENDING completion never deletes another branch
     );
   } finally {
     execFileSync('git', ['symbolic-ref', 'HEAD', `refs/heads/${integrationBranch}`], { cwd: root, stdio: 'ignore' });
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, RM_OPTIONS);
   }
 });
 
@@ -562,7 +567,7 @@ test('a failed segmented completion commit rolls back the segment exactly (T-MAN
     const segFiles = existsSync(join(root, '.adlc', 'manifest.d')) ? readdirSync(join(root, '.adlc', 'manifest.d')).filter((n) => n.endsWith('.jsonl')) : [];
     assert.deepEqual(segFiles, [], 'the newly-minted segment must be removed entirely, not left with a withdrawn entry');
     assert.equal(isCompleted(root, 'T1'), false);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, RM_OPTIONS); }
 });
 
 // Adversarial-review finding: completeTicketOnIntegration's SUCCESS path commits
@@ -616,7 +621,7 @@ test('a completion that shares its freshly-minted segment with a concurrent reco
     );
     assert.ok(existsSync(segFile), 'the segment — holding the concurrent recorder\'s entry — must survive the refused withdrawal');
     assert.equal(readFileSync(segFile, 'utf8').trim().split('\n').length, 2, 'both entries remain intact; nothing was deleted');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, RM_OPTIONS); }
 });
 
 // Adversarial-review finding (second round): the ABOVE test covers a brand-new
@@ -658,7 +663,7 @@ test('a completion into an ALREADY-OPEN segment that races a concurrent recorder
       'withdrawal must refuse rather than restore priorManifest and silently delete the concurrent recorder\'s entry',
     );
     assert.equal(readFileSync(segFile, 'utf8').trim().split('\n').length, 3, 'all three entries remain intact; nothing was deleted');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, RM_OPTIONS); }
 });
 
 test('the completion holds the ticket writer lock across the transaction AND the commit, then releases it (T73)', () => {
@@ -676,7 +681,7 @@ test('the completion holds the ticket writer lock across the transaction AND the
     assert.equal(res.completed, true);
     assert.ok(lockHeldDuringCommit, 'the writer lock is held during the commit — transaction+commit are atomic');
     assert.ok(!readTicketLock(root), 'and the lock is released afterward (no stale lock left behind)');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, RM_OPTIONS); }
 });
 
 test('a failed commit does NOT erase a concurrent manifest evidence append (data loss)', () => {
@@ -699,7 +704,7 @@ test('a failed commit does NOT erase a concurrent manifest evidence append (data
     const manifestAfter = readFileSync(manifestPath, 'utf8');
     assert.ok(manifestAfter.includes('concurrent-recorder'), 'the concurrent evidence append survives the rollback');
     assert.equal(isCompleted(root, 'T1'), false, 'while the shard is still rolled back');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, RM_OPTIONS); }
 });
 
 test('a failed commit whose evidence CANNOT be withdrawn flags the ledger dirty (so the caller quarantines)', () => {
@@ -722,7 +727,7 @@ test('a failed commit whose evidence CANNOT be withdrawn flags the ledger dirty 
 
     assert.ok(caught, 'the completion still fails');
     assert.equal(caught.ledgerDirty, true, 'and marks the ledger dirty so the branch gets quarantined');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, RM_OPTIONS); }
 });
 
 test('a clean failed commit does NOT flag the ledger dirty (evidence withdrawn exactly)', () => {
@@ -739,7 +744,7 @@ test('a clean failed commit does NOT flag the ledger dirty (evidence withdrawn e
     assert.ok(caught);
     assert.notEqual(caught.ledgerDirty, true, 'no concurrent append ⇒ our entry was removed exactly ⇒ no quarantine');
     assert.equal(git('status', '--porcelain'), '', 'and the checkout is clean');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, RM_OPTIONS); }
 });
 
 test('runFleet QUARANTINES the branch when completion evidence could not be withdrawn', async () => {
@@ -786,7 +791,7 @@ test('withdrawing the completion commit does NOT destroy unrelated tracked work 
     assert.equal(git('rev-parse', 'HEAD'), res.preCompletionSha, 'HEAD is back at the pre-completion commit');
     assert.ok(existsSync(unrelated), 'unrelated tracked work is NOT destroyed');
     assert.equal(readFileSync(unrelated, 'utf8'), 'work in progress\n');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, RM_OPTIONS); }
 });
 
 test('withdrawal REFUSES when HEAD moved — it never uncommits another process work', () => {
@@ -805,7 +810,7 @@ test('withdrawal REFUSES when HEAD moved — it never uncommits another process 
       'it refuses rather than rewinding past a concurrent commit',
     );
     assert.equal(git('rev-parse', 'HEAD'), headBefore, 'the concurrent commit is still on the branch');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, RM_OPTIONS); }
 });
 
 test('withdrawal REFUSES on a DIFFERENT branch pointing at the same commit — it never rewinds the wrong branch', () => {
@@ -828,7 +833,7 @@ test('withdrawal REFUSES on a DIFFERENT branch pointing at the same commit — i
     );
     assert.equal(git('rev-parse', 'sibling-at-same-commit'), res.completionSha, 'the sibling branch was not rewound');
     assert.equal(git('rev-parse', integrationBranch), res.completionSha, 'and the integration branch is untouched');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, RM_OPTIONS); }
 });
 
 test('withdrawal REFUSES when the shard gained a concurrent update — it never erases another writer edit', () => {
@@ -850,7 +855,7 @@ test('withdrawal REFUSES when the shard gained a concurrent update — it never 
       'it refuses rather than reverting the concurrent edit away',
     );
     assert.match(readFileSync(shardAbs, 'utf8'), /legitimately retitled during the gate/, 'the concurrent edit survives');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, RM_OPTIONS); }
 });
 
 test('withdrawal REFUSES when the ledger gained a concurrent append — no false attestation left behind', () => {
@@ -867,7 +872,7 @@ test('withdrawal REFUSES when the ledger gained a concurrent append — no false
       'it refuses rather than erasing their evidence or leaving ours to be swept into a later commit',
     );
     assert.ok(readFileSync(manifestPath, 'utf8').includes('concurrent'), 'the concurrent evidence is untouched');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, RM_OPTIONS); }
 });
 
 // ---- runFleet wiring: completion is gated on a passing post-merge gate --------
