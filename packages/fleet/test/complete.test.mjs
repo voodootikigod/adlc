@@ -66,6 +66,11 @@ function makeRepo(ticket = { id: 'T1', title: 'first' }, { bootstrapManifest = t
   if (bootstrapManifest) {
     writeFileSync(join(root, '.adlc', 'manifest.jsonl'), '{"seq":1,"gate":"bootstrap","ts":"2026-01-01T00:00:00.000Z","data":{"note":"test-bootstrap"},"prev":null}\n');
   }
+  // A rail must name a file the repository has, so every railed path exists before the ticket does.
+  for (const rail of ticket.rails ?? []) {
+    mkdirSync(dirname(join(root, rail)), { recursive: true });
+    writeFileSync(join(root, rail), '');
+  }
   const service = new TicketService(detectTicketStore({ root }), { root });
   service.apply(service.planCreate(ticket));
   git('add', '-A');

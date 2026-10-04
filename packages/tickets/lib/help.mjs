@@ -119,7 +119,7 @@ export const TICKET_FIELDS = [
     name: 'rails',
     type: 'string[]',
     required: false,
-    summary: 'Path globs frozen for the duration of the build; rails-guard denies edits to them. Once any ticket declares rails the ticket store itself becomes a frozen trust root, so later ticket writes need ADLC_RAILS_BYPASS=1.',
+    summary: 'Path globs frozen for the duration of the build; rails-guard denies edits to them. Each rail must match at least one file in the repository when it is added, or the write is refused (RAIL_MATCHES_NOTHING). Once any ticket declares rails the ticket store itself becomes a frozen trust root, so later ticket writes need ADLC_RAILS_BYPASS=1.',
     schema: { type: 'array', items: { type: 'string' } },
   },
   {

@@ -11,6 +11,7 @@ import { LegacyTicketStore } from './stores/legacy.mjs';
 import { applyDirectoryTransaction, applyLegacyTransaction } from './transaction.mjs';
 import { validateTickets } from './schema.mjs';
 import { coversManifest, discoverManifests } from './manifest-rails.mjs';
+import { railsMatchingNothing, repositoryFiles } from './rail-existence.mjs';
 
 const publicPlan = (plan) => Object.fromEntries(Object.entries(plan).filter(([key]) => !key.startsWith('_')));
 const planContent = (plan) => Object.fromEntries(Object.entries(publicPlan(plan)).filter(([key]) => key !== 'planHash'));
@@ -101,11 +102,27 @@ export class TicketService {
     );
   }
 
+  // A rail that matches no file freezes nothing. Like the manifest check, only
+  // rails being added are policed, and a store outside a git repository is not.
+  #assertRailsExist(newRails) {
+    if (!Array.isArray(newRails) || newRails.length === 0) return;
+    const files = repositoryFiles(this.root);
+    if (files === null) return;
+    const offenders = railsMatchingNothing(newRails, files);
+    if (offenders.length === 0) return;
+    throw invalid(
+      'RAIL_MATCHES_NOTHING',
+      `rail(s) match no file in the repository, so they would freeze nothing: ${offenders.join(', ')}. ` +
+      'Rail existing files the change leaves alone.'
+    );
+  }
+
   planCreate(input = {}) {
     const ticket = deepClone(input);
     if (!ticket.id) ticket.id = generateTicketId();
     this.#assertIdNotArchived(ticket.id);
     this.#assertNoManifestRails(ticket.rails);
+    this.#assertRailsExist(ticket.rails);
     return this.#plan('create', (tickets) => {
       if (tickets.some((item) => item.id === ticket.id)) throw conflict('TICKET_EXISTS', `ticket already exists: ${ticket.id}`);
       tickets.push(ticket);
@@ -152,6 +169,7 @@ export class TicketService {
     for (const ticket of batch) {
       this.#assertIdNotArchived(ticket.id);
       this.#assertNoManifestRails(ticket.rails);
+      this.#assertRailsExist(ticket.rails);
     }
     const changedFields = [...new Set(batch.flatMap((ticket) => Object.keys(ticket)))].sort();
     return this.#plan('batch-create', (tickets) => {
@@ -180,7 +198,9 @@ export class TicketService {
       // ADDS. A pre-existing manifest-covering rail keeps working; a new one is
       // rejected, so the class cannot grow.
       const beforeRails = new Set(before.rails ?? []);
-      this.#assertNoManifestRails((input.rails ?? []).filter((rail) => !beforeRails.has(rail)));
+      const addedRails = (input.rails ?? []).filter((rail) => !beforeRails.has(rail));
+      this.#assertNoManifestRails(addedRails);
+      this.#assertRailsExist(addedRails);
       const sensitive = [];
       if ((before.rails ?? []).some((rail) => !(input.rails ?? []).includes(rail))) sensitive.push('rail-narrowing');
       if ((input.scope ?? []).some((scope) => !(before.scope ?? []).includes(scope))) sensitive.push('scope-widening');

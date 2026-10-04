@@ -243,7 +243,7 @@ var TICKET_FIELDS = [
     name: "rails",
     type: "string[]",
     required: false,
-    summary: "Path globs frozen for the duration of the build; rails-guard denies edits to them. Once any ticket declares rails the ticket store itself becomes a frozen trust root, so later ticket writes need ADLC_RAILS_BYPASS=1.",
+    summary: "Path globs frozen for the duration of the build; rails-guard denies edits to them. Each rail must match at least one file in the repository when it is added, or the write is refused (RAIL_MATCHES_NOTHING). Once any ticket declares rails the ticket store itself becomes a frozen trust root, so later ticket writes need ADLC_RAILS_BYPASS=1.",
     schema: { type: "array", items: { type: "string" } }
   },
   {
@@ -1670,6 +1670,9 @@ var SLASH = "/".charCodeAt(0);
 // packages/tickets/lib/manifest-rails.mjs
 var MANIFEST_BASENAMES = Object.freeze(["package.json", "plugin.json", "marketplace.json"]);
 
+// packages/tickets/lib/rail-existence.mjs
+var GIT_MAX_BUFFER = 256 * 1024 * 1024;
+
 // packages/tickets/lib/prompt.mjs
 import { createInterface } from "node:readline/promises";
 
@@ -1842,7 +1845,7 @@ var PROVIDERS = [
 var PROVIDER_NAMES = PROVIDERS.map((p) => p.name);
 
 // packages/core/lib/git.mjs
-var GIT_MAX_BUFFER = 64 * 1024 * 1024;
+var GIT_MAX_BUFFER2 = 64 * 1024 * 1024;
 
 // packages/core/lib/tickets.mjs
 import { existsSync as existsSync11, lstatSync as lstatSync6 } from "node:fs";
@@ -1864,7 +1867,7 @@ function ticketStoreExists(root = ".", override = null) {
 }
 
 // packages/core/lib/revision.mjs
-var GIT_MAX_BUFFER2 = 64 * 1024 * 1024;
+var GIT_MAX_BUFFER3 = 64 * 1024 * 1024;
 var NULL_OBJECT = "0".repeat(40);
 
 // packages/core/lib/risk-tier.mjs
