@@ -11,8 +11,8 @@ const GIT_MAX_BUFFER = 256 * 1024 * 1024;
  * repo-relative '/'-separated paths; null when `root` is not a git work tree
  * (the existence check then does not apply, as for a store outside a repo).
  */
-export function repositoryFiles(root) {
-  const result = spawnSync('git', ['-C', root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
+export function repositoryFiles(root, { spawn = spawnSync } = {}) {
+  const result = spawn('git', ['-C', root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
     encoding: 'utf8',
     timeout: GIT_TIMEOUT_MS,
     maxBuffer: GIT_MAX_BUFFER,

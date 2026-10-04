@@ -7,6 +7,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { gitRepo, tmp } from '@adlc/core/test-kit';
 import { DirectoryTicketStore, TicketService } from '../index.mjs';
+import { repositoryFiles } from '../lib/rail-existence.mjs';
 import { ticket, writeDirectory } from './helpers.mjs';
 
 /** A git repository holding a tracked lib/score.mjs and an untracked lib/draft.mjs. */
@@ -63,4 +64,22 @@ test('outside a git repository the check does not run', (t) => {
   const path = writeDirectory(root, []);
   const service = new TicketService(new DirectoryTicketStore(path), { root });
   assert.equal(service.planCreate(ticket('NEW', { rails: ['anything/**'] })).operation, 'create');
+});
+
+test('a rail matching only a file git ignores is refused', (t) => {
+  const { root, service } = repoWithFiles(t);
+  writeFileSync(join(root, '.gitignore'), 'build/\n');
+  mkdirSync(join(root, 'build'), { recursive: true });
+  writeFileSync(join(root, 'build', 'out.mjs'), 'export {};\n');
+  assert.throws(() => service.planCreate(ticket('NEW', { rails: ['build/out.mjs'] })), matchesNothing('build/out.mjs'));
+});
+
+test('the file listing runs git with a bounded timeout and reads its NUL-separated output', () => {
+  const calls = [];
+  const spawn = (cmd, args, options) => { calls.push({ cmd, args, options }); return { status: 0, stdout: 'a.mjs\0dir/b.mjs\0' }; };
+  assert.deepEqual(repositoryFiles('/repo', { spawn }), ['a.mjs', 'dir/b.mjs']);
+  assert.equal(calls[0].cmd, 'git');
+  assert.ok(Number.isFinite(calls[0].options.timeout) && calls[0].options.timeout > 0, 'git ran without a timeout');
+  assert.equal(repositoryFiles('/repo', { spawn: () => ({ error: new Error('ETIMEDOUT') }) }), null);
+  assert.equal(repositoryFiles('/repo', { spawn: () => ({ status: 128, stdout: '' }) }), null);
 });
