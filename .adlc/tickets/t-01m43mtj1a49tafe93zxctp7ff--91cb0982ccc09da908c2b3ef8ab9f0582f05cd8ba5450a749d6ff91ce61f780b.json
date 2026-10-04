@@ -1,0 +1,16 @@
+{
+  "body": "Source: the release review of v1.11.1..main. plugins/adlc-claude-code/hooks/adlc-hook.mjs runAdlc spawned a bare PATH-resolved `adlc` with the full hook environment for every call (preflight, flail detection, gate-manifest verify and show, and the rails and build-gate bypass recorders), so a repository that puts node_modules/.bin/adlc ahead of the real install received ADLC_MANIFEST_KEY. The Codex and Copilot hooks already resolve a trusted binary.\n\nNORMATIVE BEHAVIOUR.\n1. runAdlc resolves adlc with resolveTrustedBinary: PATH entries containing node_modules are skipped and the candidate must be a regular file this user owns. With no trusted adlc it returns null, as an absent adlc did before.\n2. A Node script (by extension or node shebang, after realpath) runs under process.execPath; any other executable runs directly.\n3. Only gate-manifest verify and the rails-bypass and build-gate-bypass recorders receive ADLC_MANIFEST_KEY and ADLC_ADMIN_KEY; every other call runs with both removed from its environment. Signing keeps working in a repository with a signed chain.\n\nACCEPTANCE CRITERIA.\n- AC1 A node_modules adlc ahead of the real one never runs; with only a node_modules adlc, adlc is not run. verify: `node --test plugins/adlc-claude-code/hooks/test/adlc-trusted-spawn.test.mjs`\n- AC2 Preflight receives no signing key; gate-manifest verify still does. verify: `node --test plugins/adlc-claude-code/hooks/test/adlc-trusted-spawn.test.mjs`\n- AC3 A non-node adlc executable still runs. verify: `node --test plugins/adlc-claude-code/hooks/test/adlc-trusted-spawn.test.mjs`\n- AC4 The hook suite stays green. verify: `node --test plugins/adlc-claude-code/hooks/test/*.test.mjs`\n\nOUT OF SCOPE: an allowlisted environment for the keyed calls; the Codex and Copilot recorders.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M43MTJ1A49TAFE93ZXCTP7FF",
+  "rails": [
+    "plugins/adlc-claude-code/hooks/adlc-hook-run.mjs",
+    "plugins/adlc-claude-code/hooks/handoff-resolve.mjs"
+  ],
+  "scope": [
+    "plugins/adlc-claude-code/hooks/adlc-hook.mjs",
+    "plugins/adlc-claude-code/hooks/test/adlc-trusted-spawn.test.mjs"
+  ],
+  "title": "adlc-claude-code: run a trusted adlc and pass the signing key only to the calls that sign or verify"
+}
