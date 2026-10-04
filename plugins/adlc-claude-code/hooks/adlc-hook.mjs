@@ -171,10 +171,46 @@ function emit(obj) {
  */
 const ADLC_CLI_TIMEOUT_MS = 5000;
 
-function runAdlc(args) {
-  const r = spawnSync('adlc', args, { encoding: 'utf8', timeout: ADLC_CLI_TIMEOUT_MS, killSignal: 'SIGKILL' });
+/**
+ * Run the toolkit CLI. A repository can plant node_modules/.bin/adlc ahead of
+ * the real install, so adlc is resolved with resolveTrustedBinary (node_modules
+ * entries skipped, a regular file this user owns) and the signing keys reach it
+ * only when `keyed` — the calls that sign or verify the manifest. Returns null
+ * when no trusted adlc exists or it could not be started.
+ */
+function runAdlc(args, { keyed = false } = {}) {
+  const candidate = resolveTrustedBinary('adlc', process.env.PATH);
+  if (!candidate) return null;
+  const env = keyed ? process.env : withoutHookSecrets(process.env);
+  const options = { encoding: 'utf8', timeout: ADLC_CLI_TIMEOUT_MS, killSignal: 'SIGKILL', env };
+  const script = nodeScriptPath(candidate);
+  const r = script
+    ? spawnSync(process.execPath, [script, ...args], options)
+    : spawnSync(candidate, args, options);
   if (r.error) return null;
   return r;
+}
+
+/**
+ * The real path of `bin` when it is a Node script, so it can run under this
+ * interpreter without a second, unfiltered PATH lookup for `node`; null for any
+ * other executable, which is then run directly.
+ */
+function nodeScriptPath(bin) {
+  let real = bin;
+  try { real = realpathSync(bin); } catch { /* use the candidate as found */ }
+  if (/\.[cm]?js$/.test(real)) return real;
+  try {
+    const head = readFileSync(real, { encoding: 'utf8', flag: 'r' }).slice(0, 128);
+    return /^#!.*\bnode\b/.test(head) ? real : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `env` without the manifest and admin signing keys. */
+function withoutHookSecrets(env) {
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !HOOK_SECRET_ENV_VARS.includes(name)));
 }
 
 function parseJson(text) {
@@ -572,7 +608,7 @@ function flail(input) {
 // sig, still trips this warning. See packages/gate-manifest/lib/verify.mjs.
 function manifest() {
   if (!existsSync(join('.adlc', 'manifest.jsonl'))) return; // nothing recorded yet
-  const r = runAdlc(['gate-manifest', 'verify', '--json', '--allow-legacy-unsigned']);
+  const r = runAdlc(['gate-manifest', 'verify', '--json', '--allow-legacy-unsigned'], { keyed: true });
   if (!r || !r.stdout) return;
   const res = parseJson(r.stdout);
   if (!res || res.valid) return; // intact → silent
@@ -1077,7 +1113,7 @@ function recordBypass(relPath, why) {
     'rails-bypass',
     '--data',
     JSON.stringify({ path: relPath, reason: why }),
-  ]);
+  ], { keyed: true });
   return !!r && r.status === 0;
 }
 
@@ -1547,7 +1583,7 @@ function recordBuildGateBypass(ticketId, signals, depth, sessionBytes) {
     ticketId,
     '--data',
     JSON.stringify({ signals, depth, sessionBytes }),
-  ]);
+  ], { keyed: true });
   return !!r && r.status === 0;
 }
 
