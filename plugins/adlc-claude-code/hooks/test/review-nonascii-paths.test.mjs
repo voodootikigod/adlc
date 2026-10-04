@@ -14,10 +14,11 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { tmp } from '@adlc/core/test-kit';
 import { runHook } from './helpers/run-hook.mjs';
+import { TRUSTED_ADLC_DIR } from './helpers/trusted-adlc.mjs';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-hook.mjs');
 const NODE_DIR = dirname(process.execPath);
-const REPO_BIN = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', 'node_modules', '.bin');
+const REPO_BIN = TRUSTED_ADLC_DIR; // the workspace adlc, linked outside node_modules
 const WITH_ADLC = `${REPO_BIN}:${NODE_DIR}:${process.env.PATH ?? ''}`;
 const GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
 

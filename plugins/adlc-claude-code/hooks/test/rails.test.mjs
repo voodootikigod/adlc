@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { tmp } from '@adlc/core/test-kit';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
 import { runHook } from './helpers/run-hook.mjs';
+import { TRUSTED_ADLC_DIR } from './helpers/trusted-adlc.mjs';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-hook.mjs');
 
@@ -646,7 +647,7 @@ for (const [name, json] of [
 // ---- audited bypass: allowed ONLY when the override can be durably recorded ----
 
 const NODE_DIR = dirname(process.execPath);
-const REPO_BIN = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', 'node_modules', '.bin');
+const REPO_BIN = TRUSTED_ADLC_DIR; // the workspace adlc, linked outside node_modules
 const WITH_ADLC = `${REPO_BIN}:${NODE_DIR}:${process.env.PATH ?? ''}`; // recorder reachable
 
 test('bypass on a rail WITH a working recorder → allow + audited entry', (t) => {
