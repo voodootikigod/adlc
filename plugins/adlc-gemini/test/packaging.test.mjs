@@ -11,9 +11,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -58,16 +58,26 @@ test('AC1 (real subprocess): npm publish --dry-run reports PUBLIC access, never 
   // over the previously published versions: X"), which would flip this assertion red
   // the moment the current version ships. Bumping to an unpublishable-high version
   // keeps the public-access check deterministic regardless of what is live on the
-  // registry. The real package.json is restored in finally.
-  const pkgJsonPath = join(pkgDir, 'package.json');
-  const originalPkgJson = readFileSync(pkgJsonPath, 'utf8');
+  // registry.
+  //
+  // The bump happens in a temp copy, never the real package.json: other test files
+  // run concurrently and read it (the root lockstep check compares every host
+  // manifest's version), so a real-tree bump fails them on whichever CI leg the
+  // timing lands.
+  const stage = mkdtempSync(join(tmpdir(), 'adlc-gemini-publish-'));
   let out;
   try {
-    writeFileSync(pkgJsonPath, JSON.stringify({ ...JSON.parse(originalPkgJson), version: '999.999.999' }, null, 2) + '\n');
-    const res = spawnSync('npm', ['publish', '--dry-run'], { cwd: pkgDir, encoding: 'utf8', timeout: 60_000 });
+    // node_modules is excluded: it is irrelevant to publish resolution, may hold
+    // workspace symlinks that do not survive a copy, and is large.
+    cpSync(pkgDir, stage, {
+      recursive: true,
+      filter: (src) => !src.split(sep).includes('node_modules'),
+    });
+    writeFileSync(join(stage, 'package.json'), `${JSON.stringify({ ...pkg, version: '999.999.999' }, null, 2)}\n`);
+    const res = spawnSync('npm', ['publish', '--dry-run'], { cwd: stage, encoding: 'utf8', timeout: 60_000 });
     out = `${res.stdout ?? ''}${res.stderr ?? ''}`;
   } finally {
-    writeFileSync(pkgJsonPath, originalPkgJson);
+    rmSync(stage, { recursive: true, force: true });
   }
   assert.match(out, /with tag latest and public access/, `expected real npm to report public access:\n${out}`);
   assert.ok(!/default access/.test(out), `npm reported "default access" (restricted) — publishConfig is missing or wrong:\n${out}`);
