@@ -92,3 +92,17 @@ test('a non-node adlc executable is still run directly', (t) => {
   runMode('preflight', adlcRepo(t), dir);
   assert.equal(existsSync(marker), true, 'a shell-script adlc was not executed');
 });
+
+test('an extensionless node script runs under the hook\'s own node, not the interpreter its shebang names', (t) => {
+  const dir = tmp(t, 'adlc-cc-shebang-');
+  const dumps = tmp(t, 'adlc-cc-dumps-');
+  writeFileSync(join(dir, 'adlc'), [
+    '#!/nonexistent/bin/node',
+    "import { writeFileSync } from 'node:fs';",
+    `writeFileSync(${JSON.stringify(dumps)} + '/' + process.argv[2] + '.json', '{}');`,
+    "process.stdout.write('{\"failedNames\":[]}');",
+  ].join('\n'));
+  chmodSync(join(dir, 'adlc'), 0o755);
+  runMode('preflight', adlcRepo(t), dir);
+  assert.equal(existsSync(join(dumps, 'preflight.json')), true, 'the script was spawned through its unusable shebang');
+});

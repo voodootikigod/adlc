@@ -201,8 +201,9 @@ function nodeScriptPath(bin) {
   try { real = realpathSync(bin); } catch { /* use the candidate as found */ }
   if (/\.[cm]?js$/.test(real)) return real;
   try {
-    const head = readFileSync(real, { encoding: 'utf8', flag: 'r' }).slice(0, 128);
-    return /^#!.*\bnode\b/.test(head) ? real : null;
+    const text = readFileSync(real, 'utf8');
+    const firstLine = text.slice(0, text.indexOf('\n'));
+    return /^#!.*\bnode\b/.test(firstLine) ? real : null;
   } catch {
     return null;
   }
