@@ -76,6 +76,10 @@ export function runRailFreezeGate({ cwd, base, env, additionalTrustRoots = [], s
   const git = createGit(cwd);
   const messages = [];
   const trustedBase = resolveTrustedBase(git, base);
+  // A push to the default branch is judged as the protected-base ceremony, but only the
+  // push the event describes: its new tip must be the HEAD this run is judging.
+  const pushed = readPushContext(env);
+  const push = pushed && pushed.head === headObjectId(git) ? pushed : null;
 
   const baseHasConfig = trackedAt(git, trustedBase, '.adlc/config.json', `git ls-tree '${base}' config`);
   if (baseHasConfig) validateConfigIntegrity({ git, cwd, base, trustedBase });
@@ -145,7 +149,7 @@ export function runRailFreezeGate({ cwd, base, env, additionalTrustRoots = [], s
 
   // ---- ticket-store integrity, including the migration ceremony ---------------------
   const migration = baseSnapshot
-    ? verifyTicketStore({ git, cwd, trustedBase, baseSnapshot, baseTickets })
+    ? verifyTicketStore({ git, cwd, trustedBase, baseSnapshot, baseTickets, push })
     : { verified: false, storeHash: null, archiveHash: null };
 
   // ---- manifest evidence ------------------------------------------------------------
@@ -241,7 +245,7 @@ function validateConfigIntegrity({ git, cwd, base, trustedBase }) {
  *
  * @returns {{verified: boolean, storeHash: string|null, archiveHash: string|null}}
  */
-function verifyTicketStore({ git, cwd, trustedBase, baseSnapshot, baseTickets }) {
+function verifyTicketStore({ git, cwd, trustedBase, baseSnapshot, baseTickets, push }) {
   let headSnapshot;
   try {
     headSnapshot = detectTicketStore({ root: cwd }).load();
@@ -271,7 +275,8 @@ function verifyTicketStore({ git, cwd, trustedBase, baseSnapshot, baseTickets })
       ticketsAtMergeBase({ git, cwd, trustedBase }),
       headSnapshot.mutableTickets(),
       headSnapshot.formatVersion === 0 ? '.adlc/tickets.json' : 'the .adlc/tickets/ store',
-      new Set(baseTickets.filter((ticket) => (ticket.rails?.length ?? 0) > 0).map((ticket) => ticket.id))
+      new Set(baseTickets.filter((ticket) => (ticket.rails?.length ?? 0) > 0).map((ticket) => ticket.id)),
+      Boolean(push)
     );
     return { verified: false, storeHash: null, archiveHash: null };
   }
@@ -341,7 +346,15 @@ export function isCompletionAnnotationOnly(baseTicket, headTicket, railedAtBaseT
   // branch point said (codex cross-model review R1). This only ever DENIES more than the
   // merge-base check alone, and never more than the base-tip check it replaced.
   if (railedAtBaseTip) return false;
-  if (Object.prototype.hasOwnProperty.call(baseTicket, 'completed')) return false;
+  return gainsOnlyCompletion(baseTicket, headTicket);
+}
+
+/**
+ * True when `headTicket` is exactly `baseTicket` plus `completed: true`. A base that
+ * already carries a `completed` field never qualifies: without that field the head can
+ * never equal it. Any other difference, or a value other than `true`, is not a completion.
+ */
+function gainsOnlyCompletion(baseTicket, headTicket) {
   if (headTicket.completed !== true) return false;
   const { completed, ...headWithoutCompleted } = headTicket;
   return stable(headWithoutCompleted) === stable(baseTicket);
@@ -383,15 +396,26 @@ function ticketsAtMergeBase({ git, cwd, trustedBase }) {
   }
 }
 
-function assertBaseTicketContractsPreserved(baseTickets, headTickets, storeLabel, railedAtBaseTip = new Set()) {
+/**
+ * Every base ticket must survive unchanged, except for a completion.
+ *
+ * In a PR only a railless ticket may be completed (isCompletionAnnotationOnly). A push to
+ * the default branch is the protected-base ceremony T36 names as the one place a railed
+ * ticket may be completed, so there any ticket may gain `completed: true` and nothing
+ * else. Rails are still read from the base tip, so a push that completes a ticket cannot
+ * also edit the paths that ticket freezes.
+ */
+function assertBaseTicketContractsPreserved(baseTickets, headTickets, storeLabel, railedAtBaseTip = new Set(), protectedBasePush = false) {
+  const where = protectedBasePush ? 'in a push to the default branch' : 'in a PR';
   const headById = new Map(headTickets.map((ticket) => [ticket.id, ticket]));
   for (const baseTicket of baseTickets) {
     const headTicket = headById.get(baseTicket.id);
-    if (!headTicket) deny(`base ticket ${baseTicket.id} cannot be removed from ${storeLabel} in a PR`);
-    if (stable(headTicket) !== stable(baseTicket)
-      && !isCompletionAnnotationOnly(baseTicket, headTicket, railedAtBaseTip.has(baseTicket.id))) {
-      deny(`base ticket ${baseTicket.id} contract cannot change in ${storeLabel} in a PR`);
-    }
+    if (!headTicket) deny(`base ticket ${baseTicket.id} cannot be removed from ${storeLabel} ${where}`);
+    if (stable(headTicket) === stable(baseTicket)) continue;
+    const completed = protectedBasePush
+      ? gainsOnlyCompletion(baseTicket, headTicket)
+      : isCompletionAnnotationOnly(baseTicket, headTicket, railedAtBaseTip.has(baseTicket.id));
+    if (!completed) deny(`base ticket ${baseTicket.id} contract cannot change in ${storeLabel} ${where}`);
   }
 }
 
@@ -608,9 +632,7 @@ function isExemptManifestTrustRoot(path, base, head, cwd) {
  * never lifted; only the specific trust-root paths this PR was authorized to change.
  */
 function enforceTrustRoots({ git, env, trustedBase, immutableTrustRoots, unique, rails, messages, cwd }) {
-  const headRes = git(['rev-parse', 'HEAD'], 'git rev-parse HEAD');
-  if (headRes.status !== 0 || !headRes.stdout.trim()) fail('git rev-parse HEAD failed (operational error) — failing closed.');
-  const headOid = headRes.stdout.trim();
+  const headOid = headObjectId(git);
 
   const diff = git(['diff', '--name-status', '-M', `${trustedBase}...${headOid}`, '--', ...immutableTrustRoots], 'git diff trust roots');
   if (diff.status !== 0) fail('git diff trust roots failed (operational error) — failing closed.');
@@ -686,19 +708,7 @@ function enforceTrustRoots({ git, env, trustedBase, immutableTrustRoots, unique,
  * the BASE ref, so a PR cannot add itself as an owner.
  */
 export function readPrContext(env) {
-  const eventPath = env.GITHUB_EVENT_PATH;
-  if (!eventPath) return null;
-  // No existsSync pre-check: the read below is already wrapped in a catch that returns
-  // null on ANY failure (missing file, EISDIR, permissions), so a set-but-unreadable path
-  // fails closed there. A guard here would be exactly redundant with that catch — an
-  // unkillable equivalent mutant — so it is deliberately absent.
-  let event;
-  try {
-    event = JSON.parse(readFileSync(eventPath, 'utf8'));
-  } catch {
-    return null;
-  }
-  const pr = event.pull_request;
+  const pr = readEventPayload(env.GITHUB_EVENT_PATH)?.pull_request;
   if (!pr) return null;
 
   let reviews = [];
@@ -723,6 +733,47 @@ export function readPrContext(env) {
     labels: (Array.isArray(pr.labels) ? pr.labels : []).map((label) => label?.name ?? label),
     reviews,
   };
+}
+
+/**
+ * The pushed commit when this run judges a push to the repository's default branch;
+ * null otherwise.
+ *
+ * Read only from the GitHub event: GITHUB_EVENT_NAME is `push` and the payload's `ref`
+ * is `refs/heads/<repository.default_branch>`. A push there lands either a merged pull
+ * request, which pull-request rules already judged, or an admin's direct push, so it is
+ * the protected-base ceremony. The caller accepts the context only when `head` is the
+ * HEAD it is judging.
+ */
+export function readPushContext(env) {
+  if (env.GITHUB_EVENT_NAME !== 'push') return null;
+  const event = readEventPayload(env.GITHUB_EVENT_PATH);
+  const branch = event?.repository?.default_branch;
+  if (typeof branch !== 'string' || event.ref !== `refs/heads/${branch}`) return null;
+  return { head: event.after };
+}
+
+/**
+ * The GitHub event payload at `path`, or null when it is unset or unreadable.
+ *
+ * No existsSync pre-check: the read is wrapped in a catch that returns null on ANY
+ * failure (missing file, EISDIR, permissions), so a set-but-unreadable path fails closed
+ * there. A guard would be exactly redundant with that catch — an unkillable equivalent
+ * mutant — so it is deliberately absent.
+ */
+function readEventPayload(path) {
+  if (!path) return null;
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function headObjectId(git) {
+  const headRes = git(['rev-parse', 'HEAD'], 'git rev-parse HEAD');
+  if (headRes.status !== 0 || !headRes.stdout.trim()) fail('git rev-parse HEAD failed (operational error) — failing closed.');
+  return headRes.stdout.trim();
 }
 
 function authorizeTrustRootChange({ git, env, changedPaths, trustedBase }) {
