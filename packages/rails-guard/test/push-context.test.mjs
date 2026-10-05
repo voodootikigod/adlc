@@ -155,3 +155,14 @@ test('readPrContext treats an event payload of null as no pull request', (t) => 
   assert.equal(readPrContext({ GITHUB_EVENT_PATH: path }), null);
   assert.equal(readPushContext({ GITHUB_EVENT_NAME: 'push', GITHUB_EVENT_PATH: path }), null);
 });
+
+test('readPrContext reads the author and labels from the pull_request payload', (t) => {
+  const path = join(tmp(t, 'rg-pr-event-'), 'event.json');
+  writeFileSync(path, JSON.stringify({ pull_request: { user: { login: 'contributor' }, labels: [{ name: 'trust-root-change' }] } }));
+  const reviews = JSON.stringify([{ user: { login: 'trusty' }, state: 'APPROVED' }]);
+  assert.deepEqual(readPrContext({ GITHUB_EVENT_PATH: path, ADLC_PR_REVIEWS: reviews }), {
+    author: 'contributor',
+    labels: ['trust-root-change'],
+    reviews: [{ user: 'trusty', state: 'APPROVED', submittedAt: undefined }],
+  });
+});
