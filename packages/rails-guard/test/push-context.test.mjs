@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
-import { readPushContext, runRailFreezeGate } from '../lib/ci/rail-freeze.mjs';
+import { readPrContext, readPushContext, runRailFreezeGate } from '../lib/ci/rail-freeze.mjs';
 import { GateDeny } from '../lib/ci/errors.mjs';
 
 const RAILED = { id: 'T-RAILED', title: 'freezes a path', rails: ['src/frozen/**'] };
@@ -61,6 +61,7 @@ const gate = (root, base, env) =>
   runRailFreezeGate({ cwd: root, base, env, stdio: 'pipe' });
 
 const contractDenied = (error) => error instanceof GateDeny && /T-RAILED contract cannot change/.test(error.message);
+const deniedIn = (where) => (error) => contractDenied(error) && error.message.endsWith(where);
 
 // ── completion ──────────────────────────────────────────────────────────────────
 
@@ -75,8 +76,8 @@ test('the same completion outside a push context is still denied', (t) => {
   const { root, g, base } = repo(t);
   writeStore(root, [{ ...RAILED, completed: true }]);
   commit(g, 'complete T-RAILED');
-  assert.throws(() => gate(root, base, {}), contractDenied);
-  assert.throws(() => gate(root, base, { GITHUB_EVENT_NAME: 'pull_request' }), contractDenied);
+  assert.throws(() => gate(root, base, {}), deniedIn('in a PR'));
+  assert.throws(() => gate(root, base, { GITHUB_EVENT_NAME: 'pull_request' }), deniedIn('in a PR'));
 });
 
 test('a push context is recognised only for the default branch, and only for the HEAD being judged', (t) => {
@@ -104,7 +105,7 @@ test('in a push, a ticket may only GAIN completed: true', (t) => {
     const { root, g, base } = repo(t);
     writeStore(root, headTickets);
     const head = commit(g, name);
-    assert.throws(() => gate(root, base, pushEnv(t, head)), contractDenied, name);
+    assert.throws(() => gate(root, base, pushEnv(t, head)), deniedIn('in a push to the default branch'), name);
   }
 });
 
@@ -146,4 +147,11 @@ test('readPushContext returns the pushed HEAD only for a push to the default bra
   const noRepository = join(tmp(t, 'rg-norepo-'), 'event.json');
   writeFileSync(noRepository, JSON.stringify({ ref: 'refs/heads/undefined', after }));
   assert.equal(readPushContext({ GITHUB_EVENT_NAME: 'push', GITHUB_EVENT_PATH: noRepository }), null);
+});
+
+test('readPrContext treats an event payload of null as no pull request', (t) => {
+  const path = join(tmp(t, 'rg-null-event-'), 'event.json');
+  writeFileSync(path, 'null');
+  assert.equal(readPrContext({ GITHUB_EVENT_PATH: path }), null);
+  assert.equal(readPushContext({ GITHUB_EVENT_NAME: 'push', GITHUB_EVENT_PATH: path }), null);
 });

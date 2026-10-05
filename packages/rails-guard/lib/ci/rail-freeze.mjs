@@ -405,7 +405,7 @@ function ticketsAtMergeBase({ git, cwd, trustedBase }) {
  * else. Rails are still read from the base tip, so a push that completes a ticket cannot
  * also edit the paths that ticket freezes.
  */
-function assertBaseTicketContractsPreserved(baseTickets, headTickets, storeLabel, railedAtBaseTip = new Set(), protectedBasePush = false) {
+function assertBaseTicketContractsPreserved(baseTickets, headTickets, storeLabel, railedAtBaseTip, protectedBasePush) {
   const where = protectedBasePush ? 'in a push to the default branch' : 'in a PR';
   const headById = new Map(headTickets.map((ticket) => [ticket.id, ticket]));
   for (const baseTicket of baseTickets) {
