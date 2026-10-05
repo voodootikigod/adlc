@@ -1,0 +1,16 @@
+{
+  "body": "Source: after #1168 made push runs of the CI rails-guard job judge the pushed range (event.before..HEAD) instead of a freshly fetched origin/main, every direct push to main that completes a ticket goes red. Observed on 5da7ff0c and 6c84e532 (ticket completions: \"base ticket ... contract cannot change in the .adlc/tickets/ store in a PR\"). rails-guard is not a required check, so nothing is blocked, but main shows red after every completion and a real red would hide among them.\n\nThe T36 design already says only the protected-base admin ceremony may set `completed` on a railed ticket; a push to the default branch IS that ceremony, but the gate judges it with pull-request rules.\n\nNORMATIVE BEHAVIOUR.\n1. The gate recognises a push-to-default-branch context only from the GitHub event: GITHUB_EVENT_NAME is `push`, the event payload's `ref` equals `refs/heads/<repository.default_branch>`, and its `after` is the HEAD being judged. Anything else (a pull_request, a push to another branch, a local run, an unreadable payload) is not that context.\n2. In that context a base ticket may change only by gaining `completed: true`: base has no `completed` field and head is exactly base plus `completed: true`. This holds whether or not the ticket declares rails. Any other field change, a non-true value, or a removal is still denied. Pull-request runs keep today's railless-only allowance unchanged.\n3. Rails are still read from the base tip, so a push that completes a ticket and edits that ticket's railed paths in the same range is still denied.\n\nACCEPTANCE CRITERIA.\n- AC1 a push to the default branch that completes a RAILED ticket passes; the same change in a pull_request run is still denied. verify: `node --test packages/rails-guard/test/push-context.test.mjs`\n- AC2 in push context any change other than adding completed:true (another field, completed:false, removal) is denied, and a push to a non-default branch, or an event for another commit, gets pull_request rules. verify: `node --test packages/rails-guard/test/push-context.test.mjs`\n- AC3 a push that completes a ticket and edits its railed file is denied. verify: `node --test packages/rails-guard/test/push-context.test.mjs`\n- AC4 existing rails-guard suites stay green. verify: `node --test packages/rails-guard/test/*.test.mjs scripts/test/rails-guard-ci.test.mjs`\n\nOUT OF SCOPE: trust-root changes landed by a push. A push run still has no pull-request context, so it denies them as before; authorizing them would need the workflow to supply the merged PR, which is a separate decision.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M46620ZX620HTKTRHHNM91G4",
+  "rails": [
+    "packages/rails-guard/test/ticket-store-merge-base.test.mjs",
+    "packages/rails-guard/test/trust-root-authorization.test.mjs"
+  ],
+  "scope": [
+    "packages/rails-guard/lib/ci/rail-freeze.mjs",
+    "packages/rails-guard/test/push-context.test.mjs"
+  ],
+  "title": "rails-guard: judge a push to the default branch as the protected-base ceremony"
+}
