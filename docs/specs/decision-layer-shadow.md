@@ -34,8 +34,8 @@ Nothing changes for a project that does not run the new command.
 - Enforce mode, or any path by which a decision changes an exit code, ticket,
   rail, routing assignment, review requirement, or merge verdict.
 - Any change outside `@adlc/decision-layer`, except registering its CLI verb
-  (and the docs/registry entries every new `packages/*` directory needs) and
-  adding `.adlc/decisions/` to `.gitignore`. In particular no change to `@adlc/core`, `@adlc/prosecute`,
+  and the docs/registry entries every new `packages/*` directory needs. No
+  `.gitignore` change: `.adlc/*` is already ignored. In particular no change to `@adlc/core`, `@adlc/prosecute`,
   `@adlc/model-router`, `@adlc/gate-manifest`, or any trust-root path.
 - Calling the decision layer from an existing gate (P0, D1, P5, C8). Shadow
   runs are invoked explicitly, alongside those gates, not from inside them.
@@ -57,7 +57,8 @@ before anything is read or sent.
 
 `--mode off` is a no-op: exit 0, nothing read, nothing sent, no record.
 
-Selecting a provider without `--mode shadow` is a configuration error. An
+Selecting a provider without `--mode shadow` is a configuration error, and so is
+selecting `jev` with no API key in the environment. An
 environment variable may supply credentials and the endpoint only
 (`TYPESAFE_API_KEY`, falling back to `JEV_API_KEY`; `TYPESAFE_API_URL`); it can
 never select a mode, provider or model.
@@ -66,14 +67,19 @@ never select a mode, provider or model.
 
 ```text
 adlc decision evaluate --mode shadow --provider <jev|mock> --model <id> \
-  --pack <pack-id> [--revision <rev>] [--json]
+  --pack <pack-id> [--revision <rev>] [--ticket <id>] [--pr <number>] [--json]
 ```
+
+`--ticket` and `--pr` are recorded as join keys so a later calibration step can
+match a signal to the outcome of the change it described. They are validated
+(ticket ID shape, positive integer) and never sent to the provider.
 
 `--revision` defaults to `HEAD` and is resolved to a full commit id.
 
 Exit codes: 0 when the run completed and was recorded, whatever the answers;
 1 for configuration, validation or sanitization failure, in which case nothing
-is sent and no record is written; a provider failure is still exit 0 with status
+is sent and no record is written, and 1 when the record cannot be written,
+since the run was then not recorded; a provider failure is still exit 0 with status
 `unknown`/`error` recorded, since shadow output never gates.
 
 ## Adapter contract
@@ -87,15 +93,21 @@ evaluateDecision({ provider, model, pack, sanitizedInput, timeoutMs, revision })
 
 - Exactly one answer per declared question; a missing, duplicate, extra,
   malformed or out-of-domain answer makes the whole result `error`.
-- No answer obtained (timeout, 429/529, network failure, missing key) is
-  `unknown`. An answer that arrived but is unusable (malformed, out of domain,
+- No answer obtained (timeout, 429/529, network failure) is `unknown`. A
+  missing key never reaches the adapter: the CLI rejects it as configuration. An answer that arrived but is unusable (malformed, out of domain,
   resolved-model mismatch with a pinned request) is `error`. Neither is ever a
   fabricated answer.
 - At most 2 retries, on 429/529 and network failure only; the attempt count is
   recorded.
-- The Jev adapter posts to `https://api.typesafe.ai/v1/decisions` by default
-  (to be confirmed against TypeSafe's API documentation before the adapter is
-  built; the earlier branch used it but never made a live call).
+- The Jev adapter is built only against a real response. Before it is written,
+  one live call is made against TypeSafe's documented API with a real key, and
+  the request shape and response are committed (key and account identifiers
+  removed) as `packages/decision-layer/test/fixtures/jev-live-<date>.json`
+  with the endpoint, model and capture date. The adapter's tests replay that
+  fixture. The endpoint the earlier branch assumed,
+  `https://api.typesafe.ai/v1/decisions`, is a starting point, not a fact.
+  Until the fixture exists, no Jev adapter code ships: `--provider jev` is a
+  configuration error naming the missing fixture, and only `mock` works.
 - Both the requested and the provider-resolved model identifiers are recorded;
   an alias is allowed in shadow mode.
 - The adapter cannot write tickets, branches, manifests or any file other than
@@ -112,7 +124,12 @@ line counts, ticket risk metadata, deterministic gate/test summaries).
 
 ## Question packs
 
-Stored only at `.adlc/decision-packs/<pack-id>/pack.json`, ID matching
+Default packs ship inside the package, at
+`packages/decision-layer/packs/<pack-id>/pack.json`, versioned with the code. A
+project may add its own at `.adlc/decision-packs/<pack-id>/pack.json`; this
+repository ignores `.adlc/*`, so a project that wants its packs committed must
+un-ignore that path itself. A project pack with the same ID as a shipped one is
+a configuration error, never a silent override. Pack IDs match
 `[a-z0-9][a-z0-9-]*`, validated offline against a shipped
 `DecisionPack.schema.json`. The schema requires, per question: kind (`Choice`,
 `Score`, `Noul`), the exact input fields it may see (source, type,
@@ -133,26 +150,29 @@ spec's table would assign. In shadow mode that action is recorded as
 ## Run record
 
 Each completed run appends one JSON line to `.adlc/decisions/runs.jsonl` in the
-current checkout. The directory is gitignored: records are local telemetry, not
-committed evidence, so they never enter a PR or the rail-freeze gate's
-evidence checks. Each record contains: revision and state hash, provider,
-requested and resolved model, pack ID and hash, sanitized-input hash (not the
-input; the state hash is the hash of the metadata projection before
-redaction), normalized answers, reducer outcome and `wouldAct`, status, error
+repository's main checkout, found through git's common directory, so removing a
+worktree does not lose its records. The path is already ignored by `.adlc/*`:
+records are local telemetry, not committed evidence, so they never enter a PR
+or the rail-freeze gate's evidence checks. Each record contains: the resolved revision, provider,
+requested and resolved model, pack ID and hash, the hash of the canonical
+sanitized input (never of anything before sanitization, which could contain a
+credential), ticket ID and PR number when given, normalized answers, reducer outcome and `wouldAct`, status, error
 class, attempt count, latency and usage. No sanitized input, prompt or raw state is retained.
 
 ## Acceptance criteria
 
-1. With no decision command run, no code path loads `@adlc/decision-layer`, and
-   no existing test changes. verify: `npm test` on the branch matches main
-   outside `packages/decision-layer`.
-2. `--mode` other than `shadow`/`off`, and a provider without a mode, exit 1
-   before reading or sending anything. verify: `node --test packages/decision-layer/test/cli.test.mjs`
+1. With no decision command run, no code path loads `@adlc/decision-layer`:
+   running another verb (`adlc ticket list`) never resolves the package. verify:
+   `node --test packages/decision-layer/test/isolation.test.mjs`
+2. `--mode` other than `shadow`/`off`, a provider without a mode, `jev` without
+   a key, `jev` without the live fixture, and a project pack shadowing a
+   shipped one each exit 1 before reading or sending anything, and write no
+   record. verify: `node --test packages/decision-layer/test/cli.test.mjs`
 3. The mock provider runs fully offline; the default test suite makes no network
    call (a test fails if `fetch` is reached). verify: `node --test packages/decision-layer/test/*.test.mjs`
-4. Jev responses are schema-validated; timeout, 429/529, malformed and
-   identity-mismatched responses become `unknown`/`error` and are recorded.
-   verify: `node --test packages/decision-layer/test/jev-adapter.test.mjs`
+4. The Jev adapter's tests replay the committed live fixture; timeout, 429/529
+   and network failure become `unknown`, and malformed, out-of-domain and
+   identity-mismatched responses become `error`. verify: `node --test packages/decision-layer/test/jev-adapter.test.mjs`
 5. The sanitizer rejects undeclared fields, oversize fields and totals, and
    scanner failure before dispatch, and redacts credential-shaped values
    (API-key prefixes, JWT, PEM, high-entropy). verify: `node --test packages/decision-layer/test/sanitizer.test.mjs`
@@ -164,10 +184,14 @@ class, attempt count, latency and usage. No sanitized input, prompt or raw state
    allow, escalate, unknown and error. verify: `node --test packages/decision-layer/test/evaluate.test.mjs`
 9. The run record contains every field under "Run record" and no sanitized
    input. verify: `node --test packages/decision-layer/test/evaluate.test.mjs`
-10. `.adlc/decisions/` is ignored by git, and a configuration failure writes no
-    record. verify: `node --test packages/decision-layer/test/evaluate.test.mjs`
-    (asserts `git check-ignore .adlc/decisions/runs.jsonl` succeeds and the log
-    is absent after an exit-1 run)
+10. Run from a linked worktree, a record lands in the main checkout's
+    `.adlc/decisions/runs.jsonl`, carries the given ticket ID and PR number, and
+    that path is ignored by git. verify: `node --test packages/decision-layer/test/evaluate.test.mjs`
+11. The package passes every repository guard that applies to a `packages/*`
+    directory (docs and CLI registry, package references, temp-root fixtures,
+    environment hermeticity, no home `.adlc`). verify: `npm run preflight`
+12. No enforce-mode code ships: the only occurrence of `enforce` in
+    `packages/decision-layer/lib` is the mode rejection. verify: `node --test packages/decision-layer/test/isolation.test.mjs`
 
 ## Decisions (P1 interrogation, round 1, 2026-10-06)
 
@@ -180,3 +204,15 @@ class, attempt count, latency and usage. No sanitized input, prompt or raw state
    tests unchanged and carries no enforce-mode code.
 5. Failure classification: no answer obtained is `unknown`; an unusable answer
    is `error`.
+
+## Decisions (P1 interrogation, round 2: premortem, 2026-10-06)
+
+6. Default packs ship inside the package; project packs are optional and may
+   not shadow a shipped ID.
+7. A missing API key is a configuration error (exit 1, no record).
+8. Records carry ticket and PR join keys and live in the main checkout, so
+   worktree removal does not lose them. Who runs shadow evaluations, and when,
+   is left for a later decision.
+9. The mock provider ships first. The Jev adapter is built only after one live
+   response is captured and committed as its contract fixture.
+10. The input hash covers sanitized input only.
