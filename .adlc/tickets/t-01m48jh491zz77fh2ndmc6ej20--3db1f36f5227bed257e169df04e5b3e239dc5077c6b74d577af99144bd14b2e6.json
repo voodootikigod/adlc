@@ -1,0 +1,18 @@
+{
+  "body": "Source: docs/specs/decision-layer-shadow.md (P1 draft; supersedes the shadow-mode portion of docs/specs/jev-opt-in-decision-layer.md for v1). Replaces the unmerged feat/jev-opt-in-decision-layer branch, which grew enforce mode and trust-root changes the spec never asked for.\n\nNORMATIVE BEHAVIOUR. As specified in docs/specs/decision-layer-shadow.md: a new package @adlc/decision-layer and one CLI verb `adlc decision evaluate`, mode `off` (default, no-op) or `shadow` only. Shadow runs sanitize declared metadata, ask a provider (Jev over native fetch, or an offline mock) a versioned question pack, reduce the answers deterministically, and append one record to a gitignored .adlc/decisions/runs.jsonl. No answer can change any exit code, ticket, rail, routing, review requirement or verdict. No change outside the package except the CLI registration, the docs/registry entries a new package needs, and .gitignore.\n\nACCEPTANCE CRITERIA (as listed in the spec, each with its verify command).\n- AC1 no code path loads the package unless the verb runs; tests outside the package unchanged. verify: `npm test`\n- AC2 bad mode / provider without mode exit 1 before reading or sending. verify: `node --test packages/decision-layer/test/cli.test.mjs`\n- AC3 offline mock; default suite fails if fetch is reached. verify: `node --test packages/decision-layer/test/*.test.mjs`\n- AC4 Jev response validation and unknown/error classification. verify: `node --test packages/decision-layer/test/jev-adapter.test.mjs`\n- AC5 sanitizer rules. verify: `node --test packages/decision-layer/test/sanitizer.test.mjs`\n- AC6 pack validation rules. verify: `node --test packages/decision-layer/test/pack-validator.test.mjs`\n- AC7 reducer total, never allow for unknown/error. verify: `node --test packages/decision-layer/test/reducer.test.mjs`\n- AC8-AC10 exit code independent of answers; record fields and no input; log gitignored and absent after exit-1. verify: `node --test packages/decision-layer/test/evaluate.test.mjs`\n\nOUT OF SCOPE: enforce mode; caching; diagnostics retention; signing records into the C11 manifest; calling the layer from P0/D1/P5/C8; calibration scoring; any change to core, prosecute, model-router, gate-manifest or other trust-root paths.",
+  "category": "feature",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M48JH491ZZ77FH2NDMC6EJ20",
+  "rails": [
+    "docs/specs/decision-layer-shadow.md"
+  ],
+  "scope": [
+    "packages/decision-layer/**",
+    "packages/cli/lib/registry.mjs",
+    ".adlc/decision-packs/**",
+    ".gitignore",
+    "docs/specs/decision-layer-shadow.md"
+  ],
+  "title": "decision-layer: opt-in shadow mode (Jev and mock providers, run log only)"
+}
