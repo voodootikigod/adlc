@@ -170,9 +170,10 @@ class, attempt count, latency and usage. No sanitized input, prompt or raw state
    record. verify: `node --test packages/decision-layer/test/cli.test.mjs`
 3. The mock provider runs fully offline; the default test suite makes no network
    call (a test fails if `fetch` is reached). verify: `node --test packages/decision-layer/test/*.test.mjs`
-4. The Jev adapter's tests replay the committed live fixture; timeout, 429/529
-   and network failure become `unknown`, and malformed, out-of-domain and
-   identity-mismatched responses become `error`. verify: `node --test packages/decision-layer/test/jev-adapter.test.mjs`
+4. (Follow-up ticket, not this one.) The Jev adapter's tests replay the
+   committed live fixture; timeout, 429/529 and network failure become
+   `unknown`, and malformed, out-of-domain and identity-mismatched responses
+   become `error`. verify: `node --test packages/decision-layer/test/jev-adapter.test.mjs`
 5. The sanitizer rejects undeclared fields, oversize fields and totals, and
    scanner failure before dispatch, and redacts credential-shaped values
    (API-key prefixes, JWT, PEM, high-entropy). verify: `node --test packages/decision-layer/test/sanitizer.test.mjs`
@@ -215,4 +216,11 @@ class, attempt count, latency and usage. No sanitized input, prompt or raw state
    is left for a later decision.
 9. The mock provider ships first. The Jev adapter is built only after one live
    response is captured and committed as its contract fixture.
+
+## Decisions (P2 coldstart, 2026-10-06)
+
+11. The Jev adapter and criterion 4 are split into a follow-up ticket, started
+    once someone with a TypeSafe key captures the fixture. The first ticket
+    ships the mock provider and criteria 1-3 and 5-12; `--provider jev` stays a
+    configuration error naming the missing fixture.
 10. The input hash covers sanitized input only.
