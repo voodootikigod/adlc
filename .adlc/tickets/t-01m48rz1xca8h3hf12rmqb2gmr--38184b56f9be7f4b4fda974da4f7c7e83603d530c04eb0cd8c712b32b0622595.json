@@ -1,0 +1,16 @@
+{
+  "body": "Source: docs/specs/decision-layer-shadow.md, criterion 4 and decisions 9 and 11. Follow-up to T-01M48JH491ZZ77FH2NDMC6EJ20, which ships @adlc/decision-layer with the offline mock provider only.\n\nPREREQUISITE (human). Someone with a TypeSafe API key makes one live call against TypeSafe's documented decision API and commits the request shape and response, with the key and account identifiers removed, as packages/decision-layer/test/fixtures/jev-live-<date>.json, recording the endpoint, model and capture date. No adapter code is written before this fixture exists; the endpoint the earlier branch assumed (https://api.typesafe.ai/v1/decisions) is a starting point, not a fact.\n\nNORMATIVE BEHAVIOUR. A Jev adapter over native fetch implementing the spec's adapter contract: exactly one answer per declared question; no answer obtained (timeout, 429/529, network failure) is `unknown`; an unusable answer (malformed, out of domain, resolved-model mismatch with a pinned request) is `error`; at most 2 retries on 429/529 and network failure, counted in the record; credentials from TYPESAFE_API_KEY falling back to JEV_API_KEY, endpoint override TYPESAFE_API_URL. Once the fixture exists, `--provider jev` stops being a configuration error.\n\nACCEPTANCE CRITERIA.\n- AC4 the adapter's tests replay the committed live fixture; unknown vs error classification as above. verify: `node --test packages/decision-layer/test/jev-adapter.test.mjs`\n- The default suite still makes no network call. verify: `node --test packages/decision-layer/test/*.test.mjs`\n\nOUT OF SCOPE: everything else in the spec (shipped by T-01M48JH491ZZ77FH2NDMC6EJ20); enforce mode.",
+  "category": "feature",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M48RZ1XCA8H3HF12RMQB2GMR",
+  "rails": [
+    "docs/specs/decision-layer-shadow.md"
+  ],
+  "scope": [
+    "packages/decision-layer/lib/adapters/**",
+    "packages/decision-layer/test/jev-adapter.test.mjs",
+    "packages/decision-layer/test/fixtures/**"
+  ],
+  "title": "decision-layer: Jev adapter, built against a captured live response"
+}
