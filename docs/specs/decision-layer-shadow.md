@@ -3,7 +3,7 @@
 **Status:** Draft for P1 interrogation
 **Date:** 2026-10-06
 **Supersedes for v1:** the shadow-mode portion of
-[jev-opt-in-decision-layer.md](./jev-opt-in-decision-layer.md); enforce mode is
+the 2026-09-21 Jev decision-layer proposal (not in this repository); enforce mode is
 out of scope here and needs its own spec.
 
 ## Summary
@@ -67,8 +67,18 @@ never select a mode, provider or model.
 
 ```text
 adlc decision evaluate --mode shadow --provider <jev|mock> --model <id> \
-  --pack <pack-id> [--revision <rev>] [--ticket <id>] [--pr <number>] [--json]
+  --pack <pack-id> [--revision <rev>] [--ticket <id>] [--pr <number>] \
+  [--mock-response <file>] [--json]
 ```
+
+`--mock-response <file>` is valid only with `--provider mock`; anywhere else it
+is a configuration error. The file holds the exact provider response the mock
+returns, including malformed or failing ones (a JSON field `simulate` set to
+`timeout`, `rate-limit` or `network` makes the mock behave as that failure), so
+tests and demos can produce every outcome. Without the flag the mock returns a
+fixed response, `risk: medium` and `needs-deeper-interrogation: no` at
+probability 0.5, which reduces to `unknown`. The mock never derives answers
+from the input, so its output can never be mistaken for a signal.
 
 `--ticket` and `--pr` are recorded as join keys so a later calibration step can
 match a signal to the outcome of the change it described. They are validated
@@ -115,12 +125,52 @@ evaluateDecision({ provider, model, pack, sanitizedInput, timeoutMs, revision })
 
 ## Input boundary
 
-Unchanged from the parent spec's "Input boundary and sanitization contract":
-pack allowlist → metadata projection → UTF-8/control normalization → secret
-scanner and redactor → per-field (4 KiB) and total (32 KiB) limits → canonical
-`sanitizedInput`. Any failure stops the run before dispatch; there is no raw
-fallback. v1 packs are metadata-only (change classification, extension counts,
-line counts, ticket risk metadata, deterministic gate/test summaries).
+Sanitization is one deterministic component that runs before any provider is
+called. The adapter accepts only its output:
+
+```text
+raw local state
+  -> pack input allowlist
+  -> metadata projection
+  -> UTF-8 / control-character normalization
+  -> secret scanner and redactor
+  -> per-field and total size limits
+  -> canonical sanitizedInput
+  -> provider adapter
+```
+
+v1 packs are metadata-only, and every v1 input comes from a source that already
+exists:
+
+| Field | Source |
+| --- | --- |
+| `extensionCounts` | files changed per extension (lowercase, no dot; `none` for no extension), from `git diff --numstat` between the merge-base of `--revision` with the default branch and `--revision` |
+| `linesAdded`, `linesDeleted`, `filesChanged` | the same diff; binary files count as changed with 0 lines |
+| `ticketCategory` | the `category` of `--ticket` in the ticket store, or `none` without `--ticket` |
+| `declaredRailCount` | the number of `rails` on `--ticket`, or `none` without `--ticket` |
+
+An unknown `--ticket` is a configuration error (exit 1). They never send source
+text, diff hunks, issue bodies, prompts, environment files, git history,
+binary content, credentials or file paths.
+
+Every input field is declared by the pack with a source, type, maximum bytes and
+data classification. The component:
+
+- rejects undeclared fields and unknown pack versions;
+- normalizes strings to UTF-8, removes NUL and other control characters, and
+  sorts object keys before hashing or sending;
+- applies hard limits of 4 KiB per field and 32 KiB in total; a pack may lower
+  them, never raise them;
+- scans every string value, including nested ones, for credential-shaped
+  content: known API-key prefixes, JWTs, PEM and private-key blocks, and
+  high-entropy tokens. A match is replaced with a typed token such as
+  `<redacted:credential>`, and the run continues;
+- stops the run before dispatch, with exit 1 and no record, if scanning,
+  normalization, classification or a size check fails. There is no
+  best-effort fallback to raw input.
+
+Redaction is a privacy control, not proof that nothing sensitive remains; the
+metadata-only rule is the primary boundary.
 
 ## Question packs
 
@@ -138,14 +188,39 @@ the phase it describes. Validation rejects duplicate IDs, undeclared inputs,
 unknown kinds, out-of-domain thresholds, unbounded fields, and any `mode` other
 than `shadow`. The canonical pack hash is part of every record.
 
-The first pack is `change-risk-v1` (P0/D1 risk signal).
+### The first pack: `change-risk-v1`
+
+A P0/D1 risk signal. Both questions see the same declared inputs: every field
+in the table under "Input boundary".
+
+| ID | Kind | Domain | Asks |
+| --- | --- | --- | --- |
+| `risk` | `Choice` | `low` \| `medium` \| `high` | How risky is this change? |
+| `needs-deeper-interrogation` | `Noul` | `yes` \| `no` | Should the spec get more interrogation before building? |
+
+Aggregation, applied only when the result status is `ok`:
+
+- `escalate` if `risk` is `high` or `needs-deeper-interrogation` is `yes`;
+- `allow` only if `risk` is `low` and `needs-deeper-interrogation` is `no`,
+  and both answers carry a provider probability of at least 0.7;
+- `unknown` otherwise, including a missing probability.
 
 ## Reducer
 
 Deterministic, pure, separate from the adapter:
-`answers -> allow | escalate | unknown`, plus the phase action the parent
-spec's table would assign. In shadow mode that action is recorded as
-`wouldAct`, and nothing performs it. `unknown` is never converted to `allow`.
+`(status, answers, pack) -> allow | escalate | unknown`. A status of `unknown` or
+`error` always reduces to `unknown`. `unknown` is never converted to `allow`.
+
+The reducer also names the action the pack's phase would take for that
+outcome, recorded as `wouldAct`. Nothing performs it in this version:
+
+| Phase | allow | escalate | unknown |
+| --- | --- | --- | --- |
+| P0 triage | `keep-deterministic-triage` | `recommend-deeper-interrogation` | `record-inconclusive` |
+| D1 model router | `keep-deterministic-assignment` | `recommend-one-tier-up` | `keep-deterministic-assignment` |
+
+`change-risk-v1` declares both phases, so `wouldAct` holds one action per phase.
+A pack naming any other phase fails validation.
 
 ## Run record
 
@@ -165,7 +240,8 @@ class, attempt count, latency and usage. No sanitized input, prompt or raw state
    running another verb (`adlc ticket list`) never resolves the package. verify:
    `node --test packages/decision-layer/test/isolation.test.mjs`
 2. `--mode` other than `shadow`/`off`, a provider without a mode, `jev` without
-   a key, `jev` without the live fixture, and a project pack shadowing a
+   a key, `jev` without the live fixture, `--mock-response` without
+   `--provider mock`, an unknown `--ticket`, and a project pack shadowing a
    shipped one each exit 1 before reading or sending anything, and write no
    record. verify: `node --test packages/decision-layer/test/cli.test.mjs`
 3. The mock provider runs fully offline; the default test suite makes no network
@@ -216,6 +292,7 @@ class, attempt count, latency and usage. No sanitized input, prompt or raw state
    is left for a later decision.
 9. The mock provider ships first. The Jev adapter is built only after one live
    response is captured and committed as its contract fixture.
+10. The input hash covers sanitized input only.
 
 ## Decisions (P2 coldstart, 2026-10-06)
 
@@ -223,4 +300,12 @@ class, attempt count, latency and usage. No sanitized input, prompt or raw state
     once someone with a TypeSafe key captures the fixture. The first ticket
     ships the mock provider and criteria 1-3 and 5-12; `--provider jev` stays a
     configuration error naming the missing fixture.
-10. The input hash covers sanitized input only.
+12. `change-risk-v1` asks two questions (`risk`, `needs-deeper-interrogation`)
+    with the aggregation under "The first pack".
+13. The spec carries its own sanitizer contract and phase-action table rather
+    than referring to the earlier proposal.
+14. `change-risk-v1` reads only inputs with an existing source: diff counts and
+    the ticket's category and rail count. Change classification and gate/test
+    summaries are dropped.
+15. The mock provider returns a scripted response from `--mock-response`, or a
+    fixed response that reduces to `unknown`; it never derives answers.
