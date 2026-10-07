@@ -8,7 +8,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { installNoNetwork } from './helpers/no-network.mjs';
 import { MOCK_DEFAULT_RESPONSE, createMockProvider } from '../lib/mock-provider.mjs';
-import { packHash } from '../lib/pack.mjs';
+import { PackError, packHash } from '../lib/pack.mjs';
+import { SanitizationError } from '../lib/sanitizer.mjs';
+import { createHash } from 'node:crypto';
 import { canonicalJson } from '../lib/canonical.mjs';
 import { DEFAULT_TIMEOUT_MS, MAX_RETRIES, evaluateDecision, isPinnedModel } from '../lib/provider.mjs';
 import { reduce } from '../lib/reducer.mjs';
@@ -46,7 +48,7 @@ test('without a scripted response the mock answers medium/no at 0.5, which reduc
 });
 
 test('a scripted response is normalized into pack order with the question kinds', async () => {
-  const result = await run(body([...ok].reverse(), { resolvedModel: 'mock-1.0.3', usage: { calls: 1 } }));
+  const result = await run(body([...ok].reverse(), { resolvedModel: 'mock-1.0.3', usage: { inputTokens: 12, outputTokens: 3, totalTokens: 15 } }));
   assert.deepEqual(result, {
     status: 'ok',
     answers: [
@@ -57,7 +59,7 @@ test('a scripted response is normalized into pack order with the question kinds'
     resolvedModel: 'mock-1.0.3',
     packHash: packHash(PACK),
     errorClass: null,
-    usage: { calls: 1 },
+    usage: { inputTokens: 12, outputTokens: 3, totalTokens: 15 },
     attemptCount: 1,
     latencyMs: result.latencyMs,
   });
@@ -117,6 +119,74 @@ test('every result carries the pack hash: ok, unknown and error', async () => {
     assert.equal(result.status, status);
     assert.equal(result.packHash, packHash(PACK), status);
   }
+});
+
+// A credential-shaped string built at runtime, so no key literal sits in the source.
+const secretText = () => `ghp_${createHash('sha256').update('pack-secret').digest('hex').slice(0, 36)}`;
+
+test('a pack whose prompt or domain carries a credential-shaped string is refused before anything is sent', async () => {
+  for (const mutate of [
+    (pack) => { pack.questions[0].prompt = `How risky is this? ${secretText()}`; },
+    (pack) => { pack.questions[0].domain = ['low', 'medium', secretText()]; },
+  ]) {
+    const pack = structuredClone(PACK);
+    mutate(pack);
+    let calls = 0;
+    const provider = { name: 'spy', call: async () => { calls += 1; return { body: JSON.parse(body(ok)) }; } };
+    await assert.rejects(
+      evaluateDecision({ provider, model: 'm', pack, sanitizedInput: INPUT, retryDelayMs: 0 }),
+      (error) => error instanceof PackError && /credential-shaped/.test(error.message),
+    );
+    assert.equal(calls, 0);
+  }
+});
+
+test('the whole outbound request is bounded: 4 KiB per string, 32 KiB in total', async () => {
+  const send = (pack, input = INPUT) => evaluateDecision({
+    provider: { name: 'spy', call: async () => ({ body: JSON.parse(body(ok)) }) }, model: 'm', pack, sanitizedInput: input, retryDelayMs: 0,
+  });
+  const longValue = structuredClone(PACK);
+  longValue.questions[0].domain = ['low', 'medium', 'h'.repeat(4097)];
+  await assert.rejects(send(longValue), (error) => error instanceof SanitizationError && error.code === 'request-field-too-large');
+  const many = structuredClone(PACK);
+  for (let i = 0; i < 12; i += 1) many.questions.push({ ...structuredClone(PACK.questions[0]), id: `q${i}`, prompt: 'p'.repeat(500), domain: ['d'.repeat(3000)] });
+  await assert.rejects(send(many), (error) => error instanceof SanitizationError && error.code === 'request-too-large');
+  assert.equal((await send(PACK)).status, 'ok');
+});
+
+const USAGE_ERRORS = [
+  ['nested usage', { inputTokens: { n: 1 } }],
+  ['a nested unknown key', { extra: { deep: 1 } }],
+  ['a negative counter', { inputTokens: -1 }],
+  ['a fractional counter', { outputTokens: 1.5 }],
+  ['a string counter', { totalTokens: '15' }],
+  ['a list', { inputTokens: [1] }],
+];
+
+for (const [name, usage] of USAGE_ERRORS) {
+  test(`usage with ${name} is malformed`, async () => {
+    const result = await run(body(ok, { usage }));
+    assert.equal(result.status, 'error');
+    assert.equal(result.errorClass, 'malformed-response');
+    assert.equal(result.usage, null);
+  });
+}
+
+test('usage keeps only the documented counters and drops other keys', async () => {
+  const result = await run(body(ok, { usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3, costUsd: 0.4, region: 'us' } }));
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(result.usage, { inputTokens: 1, outputTokens: 2, totalTokens: 3 });
+  assert.deepEqual((await run(body(ok, { usage: { region: 'us' } }))).usage, {});
+});
+
+test('a resolved model that is not a valid model ID is malformed, and is not recorded', async () => {
+  for (const resolvedModel of ['m'.repeat(129), 'has space', '']) {
+    const result = await run(body(ok, { resolvedModel }));
+    assert.equal(result.status, 'error', JSON.stringify(resolvedModel));
+    assert.equal(result.errorClass, 'malformed-response');
+    assert.equal(result.resolvedModel, null);
+  }
+  assert.equal((await run(body(ok, { resolvedModel: 'm'.repeat(128) }))).status, 'ok');
 });
 
 test('MAX_RETRIES is 2', () => {

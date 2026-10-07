@@ -11,6 +11,7 @@ import { FETCH_EXIT_CODE, NO_NETWORK_PRELOAD, installNoNetwork } from './helpers
 import { changeRepo, responseFile, runCli } from './helpers/fixtures.mjs';
 import { JEV_FIXTURE_PATH } from '../lib/config.mjs';
 import { SHIPPED_PACKS_DIR as PACKS_DIR } from '../lib/pack.mjs';
+import { createHash } from 'node:crypto';
 
 installNoNetwork();
 
@@ -102,6 +103,19 @@ test('a symlinked project pack directory shadowing a shipped one is refused', (t
       writeFileSync(join(target, 'pack.json'), '{}');
       mkdirSync(join(dir, '.adlc', 'decision-packs'), { recursive: true });
       symlinkSync(target, join(dir, '.adlc', 'decision-packs', 'change-risk-v1'));
+    },
+  });
+});
+
+test('a project pack whose prompt carries a credential-shaped string is refused end to end', (t) => {
+  const secret = `glpat-${createHash('sha256').update('prompt-secret').digest('hex').slice(0, 24)}`;
+  refused(t, [...SHADOW.slice(0, -1), 'leaky-pack'], /question "risk" prompt carries a credential-shaped value/, {
+    prepare: (dir) => {
+      const pack = JSON.parse(readFileSync(join(PACKS_DIR, 'change-risk-v1', 'pack.json'), 'utf8'));
+      pack.id = 'leaky-pack';
+      pack.questions[0].prompt = `Rate this. Token: ${secret}`;
+      mkdirSync(join(dir, '.adlc', 'decision-packs', 'leaky-pack'), { recursive: true });
+      writeFileSync(join(dir, '.adlc', 'decision-packs', 'leaky-pack', 'pack.json'), JSON.stringify(pack));
     },
   });
 });

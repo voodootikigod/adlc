@@ -65,12 +65,18 @@ the provider reported none), pack ID and hash,
 the hash of the sanitized input (not the input), ticket and PR join keys, the
 normalized answers, the reducer outcome (`allow`, `escalate` or `unknown`) and
 the phase action it would take (`wouldAct`), status, error class, attempt count,
-latency and usage.
+latency and usage. Usage keeps only the counters `inputTokens`, `outputTokens`
+and `totalTokens`, each a non-negative integer; other keys a provider reports
+are dropped, and a usage of any other shape makes the reply `malformed-response`.
 
 ## Question packs
 
 Shipped packs live in `packs/<id>/pack.json`. A project may add its own at
-`.adlc/decision-packs/<id>/pack.json`, but never one with a shipped ID.
+`.adlc/decision-packs/<id>/pack.json`, but never one with a shipped ID. A
+project pack is repository text, so its prompts and domain values are scanned
+like the inputs: a pack carrying a credential-shaped value is refused before
+anything is sent, and the whole request is held to the same 4 KiB per string and
+32 KiB total.
 `schemas/DecisionPack.schema.json` documents the format.
 
 `change-risk-v1` asks two questions about the inputs above:

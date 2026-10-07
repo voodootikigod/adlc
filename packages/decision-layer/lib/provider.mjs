@@ -10,16 +10,28 @@
 // text (id, kind, prompt, domain) with only the sanitized input fields that
 // question declares. Nothing else derived from the repository is sent: in
 // particular not the revision, which the run records but the provider never sees.
-// Each question is sent only the input fields it declares. A model ID ending
+// Each question is sent only the input fields it declares.
+//
+// Pack-authored text is repository text when the pack is a project pack, so
+// every prompt and domain value is scanned before dispatch and a pack carrying
+// a credential-shaped value is refused (it is not silently redacted). The whole
+// request is held to the sanitizer's limits: 4 KiB per string, 32 KiB in total.
+//
+// A reply's usage keeps only the counters in USAGE_COUNTERS, each a
+// non-negative integer; any other key is dropped, and a usage of any other shape
+// is malformed. A resolved model must be a valid model ID. A model ID ending
 // in -<major>.<minor>.<patch> is pinned: a reply that resolves it to any other
 // model is `error`. Any other ID is an alias, which may resolve to anything.
 // The resolved model is whatever the reply reported, kept even when the reply
 // is otherwise unusable, and null when no reply arrived or none was reported.
 import { isPlainObject } from '@adlc/core';
-import { packHash } from './pack.mjs';
-import { canonicalJson } from './canonical.mjs';
+import { MAX_FIELD_BYTES, MAX_TOTAL_BYTES, PackError, packHash } from './pack.mjs';
+import { canonicalBytes, canonicalJson } from './canonical.mjs';
+import { MODEL_PATTERN } from './config.mjs';
+import { SanitizationError, scanText } from './sanitizer.mjs';
 
 export const MAX_RETRIES = 2;
+export const USAGE_COUNTERS = Object.freeze(['inputTokens', 'outputTokens', 'totalTokens']);
 export const DEFAULT_TIMEOUT_MS = 10_000;
 const PINNED_MODEL = /-\d+\.\d+\.\d+$/;
 const DEFAULT_RETRY_DELAY_MS = 250;
@@ -41,6 +53,47 @@ class UnusableReply extends Error {
 
 const isUnitInterval = (value) => typeof value === 'number' && value >= 0 && value <= 1;
 const malformed = (message) => new UnusableReply('malformed-response', message);
+
+function refuseCredentialText(pack) {
+  for (const question of pack.questions) {
+    const fields = [['prompt', question.prompt], ...(Array.isArray(question.domain) ? question.domain.map((value) => ['domain', value]) : [])];
+    for (const [field, text] of fields) {
+      if (typeof text === 'string' && scanText(text).redactions > 0) {
+        throw new PackError(`question "${question.id}" ${field} carries a credential-shaped value; the pack is refused`);
+      }
+    }
+  }
+}
+
+function strings(value) {
+  if (typeof value === 'string') return [value];
+  if (value !== null && typeof value === 'object') return Object.entries(value).flatMap(([key, item]) => [key, ...strings(item)]);
+  return [];
+}
+
+function boundRequest(request) {
+  if (strings(request).some((text) => Buffer.byteLength(text, 'utf8') > MAX_FIELD_BYTES)) {
+    throw new SanitizationError('request-field-too-large', `a string in the provider request exceeds ${MAX_FIELD_BYTES} bytes`);
+  }
+  if (canonicalBytes(request) > MAX_TOTAL_BYTES) {
+    throw new SanitizationError('request-too-large', `the provider request exceeds ${MAX_TOTAL_BYTES} bytes`);
+  }
+}
+
+function normalizeUsage(usage) {
+  if (usage === undefined) return undefined;
+  if (!isPlainObject(usage)) throw malformed('usage must be an object');
+  const counters = {};
+  for (const [key, value] of Object.entries(usage)) {
+    if (value !== null && typeof value === 'object') throw malformed('usage may not nest values');
+    if (!USAGE_COUNTERS.includes(key)) continue;
+    if (!Number.isSafeInteger(value) || value < 0) throw malformed(`usage ${key} must be a non-negative integer`);
+    counters[key] = value;
+  }
+  return counters;
+}
+
+const validModel = (model) => typeof model === 'string' && MODEL_PATTERN.test(model);
 
 function inDomain(question, value) {
   if (question.kind === 'Score') return typeof value === 'number' && value >= question.domain.min && value <= question.domain.max;
@@ -73,8 +126,8 @@ function normalizeReply(body, pack) {
     if (!BODY_KEYS.has(key)) throw malformed(`unexpected reply field "${key}"`);
   }
   if (!Array.isArray(body.answers)) throw malformed('the reply must carry an answers list');
-  if (body.resolvedModel !== undefined && typeof body.resolvedModel !== 'string') throw malformed('resolvedModel must be a string');
-  if (body.usage !== undefined && !isPlainObject(body.usage)) throw malformed('usage must be an object');
+  if (body.resolvedModel !== undefined && !validModel(body.resolvedModel)) throw malformed('resolvedModel must be a valid model ID');
+  const usage = normalizeUsage(body.usage);
   const questions = new Map(pack.questions.map((question) => [question.id, question]));
   const byId = new Map();
   for (const answer of body.answers) {
@@ -87,7 +140,7 @@ function normalizeReply(body, pack) {
   return {
     answers: pack.questions.map((question) => byId.get(question.id)),
     resolvedModel: body.resolvedModel,
-    usage: body.usage,
+    usage,
   };
 }
 
@@ -135,6 +188,8 @@ export async function evaluateDecision({
       input: Object.fromEntries(inputs.map((name) => [name, sanitizedInput[name]])),
     })),
   }));
+  refuseCredentialText(pack);
+  boundRequest(request);
   const started = Date.now();
   let attemptCount = 0;
   let outcome;
@@ -148,7 +203,7 @@ export async function evaluateDecision({
   if (outcome.failure) {
     return { status: 'unknown', answers: [], resolvedModel: null, errorClass: outcome.failure, usage: null, ...base };
   }
-  const reported = isPlainObject(outcome.body) && typeof outcome.body.resolvedModel === 'string' ? outcome.body.resolvedModel : null;
+  const reported = isPlainObject(outcome.body) && validModel(outcome.body.resolvedModel) ? outcome.body.resolvedModel : null;
   try {
     const reply = normalizeReply(outcome.body, pack);
     checkResolvedModel(model, reply.resolvedModel);

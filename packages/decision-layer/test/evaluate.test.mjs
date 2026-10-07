@@ -206,6 +206,8 @@ test('the provider receives the sanitized, redacted input and nothing undeclared
   for (const question of requests[0].questions) {
     assert.deepEqual(Object.keys(question.input).sort(), [...PACK_INPUTS].sort());
     assert.equal(question.input.ticketCategory, 'feature <redacted:credential>');
+    assert.equal(typeof question.prompt, 'string');
+    assert.ok(question.prompt.length > 0, 'a normal prompt reaches the provider');
     assert.deepEqual(question.input.extensionCounts, { md: 1, mjs: 1, none: 1, png: 1, json: 1 });
   }
 });
