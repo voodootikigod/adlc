@@ -71,13 +71,17 @@ function defaultBranchRef(root) {
   throw new ConfigError('cannot determine the default branch (no origin/HEAD, main or master)');
 }
 
-/** Parse `git diff --numstat -z --no-renames` output: "added\tdeleted\tpath\0" per file, "-" for binary. */
+/**
+ * Parse `git diff --numstat -z --no-renames` output: "added\tdeleted\tpath\0" per file,
+ * "-" for binary. The path is verbatim and may itself contain a tab.
+ */
 export function parseNumstat(output) {
   const counts = new Map();
   const stats = { linesAdded: 0, linesDeleted: 0, filesChanged: 0 };
   for (const record of output.split('\0')) {
     if (record === '') continue;
-    const [added, deleted, path] = record.split('\t');
+    const [added, deleted, ...rest] = record.split('\t');
+    const path = rest.join('\t');
     const extension = extname(path).slice(1).toLowerCase() || 'none';
     counts.set(extension, (counts.get(extension) ?? 0) + 1);
     stats.linesAdded += added === '-' ? 0 : Number(added);

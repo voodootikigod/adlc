@@ -218,6 +218,29 @@ test('a revision with no shared history is refused', (t) => {
   assert.match(result.stderr, /shares no history with the default branch/);
 });
 
+test('parseNumstat keeps a path that contains a tab whole', () => {
+  const out = ['2\t1\tdir/a\tb.js', '-\t-\timg\tx.png', '1\t0\tplain.md', ''].join('\0');
+  assert.deepEqual(parseNumstat(out), {
+    extensionCounts: { js: 1, png: 1, md: 1 },
+    linesAdded: 3,
+    linesDeleted: 1,
+    filesChanged: 3,
+  });
+});
+
+test('a real file whose name contains a tab is counted under its own extension', async (t) => {
+  const { dir, git } = changeRepo(t);
+  writeFileSync(join(dir, 'odd\tname.py'), 'x = 1\n');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'tab in a file name');
+  const result = await runEvaluate({
+    mode: 'shadow', provider: 'mock', model: 'm', pack: 'change-risk-v1', revision: 'HEAD', ticket: 'T-1', pr: null, mockResponse: null,
+  }, { cwd: dir });
+  assert.equal(result.exitCode, 0);
+  const expected = { ...EXPECTED_INPUT, extensionCounts: { ...EXPECTED_INPUT.extensionCounts, py: 1 }, filesChanged: 5, linesAdded: 6 };
+  assert.equal(result.record.inputHash, canonicalHash(expected));
+});
+
 test('parseNumstat counts extensions named after Object.prototype members', () => {
   const out = ['1\t0\tx.constructor', '1\t0\ty.__proto__', '1\t0\tz.toString', '1\t0\tw.CONSTRUCTOR', ''].join('\0');
   const { extensionCounts, filesChanged } = parseNumstat(out);
