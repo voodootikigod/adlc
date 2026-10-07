@@ -96,8 +96,8 @@ test('AC2: high-risk but session NOT degraded (no compaction, shallow) → autoc
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-// ---- integration: the three T32 hooks fire through the real plugin ----
-import { adlcRailsGuard } from '../index.mjs';
+// ---- integration: the compaction hook fires through the real plugin ----
+import { loadPlugin } from './helpers/fake-ctx.mjs';
 
 // Every fixture the factories below mint; removed once this file's tests finish.
 const fixtureDirs = new Set();
@@ -111,44 +111,24 @@ const withEnv = async (patch, fn) => {
   } finally { for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]; Object.assign(process.env, saved); }
 };
 
-test('integration: session.compacting pushes the ADLC block into output.context', async () => {
+test('integration: the compaction hook pushes the ADLC block into the compaction system parts', async () => {
   const dir = repo([{ id: 'T1', rails: ['test/**'], scope: ['src/**'] }]);
   await withEnv({ ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' }, async () => {
-    const hooks = await adlcRailsGuard({ worktree: dir });
-    const output = { context: [] };
-    await hooks['experimental.session.compacting']({ sessionID: 's' }, output);
-    assert.equal(output.context.length, 1);
-    assert.match(output.context[0], /T1/);
-    assert.match(output.context[0], /test\/\*\*/);
+    const plugin = await loadPlugin({ root: dir });
+    const system = await plugin.compaction({ system: [{ type: 'text', text: 'host prompt' }] });
+    assert.equal(system.length, 2, 'appended, host part kept');
+    assert.equal(system[1].type, 'text');
+    assert.match(system[1].text, /T1/);
+    assert.match(system[1].text, /test\/\*\*/);
   }).finally(() => rmSync(dir, { recursive: true, force: true }));
 });
 
-test('integration: compaction.autocontinue sets enabled=false on a degraded high-risk session', async () => {
-  const dir = repo([{ id: 'T1', risk: 'high', rails: ['test/**'] }]);
-  await withEnv({ ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' }, async () => {
-    const hooks = await adlcRailsGuard({ worktree: dir });
-    const output = { enabled: true };
-    await hooks['experimental.compaction.autocontinue']({ sessionID: 's' }, output);
-    assert.equal(output.enabled, false, 'human turn forced');
-    // a normal-risk ticket leaves autocontinue on
-    const dir2 = repo([{ id: 'T2', rails: ['test/**'] }]);
-    try {
-      await withEnv({ ADLC_TICKET: 'T2' }, async () => {
-        const hooks2 = await adlcRailsGuard({ worktree: dir2 });
-        const o2 = { enabled: true };
-        await hooks2['experimental.compaction.autocontinue']({ sessionID: 's' }, o2);
-        assert.equal(o2.enabled, true);
-      });
-    } finally { rmSync(dir2, { recursive: true, force: true }); }
-  }).finally(() => rmSync(dir, { recursive: true, force: true }));
-});
-
-test('integration: compaction hooks never THROW even on a malformed session', async () => {
+test('integration: the compaction hook never THROWS on a malformed event', async () => {
   const dir = repo([{ id: 'T1', rails: ['test/**'] }]);
   await withEnv({ ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' }, async () => {
-    const hooks = await adlcRailsGuard({ worktree: dir });
-    // missing output shapes must not crash the host
-    await hooks['experimental.session.compacting']({}, {});
-    await hooks['experimental.compaction.autocontinue']({}, {});
+    const plugin = await loadPlugin({ root: dir });
+    // missing event shapes must not crash the host
+    await plugin.registrations.session.get('compaction')({});
+    await plugin.registrations.session.get('compaction')(undefined);
   }).finally(() => rmSync(dir, { recursive: true, force: true }));
 });

@@ -1,229 +1,142 @@
 #!/usr/bin/env node
 // opencode-live-deny.mjs — AC7: the LIVE deny proof for the ADLC OpenCode plugin.
 //
-// Drives a REAL `opencode` binary end-to-end and proves the enforcement contract
-// the plugin relies on: a thrown error in `tool.execute.before` aborts the tool
-// call. No real model is needed — a local mock OpenAI-compatible server plays
-// the model and always asks for a `write` to a frozen-rail path.
+// Drives a REAL OpenCode 2.x binary end-to-end, with the plugin installed from
+// `npm pack` tarballs, and proves the enforcement contract the plugin relies
+// on: a thrown error in the v2 `ctx.tool.hook('execute.before')` aborts the
+// tool call. No real model is needed — a local mock OpenAI-compatible server
+// plays the model and always asks for a `write` to a frozen-rail path.
 //
 // Two runs, both against the same temp project:
 //   1. CONTROL   (enforcement off): the write MUST land. This proves the mock
 //      provider + tool loop actually executes the write — without it, a broken
-//      harness would make the treatment run pass hollowly.
+//      harness would make the treatment run pass hollowly. A probe plugin also
+//      records whether the host dispatched `permission.evaluate` for that write
+//      (the hook the plugin's permission lever registers on) — printed as
+//      `permission.evaluate invoked: yes|no`, and required.
 //   2. TREATMENT (ADLC_P4_ENFORCEMENT=1): the rail file MUST be unchanged AND
 //      the tool result the model receives (captured by the mock server on the
-//      follow-up request) MUST contain the rails-guard deny message.
-//
-// The TUI toast channel is unit-tested (test/rails-checker.test.mjs section h);
-// `opencode run` is headless, so this proof asserts the deny through the two
-// channels headless mode has: the aborted write and the tool-result error text.
+//      follow-up request) MUST contain the rails-guard deny message. The probe
+//      line is printed for this run too: it reads `no`, because the plugin's
+//      execute.before deny aborts the call before the host's permission step.
+//   3. PATCH control + treatment: the same pair with a `gpt-5*` model, which
+//      OpenCode gives the `patch` tool (a patchText envelope) instead of
+//      edit/write.
 //
 // Exit codes: 0 = pass, 1 = fail, 3 = skipped (no `opencode` binary and not
 // --require). CI passes --require so a missing binary can never silently skip.
 
-import { spawn, spawnSync, execSync } from 'node:child_process';
-import { createServer } from 'node:http';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+  makeReporter, requireOpencodeV2, MOCK_PATCH_MODEL, installPackedPlugin, startMockProvider, reply,
+  toolResultText, toolNames, createProject, writeConfig, writePermissionProbe, readProbe,
+  gitInit, runOpencode, assertPluginsLoaded,
+} from './opencode-live-harness.mjs';
 
-const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const PLUGIN_INDEX = join(REPO, 'plugins', 'adlc-opencode', 'index.mjs');
 const REQUIRE = process.argv.includes('--require');
 const KEEP = process.argv.includes('--keep');
+const RAIL = 'test/x.mjs';
 const RAIL_ORIGINAL = 'export const frozen = true;\n';
 
-const log = (m) => console.log(`opencode-live-deny: ${m}`);
+const { log, fail } = makeReporter('opencode-live-deny');
+log(`opencode ${requireOpencodeV2({ log, fail, require: REQUIRE })}`);
 
-/** Dump the newest opencode server log from the isolated home (failure diagnosis). */
-function dumpOpencodeLogs(home) {
-  try {
-    const logDir = join(home, '.local', 'share', 'opencode', 'log');
-    if (!existsSync(logDir)) { console.error('  (no opencode log dir found)'); return; }
-    const newest = readdirSync(logDir)
-      .map((f) => join(logDir, f))
-      .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
-    if (newest) {
-      console.error(`--- opencode log (${newest}) ---`);
-      const lines = readFileSync(newest, 'utf8').split('\n');
-      console.error(lines.slice(-80).join('\n'));
-    }
-  } catch (e) { console.error(`  (could not read opencode logs: ${e})`); }
-}
-
-let failHome = null;
-const fail = (m) => {
-  console.error(`opencode-live-deny: FAIL — ${m}`);
-  if (failHome) dumpOpencodeLogs(failHome);
-  process.exit(1);
-};
-
-// ---- preconditions ----
-const which = spawnSync('opencode', ['--version'], { encoding: 'utf8' });
-if (which.error || which.status !== 0) {
-  if (REQUIRE) fail('`opencode` binary not found but --require was set (install: npm i -g opencode-ai)');
-  log('SKIP — no `opencode` binary on PATH (run with --require to make this fatal)');
-  process.exit(3);
-}
-log(`opencode ${String(which.stdout || '').trim()}`);
-
-// ---- mock OpenAI-compatible provider ----
-// Every conversation: first call → tool_call write(test/x.mjs), any call whose
-// messages already carry a tool result → plain "done". Tool results are
-// captured per run so the treatment run can assert on the deny text the model saw.
-function sse(res, events) {
-  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
-  for (const e of events) res.write(`data: ${JSON.stringify(e)}\n\n`);
-  res.write('data: [DONE]\n\n');
-  res.end();
-}
-const chunk = (delta, finish = null) => ({
-  id: 'mock-1', object: 'chat.completion.chunk', created: 1, model: 'deny-driver',
-  choices: [{ index: 0, delta, finish_reason: finish }],
+// Every conversation: first tool-bearing call → mutate test/x.mjs — `patch`
+// when advertised (patchText envelope), else `write` with v2's `path`
+// argument; any call that already carries a tool result → "done".
+const PATCH_TEXT = `*** Begin Patch\n*** Update File: ${RAIL}\n@@\n-export const frozen = true;\n+export const frozen = false;\n*** End Patch\n`;
+let toolResults = [];
+const { server, baseURL } = await startMockProvider(({ messages, tools }) => {
+  if (tools.length === 0) return reply.text('live deny proof'); // title/utility calls
+  const results = messages.filter((m) => m.role === 'tool');
+  if (results.length === 0) {
+    return toolNames(tools).includes('patch')
+      ? reply.toolCall('patch', { patchText: PATCH_TEXT })
+      : reply.toolCall('write', { path: RAIL, content: 'OVERWRITTEN BY MODEL\n' });
+  }
+  toolResults.push(...results.map(toolResultText));
+  return reply.text('done');
 });
-const usage = () => ({
-  id: 'mock-1', object: 'chat.completion.chunk', created: 1, model: 'deny-driver',
-  choices: [], usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
-});
+log(`mock provider at ${baseURL}`);
 
-let toolResults = []; // reset per run
-const server = createServer((req, res) => {
-  if (!req.url.endsWith('/chat/completions')) { res.writeHead(404); res.end(); return; }
-  let body = '';
-  req.on('data', (d) => { body += d; });
-  req.on('end', () => {
-    let payload = {};
-    try { payload = JSON.parse(body); } catch { /* keep {} */ }
-    const messages = payload.messages ?? [];
-    const hasTools = Array.isArray(payload.tools) && payload.tools.length > 0;
-    const results = messages.filter((m) => m.role === 'tool');
-    if (KEEP) console.error(`  [mock] request: tools=${hasTools} toolResults=${results.length} roles=${messages.map((m) => m.role).join(',')}`);
-    if (!hasTools) {
-      // Utility calls (e.g. title generation) carry no tools — answer with text.
-      sse(res, [chunk({ role: 'assistant', content: 'live deny proof' }), chunk({}, 'stop'), usage()]);
-      return;
-    }
-    if (results.length === 0) {
-      sse(res, [
-        chunk({ role: 'assistant', tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'write', arguments: JSON.stringify({ filePath: 'test/x.mjs', content: 'OVERWRITTEN BY MODEL\n' }) } }] }),
-        chunk({}, 'tool_calls'),
-        usage(),
-      ]);
-      return;
-    }
-    for (const r of results) toolResults.push(typeof r.content === 'string' ? r.content : JSON.stringify(r.content));
-    sse(res, [chunk({ role: 'assistant', content: 'done' }), chunk({}, 'stop'), usage()]);
-  });
-});
-await new Promise((r) => server.listen(0, '127.0.0.1', r));
-const PORT = server.address().port;
-log(`mock provider listening on 127.0.0.1:${PORT}`);
-
-// ---- temp project + isolated opencode home ----
-const work = mkdtempSync(join(tmpdir(), 'oc-live-deny-'));
-const project = join(work, 'project');
-const home = join(work, 'home');
-mkdirSync(join(project, '.adlc'), { recursive: true });
-mkdirSync(join(project, 'test'), { recursive: true });
-mkdirSync(join(project, '.opencode', 'plugins'), { recursive: true });
-mkdirSync(home, { recursive: true });
-failHome = home;
-
-writeFileSync(join(project, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'Live deny fixture', rails: ['test/**'] }] }, null, 2));
-writeFileSync(join(project, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
-writeFileSync(join(project, 'test', 'x.mjs'), RAIL_ORIGINAL);
-// Load the real plugin from this repo via a shim (project-local plugin file).
-writeFileSync(join(project, '.opencode', 'plugins', 'adlc.js'),
-  `export { adlcRailsGuard } from ${JSON.stringify('file://' + PLUGIN_INDEX)};\n`);
-writeFileSync(join(project, '.opencode', 'opencode.json'), JSON.stringify({
-  $schema: 'https://opencode.ai/config.json',
-  provider: {
-    mock: {
-      npm: '@ai-sdk/openai-compatible',
-      name: 'Mock',
-      options: { baseURL: `http://127.0.0.1:${PORT}/v1`, apiKey: 'mock' },
-      models: { 'deny-driver': { name: 'deny-driver', tool_call: true } },
-    },
-  },
-  permission: { edit: 'allow', bash: 'allow' },
-}, null, 2));
-try {
-  execSync('git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm init', { cwd: project });
-} catch { /* git optional — plugin falls back to directory */ }
-
-async function runOpencode(extraEnv) {
-  toolResults = [];
-  // MINIMAL child env — deliberately NOT ...process.env:
-  //  - a stale PWD would make opencode root the session at the CALLER's project
-  //    (observed on 1.16.2), silently testing the wrong directory;
-  //  - inherited *_API_KEY vars would register real providers next to the mock.
-  // ASYNC spawn, not spawnSync: this script IS the mock provider's event loop —
-  // a sync wait would block the HTTP server and hang every model stream.
-  const child = spawn('opencode', ['run', '-m', 'mock/deny-driver', 'Overwrite test/x.mjs please'], {
-    cwd: project,
-    env: {
-      PATH: process.env.PATH,
-      TERM: process.env.TERM ?? 'xterm-256color',
-      LANG: process.env.LANG ?? 'C.UTF-8',
-      NO_COLOR: '1',
-      PWD: project,
-      HOME: home,
-      XDG_DATA_HOME: join(home, '.local', 'share'),
-      XDG_CONFIG_HOME: join(home, '.config'),
-      XDG_CACHE_HOME: join(home, '.cache'),
-      XDG_STATE_HOME: join(home, '.local', 'state'),
-      OPENCODE_DISABLE_AUTOUPDATE: '1',
-      ...extraEnv,
-    },
-  });
-  child.stdin.end(); // signal EOF — `opencode run` waits on piped stdin otherwise
-  let stdout = '', stderr = '';
-  child.stdout.on('data', (d) => { stdout += d; });
-  child.stderr.on('data', (d) => { stderr += d; });
-  const started = Date.now();
-  let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, 180_000);
-  const status = await new Promise((resolveExit) => {
-    child.on('close', (code) => { clearTimeout(timer); resolveExit(code); });
-    child.on('error', () => { clearTimeout(timer); resolveExit(1); });
-  });
-  return { status, timedOut, seconds: Math.round((Date.now() - started) / 1000), stdout, stderr, toolResults: [...toolResults] };
-}
-
+const { work, project, home, cleanup } = createProject('oc-live-deny-');
 let exitCode = 1;
 try {
+  mkdirSync(join(project, 'test'), { recursive: true });
+  writeFileSync(join(project, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'Live deny fixture', rails: ['test/**'] }] }, null, 2));
+  writeFileSync(join(project, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
+  writeFileSync(join(project, RAIL), RAIL_ORIGINAL);
+  log('installing the packed plugin…');
+  const pluginDir = installPackedPlugin(project, join(work, 'packs'));
+  const probeLog = join(work, 'permission-probe.jsonl');
+  const probeDir = writePermissionProbe(join(work, 'probe'), probeLog);
+  writeConfig(project, {
+    baseURL,
+    plugins: [probeDir, pluginDir],
+    permissions: [{ action: '*', resource: '*', effect: 'allow' }],
+  });
+  gitInit(project);
+
+  const run = async (env, model) => { toolResults = []; const r = await runOpencode({ project, home, prompt: `Overwrite ${RAIL} please`, env, model }); return { ...r, toolResults: [...toolResults] }; };
+  const evaluated = () => readProbe(probeLog).filter((d) => d.action === 'edit' && Array.isArray(d.resources) && d.resources.includes(RAIL));
+  const dump = (r) => `exit=${r.status} timedOut=${r.timedOut} after ${r.seconds}s\ntool results: ${JSON.stringify(r.toolResults, null, 2)}\nstdout:\n${r.stdout}\nstderr:\n${r.stderr.split('\n').slice(-80).join('\n')}`;
+
   // ---- run 1: CONTROL (enforcement off) — the write must actually land ----
   log('control run (enforcement off)…');
-  const control = await runOpencode({ ADLC_P4_ENFORCEMENT: '0' });
-  const afterControl = readFileSync(join(project, 'test', 'x.mjs'), 'utf8');
-  if (afterControl === RAIL_ORIGINAL) {
-    fail(`CONTROL run did not write the file — the harness never executed the write, so the deny proof would be hollow.\nexit=${control.status} timedOut=${control.timedOut} after ${control.seconds}s\nstdout:\n${control.stdout}\nstderr:\n${control.stderr}`);
+  const control = await run({ ADLC_P4_ENFORCEMENT: '0' });
+  assertPluginsLoaded(control, fail, 'control');
+  if (readFileSync(join(project, RAIL), 'utf8') === RAIL_ORIGINAL) {
+    fail(`CONTROL run did not write the file — the harness never executed the write, so the deny proof would be hollow.\n${dump(control)}`);
   }
   log('control: write landed (harness genuinely executes the tool)');
+  const dispatched = evaluated();
+  log(`control: permission.evaluate invoked: ${dispatched.length > 0 ? 'yes' : 'no'}`);
+  if (dispatched.length === 0) {
+    fail(`the host never dispatched permission.evaluate (action "edit", resources [${RAIL}]) for the control write — the plugin's permission lever has nothing to bind to.\nprobe: ${JSON.stringify(readProbe(probeLog))}`);
+  }
 
-  // restore the rail file for the treatment run
-  writeFileSync(join(project, 'test', 'x.mjs'), RAIL_ORIGINAL);
+  writeFileSync(join(project, RAIL), RAIL_ORIGINAL);
 
   // ---- run 2: TREATMENT (enforcement on) — the write must be BLOCKED ----
   log('treatment run (ADLC_P4_ENFORCEMENT=1)…');
-  const treatment = await runOpencode({ ADLC_P4_ENFORCEMENT: '1' });
-  const afterTreatment = readFileSync(join(project, 'test', 'x.mjs'), 'utf8');
-  const sawDeny = treatment.toolResults.some((t) => t.includes('ADLC rails-guard: blocked')) ||
-    `${treatment.stdout}\n${treatment.stderr}`.includes('ADLC rails-guard: blocked');
-
-  if (afterTreatment !== RAIL_ORIGINAL) {
-    fail(`TREATMENT run WROTE to the frozen rail — tool.execute.before throw did NOT abort the tool.\nstdout:\n${treatment.stdout}\nstderr:\n${treatment.stderr}`);
+  const treatment = await run({ ADLC_P4_ENFORCEMENT: '1' });
+  assertPluginsLoaded(treatment, fail, 'treatment');
+  if (readFileSync(join(project, RAIL), 'utf8') !== RAIL_ORIGINAL) {
+    fail(`TREATMENT run WROTE to the frozen rail — the execute.before throw did NOT abort the tool.\n${dump(treatment)}`);
   }
-  if (!sawDeny) {
-    fail(`rail file unchanged but no rails-guard deny message reached the model or the output — cannot attribute the block to the plugin.\ntool results: ${JSON.stringify(treatment.toolResults, null, 2)}\nstdout:\n${treatment.stdout}\nstderr:\n${treatment.stderr}`);
+  const DENY = 'ADLC rails-guard: blocked write — frozen rail "test/**"';
+  if (!treatment.toolResults.some((t) => t.includes(DENY))) {
+    fail(`rail file unchanged but the rails-guard deny naming the rail never reached the model — cannot attribute the block to the plugin.\n${dump(treatment)}`);
   }
   log('treatment: write blocked AND the deny reason reached the model');
+  log(`treatment: permission.evaluate invoked: ${evaluated().length > dispatched.length ? 'yes' : 'no'} (execute.before denies first)`);
+
+  // ---- run 3: PATCH control + treatment ----
+  writeFileSync(join(project, RAIL), RAIL_ORIGINAL);
+  log('patch control run (enforcement off)…');
+  const patchControl = await run({ ADLC_P4_ENFORCEMENT: '0' }, MOCK_PATCH_MODEL);
+  assertPluginsLoaded(patchControl, fail, 'patch control');
+  if (readFileSync(join(project, RAIL), 'utf8') === RAIL_ORIGINAL) {
+    fail(`PATCH CONTROL run did not apply the patch — the patch deny proof would be hollow.\n${dump(patchControl)}`);
+  }
+  log('patch control: patch applied');
+  writeFileSync(join(project, RAIL), RAIL_ORIGINAL);
+  log('patch treatment run (ADLC_P4_ENFORCEMENT=1)…');
+  const patchTreatment = await run({ ADLC_P4_ENFORCEMENT: '1' }, MOCK_PATCH_MODEL);
+  assertPluginsLoaded(patchTreatment, fail, 'patch treatment');
+  if (readFileSync(join(project, RAIL), 'utf8') !== RAIL_ORIGINAL) {
+    fail(`PATCH TREATMENT run modified the frozen rail.\n${dump(patchTreatment)}`);
+  }
+  if (!patchTreatment.toolResults.some((t) => t.includes('ADLC rails-guard: blocked patch — frozen rail "test/**"'))) {
+    fail(`rail unchanged but the rails-guard patch deny never reached the model.\n${dump(patchTreatment)}`);
+  }
+  log('patch treatment: patch blocked AND the deny reason reached the model');
   log('PASS — live deny proof holds (AC7)');
   exitCode = 0;
 } finally {
   server.close();
   if (KEEP) log(`--keep: temp project retained at ${work}`);
-  else rmSync(work, { recursive: true, force: true });
+  else cleanup();
 }
 process.exit(exitCode);

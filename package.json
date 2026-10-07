@@ -19,7 +19,7 @@
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.80.3",
-    "@opencode-ai/plugin": "^1.17.13",
+    "@opencode/plugin": "2.0.21",
     "acorn": "^8.17.0",
     "esbuild": "0.28.1",
     "typescript": "^5.4.5"

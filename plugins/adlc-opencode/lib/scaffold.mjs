@@ -80,33 +80,48 @@ export function deployDir(pkgRoot, destRoot, sub, destSub = sub) {
 export const PLUGIN_PKG_NAME = '@adlc/opencode';
 
 /**
- * The `plugin` array entry to register for a given package root. Registering
- * the npm name is only correct when the package is actually resolvable from
- * npm — i.e. it is running out of node_modules. From a source checkout the
- * npm name may not exist on the registry (the original T30 landmine), so the
- * RESOLVED LOCAL PATH is registered instead; OpenCode accepts both forms.
+ * The package to register for a given package root. Registering the npm name
+ * is only correct when the package is actually resolvable from npm — i.e. it is
+ * running out of node_modules. From a source checkout the npm name may not
+ * exist on the registry (the original T30 landmine), so the RESOLVED LOCAL PATH
+ * is registered instead; OpenCode accepts both forms.
  */
 export function pluginEntryFor(pkgRoot, pkgName = PLUGIN_PKG_NAME) {
   const normalized = String(pkgRoot ?? '').replace(/\\/g, '/');
   return normalized.includes('/node_modules/') ? pkgName : pkgRoot;
 }
 
+/** The package an entry names: v2 `"name"` / `{ package, options }`, v1 `[name, options]`. */
+function entryPackage(entry) {
+  if (Array.isArray(entry)) return entry[0];
+  if (entry && typeof entry === 'object') return entry.package;
+  return entry;
+}
+
+/** The options an entry carries, if any (v2 `options`, v1 tuple slot 1). */
+function entryOptions(entry) {
+  if (Array.isArray(entry)) return entry[1];
+  if (entry && typeof entry === 'object') return entry.options;
+  return undefined;
+}
+
 /**
- * Does a `plugin` array entry refer to THIS plugin, in any spelling? Matches
- * the exact npm name, a source-checkout / node_modules PATH to this package,
- * and the `[name, options]` tuple wrapping of either.
+ * Does a plugin entry refer to THIS plugin, in any spelling? Matches the exact
+ * npm name, a source-checkout / node_modules PATH to this package, in the bare
+ * string form, the v2 `{ package, options }` form, or the v1 `[name, options]`
+ * tuple.
  *
  * The rules are split BY ENTRY SHAPE (T30 review round-3): an npm-name entry
  * (bare `name` or `@scope/name` — no path syntax) is ours ONLY on exact
  * equality with pkgName, so `@other/adlc-opencode` or a bare `adlc-opencode`
  * package is never claimed (removing a stranger's entry — or grafting their
- * tuple options onto ours — is silent data loss). The directory-basename
- * heuristic applies ONLY to filesystem paths, where a dir named like our
- * package dirs (`adlc-opencode` source checkout, `opencode-package` under
- * node_modules) is overwhelmingly this plugin or a stale spelling of it.
+ * options onto ours — is silent data loss). The directory-basename heuristic
+ * applies ONLY to filesystem paths, where a dir named like our package dirs
+ * (`adlc-opencode` source checkout, `opencode-package` under node_modules) is
+ * overwhelmingly this plugin or a stale spelling of it.
  */
 export function isOwnPluginEntry(entry, pkgName = PLUGIN_PKG_NAME) {
-  const name = Array.isArray(entry) ? entry[0] : entry;
+  const name = entryPackage(entry);
   if (typeof name !== 'string' || !name) return false;
   if (name === pkgName) return true;
   const norm = name.replace(/\\/g, '/').replace(/\/+$/, '');
@@ -119,11 +134,18 @@ export function isOwnPluginEntry(entry, pkgName = PLUGIN_PKG_NAME) {
 }
 
 /**
- * Register the plugin itself in .opencode/opencode.json's `plugin` array so
- * OpenCode actually LOADS the rails-guard hook. Commands/agents/skills are inert
- * markdown; the enforcing hook only runs if the plugin package is registered.
- * Idempotent and non-clobbering: preserves any other settings and plugin entries,
- * including `[name, options]` tuple entries.
+ * Register the plugin itself in .opencode/opencode.json so OpenCode actually
+ * LOADS the rails-guard hook. Commands/agents/skills are inert markdown; the
+ * enforcing hook only runs if the plugin package is registered.
+ *
+ * Writes the OpenCode v2 `plugins` key — entries are `"name"` or
+ * `{ "package": name, "options": {...} }`. Our entries in the v1 `plugin` key
+ * are MIGRATED into `plugins` (v2 reads both keys and concatenates them, so a
+ * leftover v1 entry would load the plugin twice); other plugins' v1 entries are
+ * left where they are, and `plugin` is dropped once it is empty.
+ *
+ * Idempotent and non-clobbering: preserves every other setting and plugin
+ * entry. The result has exactly ONE entry for this plugin.
  *
  * FAIL-CLOSED on an unparseable existing config: a malformed opencode.json is
  * exactly when the file must NOT be reset — hand-edits, other plugins, and
@@ -132,9 +154,9 @@ export function isOwnPluginEntry(entry, pkgName = PLUGIN_PKG_NAME) {
  * REPLACES stale spellings instead of appending a second one: a checkout that
  * moved (path A → path B) or a switch to the npm install must not leave two
  * entries that both load the plugin. The npm name is always canonical — if it
- * is already registered, any entry form counts as present. Options riding a
- * replaced tuple are preserved on the new entry.
- * Returns { registered, alreadyPresent, replaced, path }.
+ * is already registered, it is kept. Options riding a replaced entry are
+ * preserved on the new one; an empty options object is dropped.
+ * Returns { registered, alreadyPresent, replaced, migrated, path }.
  */
 export function ensurePluginRegistered(root, entry = PLUGIN_PKG_NAME, pkgName = PLUGIN_PKG_NAME) {
   const dir = join(root, '.opencode');
@@ -151,21 +173,33 @@ export function ensurePluginRegistered(root, entry = PLUGIN_PKG_NAME, pkgName = 
       );
     }
   }
-  const plugins = Array.isArray(config.plugin) ? config.plugin : [];
-  const nameOf = (e) => (Array.isArray(e) ? e[0] : e);
-  const ours = plugins.filter((e) => isOwnPluginEntry(e, pkgName));
-  // Exact spelling already there, or the canonical npm name is registered →
-  // nothing to do (a source scaffold never displaces a working npm entry).
-  if (ours.some((e) => nameOf(e) === entry || nameOf(e) === pkgName)) {
-    return { registered: false, alreadyPresent: true, replaced: [], path };
+  const own = (e) => isOwnPluginEntry(e, pkgName);
+  const legacy = Array.isArray(config.plugin) ? config.plugin : [];
+  const native = Array.isArray(config.plugins) ? config.plugins : [];
+  const ours = [...native.filter(own), ...legacy.filter(own)];
+  const migrated = legacy.filter(own).map(entryPackage);
+  // Already exactly one v2 entry with the requested spelling, or the canonical
+  // npm name → nothing to do (a source scaffold never displaces a working npm
+  // entry).
+  if (!migrated.length && ours.length === 1 && [entry, pkgName].includes(entryPackage(ours[0]))) {
+    return { registered: false, alreadyPresent: true, replaced: [], migrated: [], path };
   }
-  // Preserve options from a tuple we are about to replace.
-  const tupleOptions = ours.map((e) => (Array.isArray(e) ? e[1] : undefined)).find((o) => o && typeof o === 'object');
-  const newEntry = tupleOptions ? [entry, tupleOptions] : entry;
-  config.plugin = [...plugins.filter((e) => !isOwnPluginEntry(e, pkgName)), newEntry];
+  const name = ours.some((e) => entryPackage(e) === pkgName) ? pkgName : entry;
+  const options = ours.map(entryOptions)
+    .find((o) => o && typeof o === 'object' && !Array.isArray(o) && Object.keys(o).length);
+  config.plugins = [...native.filter((e) => !own(e)), options ? { package: name, options } : name];
+  const otherLegacy = legacy.filter((e) => !own(e));
+  if (otherLegacy.length) config.plugin = otherLegacy;
+  else delete config.plugin;
   mkdirSync(dir, { recursive: true });
   writeFileSync(path, JSON.stringify(config, null, 2) + '\n');
-  return { registered: true, alreadyPresent: false, replaced: ours.map(nameOf), path };
+  return {
+    registered: true,
+    alreadyPresent: false,
+    replaced: [...new Set(ours.map(entryPackage).filter((n) => n !== name))],
+    migrated,
+    path,
+  };
 }
 
 /**

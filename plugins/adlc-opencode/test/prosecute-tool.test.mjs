@@ -11,79 +11,84 @@ import { fileURLToPath } from 'node:url';
 import { buildProsecuteTool, captureDiff, makeAgentPromptReader, makeModelLedger } from '../lib/prosecute-tool.mjs';
 import { ALL_AGENTS } from '../lib/prosecutor.mjs';
 import { checkToolCall } from '../rails-checker.mjs';
+import { lensPermissions } from '../lib/prosecute-runner.mjs';
+import { VERIFIER } from '../lib/prosecutor.mjs';
 
 const PKG = dirname(dirname(fileURLToPath(import.meta.url)));
-const fakeSchema = {
-  string: () => ({ _t: 'string', optional() { return this; }, describe() { return this; } }),
-};
 const fenced = (obj) => '```json\n' + JSON.stringify(obj) + '\n```';
+const TOOL_CTX = { sessionID: 'ses_parent', agent: 'build', messageID: 'msg_1', id: 'call_1' };
+const VERIFIER_PROMPT = makeAgentPromptReader(PKG)(VERIFIER.agent);
 
-const isVerifier = (req) => (req.body.agent ?? req.body.system ?? '').includes('verifier');
-
-// a session client whose child prompt replies are scripted by agent; `info`
-// optionally returns the model that answered (opencode's assistant message info);
-// `agents` is what the host reports as registered
-function mockClient(reply, info, agents = ALL_AGENTS) {
-  const calls = { prompts: [] };
+// a v2 `ctx.session` whose child replies are scripted from the prompt text.
+// Like OpenCode 2.x, a child answers on the model it was CREATED with
+// (`create.model`), else on the session model `model(create)` (v2
+// `SessionMessageAssistant.model`) — naming an agent alone does not pick its model.
+function mockSession(reply, model) {
+  const calls = { creates: [], prompts: [] };
+  const created = new Map();
+  const pending = new Map();
+  let n = 0;
   return {
     calls,
-    app: { agents: async () => ({ data: agents.map((name) => ({ name })) }) },
-    session: {
-      create: async () => ({ data: { id: 'child' } }),
-      prompt: async (req) => {
-        calls.prompts.push(req);
-        const i = info?.(req);
-        return { data: { ...(i ? { info: i } : {}), parts: [{ type: 'text', text: reply(req) }] } };
-      },
-      delete: async () => ({ data: true }),
+    create: async (req) => { calls.creates.push(req); const id = `ses_child_${++n}`; created.set(id, req); return { id }; },
+    prompt: async (req) => { calls.prompts.push(req); pending.set(req.sessionID, reply(req.text)); return { id: 'inb' }; },
+    wait: async () => {},
+    context: async ({ sessionID }) => {
+      const req = created.get(sessionID);
+      const m = req?.model ?? model?.(req);
+      return [{ type: 'assistant', agent: 'x', ...(m ? { model: m } : {}), content: [{ type: 'text', text: pending.get(sessionID) }] }];
     },
   };
 }
+const isVerifier = (text) => VERIFIER_PROMPT.length > 0 && text.startsWith(VERIFIER_PROMPT);
 
-test('buildProsecuteTool shapes an adlc_prosecute ToolDefinition with an optional base arg', () => {
-  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG });
-  assert.ok(def.adlc_prosecute);
-  assert.match(def.adlc_prosecute.description, /P5 prosecution|WRITE-DISABLED/);
-  assert.ok(def.adlc_prosecute.args.base);
-  assert.equal(typeof def.adlc_prosecute.execute, 'function');
+test('buildProsecuteTool shapes an adlc_prosecute v2 Tool.Info with an optional base input', () => {
+  const def = buildProsecuteTool({ root: '/p', pkgRoot: PKG });
+  assert.equal(def.name, 'adlc_prosecute');
+  assert.match(def.description, /P5 prosecution|WRITE-DISABLED/);
+  assert.deepEqual(def.input, {
+    type: 'object',
+    properties: { base: { type: 'string', description: def.input.properties.base.description } },
+    additionalProperties: false,
+  });
+  assert.equal(typeof def.execute, 'function');
 });
 
-test('execute: no session client → structured "use the prose protocol" fallback (not silent)', async () => {
-  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG }); // no client
-  const r = await def.adlc_prosecute.execute({}, {});
+test('execute: no session API → structured "use the prose protocol" fallback (not silent)', async () => {
+  const def = buildProsecuteTool({ root: '/p', pkgRoot: PKG }); // no session
+  const r = await def.execute({}, TOOL_CTX);
   assert.equal(r.metadata.error, 'no-session-api');
   assert.equal(r.metadata.deterministic, false);
-  assert.match(r.output, /\/adlc-prosecute/);
+  assert.match(r.content, /\/adlc-prosecute/);
 });
 
 test('execute: empty diff → reports nothing to prosecute (does not spawn lenses)', async () => {
-  const client = mockClient(() => fenced([]));
-  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG, client, diffImpl: () => '' });
-  const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
+  const session = mockSession(() => fenced([]));
+  const diffCalls = [];
+  const def = buildProsecuteTool({ root: '/p', pkgRoot: PKG, session, diffImpl: (o) => { diffCalls.push(o); return ''; } });
+  const r = await def.execute({ base: 'main' }, TOOL_CTX);
   assert.equal(r.metadata.confirmed, 0);
-  assert.match(r.output, /no changes to prosecute/);
-  assert.equal(client.calls.prompts.length, 0, 'no lens sessions spawned');
+  assert.match(r.content, /no changes to prosecute/);
+  assert.equal(session.calls.prompts.length, 0, 'no lens sessions spawned');
+  assert.deepEqual(diffCalls, [{ base: 'main', cwd: '/p' }], 'the diff is taken in the plugin root');
 });
 
 test('execute: a real diff drives the deterministic loop and returns a structured verdict', async () => {
   // lenses find a bug; verifier confirms it
-  const client = mockClient((req) => {
-    if (isVerifier(req)) return fenced({ real: true, reason: 'reproduced' });
+  const session = mockSession((text) => {
+    if (isVerifier(text)) return fenced({ real: true, reason: 'reproduced' });
     return fenced([{ title: 'planted-bug', severity: 'high', file: 'x.mjs' }]);
   });
-  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG, client, diffImpl: () => 'diff --git a/x b/x' });
-  const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
+  const def = buildProsecuteTool({ root: '/p', pkgRoot: PKG, session, diffImpl: () => 'diff --git a/x b/x' });
+  const r = await def.execute({ base: 'main' }, TOOL_CTX);
   assert.equal(r.metadata.deterministic, true);
   assert.equal(r.metadata.confirmed, 1);
   assert.match(r.metadata.verdict, /NO-SHIP/);
-  assert.match(r.output, /planted-bug/);
+  assert.match(r.content, /planted-bug/);
   // the child sessions were fail-CLOSED (AC2, end-to-end through the tool):
-  // "*": false floor, and no write/sub-agent tool re-enabled.
-  for (const p of client.calls.prompts) {
-    assert.equal(Object.keys(p.body.tools)[0], '*');
-    assert.equal(p.body.tools['*'], false);
-    for (const t of ['edit', 'write', 'bash', 'apply_patch', 'task']) assert.notEqual(p.body.tools[t], true);
-  }
+  // every one was created with the read-only lens permissions.
+  assert.ok(session.calls.creates.length > 1, 'lenses and verifier ran');
+  for (const c of session.calls.creates) assert.deepEqual(c.permissions, lensPermissions());
 });
 
 test('captureDiff distinguishes a git FAILURE from a clean empty tree', () => {
@@ -93,81 +98,90 @@ test('captureDiff distinguishes a git FAILURE from a clean empty tree', () => {
 });
 
 test('execute: a git-capture FAILURE fails CLOSED (NO-SHIP), not a false empty-diff SHIP', async () => {
-  const client = mockClient(() => fenced([]));
-  const def = buildProsecuteTool(fakeSchema, {
-    root: '/p', pkgRoot: PKG, client,
+  const session = mockSession(() => fenced([]));
+  const def = buildProsecuteTool({
+    root: '/p', pkgRoot: PKG, session,
     diffImpl: () => ({ diff: '', error: 'fatal: bad revision main...HEAD' }),
   });
-  const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
+  const r = await def.execute({ base: 'main' }, TOOL_CTX);
   assert.equal(r.metadata.error, 'diff-capture-failed');
   assert.match(r.metadata.verdict, /NO-SHIP/);
-  assert.equal(client.calls.prompts.length, 0, 'did not run lenses on a broken diff');
+  assert.equal(session.calls.prompts.length, 0, 'did not run lenses on a broken diff');
 });
 
 test('execute: a bounded/incomplete run with zero findings is NO-SHIP (INCOMPLETE), never a false SHIP', async () => {
   // never converges → hits maxRounds; still zero confirmed → must NOT SHIP
   let n = 0;
-  const client = mockClient((req) => {
-    if (isVerifier(req)) return fenced({ real: false }); // everything refuted → zero confirmed
+  const session = mockSession((text) => {
+    if (isVerifier(text)) return fenced({ real: false }); // everything refuted → zero confirmed
     n += 1;
     return fenced([{ title: `ephemeral-${n}`, severity: 'low', file: 'x' }]); // new finding every round → never dry
   });
-  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG, client, diffImpl: () => 'diff x' });
-  const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
+  const def = buildProsecuteTool({ root: '/p', pkgRoot: PKG, session, diffImpl: () => 'diff x' });
+  const r = await def.execute({ base: 'main' }, TOOL_CTX);
   assert.equal(r.metadata.confirmed, 0);
   assert.ok(r.metadata.hitBound, 'the run hit a bound');
   assert.match(r.metadata.verdict, /NO-SHIP.*INCOMPLETE/);
 });
 
 // ---- per-lens models ----
-const lensModel = (req) => ({ providerID: 'vercel', modelID: `vmc/adlc-${req.body.agent ?? 'session'}` });
+// `ctx.agent` as v2 exposes it: list() → AgentListOutput { location, data: AgentInfo[] }.
+// Each listed agent configures its own model, `vercel/vmc/adlc-<id>`.
+const agentDomain = (ids = ALL_AGENTS) => ({
+  list: async () => ({ location: { directory: '/p' }, data: ids.map((id) => ({ id, name: id, mode: 'subagent', hidden: false, permissions: [], model: { providerID: 'vercel', id: `vmc/adlc-${id}` } })) }),
+});
+// The session model a child falls back to when created without one.
+const lensModel = () => ({ providerID: 'vercel', id: 'vmc/adlc-session' });
+const bugOrConfirm = (text) => (isVerifier(text) ? fenced({ real: true }) : fenced([{ title: 'bug', severity: 'high', file: 'x' }]));
 
-test('execute: every lens and the verifier prompt AS their agent and report the model that answered', async () => {
-  const client = mockClient((req) => (isVerifier(req) ? fenced({ real: true }) : fenced([{ title: 'bug', severity: 'high', file: 'x' }])), lensModel);
-  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG, client, diffImpl: () => 'diff x' });
-  const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
-  const named = new Set(client.calls.prompts.map((p) => p.body.agent));
-  for (const a of ALL_AGENTS) assert.ok(named.has(a), `${a} prompted as its own agent`);
-  for (const p of client.calls.prompts) assert.ok(p.body.system?.length > 0, 'authoritative charter is always present');
+test('execute: every lens and the verifier run AS their agent and report the model that answered', async () => {
+  const session = mockSession(bugOrConfirm, lensModel);
+  const def = buildProsecuteTool({ root: '/p', pkgRoot: PKG, session, agent: agentDomain(), diffImpl: () => 'diff x' });
+  const r = await def.execute({ base: 'main' }, TOOL_CTX);
+  const named = new Set(session.calls.creates.map((c) => c.agent));
+  for (const a of ALL_AGENTS) assert.ok(named.has(a), `${a} created as its own agent`);
+  for (const c of session.calls.creates) assert.deepEqual(c.permissions, lensPermissions(), 'every child still write-disabled');
+  for (const p of session.calls.prompts) assert.ok(p.text.indexOf('\n\n---\n\n') > 0, 'authoritative charter always leads the prompt');
   for (const a of ALL_AGENTS) assert.deepEqual(r.metadata.models[a], [`vercel/vmc/adlc-${a}`]);
   assert.deepEqual(r.metadata.unregisteredAgents, []);
   assert.equal(r.metadata.agentListUnavailable, false);
   assert.equal(r.metadata.singleModel, false);
-  assert.match(r.output, /Reviewer models:/);
-  assert.match(r.output, /prosecutor-security: vercel\/vmc\/adlc-prosecutor-security/);
-  assert.doesNotMatch(r.output, /single-model review/);
+  assert.match(r.content, /Reviewer models:/);
+  assert.match(r.content, /prosecutor-security: vercel\/vmc\/adlc-prosecutor-security/);
+  assert.doesNotMatch(r.content, /single-model review/);
 });
 
 test('execute: reviewers that all answer on one model are labelled single-model, not cross-model', async () => {
-  const client = mockClient(() => fenced([]), () => ({ providerID: 'anthropic', modelID: 'claude-opus-5' }));
-  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG, client, diffImpl: () => 'diff x' });
-  const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
+  const session = mockSession(() => fenced([]), () => ({ providerID: 'anthropic', id: 'claude-opus-5' }));
+  const def = buildProsecuteTool({ root: '/p', pkgRoot: PKG, session, agent: { list: async () => ({ data: ALL_AGENTS.map((id) => ({ id, name: id })) }) }, diffImpl: () => 'diff x' });
+  const r = await def.execute({ base: 'main' }, TOOL_CTX);
   assert.equal(r.metadata.singleModel, true);
-  assert.match(r.output, /fresh-context, single-model review \(not cross-model\)/);
+  assert.match(r.content, /fresh-context, single-model review \(not cross-model\)/);
 });
 
 test('execute: an unregistered lens agent runs on the session model and is surfaced, not hidden', async () => {
-  const client = mockClient(() => fenced([]), lensModel, ALL_AGENTS.filter((a) => a !== 'prosecutor-tests'));
-  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG, client, diffImpl: () => 'diff x' });
-  const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
+  const session = mockSession(() => fenced([]), lensModel);
+  const agent = agentDomain(ALL_AGENTS.filter((a) => a !== 'prosecutor-tests'));
+  const def = buildProsecuteTool({ root: '/p', pkgRoot: PKG, session, agent, diffImpl: () => 'diff x' });
+  const r = await def.execute({ base: 'main' }, TOOL_CTX);
   assert.deepEqual(r.metadata.unregisteredAgents, ['prosecutor-tests']);
   assert.equal(r.metadata.agentListUnavailable, false);
   assert.deepEqual(r.metadata.models['prosecutor-tests'], ['vercel/vmc/adlc-session']);
-  assert.match(r.output, /prosecutor-tests: vercel\/vmc\/adlc-session \(session model: agent not registered\)/);
-  assert.doesNotMatch(r.output, /prosecutor-security: .*agent not registered/, 'only the missing agent is flagged');
-  assert.doesNotMatch(r.output, /Could not list OpenCode agents/);
+  assert.match(r.content, /prosecutor-tests: vercel\/vmc\/adlc-session \(session model: agent not registered\)/);
+  assert.doesNotMatch(r.content, /prosecutor-security: .*agent not registered/, 'only the missing agent is flagged');
+  assert.doesNotMatch(r.content, /Could not list OpenCode agents/);
 });
 
 test('execute: a host that cannot list agents is reported as such — not blamed on missing agents', async () => {
-  const client = mockClient(() => fenced([]), lensModel);
-  client.app.agents = async () => { throw new Error('GET /agent 500'); };
-  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG, client, diffImpl: () => 'diff x' });
-  const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
+  const session = mockSession(() => fenced([]), lensModel);
+  const agent = { list: async () => { throw new Error('GET /agent 500'); } };
+  const def = buildProsecuteTool({ root: '/p', pkgRoot: PKG, session, agent, diffImpl: () => 'diff x' });
+  const r = await def.execute({ base: 'main' }, TOOL_CTX);
   assert.equal(r.metadata.agentListUnavailable, true);
   assert.deepEqual(r.metadata.unregisteredAgents, []);
-  assert.match(r.output, /Could not list OpenCode agents, so every reviewer ran on the session model/);
-  assert.doesNotMatch(r.output, /agent not registered/);
-  for (const p of client.calls.prompts) assert.equal('agent' in p.body, false, 'no agent named without a listing');
+  assert.match(r.content, /Could not list OpenCode agents, so every reviewer ran on the session model/);
+  assert.doesNotMatch(r.content, /agent not registered/);
+  for (const c of session.calls.creates) assert.equal('agent' in c, false, 'no agent named without a listing');
 });
 
 test('makeModelLedger: single-model needs every reviewer on one KNOWN, identical model; one reviewer is never "single-model"', () => {
@@ -206,11 +220,12 @@ test('makeAgentPromptReader reads the packaged agent prompt; "" for an unknown a
 });
 
 test('execute: a failing lens model fails CLOSED (NO-SHIP), not an uncaught throw', async () => {
-  const client = mockClient(() => { throw new Error('503 model unavailable'); });
-  const def = buildProsecuteTool(fakeSchema, { root: '/p', pkgRoot: PKG, client, diffImpl: () => 'diff x' });
-  const r = await def.adlc_prosecute.execute({ base: 'main' }, { sessionID: 's' });
+  const session = mockSession(() => { throw new Error('503 model unavailable'); });
+  const def = buildProsecuteTool({ root: '/p', pkgRoot: PKG, session, agent: agentDomain(), diffImpl: () => 'diff x' });
+  const r = await def.execute({ base: 'main' }, TOOL_CTX);
   assert.equal(r.metadata.verdict, 'NO-SHIP (prosecution-failed)');
-  assert.match(r.output, /Prosecution stopped with an error.*503/);
+  assert.equal(r.metadata.error, 'prosecution-failed');
+  assert.match(r.content, /Prosecution stopped with an error.*503/);
 });
 
 // ---- rails: the plugin's own adlc_prosecute tool must not be denied ----

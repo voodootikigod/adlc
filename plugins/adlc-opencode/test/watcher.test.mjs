@@ -9,7 +9,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { handleFileEdited, createWatcherState, allowedSuppressions, MAX_RESTORES_PER_FILE, SUPPRESSION_MARKERS } from '../lib/watcher.mjs';
-import { adlcRailsGuard } from '../index.mjs';
+import { loadPlugin, captureStderr, filesystemChanged } from './helpers/fake-ctx.mjs';
 
 // Every fixture the factories below mint; removed once this file's tests finish.
 const fixtureDirs = new Set();
@@ -224,48 +224,54 @@ test('in-scope and .adlc/ writes are not flagged; tickets without scope are exem
 });
 
 // ---- end-to-end through the REAL event handler: synthetic third-party tool ----
-test('handler: a write from an UNKNOWN tool (no before-hook interception) is restored via file.edited', async () => {
+test('handler: a write from an UNKNOWN tool (no before-hook interception) is restored via filesystem.changed', async () => {
   const dir = gitRepo({ tickets: T1 });
   const saved = { ...process.env };
   try {
     process.env.ADLC_P4_ENFORCEMENT = '1';
     process.env.ADLC_TICKET = 'T1';
-    const toasts = [];
-    const client = { tui: { showToast: async (req) => { toasts.push(req.body); } } };
-    const hooks = await adlcRailsGuard({ worktree: dir, client });
+    const plugin = await loadPlugin({ root: dir });
     // Simulate a co-installed plugin's write tool the before-hook never saw:
-    // the write simply LANDS, then OpenCode emits file.edited.
+    // the write simply LANDS, then OpenCode emits filesystem.changed.
     writeFileSync(join(dir, 'test', 'x.mjs'), 'SPOOFED WRITE\n');
-    await hooks.event({ event: { type: 'file.edited', properties: { file: join(dir, 'test', 'x.mjs') } } });
+    const { lines } = await captureStderr(() => plugin.emit(filesystemChanged(join(dir, 'test', 'x.mjs'), { directory: dir })));
+    plugin.cleanup();
     assert.equal(readFileSync(join(dir, 'test', 'x.mjs'), 'utf8'), RAIL_CONTENT, 'rail restored');
-    assert.equal(toasts.length, 1);
-    assert.match(toasts[0].message, /rails-backstop/);
-    assert.equal(toasts[0].variant, 'error');
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], /^\[adlc\] error: .*rails-backstop/);
   } finally { Object.assign(process.env, saved); rmSync(dir, { recursive: true, force: true }); }
 });
 
-// ---- dormant permission.ask lever (2.1) ----
-test('permission.ask (dormant): rail-target permission → status deny, both payload shapes', async () => {
+test('handler: an unlink event is not a write — the watcher takes no action', async () => {
   const dir = gitRepo({ tickets: T1 });
   const saved = { ...process.env };
   try {
     process.env.ADLC_P4_ENFORCEMENT = '1';
     process.env.ADLC_TICKET = 'T1';
-    const hooks = await adlcRailsGuard({ worktree: dir });
-    // V1 shape: { type, pattern }
-    const v1 = { status: 'ask' };
-    await hooks['permission.ask']({ type: 'edit', pattern: 'test/x.mjs' }, v1);
-    assert.equal(v1.status, 'deny');
-    // V2 shape: { action, resources[] }
-    const v2 = { status: 'ask' };
-    await hooks['permission.ask']({ action: 'write', resources: ['test/x.mjs'] }, v2);
-    assert.equal(v2.status, 'deny');
+    const plugin = await loadPlugin({ root: dir });
+    writeFileSync(join(dir, 'test', 'x.mjs'), 'SPOOFED WRITE\n');
+    const { lines } = await captureStderr(() => plugin.emit(filesystemChanged(join(dir, 'test', 'x.mjs'), { event: 'unlink', directory: dir })));
+    plugin.cleanup();
+    assert.equal(readFileSync(join(dir, 'test', 'x.mjs'), 'utf8'), 'SPOOFED WRITE\n', 'unlink is not routed to the restore path');
+    assert.deepEqual(lines, []);
+  } finally { Object.assign(process.env, saved); rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ---- permission.evaluate lever (2.1) ----
+test('permission.evaluate: rail-target permission → effect deny with a message', async () => {
+  const dir = gitRepo({ tickets: T1 });
+  const saved = { ...process.env };
+  try {
+    process.env.ADLC_P4_ENFORCEMENT = '1';
+    process.env.ADLC_TICKET = 'T1';
+    const plugin = await loadPlugin({ root: dir });
+    const { result: hit } = await captureStderr(() => plugin.permission({ action: 'edit', resources: ['test/x.mjs'] }));
+    assert.equal(hit.effect, 'deny');
+    assert.match(hit.message, /ADLC rails-guard: denied permission "edit" — frozen rail/);
     // Non-rail target and read-type permissions untouched
-    const ok = { status: 'ask' };
-    await hooks['permission.ask']({ type: 'edit', pattern: 'src/ok.mjs' }, ok);
-    assert.equal(ok.status, 'ask');
-    const read = { status: 'ask' };
-    await hooks['permission.ask']({ type: 'read', pattern: 'test/x.mjs' }, read);
-    assert.equal(read.status, 'ask');
+    const ok = await plugin.permission({ action: 'edit', resources: ['src/ok.mjs'] });
+    assert.equal(ok.effect, 'ask');
+    const read = await plugin.permission({ action: 'read', resources: ['test/x.mjs'] });
+    assert.equal(read.effect, 'ask');
   } finally { Object.assign(process.env, saved); rmSync(dir, { recursive: true, force: true }); }
 });

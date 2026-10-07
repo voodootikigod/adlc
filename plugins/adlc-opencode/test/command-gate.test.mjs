@@ -161,29 +161,33 @@ test('AC3: no deployed copy (or non-adlc command) → no warning (nothing to pro
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-// ---- host-safety: the command.execute.before WRAPPER must swallow helper throws ----
-import { adlcRailsGuard } from '../index.mjs';
+// ---- host-safety: the prompt-hook WRAPPER must swallow helper throws ----
+import { loadPlugin, captureStderr } from './helpers/fake-ctx.mjs';
 
 // Every fixture the factories below mint; removed once this file's tests finish.
 const fixtureDirs = new Set();
 after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
 
-test('command.execute.before hook never throws, even on a malformed command payload', async () => {
+test('prompt hook never throws, even on a malformed prompt payload', async () => {
   const dir = repo();
   const saved = { ...process.env };
   try {
     process.env.ADLC_P4_ENFORCEMENT = '1';
     process.env.ADLC_TICKET = 'T1';
-    const hooks = await adlcRailsGuard({ worktree: dir });
-    // Shapes that could trip a helper: missing command, non-string, an adlc
+    const plugin = await loadPlugin({ root: dir });
+    const prompt = plugin.registrations.session.get('prompt');
+    // Shapes that could trip a helper: missing prompt, non-string text, an adlc
     // command with no deployed copy, and a genuinely tampered deployed command.
-    await hooks['command.execute.before']({});
-    await hooks['command.execute.before']({ command: 123 });
-    await hooks['command.execute.before']({ command: '/adlc-decompose', sessionID: 's', arguments: '' });
+    await prompt({});
+    await prompt({ prompt: { text: 123 } });
+    await plugin.prompt('/adlc-decompose');
     mkdirSync(join(dir, '.opencode', 'commands'), { recursive: true });
     writeFileSync(join(dir, '.opencode', 'commands', 'adlc-spec.md'), 'HACKED');
-    await hooks['command.execute.before']({ command: '/adlc-spec', sessionID: 's', arguments: '' });
-    // reaching here without a throw is the assertion (advisory host-safety contract)
-    assert.ok(true);
+    const { result: e, lines } = await captureStderr(() => plugin.prompt('/adlc-spec shape the thing'));
+    assert.ok(lines.some((l) => /^\[adlc\] warning: .*adlc-spec/.test(l)), `tamper advisory surfaced: ${lines.join('\n')}`);
+    assert.equal(e.prompt.text, '/adlc-spec shape the thing', 'advisory never mutates the prompt');
+    // A prompt that merely starts with a command NAME (no slash) is prose, not an invocation.
+    const { lines: prose } = await captureStderr(() => plugin.prompt('adlc-spec is the next step'));
+    assert.deepEqual(prose, []);
   } finally { Object.assign(process.env, saved); for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]; rmSync(dir, { recursive: true, force: true }); }
 });

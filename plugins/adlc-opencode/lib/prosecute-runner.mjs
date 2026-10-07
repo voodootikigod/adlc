@@ -14,7 +14,7 @@ import {
   LENSES, VERIFIER, findingKey, dedupeFindings, survivesVerification, shouldContinue,
 } from './prosecutor.mjs';
 import { READONLY_TOOLS } from '../rails-checker.mjs';
-import { PROMPT_TIMEOUT_MS } from './keyless-bridge.mjs';
+import { PROMPT_TIMEOUT_MS, makeSessionAsk } from './keyless-bridge.mjs';
 import { fence } from '@adlc/core';
 
 // The diff and the finding under verification are authored outside this
@@ -23,25 +23,24 @@ const MAX_DIFF_CHARS = 1_000_000;
 const MAX_FINDING_CHARS = 20_000;
 const fencedDiff = (diff) => fence('DIFF', String(diff ?? ''), MAX_DIFF_CHARS, { bias: 'head' });
 
-// A lens/verifier session must READ but never MUTATE. The session.prompt `tools`
-// map compiles to opencode PERMISSION RULES (session/prompt.ts): each key → one
-// rule, `findLast` match wins, unmatched → the agent default (base `build` =
-// `"*": "allow"`). So a DENYLIST fails OPEN — a write tool not in the list
-// (`task` sub-agent spawner, MCP tools, any future tool) stays enabled.
+// A lens/verifier session must READ but never MUTATE. OpenCode v2 session
+// `permissions` are rules over permission ACTIONS (a tool's action is its name;
+// edit/write/patch all request `edit`), evaluated `findLast` over the agent's
+// rules then the session's; unmatched → `ask`. So a DENYLIST fails OPEN — a
+// write action not in the list (`subagent`, MCP tools, any future tool) keeps
+// the agent's allow.
 //
-// The fix is a wildcard-deny-first ALLOWLIST — the exact shape opencode's own
-// read-only `explore`/`compaction` agents use: `{ "*": false, <read tools>: true }`.
-// `"*": false` denies everything; the read tools re-allow themselves via a LATER
-// rule (findLast). Anything unlisted — edit/write/patch, `task`, MCP, unknown —
-// matches only `*` → HARD DENY (an explicit deny rule, enforced even in a
-// headless child with no interactive approver). ORDER IS LOAD-BEARING: `"*"`
-// MUST be the first key, or the deny wins for everything.
+// The fix is a wildcard-deny-first ALLOWLIST: `*` deny, then one allow per
+// read-only action. Anything unlisted matches only `*` → HARD DENY (enforced
+// even in a headless child with no interactive approver). ORDER IS
+// LOAD-BEARING: the `*` rule MUST come first, or the deny wins for everything.
 export const LENS_READ_TOOLS = READONLY_TOOLS; // single source: the rail guard's read-only set
 
-export function lensToolsMap() {
-  const map = { '*': false };            // deny-all first (insertion order preserved)
-  for (const t of LENS_READ_TOOLS) map[t] = true; // re-allow only read-only tools
-  return map;
+export function lensPermissions() {
+  return [
+    { action: '*', resource: '*', effect: 'deny' },
+    ...LENS_READ_TOOLS.map((action) => ({ action, resource: '*', effect: 'allow' })),
+  ];
 }
 
 /**
@@ -82,31 +81,47 @@ export function parseVerdict(text) {
   return null;
 }
 
-/** `provider/model` that answered a session.prompt reply, or null if absent. */
-export function replyModel(res) {
-  const info = res?.data?.info ?? res?.info;
-  return info?.providerID && info?.modelID ? `${info.providerID}/${info.modelID}` : null;
+/**
+ * `provider/model` that answered a child session, read from the LAST assistant
+ * message `session.context` returned (v2 `SessionMessageAssistant.model`), or
+ * null when it is absent or only half known.
+ */
+export function replyModel(messages) {
+  if (!Array.isArray(messages)) return null;
+  const reply = [...messages].reverse().find((m) => m?.type === 'assistant');
+  const ref = reply?.model;
+  return ref?.providerID && ref?.id ? `${ref.providerID}/${ref.id}` : null;
+}
+
+/** An agent's configured model as a v2 ref, or null when unset or half known. */
+function agentModelRef(model) {
+  if (!model?.providerID || !model?.id) return null;
+  return { providerID: model.providerID, id: model.id, ...(model.variant ? { variant: model.variant } : {}) };
 }
 
 /** Bound on the one agent-listing call per run; a local server answers in milliseconds. */
 export const AGENT_LIST_TIMEOUT_MS = 5_000;
 
 /**
- * Names of the agents registered in this opencode instance (`client.app.agents`),
- * or null when the host cannot list them (no API, error, bad payload, or no
- * answer within `timeoutMs`). Never throws: an unlistable host keeps the
- * pre-per-lens behavior (every lens on the session model).
+ * The agents registered in this OpenCode instance (`ctx.agent.list`, v2
+ * `AgentListOutput.data[]`), as a Map from agent id (a file agent's id is its
+ * file name) to its configured model ref (`{ providerID, id, variant? }`, or
+ * null when the agent sets none). Null when the host cannot list them (no API,
+ * error, bad payload, or no answer within `timeoutMs`). Never throws: an
+ * unlistable host keeps the pre-per-lens behavior (every lens on the session
+ * model).
  */
-export async function listRegisteredAgents(client, { timeoutMs = AGENT_LIST_TIMEOUT_MS } = {}) {
-  if (typeof client?.app?.agents !== 'function') {
+export async function listRegisteredAgents(agentApi, { directory, timeoutMs = AGENT_LIST_TIMEOUT_MS } = {}) {
+  if (typeof agentApi?.list !== 'function') {
     return null;
   }
   let timer;
   try {
     const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); });
-    const res = await Promise.race([client.app.agents(), timeout]);
+    const res = await Promise.race([agentApi.list(directory ? { location: { directory } } : undefined), timeout]);
     const list = res?.data ?? res;
-    return Array.isArray(list) ? new Set(list.map((a) => a?.name).filter((n) => typeof n === 'string')) : null;
+    if (!Array.isArray(list)) return null;
+    return new Map(list.filter((a) => typeof a?.id === 'string').map((a) => [a.id, agentModelRef(a.model)]));
   } catch {
     return null;
   } finally {
@@ -115,62 +130,49 @@ export async function listRegisteredAgents(client, { timeoutMs = AGENT_LIST_TIME
 }
 
 /**
- * Build the real lens/verifier `ask` from the host SDK client: each call spins
- * up an isolated child session (parentID = active session) with the
- * WRITE-DISABLED tools map, returns the reply text, and best-effort deletes the
- * child. Returns null when the client lacks the session API (caller falls back
- * to the prose protocol). Mirrors keyless-bridge makeAsk, adding the tools
- * disable-map.
+ * Build the real lens/verifier `ask` from the v2 session API (`ctx.session`):
+ * each call runs an isolated READ-ONLY child session (lensPermissions) and
+ * returns the reply text. Returns null when the session API is missing (caller
+ * falls back to the prose protocol).
  *
- * A call whose `agent` is registered prompts AS that agent, so opencode resolves
- * the lens's own configured `model` (agent frontmatter or `opencode.json`
- * `agent.<name>.model`) exactly as its Task tool does. The authoritative
- * packaged charter is always passed as `system` so repo-controlled agent files
- * or version drift cannot tamper with or weaken the reviewer instructions. The
- * registered set is read once per ask. An unregistered agent is never named:
- * opencode reports that only as a generic 500, so the call carries the `system`
- * override on the session model instead.
+ * A call whose `agent` is registered (`agentApi` = `ctx.agent`) creates the
+ * child AS that agent and, when the agent configures a `model` (frontmatter or
+ * `opencode.json` `agents.<id>.model`), passes that model explicitly: OpenCode
+ * v2 does not apply an agent's model to a plugin-created session (verified
+ * against the 2.0.23 binary — the child answered on the session model). The session's
+ * permission rules are evaluated after the agent's, so the wildcard deny still
+ * holds. v2 `session.prompt` has no system override, so the authoritative
+ * packaged charter always leads the prompt text — a repo-controlled agent file
+ * or version drift cannot replace the reviewer instructions. The registered
+ * set is read once per ask. An unregistered agent is never named; its call runs
+ * on the session model with the charter.
  * `onResolved` is told which model answered each call, whether the agent's
  * config was used, and whether the agent listing succeeded at all
  * (`agentsListed: false` → every lens fell back because the host could not list
  * agents, not because a lens agent is missing).
  */
-export function makeLensAsk(client, {
-  parentID, model, timeoutMs = PROMPT_TIMEOUT_MS, agentListTimeoutMs = AGENT_LIST_TIMEOUT_MS, withTimeout, onResolved,
+export function makeLensAsk(session, {
+  agentApi, directory, model, timeoutMs = PROMPT_TIMEOUT_MS, agentListTimeoutMs = AGENT_LIST_TIMEOUT_MS, onResolved,
 } = {}) {
-  const session = client?.session;
-  if (typeof session?.create !== 'function' || typeof session?.prompt !== 'function') return null;
-  const race = withTimeout ?? ((p) => p);
+  const ask = makeSessionAsk(session, {
+    title: 'adlc-prosecute', permissions: lensPermissions(), directory, model, timeoutMs, label: 'prosecute',
+  });
+  if (!ask) return null;
   let registered;
 
   return async ({ agent, system, prompt }) => {
-    registered ??= listRegisteredAgents(client, { timeoutMs: agentListTimeoutMs });
+    registered ??= listRegisteredAgents(agentApi, { directory, timeoutMs: agentListTimeoutMs });
     const agents = await registered;
     const asAgent = Boolean(agent) && (agents?.has(agent) ?? false);
-    const created = await race(
-      session.create({ body: { ...(parentID ? { parentID } : {}), title: 'adlc-prosecute' } }),
-      timeoutMs, 'prosecute: child session.create timed out');
-    const childId = created?.data?.id ?? created?.id;
-    try {
-      const res = await race(
-        session.prompt({
-          path: { id: childId },
-          body: {
-            ...(model ? { model } : {}),
-            ...(asAgent ? { agent } : {}),
-            ...(system ? { system } : {}),
-            tools: lensToolsMap(),
-            parts: [{ type: 'text', text: prompt }],
-          },
-        }),
-        timeoutMs, 'prosecute: child session.prompt timed out');
-      onResolved?.({ agent, model: replyModel(res), agentModel: asAgent, agentsListed: agents !== null });
-      const parts = res?.data?.parts ?? res?.parts ?? [];
-      return parts.filter((p) => p?.type === 'text').map((p) => p.text).join('') || '';
-    } finally {
-      try { if (childId && typeof session.delete === 'function') await session.delete({ path: { id: childId } }); }
-      catch { /* best-effort cleanup */ }
-    }
+    const agentModel = asAgent ? agents.get(agent) : null;
+    let answered = null;
+    const text = await ask(system ? `${system}\n\n---\n\n${prompt}` : prompt, {
+      ...(asAgent ? { agent } : {}),
+      ...(agentModel ? { model: agentModel } : {}),
+      onMessages: (messages) => { answered = replyModel(messages); },
+    });
+    onResolved?.({ agent, model: answered, agentModel: asAgent, agentsListed: agents !== null });
+    return text;
   };
 }
 

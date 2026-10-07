@@ -13,7 +13,7 @@ import {
 } from '../rails-checker.mjs';
 import { globMatch } from '@adlc/core';
 import { tmp } from '@adlc/core/test-kit';
-import { adlcRailsGuard } from '../index.mjs';
+import { loadPlugin, captureStderr } from './helpers/fake-ctx.mjs';
 
 function repo(t, { tickets, current } = {}) {
   const dir = tmp(t, 'oc-rails-');
@@ -106,20 +106,8 @@ test('g: conflicting ADLC_TICKET vs current-ticket.json → deny (fail closed)',
   assert.equal(resolveActiveTicketId(dir, {}).conflict, false); // sanity: no env, dir gone is fine
 });
 
-// ---- (h) the REAL handler: enforce by default, pinned payload shape ----
-// v1.17.13 contract: hook receives (input={tool,sessionID,callID}, output={args}).
-const IN = (tool) => ({ tool, sessionID: 's_1', callID: 'c_1' });
-const OUT = (args) => ({ args });
-
-/** A fake SDK client capturing toast/log calls, mirroring @opencode-ai/sdk's shape. */
-function fakeClient() {
-  const calls = { toasts: [], logs: [] };
-  return {
-    calls,
-    tui: { showToast: async (req) => { calls.toasts.push(req.body); } },
-    app: { log: async (req) => { calls.logs.push(req.body); } },
-  };
-}
+// ---- (h) the REAL handler: enforce by default, v2 payload shape ----
+// v2 contract: `execute.before` receives { tool, sessionID, agent, messageID, id, input }.
 
 test('h: handler throws to enforce BY DEFAULT (no env opt-in needed)', async (t) => {
   const dir = repo(t, { tickets: T1_RAILED });
@@ -129,55 +117,38 @@ test('h: handler throws to enforce BY DEFAULT (no env opt-in needed)', async (t)
   process.env.ADLC_TICKET = 'T1';
   delete process.env.ADLC_ALLOW_ADVISORY_HOOKS;
   delete process.env.ADLC_OPENCODE_ENFORCES; // retired flag must not be needed
-  const client = fakeClient();
-  const hooks = await adlcRailsGuard({ worktree: dir, client });
-  await assert.rejects(
-    () => hooks['tool.execute.before'](IN('edit'), OUT({ filePath: 'test/x.mjs' })),
-    /ADLC rails-guard: blocked/,
-  );
-  // The deny is surfaced in the TUI, not only stderr (fire-and-forget → settle).
-  await new Promise((r) => setImmediate(r));
-  assert.equal(client.calls.toasts.length, 1);
-  assert.equal(client.calls.toasts[0].variant, 'error');
-  assert.match(client.calls.toasts[0].message, /blocked edit/);
+  const plugin = await loadPlugin({ root: dir });
+  const err = await captureStderr(() => plugin.before('edit', { path: 'test/x.mjs' })).catch((e) => e);
+  assert.match(String(err?.message), /ADLC rails-guard: blocked/);
+  // The deny is surfaced to the operator on stderr, not only to the model.
+  assert.ok(err.stderr.some((l) => /^\[adlc\] error: .*blocked edit/.test(l)), err.stderr.join('\n'));
 });
 
-test('h: args read from output.args (input carries only tool/session/call ids)', async (t) => {
+test('h: args read from event.input', async (t) => {
   const dir = repo(t, { tickets: T1_RAILED });
   const saved = { ...process.env };
   t.after(() => { Object.assign(process.env, saved); });
   process.env.ADLC_P4_ENFORCEMENT = '1';
   process.env.ADLC_TICKET = 'T1';
   delete process.env.ADLC_ALLOW_ADVISORY_HOOKS;
-  const hooks = await adlcRailsGuard({ worktree: dir });
+  const plugin = await loadPlugin({ root: dir });
   // Same payload but the target is NOT a rail → resolves.
-  await hooks['tool.execute.before'](IN('edit'), OUT({ filePath: 'src/ok.mjs' }));
+  await plugin.before('edit', { path: 'src/ok.mjs' });
+  // …and the v1 `filePath` key is still read.
+  await assert.rejects(() => captureStderr(() => plugin.before('edit', { filePath: 'test/x.mjs' })), /ADLC rails-guard: blocked/);
 });
 
-test('h: explicit advisory downgrade → no throw, warning toast instead', async (t) => {
+test('h: explicit advisory downgrade → no throw, warning on stderr instead', async (t) => {
   const dir = repo(t, { tickets: T1_RAILED });
   const saved = { ...process.env };
   t.after(() => { Object.assign(process.env, saved); });
   process.env.ADLC_P4_ENFORCEMENT = '1';
   process.env.ADLC_TICKET = 'T1';
   process.env.ADLC_ALLOW_ADVISORY_HOOKS = '1';
-  const client = fakeClient();
-  const hooks = await adlcRailsGuard({ worktree: dir, client });
-  await hooks['tool.execute.before'](IN('edit'), OUT({ filePath: 'test/x.mjs' })); // resolves, no throw
-  assert.equal(client.calls.toasts.length, 1);
-  assert.equal(client.calls.toasts[0].variant, 'warning');
-  assert.match(client.calls.toasts[0].message, /ADVISORY/);
-});
-
-test('h: handler survives a client with no tui/app surface (stderr fallback)', async (t) => {
-  const dir = repo(t, { tickets: T1_RAILED });
-  const saved = { ...process.env };
-  t.after(() => { Object.assign(process.env, saved); });
-  process.env.ADLC_P4_ENFORCEMENT = '1';
-  process.env.ADLC_TICKET = 'T1';
-  delete process.env.ADLC_ALLOW_ADVISORY_HOOKS;
-  const hooks = await adlcRailsGuard({ worktree: dir, client: {} });
-  await assert.rejects(() => hooks['tool.execute.before'](IN('edit'), OUT({ filePath: 'test/x.mjs' })));
+  const plugin = await loadPlugin({ root: dir });
+  const { lines } = await captureStderr(() => plugin.before('edit', { path: 'test/x.mjs' })); // resolves, no throw
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /^\[adlc\] warning: .*ADVISORY/);
 });
 
 // ---- (i) fail closed on unextractable / synthetic third-party mutators ----
@@ -1310,4 +1281,81 @@ test('r: a mutating/unknown tool with only a target still fails closed', (t) => 
     assert.equal(r.decision, 'deny', `${JSON.stringify(args)} → ${r.reason}`);
     assert.match(r.reason, /no extractable target path/);
   }
+});
+
+// ---- OpenCode v2 tool vocabulary ----
+const V2_RAILED = { tickets: [{ id: 'T1', rails: ['src/frozen.mjs'] }] };
+const envT1 = { ...ON, ADLC_TICKET: 'T1' };
+const envelope = (file) => `*** Begin Patch\n*** Update File: ${file}\n@@\n-a\n+b\n*** End Patch\n`;
+
+test('v2: patch with a patchText envelope updating a rail → deny naming the rail', (t) => {
+  const dir = repo(t, { tickets: V2_RAILED });
+  const r = checkToolCall({ tool: 'patch', args: { patchText: envelope('src/frozen.mjs') }, root: dir, env: envT1 });
+  assert.equal(r.decision, 'deny');
+  assert.match(r.reason, /src\/frozen\.mjs/);
+});
+
+test('v2: patch with a patchText envelope updating a non-rail file → allow', (t) => {
+  const dir = repo(t, { tickets: V2_RAILED });
+  const r = checkToolCall({ tool: 'patch', args: { patchText: envelope('src/free.mjs') }, root: dir, env: envT1 });
+  assert.equal(r.decision, 'allow', r.reason);
+});
+
+test('v2: patch with an unparseable patchText fails closed while rails are in force', (t) => {
+  const dir = repo(t, { tickets: V2_RAILED });
+  const r = checkToolCall({ tool: 'patch', args: { patchText: 'garbage' }, root: dir, env: envT1 });
+  assert.equal(r.decision, 'deny');
+  assert.match(r.reason, /no extractable target path/);
+});
+
+test('v2: patchText targets feed extractTargets (flail churn sees v2 patches)', () => {
+  assert.deepEqual(extractTargets({ patchText: envelope('src/a.mjs') }), ['src/a.mjs']);
+});
+
+test('v2: subagent is ungated while rails are in force', (t) => {
+  const dir = repo(t, { tickets: V2_RAILED });
+  const r = checkToolCall({ tool: 'subagent', args: { prompt: 'look around' }, root: dir, env: envT1 });
+  assert.equal(r.decision, 'allow', r.reason);
+});
+
+test('v2: subagent carrying a frozen-rail target is still spoof-guarded', (t) => {
+  const dir = repo(t, { tickets: V2_RAILED });
+  const r = checkToolCall({ tool: 'subagent', args: { filePath: 'src/frozen.mjs' }, root: dir, env: envT1 });
+  assert.equal(r.decision, 'deny');
+});
+
+test('v2: shell workdir away from the root is a cwd change → mutating command denied', (t) => {
+  const dir = repo(t, { tickets: V2_RAILED });
+  const r = checkToolCall({ tool: 'shell', args: { command: 'echo x > frozen.mjs', workdir: 'src' }, root: dir, env: envT1 });
+  assert.equal(r.decision, 'deny');
+  assert.match(r.reason, /changes cwd/);
+});
+
+test('v2: shell workdir equal to the root does not trip the cwd rule', (t) => {
+  const dir = repo(t, { tickets: V2_RAILED });
+  for (const workdir of ['.', dir, '']) {
+    const r = checkToolCall({ tool: 'shell', args: { command: 'echo x > src/free.mjs', workdir }, root: dir, env: envT1 });
+    assert.equal(r.decision, 'allow', `workdir ${JSON.stringify(workdir)} → ${r.reason}`);
+  }
+});
+
+test('v2: a read-only shell command with a workdir is still allowed', (t) => {
+  const dir = repo(t, { tickets: V2_RAILED });
+  const r = checkToolCall({ tool: 'shell', args: { command: 'cat frozen.mjs', workdir: 'src' }, root: dir, env: envT1 });
+  assert.equal(r.decision, 'allow', r.reason);
+});
+
+test('v2: edit/write `path` argument naming a rail → deny', (t) => {
+  const dir = repo(t, { tickets: V2_RAILED });
+  for (const [tool, args] of [['write', { path: 'src/frozen.mjs', content: 'x' }], ['edit', { path: 'src/frozen.mjs', oldString: 'a', newString: 'b' }]]) {
+    const r = checkToolCall({ tool, args, root: dir, env: envT1 });
+    assert.equal(r.decision, 'deny', `${tool}: ${r.reason}`);
+    assert.match(r.reason, /src\/frozen\.mjs/);
+  }
+});
+
+test('v2: the code-running `execute` tool carries no vettable target → fails closed while rails are in force', (t) => {
+  const dir = repo(t, { tickets: V2_RAILED });
+  const r = checkToolCall({ tool: 'execute', args: { code: "require('fs').writeFileSync('src/frozen.mjs', 'x')" }, root: dir, env: envT1 });
+  assert.equal(r.decision, 'deny');
 });

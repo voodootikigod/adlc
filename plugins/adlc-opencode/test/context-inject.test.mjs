@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveTicketContext, buildSystemContext, buildToolRailNotice, buildStatusLine, sanitizeField } from '../lib/context-inject.mjs';
-import { adlcRailsGuard } from '../index.mjs';
+import { loadPlugin } from './helpers/fake-ctx.mjs';
 
 // Every fixture the factories below mint; removed once this file's tests finish.
 const fixtureDirs = new Set();
@@ -103,49 +103,46 @@ test('buildStatusLine: names ticket + enforcement + rail count; null when inert'
 });
 
 // ---- REAL hook handlers ----
-test('experimental.chat.system.transform: pushes the ADLC block onto output.system', async () => {
+test('context hook: pushes the ADLC block onto the system parts', async () => {
   const dir = repo({ tickets: T1 });
   const saved = { ...process.env };
   try {
     process.env.ADLC_P4_ENFORCEMENT = '1';
     process.env.ADLC_TICKET = 'T1';
-    const hooks = await adlcRailsGuard({ worktree: dir });
-    const output = { system: ['base prompt'] };
-    await hooks['experimental.chat.system.transform']({ model: 'x' }, output);
-    assert.equal(output.system.length, 2);
-    assert.match(output.system[1], /ADLC.*active ticket T1|Active ticket: T1/);
+    const plugin = await loadPlugin({ root: dir });
+    const system = await plugin.context({ system: [{ type: 'text', text: 'base prompt' }] });
+    assert.equal(system.length, 2);
+    assert.equal(system[1].type, 'text');
+    assert.match(system[1].text, /ADLC.*active ticket T1|Active ticket: T1/);
   } finally { Object.assign(process.env, saved); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('experimental.chat.system.transform: no-op (no throw) when uninitialized or system missing', async () => {
+test('context hook: no-op (no throw) when uninitialized or system missing', async () => {
   const bare = mkdtempSync(join(tmpdir(), 'oc-ctx-'));
   const saved = { ...process.env };
   try {
     process.env.ADLC_P4_ENFORCEMENT = '1';
     process.env.ADLC_TICKET = 'T1';
-    const hooks = await adlcRailsGuard({ worktree: bare });
-    const output = { system: ['base'] };
-    await hooks['experimental.chat.system.transform']({ model: 'x' }, output);
-    assert.deepEqual(output.system, ['base']); // unchanged
-    await hooks['experimental.chat.system.transform']({ model: 'x' }, {}); // no system array → no throw
+    const plugin = await loadPlugin({ root: bare });
+    const system = await plugin.context({ system: [{ type: 'text', text: 'base' }] });
+    assert.deepEqual(system, [{ type: 'text', text: 'base' }]); // unchanged
+    await plugin.registrations.session.get('context')({}); // no system array → no throw
   } finally { Object.assign(process.env, saved); rmSync(bare, { recursive: true, force: true }); }
 });
 
-test('tool.definition: appends rail notice to edit/write/apply_patch only', async () => {
+test('tool transform: appends rail notice to patch/edit/write/apply_patch only', async () => {
   const dir = repo({ tickets: T1 });
   const saved = { ...process.env };
   try {
     process.env.ADLC_P4_ENFORCEMENT = '1';
     process.env.ADLC_TICKET = 'T1';
-    const hooks = await adlcRailsGuard({ worktree: dir });
-    for (const toolID of ['edit', 'write', 'apply_patch']) {
-      const output = { description: 'Edit a file.' };
-      await hooks['tool.definition']({ toolID }, output);
-      assert.match(output.description, /FROZEN RAILS.*test\/\*\*/, `${toolID} annotated`);
+    const plugin = await loadPlugin({ root: dir });
+    const ids = ['patch', 'edit', 'write', 'apply_patch', 'read'];
+    const tools = plugin.tools(Object.fromEntries(ids.map((id) => [id, { name: id, description: `The ${id} tool.` }])));
+    for (const id of ['patch', 'edit', 'write', 'apply_patch']) {
+      assert.match(tools.get(id).description, /^The \w+ tool\..*FROZEN RAILS.*test\/\*\*/s, `${id} annotated`);
     }
     // non-mutating tool untouched
-    const read = { description: 'Read a file.' };
-    await hooks['tool.definition']({ toolID: 'read' }, read);
-    assert.equal(read.description, 'Read a file.');
+    assert.equal(tools.get('read').description, 'The read tool.');
   } finally { Object.assign(process.env, saved); rmSync(dir, { recursive: true, force: true }); }
 });

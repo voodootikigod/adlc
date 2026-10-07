@@ -134,7 +134,7 @@ export const routerModel = {
       local: {
         "intro": "\n# ADLC phase router (OpenCode)\n\nDescribe what you're doing; this routes you to the gate that fits. Gates run via\nthe `adlc <tool>` dispatcher (`npm i -g @adlc/cli`). LLM-backed gates support\n`--prompt-only` — inside OpenCode, the model answers the printed prompt, so no\nAPI key is required.\n",
         "p0-row": "| Triage / author a ticket | P0 | `adlc preflight`, `/adlc-ticket` |\n",
-        "rail-enforcement": "## Rail enforcement in this harness\n\nThe bundled plugin wires a `tool.execute.before` hook that denies structured\n`edit`/`write` to frozen rails declared by the active ticket. It is **advisory in\nsession and gated on host SDK capability** — the unbypassable layer is the\ncommit-time CI gate (`docs/ci/rails-guard.yml`). See\n[`docs/integrations/opencode.md`](../../../docs/integrations/opencode.md).\n",
+        "rail-enforcement": "## Rail enforcement in this harness\n\nThe bundled plugin wires a tool `execute.before` hook that denies structured\n`edit`/`write` to frozen rails declared by the active ticket. It is **advisory in\nsession and gated on host SDK capability** — the unbypassable layer is the\ncommit-time CI gate (`docs/ci/rails-guard.yml`). See\n[`docs/integrations/opencode.md`](../../../docs/integrations/opencode.md).\n",
       },
       layout: ["intro","table:head","p0-row","table:rows-rest","table:adversarial","rail-enforcement"],
     },

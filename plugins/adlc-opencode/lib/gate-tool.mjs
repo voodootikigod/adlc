@@ -104,14 +104,14 @@ export function runGate({ gate, args = [], spawnImpl = spawnSync, cwd = process.
 /**
  * Run an LLM-backed gate KEYLESSLY via the host model (Phase 4.1 → 4.2 wiring):
  * the gate runs in `--prompt-only` mode to emit its prompts, each is answered
- * by an isolated child session (makeAsk), and the answers are returned. This is
+ * by a tool-less host generation (makeAsk), and the answers are returned. This is
  * what makes the keyless bridge LIVE code — adlc_gate calls it for LLM gates so
  * they work inside OpenCode with no API key. Returns a structured result, or
- * null when the client can't spawn sessions (caller falls back to the CLI).
+ * null when the host has no generate API (caller falls back to the CLI).
  */
-export async function runGateKeyless2({ gate, args = [], client, parentID, cwd = process.cwd(), spawnImpl }) {
-  const ask = makeAsk(client, { parentID });
-  if (!ask) return null; // no session API → let the caller fall back
+export async function runGateKeyless2({ gate, args = [], generate, cwd = process.cwd(), spawnImpl }) {
+  const ask = makeAsk(generate);
+  if (!ask) return null; // no generate API → let the caller fall back
   try {
     const { prompts, answers } = await runGateKeyless({
       bin: 'adlc',
@@ -141,45 +141,60 @@ export async function runGateKeyless2({ gate, args = [], client, parentID, cwd =
   }
 }
 
+/** A `{ title, output, metadata }` gate/prosecute result → an OpenCode v2 `Tool.Result`. */
+export function toToolResult(result) {
+  return { content: `${result.title}\n\n${result.output}`, metadata: { title: result.title, ...result.metadata } };
+}
+
+// v2 plugin tools default to Code Mode, reachable only through the `execute`
+// tool — which the rails guard denies while rails are in force (its code
+// carries no vettable target). The ADLC tools must stay callable then, so they
+// are registered as direct tools.
+export const DIRECT_TOOL_OPTIONS = Object.freeze({ codemode: false });
+
 /**
- * Build the `adlc_gate` custom-tool definition map for the plugin `tool` hook
- * (Phase 4.2). `schema` is the host's zod (from @opencode-ai/plugin's
- * `tool.schema`), injected so this stays testable without the peer dependency.
- * `client` is the plugin's SDK client — when present, LLM-backed gates run
- * KEYLESS through the host model (child sessions); deterministic gates and the
- * no-client fallback run the CLI. Returns `{ adlc_gate: ToolDefinition }`.
+ * Build the `adlc_gate` OpenCode v2 tool (`Tool.Info`, registered through
+ * `ctx.tool.transform(ed => ed.add(...))`). The input schema is plain JSON
+ * Schema, so no host schema library is needed. `generate` is the plugin
+ * context's `ctx.generate` — when present, LLM-backed gates run KEYLESS through
+ * the host model; deterministic gates and the no-generate fallback run the
+ * CLI. v2 tool contexts carry no directory, so gates run in
+ * `root`.
  */
-export function buildGateTool(schema, { root = process.cwd(), client, spawnImpl } = {}) {
+export function buildGateTool({ root = process.cwd(), generate, spawnImpl } = {}) {
   return {
-    adlc_gate: {
-      description:
-        'Run an ADLC lifecycle gate and return its result. Gates: ' +
-        `${GATE_BINS.join(', ')}. Prefer this over shelling out to \`adlc\` directly ` +
-        '— it validates the gate name, runs LLM-backed gates keyless through the ' +
-        'session model, and returns structured output. While rails are frozen, ' +
-        'write-capable gates (hollow-test, review-calibration, consensus-fix, ' +
-        'behavior-diff, gate-fuzzing) and mutation flags (--write/--record/' +
-        '--append) are denied here — run those via the `adlc` CLI instead.',
-      args: {
-        gate: schema.string().describe('The ADLC gate to run, e.g. "preflight", "spec-lint", "coldstart", "merge-forecast".'),
-        args: schema.array(schema.string()).optional().describe('Extra CLI arguments for the gate, e.g. ["--json"].'),
+    name: 'adlc_gate',
+    description:
+      'Run an ADLC lifecycle gate and return its result. Gates: ' +
+      `${GATE_BINS.join(', ')}. Prefer this over shelling out to \`adlc\` directly ` +
+      '— it validates the gate name, runs LLM-backed gates keyless through the ' +
+      'session model, and returns structured output. While rails are frozen, ' +
+      'write-capable gates (hollow-test, review-calibration, consensus-fix, ' +
+      'behavior-diff, gate-fuzzing) and mutation flags (--write/--record/' +
+      '--append) are denied here — run those via the `adlc` CLI instead.',
+    input: {
+      type: 'object',
+      properties: {
+        gate: { type: 'string', description: 'The ADLC gate to run, e.g. "preflight", "spec-lint", "coldstart", "merge-forecast".' },
+        args: { type: 'array', items: { type: 'string' }, description: 'Extra CLI arguments for the gate, e.g. ["--json"].' },
       },
-      execute: async (a, ctx) => {
-        const gate = String(a?.gate ?? '').trim();
-        const args = a?.args ?? [];
-        const cwd = ctx?.directory ?? ctx?.worktree ?? root;
-        let result = null;
-        // LLM-backed gate + a usable client → run keyless through the host model.
-        if (LLM_BACKED_GATES.has(gate) && client) {
-          result = await runGateKeyless2({ gate, args, client, parentID: ctx?.sessionID, cwd, spawnImpl });
-        }
-        // Deterministic gate, no client, or keyless unavailable → CLI.
-        if (!result) {
-          result = runGate({ gate, args, cwd, ...(spawnImpl ? { spawnImpl } : {}) });
-        }
-        try { ctx?.metadata?.({ title: result.title, metadata: result.metadata }); } catch { /* best-effort */ }
-        return { title: result.title, output: result.output, metadata: result.metadata };
-      },
+      required: ['gate'],
+      additionalProperties: false,
+    },
+    options: DIRECT_TOOL_OPTIONS,
+    execute: async (a) => {
+      const gate = String(a?.gate ?? '').trim();
+      const args = Array.isArray(a?.args) ? a.args : [];
+      let result = null;
+      // LLM-backed gate + a usable generate API → run keyless through the host model.
+      if (LLM_BACKED_GATES.has(gate) && generate) {
+        result = await runGateKeyless2({ gate, args, generate, cwd: root, spawnImpl });
+      }
+      // Deterministic gate, no generate API, or keyless unavailable → CLI.
+      if (!result) {
+        result = runGate({ gate, args, cwd: root, ...(spawnImpl ? { spawnImpl } : {}) });
+      }
+      return toToolResult(result);
     },
   };
 }

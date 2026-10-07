@@ -1,4 +1,5 @@
-// watcher.mjs — the file.edited backstop (plan Phases 2.4 + 2.5).
+// watcher.mjs — the filesystem-change backstop (plan Phases 2.4 + 2.5), fed by
+// OpenCode v2 `filesystem.changed` events.
 //
 // OpenCode's `event` hook is observe-only (fire-and-forget, cannot block), so
 // everything here is POST-HOC: detect a violation after the write landed and
@@ -112,8 +113,8 @@ export function createWatcherState() {
 }
 
 /**
- * Handle one file.edited event. Pure-ish (exec injected); returns
- * { actions: [{check, action, message}] } — the caller toasts each message.
+ * Handle one changed file. Pure-ish (exec injected); returns
+ * { actions: [{check, action, message}] } — the caller reports each message.
  * Fail-safe: never throws; any internal failure degrades to a warning.
  */
 export function handleFileEdited({ file, root, env = process.env, exec = spawnSync, state, now }) {
@@ -162,8 +163,8 @@ export function handleFileEdited({ file, root, env = process.env, exec = spawnSy
   }
 
   // ---- 2.5 rail backstop: enforcing by default (this IS a rail violation) ----
-  // A file.edited event names ONE concrete file — match it exactly, no ancestor
-  // detection (a directory delete doesn't arrive as a single file.edited).
+  // A filesystem.changed event names ONE concrete file — match it exactly, no
+  // ancestor detection (a directory delete doesn't arrive as a single change).
   const hit = railHit(rel, force.rails, root, { ancestors: false });
   if (hit) {
     restoreWithGuard('rails', `ADLC rails-backstop: a write landed on frozen rail "${hit}" (active ticket ${force.ticketId}) via a path the in-session guard did not intercept`);

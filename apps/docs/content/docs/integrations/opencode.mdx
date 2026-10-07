@@ -6,20 +6,21 @@ description: "Native ADLC integration for the opencode terminal agent: an enforc
 # ADLC in opencode
 
 Brings the lifecycle into the [opencode](https://opencode.ai) terminal agent as
-a native plugin: an in-session rails-guard hook (`tool.execute.before`),
+a native OpenCode 2 plugin: an in-session rails-guard hook (`execute.before`),
 advisory session hooks, nine lifecycle commands, the `adlc` phase-routing
 skill, two native model-callable tools (`adlc_gate`, `adlc_prosecute`), a
 **deterministic P5 prosecution loop** (five lenses + a verifier fanned out over
 write-disabled child sessions), and a separate `@prosecutor` meta-agent (seven
 prosecution agents in all). The integration **enforces by default**: a thrown
-denial in `tool.execute.before` aborts the tool call (documented host behavior,
-regression-tested against a real binary).
+denial in the `execute.before` tool hook aborts the tool call (regression-tested
+against a real OpenCode 2 binary). It requires **OpenCode >= 2.0.20**; OpenCode
+1.x cannot load it.
 
 ## What you get
 
-- **Rails-guard hook** on `tool.execute.before`. Denies structured
-  `edit`/`write`/`apply_patch` to a frozen rail declared by the active ticket;
-  in-session **bash is gated** too via the `@adlc/core` shell classifier.
+- **Rails-guard hook** on `ctx.tool.hook('execute.before')`. Denies structured
+  `edit`/`write`/`patch` to a frozen rail declared by the active ticket;
+  in-session **`shell` is gated** too via the `@adlc/core` shell classifier.
 - **Native tools:** `adlc_gate` (the model runs a lifecycle gate, LLM-backed
   ones keyless through the host model) and `adlc_prosecute` (the **deterministic
   first-party P5 loop**: fan-out → dedupe → verify → loop-until-dry over
@@ -42,7 +43,8 @@ regression-tested against a real binary).
 
 ## Install
 
-Two commands (peer dependency: `@opencode-ai/plugin` ≥ 1.17.13):
+Requires OpenCode ≥ 2.0.20 (optional peer dependency `@opencode/plugin`
+`>=2.0.20 <3`). Two commands:
 
 ```sh
 npm install -g @adlc/cli                 # the gate toolkit the plugin shells out to
@@ -50,32 +52,33 @@ npx @adlc/opencode init                  # scaffolds .adlc/ + .opencode/, regist
 ```
 
 Restart opencode so the hooks load. Inside the TUI, `/adlc-init` re-runs the same
-idempotent scaffold. The bootstrap registers a **resolvable** plugin entry (the
-npm name when installed from node_modules, the resolved local path from a source
-checkout). Verify locally without an `opencode` binary:
+idempotent scaffold. The bootstrap registers a **resolvable** entry under the v2
+`"plugins"` key (the npm name when installed from node_modules, the resolved
+local package directory from a source checkout), and migrates an existing v1
+`"plugin"` entry for this package. Verify locally without an `opencode` binary:
 
 ```sh
 npm test --workspace=@adlc/opencode
 ```
 
-Per-repo config rides the `["@adlc/opencode", { … }]` plugin-options
-tuple (env vars override); see the integration guide for the option table.
+Per-repo config rides the `{ "package": "@adlc/opencode", "options": { … } }`
+plugin entry (env vars override); see the integration guide for the option table.
 
 ## Rail enforcement: two layers
 
 1. **In-session (enforcing by default).** A thrown denial in
-   `tool.execute.before` **aborts the tool call**: documented host behavior on
-   `@opencode-ai/plugin` ≥ 1.17.13, regression-tested end-to-end against a real
-   opencode binary (required CI). Bash **is** gated via the `@adlc/core` shell
-   classifier; unrecognized structured tools carrying a path fail closed. The
+   `execute.before` **aborts the tool call**, regression-tested end-to-end
+   against a real OpenCode 2 binary for `write` and `patch` (required CI). The
+   shell **is** gated via the `@adlc/core` shell classifier; unrecognized tools
+   with no vettable target (including Code Mode `execute`) fail closed. The
    only downgrade is the explicit `ADLC_ALLOW_ADVISORY_HOOKS=1` escape hatch
    (surface loudly, don't block).
 
    Which argument shapes the check can see differs by tool class, because the
    two classes treat "no path found" oppositely. An **unrecognized or mutating**
    tool is denied when no target can be extracted, so breadth costs it nothing:
-   it reads `filePath`, `path`, `file`, `files[]`, `edits[]`, and apply_patch
-   envelope bodies. An **ungated** tool (`task`, `skill`, `todowrite`,
+   it reads `filePath`, `path`, `file`, `files[]`, `edits[]`, and apply_patch /
+   `patchText` envelope bodies. An **ungated** tool (`task`, `subagent`, `skill`, `todowrite`,
    `question`, plus anything in `ADLC_UNGATED_TOOLS`) is allowed when no target
    is found — those tools carry no path on nearly every call — so its spoof
    check additionally reads `target`, `targetPath`, and `target_path`. Anything
@@ -134,7 +137,7 @@ Mirrors the sibling integrations; all glob/ticket logic delegates to `@adlc/core
 </Callout>
 
 With the flag set, the deny-set from
-`@adlc/context-handoff` is evaluated in `tool.execute.before` **ahead of** the
+`@adlc/context-handoff` is evaluated in `execute.before` **ahead of** the
 rail check: a session that must hand off should be told to stop, not told which
 rail it happened to hit.
 
@@ -187,15 +190,20 @@ just cannot be re-opened in-session, and says so
 
 ## Gaps
 
-1. **`permission.ask` is a dormant lever.** It is defined but never dispatched
-   upstream (anomalyco/opencode#7006, re-verified at 1.17.17/1.17.18). The
-   enforcing control is the `tool.execute.before` throw; the tolerant handler
-   activates the instant upstream wires the hook.
-2. **The native TUI plugin module is deferred.** `PluginModule` types
-   `tui?: never` at 1.17.17 (the surface is reserved, not shipped), so the
-   persistent statusline slot / dialogs are a follow-on. The verifiable native
-   touch (the statusline toast) ships now.
-3. **P6 acceptance is a human decision** by design. The plugin surfaces
+1. **No TUI toasts.** v2 server plugins have no toast channel, so notices and
+   denials are written to the OpenCode server's stderr (visible with
+   `opencode run --standalone --print-logs`); a denial also reaches the model as
+   the tool error. A TUI plugin module is out of scope.
+2. **Autocontinue not ported.** v2 has no autocontinue hook; after
+   `session.compaction.ended`, a high-risk ticket's next structured edit is
+   denied by the build gate instead.
+3. **Rail notice fixed at load.** The rail notice in the edit/write/patch tool
+   descriptions reflects the ticket active when OpenCode loaded its tools.
+4. **The permission lever is secondary.** `permission.evaluate` is dispatched,
+   but after `execute.before`, which already throws on a rails hit.
+5. **Lens child sessions are not removed** (the v2 plugin API has no session
+   delete); keyless gates use `ctx.generate.text` for that reason.
+6. **P6 acceptance is a human decision** by design. The plugin surfaces
    evidence, it does not automate approval.
 
 ## Go deeper

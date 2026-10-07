@@ -83,38 +83,39 @@ jobs:
       # the enforcement throw and still merge — the exact regression class the
       # adversarial design review flagged. Runs on one matrix leg to keep CI
       # time bounded; --require makes a missing opencode binary a hard failure.
-      # PINNED to the version the plugin contract is verified against (ADR 0004
-      # amendment) so upstream releases can't flake or mask regressions in a
-      # required job; bump deliberately alongside the peerDependency. A separate
-      # non-required job may track latest.
+      # PINNED to the OpenCode 2.x the v2 plugin contract is verified against
+      # (ADR 0004 v2-only addendum) so upstream releases can't flake or mask
+      # regressions in a required job; bump deliberately alongside the
+      # @opencode/plugin peerDependency. The non-required canary tracks latest.
+      # `@opencode/cli` is the documented v2 npm install.
       - name: OpenCode live deny proof (AC7)
         if: matrix.node-version == 20
         run: |
-          npm install -g opencode-ai@1.17.13
+          npm install -g @opencode/cli@2.0.20
+          opencode --version
           node scripts/opencode-live-deny.mjs --require
 
       # Phase 4 live proof: the native adlc_gate tool registers + is model-callable,
-      # and the keyless bridge drives a child session end-to-end. Pinned to the
-      # opencode whose tool-hook + session SDK is source-verified (1.17.13).
+      # and an LLM-backed gate runs keyless through ctx.generate end-to-end, on
+      # the pinned OpenCode 2.x installed by the deny step above.
       - name: OpenCode live tool + keyless proof (Phase 4)
         if: matrix.node-version == 20
         run: node scripts/opencode-live-tool.mjs --require
 
       # T32 compaction REGISTRATION + BEHAVIOR proof (NOT a host-dispatch proof):
-      # asserts the session.compacting + compaction.autocontinue hooks are
-      # registered on the real plugin entry under their exact host keys and behave
-      # (rail context survives, auto-continue suppressed on a degraded high-risk
-      # session). Loads the plugin the way opencode does (no binary needed → all
-      # matrix legs). REQUIRED so a refactor dropping/renaming either hook cannot
-      # merge green. Upstream DISPATCH on the pinned version is source-verified,
-      # not asserted here (compaction is not forcible in a headless run).
+      # asserts setup(ctx) registers the `compaction` session hook and the event
+      # subscription, that rail context survives compaction, and that a
+      # session.compaction.ended event makes a high-risk session's next edit hit
+      # the build gate. Loads the plugin the way opencode does (no binary needed
+      # → all matrix legs). REQUIRED so a refactor dropping either registration
+      # cannot merge green (compaction is not forcible in a headless run).
       - name: OpenCode compaction registration+behavior proof (T32)
         run: node scripts/opencode-live-compaction.mjs
 
       # T33 deterministic P5 proof: the shipped adlc_prosecute tool drives the
       # fan-out → verify → loop-until-dry loop in first-party code over
       # WRITE-DISABLED child sessions, converging a seeded defect to NO-SHIP.
-      # Runs against a real-shaped mock SDK client (a full multi-lens loop isn't
+      # Runs against a real-shaped v2 ctx.session (a full multi-lens loop isn't
       # deterministically forcible through a real binary) — registration on the
       # real binary is proven by the live-tool step above. REQUIRED.
       - name: OpenCode deterministic prosecute proof (T33)
@@ -153,7 +154,7 @@ jobs:
       # which runs on `pull_request_target` (BASE code, BASE deps) against the PR tree as
       # DATA, so the key is only ever seen by trusted base code and never by PR code.
 
-  # T31 drift canary: the SAME two OpenCode live proofs against opencode-ai@latest.
+  # T31 drift canary: the SAME two OpenCode live proofs against @opencode/cli@latest.
   # ADVISORY by design (continue-on-error): upstream releases near-daily, and a
   # latest-version break must be VISIBLE same-day without blocking unrelated
   # merges — the required, pinned proofs in the test job above stay authoritative.
@@ -178,7 +179,7 @@ jobs:
 
       - name: OpenCode live proofs vs latest
         run: |
-          npm install -g opencode-ai@latest
+          npm install -g @opencode/cli@latest
           opencode --version
           node scripts/opencode-live-deny.mjs --require
           node scripts/opencode-live-tool.mjs --require

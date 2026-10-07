@@ -471,12 +471,12 @@ export const OPENCODE_INTEGRATION = {
     'npm install -g @adlc/cli',
     'npx @adlc/opencode init',
   ],
-  note: 'Restart OpenCode after bootstrap so hooks load. /adlc-init inside the TUI re-runs the same idempotent scaffold. Peer dependency: @opencode-ai/plugin >= 1.17.13.',
+  note: 'Requires OpenCode >= 2.0.20 (v2 plugin API). Restart OpenCode after bootstrap so hooks load. /adlc-init inside the TUI re-runs the same idempotent scaffold. Optional peer dependency: @opencode/plugin >=2.0.20 <3.',
   pluginDir: 'plugins/adlc-opencode',
   hero: {
     kicker: 'OpenCode integration',
     title: 'ADLC in the OpenCode TUI',
-    identity: 'Enforcing by default: a thrown denial in tool.execute.before aborts the tool call. That is documented host behavior, and we regression-test it against a real binary.',
+    identity: 'Enforcing by default: a thrown denial in the v2 execute.before tool hook aborts the tool call, and we regression-test it against a real OpenCode 2 binary.',
     badges: [
       { label: 'Enforcing by default', accent: true },
       { label: 'One-line install' },
@@ -533,9 +533,9 @@ export const OPENCODE_INTEGRATION = {
       key: 'hooks',
       count: 1,
       label: 'enforcing hook',
-      title: 'tool.execute.before aborts on rail writes',
-      detail: 'Structured edit/write/apply_patch and bash (via the shared shell classifier) deny frozen-rail mutations. Advisory session hooks warn only.',
-      items: ['tool.execute.before'],
+      title: 'execute.before aborts on rail writes',
+      detail: 'Structured edit/write/patch and shell (via the shared shell classifier) deny frozen-rail mutations. Advisory session hooks warn only.',
+      items: ['execute.before'],
     },
   ],
   surfacesSection: {
@@ -559,7 +559,7 @@ export const OPENCODE_INTEGRATION = {
     session: {
       kicker: 'In the session',
       title: 'Thrown denial aborts the tool call',
-      body: 'Enforcing by default on @opencode-ai/plugin >= 1.17.13. Unrecognized structured tools with a path fail closed. Downgrade only with the loud ADLC_ALLOW_ADVISORY_HOOKS=1 escape hatch.',
+      body: 'Enforcing by default on OpenCode >= 2.0.20. Unrecognized tools with no vettable target fail closed. Downgrade only with the loud ADLC_ALLOW_ADVISORY_HOOKS=1 escape hatch.',
     },
     ci: {
       kicker: 'In CI',

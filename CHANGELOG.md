@@ -12,6 +12,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 ## [Unreleased]
 
 ### Breaking
+- **opencode:** `@adlc/opencode` now targets the OpenCode v2 plugin API only (default export `{ id: "adlc", setup(ctx) }`) and requires OpenCode >= 2.0.20; it no longer loads on OpenCode 1.x. The optional peer dependency moves from `@opencode-ai/plugin` to `@opencode/plugin` `>=2.0.20 <3`, `/adlc-init` writes the v2 `"plugins"` key (migrating an existing v1 `"plugin"` entry), and notices go to stderr instead of TUI toasts. Fixes "Plugin must export a default definition with an id and an effect or setup function".
 - **tickets:** `@adlc/tickets` no longer exports the `./lib/generation-descriptor.mjs` subpath (it was published in 1.11.1). An `import '@adlc/tickets/lib/generation-descriptor.mjs'` now fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`; the remaining subpaths are `./lib/key-contract.mjs`, `./lib/durability.mjs` and `./lib/manifest-primitives.mjs`.
 - **parallax:** `parallax --prompt-only --record-verdict <file|->` now requires `--ticket <id>` and exits 1 without it, so a recorded verdict is always bound to the ticket it is evidence for.
 

@@ -9,7 +9,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDepthTracker, checkBuildGate } from '../lib/build-gate.mjs';
-import { adlcRailsGuard } from '../index.mjs';
+import { loadPlugin, captureStderr, compactionEnded } from './helpers/fake-ctx.mjs';
 
 // Every fixture the factories below mint; removed once this file's tests finish.
 const fixtureDirs = new Set();
@@ -136,18 +136,19 @@ test('handler: high-risk + compaction event → edit to a NON-rail path throws',
     process.env.ADLC_TICKET = 'T1';
     delete process.env.ADLC_ALLOW_ADVISORY_HOOKS;
     delete process.env.ADLC_BUILD_GATE_BYPASS;
-    const hooks = await adlcRailsGuard({ worktree: dir });
+    const plugin = await loadPlugin({ root: dir });
     // Off-rail edit passes rails; passes build-gate while fresh…
-    await hooks['tool.execute.before']({ tool: 'edit', sessionID: 's1', callID: 'c' }, { args: { filePath: 'src/ok.mjs' } });
+    await plugin.before('edit', { path: 'src/ok.mjs' }, { sessionID: 's1' });
     // …the session compacts…
-    await hooks.event({ event: { type: 'session.compacted', properties: { sessionID: 's1' } } });
+    await plugin.emit(compactionEnded('s1'));
     // …now the same off-rail edit is denied by the build gate.
     await assert.rejects(
-      () => hooks['tool.execute.before']({ tool: 'edit', sessionID: 's1', callID: 'c' }, { args: { filePath: 'src/ok.mjs' } }),
+      () => captureStderr(() => plugin.before('edit', { path: 'src/ok.mjs' }, { sessionID: 's1' })),
       /ADLC build-gate/,
     );
     // A different (fresh) session is unaffected.
-    await hooks['tool.execute.before']({ tool: 'edit', sessionID: 's2', callID: 'c' }, { args: { filePath: 'src/ok.mjs' } });
+    await plugin.before('edit', { path: 'src/ok.mjs' }, { sessionID: 's2' });
+    plugin.cleanup();
   } finally { Object.assign(process.env, saved); rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -157,8 +158,9 @@ test('handler: read-only tools never hit the build gate', async () => {
   try {
     process.env.ADLC_P4_ENFORCEMENT = '1';
     process.env.ADLC_TICKET = 'T1';
-    const hooks = await adlcRailsGuard({ worktree: dir });
-    await hooks.event({ event: { type: 'session.compacted', properties: { sessionID: 's1' } } });
-    await hooks['tool.execute.before']({ tool: 'read', sessionID: 's1', callID: 'c' }, { args: { filePath: 'src/ok.mjs' } }); // no throw
+    const plugin = await loadPlugin({ root: dir });
+    await plugin.emit(compactionEnded('s1'));
+    await plugin.before('read', { path: 'src/ok.mjs' }, { sessionID: 's1' }); // no throw
+    plugin.cleanup();
   } finally { Object.assign(process.env, saved); rmSync(dir, { recursive: true, force: true }); }
 });

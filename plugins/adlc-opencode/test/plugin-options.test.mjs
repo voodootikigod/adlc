@@ -1,14 +1,15 @@
 // plugin-options.test.mjs — T30: per-repo config via the opencode.json plugin
-// tuple (["@adlc/opencode", {...}] → the plugin function's 2nd arg,
-// per @opencode-ai/plugin `Plugin = (input, options?) => Hooks`). Env vars win
-// over options. Offline, temp-dir only.
+// options (`"plugins": [{ "package": "@adlc/opencode", "options": {...} }]` →
+// the v2 plugin context's `ctx.options`). Env vars win over options. Offline,
+// temp-dir only.
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { adlcRailsGuard, optionsToEnv } from '../index.mjs';
+import { optionsToEnv } from '../index.mjs';
+import { loadPlugin, compactionEnded } from './helpers/fake-ctx.mjs';
 
 // Every fixture the factories below mint; removed once this file's tests finish.
 const fixtureDirs = new Set();
@@ -53,27 +54,27 @@ test('optionsToEnv maps the documented options and NOTHING else (bypasses stay e
 test('advisoryHooks option: a rail edit warns instead of throwing', async () => {
   const dir = railedRepo();
   await withEnv({ ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1', ADLC_ALLOW_ADVISORY_HOOKS: undefined }, async () => {
-    const hooks = await adlcRailsGuard({ worktree: dir }, { advisoryHooks: true });
+    const hooks = await loadPlugin({ root: dir, options: { advisoryHooks: true } });
     // resolves (advisory) rather than throwing (enforcing)
-    await hooks['tool.execute.before']({ tool: 'edit', sessionID: 's', callID: 'c' }, { args: { filePath: 'test/x.mjs' } });
+    await hooks.before('edit', { filePath: 'test/x.mjs' });
   }).finally(() => rmSync(dir, { recursive: true, force: true }));
 });
 
 test('default (no options): the same rail edit throws — options must not weaken the default', async () => {
   const dir = railedRepo();
   await withEnv({ ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1', ADLC_ALLOW_ADVISORY_HOOKS: undefined }, async () => {
-    const hooks = await adlcRailsGuard({ worktree: dir });
+    const hooks = await loadPlugin({ root: dir });
     await assert.rejects(() =>
-      hooks['tool.execute.before']({ tool: 'edit', sessionID: 's', callID: 'c' }, { args: { filePath: 'test/x.mjs' } }));
+      hooks.before('edit', { filePath: 'test/x.mjs' }));
   }).finally(() => rmSync(dir, { recursive: true, force: true }));
 });
 
 test('env var OVERRIDES the option: explicit ADLC_ALLOW_ADVISORY_HOOKS=0 keeps enforcement despite advisory option', async () => {
   const dir = railedRepo();
   await withEnv({ ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1', ADLC_ALLOW_ADVISORY_HOOKS: '0' }, async () => {
-    const hooks = await adlcRailsGuard({ worktree: dir }, { advisoryHooks: true });
+    const hooks = await loadPlugin({ root: dir, options: { advisoryHooks: true } });
     await assert.rejects(() =>
-      hooks['tool.execute.before']({ tool: 'edit', sessionID: 's', callID: 'c' }, { args: { filePath: 'test/x.mjs' } }));
+      hooks.before('edit', { filePath: 'test/x.mjs' }));
   }).finally(() => rmSync(dir, { recursive: true, force: true }));
 });
 
@@ -81,25 +82,25 @@ test('ungatedTools option exempts a benign no-target tool that would otherwise f
   const dir = railedRepo();
   await withEnv({ ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1', ADLC_UNGATED_TOOLS: undefined }, async () => {
     // unknown tool, no extractable target → fail-closed deny by default…
-    const strict = await adlcRailsGuard({ worktree: dir });
+    const strict = await loadPlugin({ root: dir });
     await assert.rejects(() =>
-      strict['tool.execute.before']({ tool: 'symbols_index', sessionID: 's', callID: 'c' }, { args: { query: 'x' } }));
+      strict.before('symbols_index', { query: 'x' }));
     // …but the per-repo option exempts it (still spoof-guarded upstream)
-    const relaxed = await adlcRailsGuard({ worktree: dir }, { ungatedTools: ['symbols_index'] });
-    await relaxed['tool.execute.before']({ tool: 'symbols_index', sessionID: 's', callID: 'c' }, { args: { query: 'x' } });
+    const relaxed = await loadPlugin({ root: dir, options: { ungatedTools: ['symbols_index'] } });
+    await relaxed.before('symbols_index', { query: 'x' });
   }).finally(() => rmSync(dir, { recursive: true, force: true }));
 });
 
 // ---- provenance + load-time visibility of option-sourced weakenings ----
-test('advisory toast cites the plugin option (not a phantom env var) when the tuple caused the downgrade', async () => {
+test('advisory notice cites the plugin option (not a phantom env var) when the tuple caused the downgrade', async () => {
   const dir = railedRepo();
   const errors = [];
   const orig = console.error;
   console.error = (m) => errors.push(String(m));
   try {
     await withEnv({ ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1', ADLC_ALLOW_ADVISORY_HOOKS: undefined }, async () => {
-      const hooks = await adlcRailsGuard({ worktree: dir }, { advisoryHooks: true });
-      await hooks['tool.execute.before']({ tool: 'edit', sessionID: 's', callID: 'c' }, { args: { filePath: 'test/x.mjs' } });
+      const hooks = await loadPlugin({ root: dir, options: { advisoryHooks: true } });
+      await hooks.before('edit', { filePath: 'test/x.mjs' });
     });
     const advisory = errors.find((m) => m.includes('[ADVISORY'));
     assert.ok(advisory, 'advisory notice emitted');
@@ -118,7 +119,7 @@ test('option-sourced weakenings are announced ONCE at plugin load (incl. the oth
   console.error = (m) => errors.push(String(m));
   try {
     await withEnv({ ADLC_ALLOW_ADVISORY_HOOKS: undefined, ADLC_UNGATED_TOOLS: undefined }, async () => {
-      await adlcRailsGuard({ worktree: dir }, { advisoryHooks: true, ungatedTools: ['symbols_index'] });
+      await loadPlugin({ root: dir, options: { advisoryHooks: true, ungatedTools: ['symbols_index'] } });
     });
     const loadNotice = errors.find((m) => m.includes('weaken enforcement'));
     assert.ok(loadNotice, 'load-time weakening notice emitted');
@@ -127,7 +128,7 @@ test('option-sourced weakenings are announced ONCE at plugin load (incl. the oth
     // no notice when the same knobs come from REAL env vars (operator's own doing)
     errors.length = 0;
     await withEnv({ ADLC_ALLOW_ADVISORY_HOOKS: '1', ADLC_UNGATED_TOOLS: 'symbols_index' }, async () => {
-      await adlcRailsGuard({ worktree: dir }, {});
+      await loadPlugin({ root: dir, options: {} });
     });
     assert.ok(!errors.some((m) => m.includes('weaken enforcement')), 'env-sourced knobs are not re-announced');
   } finally {
@@ -144,15 +145,15 @@ test('ungatedTools option survives the build-gate backstop (degraded high-risk s
     JSON.stringify({ tickets: [{ id: 'T1', risk: 'high', rails: ['frozen/**'] }] }));
   await withEnv({ ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1', ADLC_UNGATED_TOOLS: undefined }, async () => {
     const call = (hooks, tool) =>
-      hooks['tool.execute.before']({ tool, sessionID: 'sess', callID: 'c' }, { args: { query: 'x' } });
+      hooks.before(tool, { query: 'x' }, { sessionID: 'sess' });
     // degrade the session hard: compaction IS the context-rot event
-    const relaxed = await adlcRailsGuard({ worktree: dir }, { ungatedTools: ['symbols_index'] });
-    await relaxed.event({ event: { type: 'session.compacted', properties: { sessionID: 'sess' } } });
+    const relaxed = await loadPlugin({ root: dir, options: { ungatedTools: ['symbols_index'] } });
+    await relaxed.emit(compactionEnded('sess'));
     // configured ungated tool passes BOTH the rails guard and the build gate
     await call(relaxed, 'symbols_index');
     // negative twin: without the option the same tool is denied (fail-closed default)
-    const strict = await adlcRailsGuard({ worktree: dir });
-    await strict.event({ event: { type: 'session.compacted', properties: { sessionID: 'sess' } } });
+    const strict = await loadPlugin({ root: dir });
+    await strict.emit(compactionEnded('sess'));
     await assert.rejects(() => call(strict, 'symbols_index'));
   }).finally(() => rmSync(dir, { recursive: true, force: true }));
 });

@@ -8,7 +8,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
 import { checkPreflight, auditGateManifest, auditAdversarialReview } from '../lib/session-hooks.mjs';
-import { adlcRailsGuard } from '../index.mjs';
+import { loadPlugin, sessionCreated, sessionIdle } from './helpers/fake-ctx.mjs';
 
 const mkroot = (t) => tmp(t, 'oc-t4-');
 function initAdlc(root) {
@@ -306,10 +306,13 @@ test('auditAdversarialReview: main exists but shares no history with HEAD → re
 });
 
 // ---- the real hooks are advisory: never throw ----
-test('session.created / session.idle hooks never throw (advisory)', async (t) => {
+test('session.created / session.idle events never break the event loop (advisory)', async (t) => {
   const root = initAdlc(mkroot(t));
-  const hooks = await adlcRailsGuard({ worktree: root });
-  await hooks['session.created'](); // must resolve, not reject
-  await hooks['session.idle']();
-  assert.ok(typeof hooks['session.created'] === 'function');
+  const plugin = await loadPlugin({ root });
+  t.after(() => plugin.cleanup());
+  await plugin.emit(sessionCreated('ses_1')); // handled, not thrown
+  await plugin.emit(sessionIdle('ses_1'));
+  // The loop is still consuming after both: a third event is handled too.
+  await plugin.emit(sessionIdle('ses_1'));
+  assert.equal(plugin.events.subscriptions.length, 1, 'no resubscribe — the loop never failed');
 });

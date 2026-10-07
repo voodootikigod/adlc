@@ -17,9 +17,14 @@ const DYNAMIC_IMPORT_RE = new RegExp(String.raw`import\(\s*${CORE_SPEC}\s*\)`, '
 const AWAIT_BINDINGS_RE = /\{([^}]*)\}\s*=\s*await\s*$/;
 const THEN_BINDINGS_RE = /^\s*\.then\(\s*(?:async\s*)?\(\s*\{([^}]*)\}\s*\)/;
 
-/** Host-harness sends: an SDK session prompt, or a CLI spawned in print mode. */
+/**
+ * Host-harness sends: an SDK session prompt, a child-session ask built on the
+ * opencode plugin's shared helper (its callers never call session.prompt
+ * themselves), or a CLI spawned in print mode.
+ */
 const HOST_SEND_RES = [
   /\bsession\.prompt\(/,
+  /\bmakeSessionAsk\(/,
   /\[\s*['"](?:-p|--print)['"]\s*,\s*prompt\b/,
 ];
 
