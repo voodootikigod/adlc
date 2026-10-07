@@ -156,7 +156,11 @@ binary content, credentials or file paths.
 Every input field is declared by the pack with a source, type, maximum bytes and
 data classification. The component:
 
-- rejects undeclared fields and unknown pack versions;
+- keeps only the fields the pack declares and drops every other collected
+  field unread, so a pack that declares a subset of the inputs sees only that
+  subset (a pack declaring a field outside the input table above fails pack
+  validation before any of this runs);
+- rejects unknown pack versions;
 - normalizes strings to UTF-8, removes NUL and other control characters, and
   sorts object keys before hashing or sending;
 - applies hard limits of 4 KiB per field and 32 KiB in total; a pack may lower
@@ -250,8 +254,9 @@ class, attempt count, latency and usage. No sanitized input, prompt or raw state
    committed live fixture; timeout, 429/529 and network failure become
    `unknown`, and malformed, out-of-domain and identity-mismatched responses
    become `error`. verify: `node --test packages/decision-layer/test/jev-adapter.test.mjs`
-5. The sanitizer rejects undeclared fields, oversize fields and totals, and
-   scanner failure before dispatch, and redacts credential-shaped values
+5. The sanitizer sends only the fields the pack declares (other collected
+   fields are dropped), rejects oversize fields and totals and scanner failure
+   before dispatch, and redacts credential-shaped values
    (API-key prefixes, JWT, PEM, high-entropy). verify: `node --test packages/decision-layer/test/sanitizer.test.mjs`
 6. Pack validation enforces every rule under "Question packs". verify:
    `node --test packages/decision-layer/test/pack-validator.test.mjs`
@@ -309,3 +314,7 @@ class, attempt count, latency and usage. No sanitized input, prompt or raw state
     summaries are dropped.
 15. The mock provider returns a scripted response from `--mock-response`, or a
     fixed response that reduces to `unknown`; it never derives answers.
+16. The input allowlist selects: the sanitizer keeps a pack's declared inputs
+    and drops other collected fields, so a pack may declare a subset; a pack
+    naming an input outside the input table is rejected by pack validation.
+    (P5 prosecution, 2026-10-07.)
