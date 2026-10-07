@@ -133,6 +133,27 @@ test('the hard 4 KiB field limit holds even when a field declares more', () => {
   fails(raw({ ticketCategory: 'x'.repeat(4095) }), 'field-too-large', pack);
 });
 
+test('the sanitizer applies the 4 KiB and 32 KiB caps itself, whatever an unvalidated pack declares', () => {
+  const huge = { ...PACK, limits: { fieldBytes: 1_000_000, totalBytes: 10_000_000 } };
+  huge.inputs = { ...PACK.inputs, ticketCategory: { ...PACK.inputs.ticketCategory, maxBytes: 1_000_000 } };
+  assert.doesNotThrow(() => sanitize(raw({ ticketCategory: 'x'.repeat(4094) }), huge));
+  fails(raw({ ticketCategory: 'x'.repeat(4095) }), 'field-too-large', huge);
+  const wide = { ...huge, inputs: {} };
+  const input = {};
+  for (let i = 0; i < 9; i += 1) {
+    wide.inputs[`f${i}`] = { source: 'ticket-store', type: 'string', classification: 'metadata', maxBytes: 1_000_000 };
+    input[`f${i}`] = 'y'.repeat(3800);
+  }
+  assert.doesNotThrow(() => sanitize(Object.fromEntries(Object.entries(input).slice(0, 8)), { ...wide, inputs: Object.fromEntries(Object.entries(wide.inputs).slice(0, 8)) }));
+  fails(input, 'total-too-large', wide);
+});
+
+test('count-map keys that name Object.prototype members are ordinary keys', () => {
+  const extensionCounts = JSON.parse('{"constructor":2,"__proto__":3,"tostring":1}');
+  const { sanitizedInput } = sanitize(raw({ extensionCounts }), PACK);
+  assert.deepEqual(Object.entries(sanitizedInput.extensionCounts).sort(), [['__proto__', 3], ['constructor', 2], ['tostring', 1]]);
+});
+
 test('a scanner failure stops the run; there is no raw fallback', () => {
   const scanner = () => { throw new Error('scanner exploded'); };
   fails(raw(), 'scanner-failure', PACK, { scanner });

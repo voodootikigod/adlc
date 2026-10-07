@@ -157,6 +157,59 @@ test('a revision with no shared history is refused', (t) => {
   assert.match(result.stderr, /shares no history with the default branch/);
 });
 
+test('parseNumstat counts extensions named after Object.prototype members', () => {
+  const out = ['1\t0\tx.constructor', '1\t0\ty.__proto__', '1\t0\tz.toString', '1\t0\tw.CONSTRUCTOR', ''].join('\0');
+  const { extensionCounts, filesChanged } = parseNumstat(out);
+  assert.equal(filesChanged, 4);
+  assert.deepEqual(Object.entries(extensionCounts).sort(), [['__proto__', 1], ['constructor', 2], ['tostring', 1]]);
+});
+
+test('a run inside a submodule records into the submodule work tree', (t) => {
+  const outer = changeRepo(t);
+  const inner = changeRepo(t);
+  outer.git('-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', inner.dir, 'sub');
+  const sub = join(outer.dir, 'sub');
+  execFileSync('git', ['-C', sub, 'checkout', '-q', 'feature'], { stdio: 'ignore' });
+  const result = runCli(t, SHADOW, { cwd: sub });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(readRecords(sub).length, 1);
+});
+
+test('a checkout with a separate git directory records into its work tree', (t) => {
+  const { dir } = changeRepo(t);
+  const clone = join(tmp(t, 'decision-sep-'), 'work');
+  const gitDir = join(tmp(t, 'decision-sepgit-'), 'git');
+  execFileSync('git', ['clone', '-q', '--separate-git-dir', gitDir, dir, clone], { stdio: 'ignore' });
+  execFileSync('git', ['-C', clone, 'checkout', '-q', 'feature'], { stdio: 'ignore' });
+  execFileSync('git', ['-C', clone, 'branch', '-q', 'main', 'origin/main'], { stdio: 'ignore' });
+  const result = runCli(t, SHADOW, { cwd: clone });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(readRecords(clone).length, 1);
+});
+
+test('a worktree of a bare repository is refused: there is no main work tree to record into', (t) => {
+  const { dir } = changeRepo(t);
+  const bare = join(tmp(t, 'decision-bare-'), 'repo.git');
+  execFileSync('git', ['clone', '-q', '--bare', dir, bare], { stdio: 'ignore' });
+  const worktree = join(tmp(t, 'decision-bare-wt-'), 'wt');
+  execFileSync('git', ['-C', bare, 'worktree', 'add', '-q', worktree, 'feature'], { stdio: 'ignore' });
+  const result = runCli(t, SHADOW, { cwd: worktree });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /cannot locate the main work tree/);
+});
+
+test('a linked worktree of a separate-git-dir checkout is refused rather than guessed', (t) => {
+  const { dir } = changeRepo(t);
+  const clone = join(tmp(t, 'decision-sep-'), 'work');
+  const gitDir = join(tmp(t, 'decision-sepgit-'), 'git');
+  execFileSync('git', ['clone', '-q', '--separate-git-dir', gitDir, dir, clone], { stdio: 'ignore' });
+  const worktree = join(tmp(t, 'decision-sep-wt-'), 'wt');
+  execFileSync('git', ['-C', clone, 'worktree', 'add', '-q', worktree, 'origin/feature'], { stdio: 'ignore' });
+  const result = runCli(t, SHADOW, { cwd: worktree });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /cannot locate the main work tree/);
+});
+
 test('parseNumstat counts files per extension and skips binary line counts', () => {
   const out = ['3\t1\tsrc/A.MJS', '-\t-\timg.png', '2\t0\t.gitignore', '1\t5\tdir.v2/README', ''].join('\0');
   assert.deepEqual(parseNumstat(out), {

@@ -24,11 +24,11 @@ function readMockResponse(cwd, file) {
 }
 
 async function shadowRun(config, { cwd, retryDelayMs, now }) {
-  const responseText = readMockResponse(cwd, config.mockResponse);
   const root = projectRoot(cwd);
   const mainRoot = mainCheckoutRoot(cwd);
-  const pack = loadPack(config.pack, { projectRoot: root });
   const ticket = ticketFacts(root, config.ticket);
+  const responseText = readMockResponse(cwd, config.mockResponse);
+  const pack = loadPack(config.pack, { projectRoot: root });
   const revision = resolveRevision(root, config.revision);
   const { sanitizedInput, inputHash } = sanitize({ ...diffStats(root, revision), ...ticket }, pack);
 

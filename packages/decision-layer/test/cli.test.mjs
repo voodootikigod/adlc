@@ -70,6 +70,10 @@ test('an unknown --ticket is refused', (t) => {
   refused(t, [...SHADOW, '--ticket', 'T-404'], /unknown --ticket T-404/);
 });
 
+test('an unknown --ticket is refused before the mock response or the pack is read', (t) => {
+  refused(t, [...SHADOW.slice(0, -1), 'no-such-pack', '--ticket', 'T-404', '--mock-response', 'missing.json'], /unknown --ticket T-404/);
+});
+
 test('a ticket ID with an invalid shape is refused', (t) => {
   refused(t, [...SHADOW, '--ticket', '../etc'], /is not a ticket ID/);
 });
@@ -128,6 +132,13 @@ test('--mode off does nothing: exit 0, no output, no record, even outside a repo
     assert.equal(result.stdout, '');
     assert.equal(result.stderr, '');
   }
+  assert.equal(existsSync(recordFile(dir)), false);
+});
+
+test('--mode off inside a repository writes no record', (t) => {
+  const { dir } = changeRepo(t);
+  const result = runCli(t, ['evaluate', '--mode', 'off'], { cwd: dir });
+  assert.equal(result.status, 0, result.stderr);
   assert.equal(existsSync(recordFile(dir)), false);
 });
 

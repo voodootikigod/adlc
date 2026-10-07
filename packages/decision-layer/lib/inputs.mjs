@@ -2,7 +2,7 @@
 // already exists: `git diff --numstat` between the merge-base of the revision
 // with the default branch and the revision, and the ticket store.
 import { execFileSync } from 'node:child_process';
-import { basename, dirname, extname } from 'node:path';
+import { extname, join, resolve } from 'node:path';
 import { loadTicketSnapshot } from '@adlc/tickets';
 import { ConfigError } from './errors.mjs';
 
@@ -34,12 +34,25 @@ export function projectRoot(cwd) {
   return out.trim();
 }
 
-/** The repository's main checkout, found through git's common directory, so linked worktrees share it. */
+/**
+ * The repository's main work tree: the first entry `git worktree list` reports,
+ * so every linked worktree shares it. In a submodule or a --separate-git-dir
+ * checkout git reports the git directory there instead; the work tree is then
+ * its `core.worktree` (submodules), or this checkout's own top level when this
+ * checkout is the main one. A bare main repository has no work tree.
+ */
 export function mainCheckoutRoot(cwd) {
-  const out = git(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
-  const common = out?.trim();
-  if (!common || basename(common) !== '.git') throw new ConfigError('cannot locate the main checkout of this repository');
-  return dirname(common);
+  const fail = () => { throw new ConfigError('cannot locate the main work tree of this repository'); };
+  const out = git(cwd, ['worktree', 'list', '--porcelain', '-z']);
+  const fields = (out ?? '').split('\0\0')[0].split('\0');
+  const path = fields.find((field) => field.startsWith('worktree '))?.slice('worktree '.length);
+  if (!path || fields.includes('bare')) fail();
+  const common = git(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir'])?.trim();
+  if (path !== common) return path;
+  const configured = git(cwd, ['config', '--file', join(common, 'config'), 'core.worktree'])?.trim();
+  if (configured) return resolve(common, configured);
+  const gitDir = git(cwd, ['rev-parse', '--absolute-git-dir'])?.trim();
+  return gitDir === common ? projectRoot(cwd) : fail();
 }
 
 /** `rev` resolved to a full commit id. */
@@ -60,17 +73,18 @@ function defaultBranchRef(root) {
 
 /** Parse `git diff --numstat -z --no-renames` output: "added\tdeleted\tpath\0" per file, "-" for binary. */
 export function parseNumstat(output) {
-  const stats = { extensionCounts: {}, linesAdded: 0, linesDeleted: 0, filesChanged: 0 };
+  const counts = new Map();
+  const stats = { linesAdded: 0, linesDeleted: 0, filesChanged: 0 };
   for (const record of output.split('\0')) {
     if (record === '') continue;
     const [added, deleted, path] = record.split('\t');
     const extension = extname(path).slice(1).toLowerCase() || 'none';
-    stats.extensionCounts[extension] = (stats.extensionCounts[extension] ?? 0) + 1;
+    counts.set(extension, (counts.get(extension) ?? 0) + 1);
     stats.linesAdded += added === '-' ? 0 : Number(added);
     stats.linesDeleted += deleted === '-' ? 0 : Number(deleted);
     stats.filesChanged += 1;
   }
-  return stats;
+  return { extensionCounts: Object.fromEntries(counts), ...stats };
 }
 
 /** Diff counts between the merge-base of `revision` with the default branch and `revision`. */
