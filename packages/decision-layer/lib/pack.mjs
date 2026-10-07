@@ -21,6 +21,13 @@ const PHASES = new Set(['P0', 'D1']);
 const SOURCES = new Set(['git-diff', 'ticket-store']);
 const TYPES = new Set(['integer', 'string', 'count-map', 'integer-or-none']);
 const NOUL_DOMAIN = ['yes', 'no'];
+const PACK_KEYS = ['schemaVersion', 'id', 'mode', 'description', 'limits', 'inputs', 'questions', 'aggregation'];
+const LIMIT_KEYS = ['fieldBytes', 'totalBytes'];
+const INPUT_KEYS = ['source', 'type', 'classification', 'maxBytes'];
+const QUESTION_KEYS = ['id', 'kind', 'prompt', 'domain', 'phases', 'inputs'];
+const AGGREGATION_KEYS = ['escalateIf', 'allowIf'];
+const CONDITION_KEYS = ['question', 'equals', 'atLeast', 'atMost', 'minProbability'];
+const SCORE_DOMAIN_KEYS = ['min', 'max'];
 
 export class PackError extends Error {
   constructor(message) {
@@ -30,6 +37,12 @@ export class PackError extends Error {
 }
 
 const isProbability = (value) => typeof value === 'number' && value >= 0 && value <= 1;
+
+/** Reject any key of `object` outside `allowed`; packs are closed, like the schema. */
+function closed(object, allowed, where) {
+  const extra = Object.keys(object).find((key) => !allowed.includes(key));
+  if (extra !== undefined) throw new PackError(`${where} has unknown key "${extra}"`);
+}
 
 /** sha256 of the canonical pack; part of every run record. */
 export function packHash(pack) {
@@ -42,6 +55,7 @@ export function packHash(pack) {
  */
 export function validatePack(pack) {
   if (!isPlainObject(pack)) throw new PackError('a pack must be a JSON object');
+  closed(pack, PACK_KEYS, 'the pack');
   if (pack.schemaVersion !== PACK_SCHEMA_VERSION) {
     throw new PackError(`unknown pack schemaVersion ${JSON.stringify(pack.schemaVersion)}; expected ${PACK_SCHEMA_VERSION}`);
   }
@@ -58,6 +72,7 @@ export function validatePack(pack) {
 
 function validateLimits(limits) {
   if (!isPlainObject(limits)) throw new PackError('pack limits must declare fieldBytes and totalBytes');
+  closed(limits, LIMIT_KEYS, 'limits');
   for (const [key, ceiling] of [['fieldBytes', MAX_FIELD_BYTES], ['totalBytes', MAX_TOTAL_BYTES]]) {
     const value = limits[key];
     if (!Number.isInteger(value) || value < 1 || value > ceiling) {
@@ -70,6 +85,7 @@ function validateInputs(inputs) {
   if (!isPlainObject(inputs) || Object.keys(inputs).length === 0) throw new PackError('a pack must declare its inputs');
   for (const [name, field] of Object.entries(inputs)) {
     if (!isPlainObject(field)) throw new PackError(`input "${name}" must be an object`);
+    closed(field, INPUT_KEYS, `input "${name}"`);
     if (!SOURCES.has(field.source)) throw new PackError(`input "${name}" has unknown source ${JSON.stringify(field.source)}`);
     if (!TYPES.has(field.type)) throw new PackError(`input "${name}" has unknown type ${JSON.stringify(field.type)}`);
     if (field.classification !== 'metadata') {
@@ -98,6 +114,7 @@ function validateDomain(question) {
   }
   const valid = isPlainObject(domain) && Number.isFinite(domain.min) && Number.isFinite(domain.max) && domain.min < domain.max;
   if (!valid) throw new PackError(`question "${id}": a Score domain is { min, max } with min < max`);
+  closed(domain, SCORE_DOMAIN_KEYS, `question "${id}" domain`);
 }
 
 function validateQuestions(questions, inputs) {
@@ -108,6 +125,7 @@ function validateQuestions(questions, inputs) {
       throw new PackError('every question needs a string id');
     }
     if (byId.has(question.id)) throw new PackError(`duplicate question id "${question.id}"`);
+    closed(question, QUESTION_KEYS, `question "${question.id}"`);
     byId.set(question.id, question);
     if (!KINDS.has(question.kind)) throw new PackError(`question "${question.id}" has unknown kind ${JSON.stringify(question.kind)}`);
     validateDomain(question);
@@ -130,6 +148,7 @@ function validateQuestions(questions, inputs) {
 function validateCondition(condition, questions, list) {
   const where = `aggregation.${list}`;
   if (!isPlainObject(condition)) throw new PackError(`${where}: every condition is an object`);
+  closed(condition, CONDITION_KEYS, where);
   const question = questions.get(condition.question);
   if (!question) throw new PackError(`${where}: unknown question ${JSON.stringify(condition.question)}`);
   if (condition.minProbability !== undefined && !isProbability(condition.minProbability)) {
@@ -153,6 +172,7 @@ function validateCondition(condition, questions, list) {
 
 function validateAggregation(aggregation, questions) {
   if (!isPlainObject(aggregation)) throw new PackError('a pack must declare its aggregation');
+  closed(aggregation, AGGREGATION_KEYS, 'aggregation');
   for (const list of ['escalateIf', 'allowIf']) {
     if (!Array.isArray(aggregation[list])) throw new PackError(`aggregation.${list} must be a list`);
     for (const condition of aggregation[list]) validateCondition(condition, questions, list);

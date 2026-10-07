@@ -5,19 +5,47 @@
   "description": "A versioned question pack for @adlc/decision-layer (shadow mode). lib/pack.mjs validates the same rules without a schema engine, plus the cross-references a schema cannot express: question inputs must be declared, aggregation conditions must name a question and stay inside its domain, and question IDs must be unique.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "id", "mode", "limits", "inputs", "questions", "aggregation"],
+  "required": [
+    "schemaVersion",
+    "id",
+    "mode",
+    "limits",
+    "inputs",
+    "questions",
+    "aggregation"
+  ],
   "properties": {
-    "schemaVersion": { "const": 1 },
-    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
-    "mode": { "const": "shadow" },
-    "description": { "type": "string" },
+    "schemaVersion": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "mode": {
+      "const": "shadow"
+    },
+    "description": {
+      "type": "string"
+    },
     "limits": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["fieldBytes", "totalBytes"],
+      "required": [
+        "fieldBytes",
+        "totalBytes"
+      ],
       "properties": {
-        "fieldBytes": { "type": "integer", "minimum": 1, "maximum": 4096 },
-        "totalBytes": { "type": "integer", "minimum": 1, "maximum": 32768 }
+        "fieldBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
+        },
+        "totalBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32768
+        }
       }
     },
     "inputs": {
@@ -26,12 +54,35 @@
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["source", "type", "classification", "maxBytes"],
+        "required": [
+          "source",
+          "type",
+          "classification",
+          "maxBytes"
+        ],
         "properties": {
-          "source": { "enum": ["git-diff", "ticket-store"] },
-          "type": { "enum": ["integer", "string", "count-map", "integer-or-none"] },
-          "classification": { "const": "metadata" },
-          "maxBytes": { "type": "integer", "minimum": 1, "maximum": 4096 }
+          "source": {
+            "enum": [
+              "git-diff",
+              "ticket-store"
+            ]
+          },
+          "type": {
+            "enum": [
+              "integer",
+              "string",
+              "count-map",
+              "integer-or-none"
+            ]
+          },
+          "classification": {
+            "const": "metadata"
+          },
+          "maxBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4096
+          }
         }
       }
     },
@@ -40,45 +91,187 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["id", "kind", "domain", "phases", "inputs"],
+        "required": [
+          "id",
+          "kind",
+          "domain",
+          "phases",
+          "inputs"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "kind": { "enum": ["Choice", "Score", "Noul"] },
-          "prompt": { "type": "string" },
-          "domain": {
-            "oneOf": [
-              { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
-              {
-                "type": "object",
-                "required": ["min", "max"],
-                "properties": { "min": { "type": "number" }, "max": { "type": "number" } }
-              }
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "enum": [
+              "Choice",
+              "Score",
+              "Noul"
             ]
           },
-          "phases": { "type": "array", "minItems": 1, "items": { "enum": ["P0", "D1"] } },
-          "inputs": { "type": "array", "minItems": 1, "items": { "type": "string" } }
-        }
+          "prompt": {
+            "type": "string"
+          },
+          "domain": {
+            "description": "Bound to the kind by allOf below."
+          },
+          "phases": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "enum": [
+                "P0",
+                "D1"
+              ]
+            }
+          },
+          "inputs": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "Choice"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "domain": {
+                  "$ref": "#/$defs/choiceDomain"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "Noul"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "domain": {
+                  "$ref": "#/$defs/noulDomain"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "Score"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "domain": {
+                  "$ref": "#/$defs/scoreDomain"
+                }
+              }
+            }
+          }
+        ]
       }
     },
     "aggregation": {
       "type": "object",
-      "required": ["escalateIf", "allowIf"],
+      "required": [
+        "escalateIf",
+        "allowIf"
+      ],
       "properties": {
-        "escalateIf": { "type": "array", "items": { "$ref": "#/$defs/condition" } },
-        "allowIf": { "type": "array", "items": { "$ref": "#/$defs/condition" } }
-      }
+        "escalateIf": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/condition"
+          }
+        },
+        "allowIf": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/condition"
+          }
+        }
+      },
+      "additionalProperties": false
     }
   },
   "$defs": {
     "condition": {
       "type": "object",
-      "required": ["question"],
+      "required": [
+        "question"
+      ],
       "properties": {
-        "question": { "type": "string" },
-        "equals": { "type": "string" },
-        "atLeast": { "type": "number" },
-        "atMost": { "type": "number" },
-        "minProbability": { "type": "number", "minimum": 0, "maximum": 1 }
+        "question": {
+          "type": "string"
+        },
+        "equals": {
+          "type": "string"
+        },
+        "atLeast": {
+          "type": "number"
+        },
+        "atMost": {
+          "type": "number"
+        },
+        "minProbability": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "choiceDomain": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "noulDomain": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "yes",
+          "no"
+        ]
+      }
+    },
+    "scoreDomain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "min",
+        "max"
+      ],
+      "properties": {
+        "min": {
+          "type": "number"
+        },
+        "max": {
+          "type": "number"
+        }
       }
     }
   }
