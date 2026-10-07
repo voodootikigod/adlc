@@ -21,7 +21,13 @@ It is opt-in. Nothing changes for a project that never runs it.
 ## Usage
 
 ```sh
-adlc decision evaluate --mode shadow --provider mock --model mock-1 --pack change-risk-v1 [--revision <rev>] [--ticket <id>] [--pr <number>] [--mock-response <file>] [--json]
+adlc decision evaluate --mode shadow --provider <jev|mock> --model <id> --pack <pack-id> [--revision <rev>] [--ticket <id>] [--pr <number>] [--mock-response <file>] [--json]
+```
+
+For example, an offline run against the shipped pack, joined to a ticket and PR:
+
+```sh
+adlc decision evaluate --mode shadow --provider mock --model mock-1 --pack change-risk-v1 --ticket T-01M48JH491ZZ77FH2NDMC6EJ20 --pr 1180
 ```
 
 | Flag | Description |
