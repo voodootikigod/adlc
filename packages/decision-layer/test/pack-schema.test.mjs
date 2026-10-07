@@ -150,6 +150,18 @@ for (const [name, pack, expected] of CASES) {
   });
 }
 
+test('Score min < max is a validator-only rule, and the schema says so', () => {
+  assert.match(SCHEMA.description, /Score domain min < max/);
+  for (const domain of [{ min: 1, max: 1 }, { min: 2, max: 1 }]) {
+    const pack = variant((p) => {
+      p.questions[0] = { ...p.questions[0], kind: 'Score', domain };
+      p.aggregation = { escalateIf: [], allowIf: [] };
+    });
+    assert.equal(validatorAccepts(pack), false, JSON.stringify(domain));
+    assert.equal(conforms(SCHEMA, pack), true, `the schema cannot express min < max: ${JSON.stringify(domain)}`);
+  }
+});
+
 test('the walker refuses schema keywords it does not implement', () => {
   assert.throws(() => conforms({ format: 'email' }, 'x'), /not supported/);
 });
