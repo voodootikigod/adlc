@@ -40,10 +40,40 @@ test('the resolve log does see the decision layer when its own verb runs', (t) =
   assert.ok(urls.some((url) => url.endsWith('/packages/decision-layer/lib/cli.mjs')), urls.join('\n'));
 });
 
+// Static, dynamic and CommonJS imports of the package or any subpath. A plain
+// string naming the package (the registry's packageName) is not an import.
+const IMPORTS_DECISION_LAYER = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+|\brequire\s*\(\s*)['"`]@adlc\/decision-layer(?:\/[^'"`]*)?['"`]/;
+
+function sourceFiles(dir) {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) return sourceFiles(path);
+    return /\.(?:mjs|cjs|js)$/.test(entry.name) ? [path] : [];
+  });
+}
+
+test('the import matcher catches every import form and ignores a plain string', () => {
+  for (const source of [
+    "import { main } from '@adlc/decision-layer';",
+    "import x from \"@adlc/decision-layer/lib/cli.mjs\";",
+    "import '@adlc/decision-layer';",
+    "const m = await import('@adlc/decision-layer/lib/cli.mjs');",
+    "const m = await import( `@adlc/decision-layer` );",
+    "const m = require('@adlc/decision-layer');",
+    "export { main } from '@adlc/decision-layer';",
+  ]) assert.ok(IMPORTS_DECISION_LAYER.test(source), source);
+  for (const source of [
+    "{ name: 'decision', packageName: '@adlc/decision-layer', binName: 'adlc-decision' }",
+    "import x from '@adlc/decision-layer-other';",
+  ]) assert.ok(!IMPORTS_DECISION_LAYER.test(source), source);
+});
+
 test('the CLI package never imports the decision layer', () => {
-  const cliLib = join(PACKAGE_DIR, '..', 'cli', 'lib');
-  for (const name of readdirSync(cliLib)) {
-    assert.ok(!readFileSync(join(cliLib, name), 'utf8').includes('@adlc/decision-layer/'), `${name} imports the decision layer`);
+  const files = sourceFiles(join(PACKAGE_DIR, '..', 'cli'));
+  assert.ok(files.some((file) => file.endsWith('registry.mjs')), 'the walk did not reach the CLI sources');
+  for (const file of files) {
+    if (file.includes(`${join('cli', 'test')}`)) continue;
+    assert.ok(!IMPORTS_DECISION_LAYER.test(readFileSync(file, 'utf8')), `${file} imports the decision layer`);
   }
 });
 
