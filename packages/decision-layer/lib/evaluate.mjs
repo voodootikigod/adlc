@@ -37,6 +37,7 @@ async function shadowRun(config, { cwd, retryDelayMs, now }) {
     model: config.model,
     pack,
     sanitizedInput,
+    revision,
     retryDelayMs,
   });
   const { outcome, wouldAct } = reduce({ status: result.status, answers: result.answers, pack });

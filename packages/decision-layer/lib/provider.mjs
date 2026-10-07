@@ -3,20 +3,33 @@
 // A provider's call() resolves to { body } (a reply arrived) or { failure }
 // (none did: 'timeout', 'rate-limit' or 'network'). No reply is `unknown`; a
 // reply that is unusable is `error`. Neither ever carries a fabricated answer.
-// Rate-limit and network failures are retried at most MAX_RETRIES times;
-// timeouts are not retried.
+// Rate-limit and network failures are retried at most MAX_RETRIES times; a
+// call that has not answered within timeoutMs is a timeout, never retried.
+//
+// Each question is sent only the input fields it declares. A model ID ending
+// in -<major>.<minor>.<patch> is pinned: a reply that resolves it to any other
+// model is `error`. Any other ID is an alias, which may resolve to anything;
+// both IDs are recorded.
 import { isPlainObject } from '@adlc/core';
 
 export const MAX_RETRIES = 2;
+export const DEFAULT_TIMEOUT_MS = 10_000;
+const PINNED_MODEL = /-\d+\.\d+\.\d+$/;
 const DEFAULT_RETRY_DELAY_MS = 250;
 const RETRYABLE = new Set(['rate-limit', 'network']);
 const BODY_KEYS = new Set(['answers', 'resolvedModel', 'usage']);
 const ANSWER_KEYS = new Set(['id', 'kind', 'value', 'probability', 'confidence']);
 
+/** A model ID ending in -<major>.<minor>.<patch> names one immutable model. */
+export function isPinnedModel(model) {
+  return PINNED_MODEL.test(model);
+}
+
 class UnusableReply extends Error {
-  constructor(errorClass, message) {
+  constructor(errorClass, message, resolvedModel) {
     super(message);
     this.errorClass = errorClass;
+    this.resolvedModel = resolvedModel;
   }
 }
 
@@ -72,11 +85,21 @@ function normalizeReply(body, pack) {
   };
 }
 
-async function callOnce(provider, request) {
+async function callOnce(provider, request, timeoutMs) {
+  let timer;
+  const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve({ failure: 'timeout' }), timeoutMs); });
   try {
-    return await provider.call(request);
+    return await Promise.race([provider.call(request), timeout]);
   } catch {
     return { failure: 'network' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function checkResolvedModel(model, resolvedModel) {
+  if (resolvedModel !== undefined && resolvedModel !== model && isPinnedModel(model)) {
+    throw new UnusableReply('model-mismatch', `pinned model ${model} resolved to ${resolvedModel}`, resolvedModel);
   }
 }
 
@@ -90,21 +113,29 @@ export async function evaluateDecision({
   model,
   pack,
   sanitizedInput,
+  revision,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
   retryDelayMs = DEFAULT_RETRY_DELAY_MS,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }) {
   const request = {
     model,
+    revision,
     packId: pack.id,
-    questions: pack.questions.map(({ id, kind, prompt, domain, inputs }) => ({ id, kind, prompt, domain, inputs })),
-    input: sanitizedInput,
+    questions: pack.questions.map(({ id, kind, prompt, domain, inputs }) => ({
+      id,
+      kind,
+      prompt,
+      domain,
+      input: Object.fromEntries(inputs.map((name) => [name, sanitizedInput[name]])),
+    })),
   };
   const started = Date.now();
   let attemptCount = 0;
   let outcome;
   for (;;) {
     attemptCount += 1;
-    outcome = await callOnce(provider, request);
+    outcome = await callOnce(provider, request, timeoutMs);
     if (!(outcome.failure && RETRYABLE.has(outcome.failure) && attemptCount <= MAX_RETRIES)) break;
     await sleep(retryDelayMs);
   }
@@ -114,6 +145,7 @@ export async function evaluateDecision({
   }
   try {
     const reply = normalizeReply(outcome.body, pack);
+    checkResolvedModel(model, reply.resolvedModel);
     return {
       status: 'ok',
       answers: reply.answers,
@@ -123,6 +155,6 @@ export async function evaluateDecision({
       ...base,
     };
   } catch (error) {
-    return { status: 'error', answers: [], resolvedModel: model, errorClass: error.errorClass, usage: null, ...base };
+    return { status: 'error', answers: [], resolvedModel: error.resolvedModel ?? model, errorClass: error.errorClass, usage: null, ...base };
   }
 }

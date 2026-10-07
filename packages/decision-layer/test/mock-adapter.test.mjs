@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { installNoNetwork } from './helpers/no-network.mjs';
 import { MOCK_DEFAULT_RESPONSE, createMockProvider } from '../lib/mock-provider.mjs';
-import { MAX_RETRIES, evaluateDecision } from '../lib/provider.mjs';
+import { DEFAULT_TIMEOUT_MS, MAX_RETRIES, evaluateDecision, isPinnedModel } from '../lib/provider.mjs';
 import { reduce } from '../lib/reducer.mjs';
 
 installNoNetwork();
@@ -115,14 +115,61 @@ test('by default retries back off between attempts', async () => {
   for (const ms of delays) assert.ok(ms >= 100, `retry backoff ${ms} ms is too short to relieve a rate limit`);
 });
 
-test('the provider receives the model, the pack questions and the sanitized input', async () => {
+test('the provider receives the model, revision, pack ID and each question with only its declared inputs', async () => {
   let seen;
   const provider = { name: 'spy', call: async (request) => { seen = request; return { body: JSON.parse(body(ok)) }; } };
-  await evaluateDecision({ provider, model: 'm-7', pack: PACK, sanitizedInput: INPUT, retryDelayMs: 0 });
+  const pack = structuredClone(PACK);
+  pack.questions[0].inputs = ['linesAdded', 'filesChanged'];
+  pack.questions[1].inputs = ['ticketCategory'];
+  await evaluateDecision({ provider, model: 'm-7', pack, sanitizedInput: INPUT, revision: 'abc123', retryDelayMs: 0 });
   assert.equal(seen.model, 'm-7');
+  assert.equal(seen.revision, 'abc123');
   assert.equal(seen.packId, 'change-risk-v1');
-  assert.deepEqual(seen.questions.map((q) => q.id), ['risk', 'needs-deeper-interrogation']);
-  assert.deepEqual(seen.input, INPUT);
+  assert.deepEqual(seen.questions, [
+    { id: 'risk', kind: 'Choice', prompt: PACK.questions[0].prompt, domain: ['low', 'medium', 'high'], input: { filesChanged: 1, linesAdded: 1 } },
+    { id: 'needs-deeper-interrogation', kind: 'Noul', prompt: PACK.questions[1].prompt, domain: ['yes', 'no'], input: { ticketCategory: 'none' } },
+  ]);
+  assert.equal('input' in seen, false, 'the whole input was sent beside the per-question inputs');
+});
+
+test('a provider that does not answer within timeoutMs is an unknown timeout, not retried', async () => {
+  let calls = 0;
+  const provider = { name: 'hang', call: () => { calls += 1; return new Promise(() => {}); } };
+  const result = await evaluateDecision({ provider, model: 'm', pack: PACK, sanitizedInput: INPUT, timeoutMs: 20, retryDelayMs: 0 });
+  assert.equal(result.status, 'unknown');
+  assert.equal(result.errorClass, 'timeout');
+  assert.equal(result.attemptCount, 1);
+  assert.equal(calls, 1);
+});
+
+test('the default timeout is bounded', () => {
+  assert.ok(Number.isFinite(DEFAULT_TIMEOUT_MS) && DEFAULT_TIMEOUT_MS > 0 && DEFAULT_TIMEOUT_MS <= 120_000);
+});
+
+test('a pinned model (ending in a version) must resolve to itself, or the reply is error', async () => {
+  const reply = (resolvedModel) => ({ name: 's', call: async () => ({ body: { ...JSON.parse(body(ok)), resolvedModel } }) });
+  const call = (model, resolved) => evaluateDecision({ provider: reply(resolved), model, pack: PACK, sanitizedInput: INPUT, retryDelayMs: 0 });
+  const mismatch = await call('mock-1.0.0', 'mock-1.0.1');
+  assert.equal(mismatch.status, 'error');
+  assert.equal(mismatch.errorClass, 'model-mismatch');
+  assert.equal(mismatch.resolvedModel, 'mock-1.0.1');
+  assert.equal((await call('mock-1.0.0', 'mock-1.0.0')).status, 'ok');
+  assert.equal((await call('mock-1.0.0', undefined)).status, 'ok');
+});
+
+test('an alias may resolve to any model, and both are recorded', async () => {
+  for (const alias of ['mock-latest', 'mock-1', 'mock-1.0']) {
+    const provider = { name: 's', call: async () => ({ body: { ...JSON.parse(body(ok)), resolvedModel: 'mock-1.0.3' } }) };
+    const result = await evaluateDecision({ provider, model: alias, pack: PACK, sanitizedInput: INPUT, retryDelayMs: 0 });
+    assert.equal(result.status, 'ok', alias);
+    assert.equal(result.requestedModel, alias);
+    assert.equal(result.resolvedModel, 'mock-1.0.3');
+  }
+});
+
+test('isPinnedModel: a model ID ending in -<major>.<minor>.<patch> is pinned', () => {
+  for (const model of ['jev-1.13.0', 'mock-0.0.1', 'a-10.20.30']) assert.equal(isPinnedModel(model), true, model);
+  for (const model of ['jev-latest', 'jev-1.13', 'jev1.13.0', 'mock-1.0.0-beta', 'mock-1.0.0.1']) assert.equal(isPinnedModel(model), false, model);
 });
 
 test('a provider that throws is recorded as an unknown network failure, not a crash', async () => {
