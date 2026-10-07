@@ -33,6 +33,24 @@ function refuseLink(path, stats) {
   if (stats?.isSymbolicLink()) throw new Error(`${path} is a symbolic link`);
 }
 
+/**
+ * Make sure `dir` is a real directory, creating it if needed. Another run may
+ * create it between the check and the mkdir: that EEXIST is not a failure, and
+ * whatever now stands there is checked like anything found in the first place.
+ */
+function ensureDirectory(dir) {
+  if (!lstatOrNull(dir)) {
+    try {
+      mkdirSync(dir);
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+  }
+  const stats = lstatSync(dir);
+  refuseLink(dir, stats);
+  if (!stats.isDirectory()) throw new Error(`${dir} is not a directory`);
+}
+
 /** Append `record` as one line to the main checkout's log; any failure is a RecordError (the run was not recorded). */
 export function appendRecord(mainRoot, record) {
   const path = recordPath(mainRoot);
@@ -40,9 +58,7 @@ export function appendRecord(mainRoot, record) {
     let dir = mainRoot;
     for (const segment of LOG_DIRECTORIES) {
       dir = join(dir, segment);
-      const stats = lstatOrNull(dir);
-      refuseLink(dir, stats);
-      if (!stats) mkdirSync(dir);
+      ensureDirectory(dir);
     }
     refuseLink(path, lstatOrNull(path));
     const fd = openSync(path, APPEND_FLAGS, 0o644);
