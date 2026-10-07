@@ -10,7 +10,9 @@ import { tmp } from '@adlc/core/test-kit';
 import { installNoNetwork } from './helpers/no-network.mjs';
 import { REPLIES, TICKET_CATEGORY_MARKER, changeRepo, responseFile, runCli } from './helpers/fixtures.mjs';
 import { canonicalHash } from '../lib/canonical.mjs';
-import { parseNumstat } from '../lib/inputs.mjs';
+import { GIT_OPTIONS, parseNumstat } from '../lib/inputs.mjs';
+import { RecordError } from '../lib/errors.mjs';
+import { writeFileSync } from 'node:fs';
 import { runEvaluate } from '../lib/evaluate.mjs';
 import { loadPack, packHash } from '../lib/pack.mjs';
 
@@ -162,6 +164,21 @@ test('runEvaluate rethrows failures it does not own', async (t) => {
     }),
     /clock broke/,
   );
+});
+
+test('a record that cannot be written resolves to exit 1 with a RecordError', async (t) => {
+  const { dir } = changeRepo(t);
+  writeFileSync(join(dir, '.adlc', 'decisions'), 'a file where the directory should be');
+  const result = await runEvaluate({
+    mode: 'shadow', provider: 'mock', model: 'm', pack: 'change-risk-v1', revision: 'HEAD', ticket: null, pr: null, mockResponse: null,
+  }, { cwd: dir });
+  assert.equal(result.exitCode, 1);
+  assert.ok(result.error instanceof RecordError);
+});
+
+test('every git call is bounded in time and output', () => {
+  assert.ok(Number.isFinite(GIT_OPTIONS.timeout) && GIT_OPTIONS.timeout > 0, 'git runs without a timeout');
+  assert.ok(GIT_OPTIONS.maxBuffer >= 16 * 1024 * 1024, 'git output buffer is too small for a large diff');
 });
 
 test('--mode off returns 0 without touching the repository', async () => {

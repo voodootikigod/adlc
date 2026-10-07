@@ -95,6 +95,16 @@ test('a credential used as a count-map key is redacted, and colliding keys merge
   assert.deepEqual(sanitizedInput.extensionCounts, { '<redacted:credential>': 5, mjs: 1 });
 });
 
+test('the JWT and API-key patterns start at their minimum lengths', () => {
+  const seg = (n) => 'abcdefghijklmnop'.slice(0, n);
+  assert.equal(scanText(`eyJ${seg(8)}.${seg(8)}.x`).text, '<redacted:jwt>');
+  assert.equal(scanText(`eyJ${seg(7)}.${seg(8)}.x`).text, `eyJ${seg(7)}.${seg(8)}.x`);
+  assert.equal(scanText(`eyJ${seg(8)}.${seg(7)}.x`).text, `eyJ${seg(8)}.${seg(7)}.x`);
+  const key = (n) => `sk-${'Ab1'.repeat(7).slice(0, n)}`;
+  assert.equal(scanText(key(20)).text, '<redacted:credential>');
+  assert.equal(scanText(key(19)).text, key(19));
+});
+
 test('ordinary metadata is not redacted', () => {
   for (const value of ['feature', 'bugfix', 'mjs', 'none', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '0123456789abcdef0123456789abcdef01234567']) {
     assert.equal(scanText(value).text, value);

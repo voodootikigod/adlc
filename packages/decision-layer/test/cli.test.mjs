@@ -134,7 +134,9 @@ test('--mode off does nothing: exit 0, no output, no record, even outside a repo
 test('--help prints usage and exits 0', (t) => {
   const result = runCli(t, ['--help'], { cwd: tmp(t, 'decision-help-') });
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /adlc decision evaluate --mode shadow/);
+  assert.ok(result.stdout.includes('adlc decision evaluate --mode shadow --provider <jev|mock> --model <id>'), result.stdout);
+  assert.ok(result.stdout.includes('--pack <pack-id> [--revision <rev>] [--ticket <id>] [--pr <number>]'), result.stdout);
+  assert.ok(result.stdout.includes('[--mock-response <file>] [--json]'), result.stdout);
   assert.match(result.stdout, /Exit codes:/);
 });
 

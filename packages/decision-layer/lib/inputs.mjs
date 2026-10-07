@@ -6,8 +6,8 @@ import { basename, dirname, extname } from 'node:path';
 import { loadTicketSnapshot } from '@adlc/tickets';
 import { ConfigError } from './errors.mjs';
 
-const GIT_TIMEOUT_MS = 30_000;
-const GIT_MAX_BUFFER = 64 * 1024 * 1024;
+/** Bounds on every git call: a hung or runaway git cannot stall or flood a run. */
+export const GIT_OPTIONS = Object.freeze({ timeout: 30_000, maxBuffer: 64 * 1024 * 1024 });
 const AMBIENT_GIT_VARIABLES = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_COMMON_DIR', 'GIT_PREFIX'];
 
 function gitEnv() {
@@ -21,8 +21,7 @@ function git(root, args) {
   try {
     return execFileSync('git', ['-C', root, ...args], {
       encoding: 'utf8',
-      timeout: GIT_TIMEOUT_MS,
-      maxBuffer: GIT_MAX_BUFFER,
+      ...GIT_OPTIONS,
       stdio: ['ignore', 'pipe', 'ignore'],
       env: gitEnv(),
     });

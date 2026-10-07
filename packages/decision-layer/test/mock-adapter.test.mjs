@@ -107,6 +107,14 @@ test('retries wait retryDelayMs between attempts', async () => {
   assert.deepEqual(delays, [5, 5]);
 });
 
+test('by default retries back off between attempts', async () => {
+  const delays = [];
+  const provider = { name: 'scripted', call: async () => ({ failure: 'rate-limit' }) };
+  await evaluateDecision({ provider, model: 'm', pack: PACK, sanitizedInput: INPUT, sleep: async (ms) => { delays.push(ms); } });
+  assert.equal(delays.length, 2);
+  for (const ms of delays) assert.ok(ms >= 100, `retry backoff ${ms} ms is too short to relieve a rate limit`);
+});
+
 test('the provider receives the model, the pack questions and the sanitized input', async () => {
   let seen;
   const provider = { name: 'spy', call: async (request) => { seen = request; return { body: JSON.parse(body(ok)) }; } };

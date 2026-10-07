@@ -45,6 +45,11 @@ test('pack IDs must match [a-z0-9][a-z0-9-]*', () => {
   }
 });
 
+test('single-character pack IDs are valid', () => {
+  assert.doesNotThrow(() => validatePack({ ...clone(), id: 'a' }));
+  assert.doesNotThrow(() => validatePack({ ...clone(), id: '7' }));
+});
+
 test('an unknown schema version is rejected', () => {
   rejects({ ...clone(), schemaVersion: 2 }, /schemaVersion/);
 });
