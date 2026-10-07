@@ -6,7 +6,7 @@
 // Rate-limit and network failures are retried at most MAX_RETRIES times; a
 // call that has not answered within timeoutMs is a timeout, never retried.
 //
-// The request carries the model, the pack ID and each question's pack-authored
+// The request is canonical JSON (keys sorted at every level) and carries the model, the pack ID and each question's pack-authored
 // text (id, kind, prompt, domain) with only the sanitized input fields that
 // question declares. Nothing else derived from the repository is sent: in
 // particular not the revision, which the run records but the provider never sees.
@@ -17,6 +17,7 @@
 // is otherwise unusable, and null when no reply arrived or none was reported.
 import { isPlainObject } from '@adlc/core';
 import { packHash } from './pack.mjs';
+import { canonicalJson } from './canonical.mjs';
 
 export const MAX_RETRIES = 2;
 export const DEFAULT_TIMEOUT_MS = 10_000;
@@ -123,7 +124,7 @@ export async function evaluateDecision({
   retryDelayMs = DEFAULT_RETRY_DELAY_MS,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }) {
-  const request = {
+  const request = JSON.parse(canonicalJson({
     model,
     packId: pack.id,
     questions: pack.questions.map(({ id, kind, prompt, domain, inputs }) => ({
@@ -133,7 +134,7 @@ export async function evaluateDecision({
       domain,
       input: Object.fromEntries(inputs.map((name) => [name, sanitizedInput[name]])),
     })),
-  };
+  }));
   const started = Date.now();
   let attemptCount = 0;
   let outcome;

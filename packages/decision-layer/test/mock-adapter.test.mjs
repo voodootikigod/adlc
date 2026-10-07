@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { installNoNetwork } from './helpers/no-network.mjs';
 import { MOCK_DEFAULT_RESPONSE, createMockProvider } from '../lib/mock-provider.mjs';
 import { packHash } from '../lib/pack.mjs';
+import { canonicalJson } from '../lib/canonical.mjs';
 import { DEFAULT_TIMEOUT_MS, MAX_RETRIES, evaluateDecision, isPinnedModel } from '../lib/provider.mjs';
 import { reduce } from '../lib/reducer.mjs';
 
@@ -161,6 +162,15 @@ test('the provider receives the model, the pack ID and each question with only i
     { id: 'needs-deeper-interrogation', kind: 'Noul', prompt: PACK.questions[1].prompt, domain: ['yes', 'no'], input: { ticketCategory: 'none' } },
   ]);
   assert.equal('input' in seen, false, 'the whole input was sent beside the per-question inputs');
+});
+
+test('the provider request is canonical: object keys sorted at every level', async () => {
+  let seen;
+  const provider = { name: 'spy', call: async (request) => { seen = request; return { body: JSON.parse(body(ok)) }; } };
+  const pack = structuredClone(PACK);
+  pack.questions[0].inputs = ['linesAdded', 'extensionCounts', 'filesChanged'];
+  await evaluateDecision({ provider, model: 'm', pack, sanitizedInput: INPUT, retryDelayMs: 0 });
+  assert.equal(JSON.stringify(seen), canonicalJson(seen));
 });
 
 test('the revision is never sent to the provider', async () => {
