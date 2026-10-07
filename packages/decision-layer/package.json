@@ -33,6 +33,7 @@
     "LICENSE"
   ],
   "dependencies": {
+    "@adlc/core": "1.11.1",
     "@adlc/tickets": "1.11.1"
   },
   "scripts": {

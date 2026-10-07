@@ -1,0 +1,60 @@
+---
+title: decision-layer
+description: Asks a typed classifier versioned questions about a change and records the answers, which never change an ADLC outcome.
+---
+
+# decision-layer
+
+**ADLC phase: P0 / D1 (shadow, observation only)** · **Gate:** none. The answers never change an exit code, ticket, rail, routing assignment, review requirement or verdict.
+
+## What it is for
+
+A typed probabilistic classifier can answer questions such as "how risky is
+this change?" with a value and a probability. Whether those answers deserve any
+weight in your lifecycle is an empirical question, and vendor confidence is not
+the answer to it. `decision-layer` runs the classifier beside the existing
+deterministic gates and records what it said, so a later decision about using
+it rests on evidence from your own repository.
+
+It is opt-in. Nothing changes for a project that never runs it.
+
+## Usage
+
+```sh
+adlc decision evaluate --mode shadow --provider mock --model mock-1 --pack change-risk-v1 [--revision <rev>] [--ticket <id>] [--pr <number>] [--mock-response <file>] [--json]
+```
+
+| Flag | Description |
+| --- | --- |
+| `--mode off\|shadow` | `off` (default) does nothing. Any other value, including `enforce`, is refused. |
+| `--provider mock\|jev` | `mock` is offline. `jev` is refused until its live contract fixture has been captured. |
+| `--model <id>` | Model identifier to request. |
+| `--pack <id>` | Question pack. Shipped: `change-risk-v1`. |
+| `--revision <rev>` | Revision whose change is described (default `HEAD`). |
+| `--ticket <id>`, `--pr <n>` | Join keys recorded with the run, so outcomes can be matched later. Never sent. |
+| `--mock-response <file>` | With `--provider mock`, the reply to return. |
+| `--json` | Print the run record. |
+
+## What leaves the machine
+
+Only declared metadata: files changed per extension, lines added and deleted,
+files changed, and the ticket's category and rail count. Never source text,
+diffs, issue bodies, prompts, environment files, git history, file paths or
+credentials. Credential-shaped strings are redacted, fields are capped at 4 KiB
+each and 32 KiB in total, and any sanitization failure stops the run before
+anything is sent.
+
+## The record
+
+Each run appends one line to `.adlc/decisions/runs.jsonl` in the main checkout:
+revision, provider, requested and resolved model, pack hash, the hash of the
+sanitized input (not the input), join keys, normalized answers, the outcome
+(`allow`, `escalate` or `unknown`), the phase action it would take, status,
+attempts, latency and usage.
+
+## Exit codes
+
+<div style={{ display: 'grid', gap: '0.25rem' }}>
+  <span style={{ color: 'var(--adlc-pass)' }}>**0**: the run was recorded, whatever the answers; or `--mode off`.</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**1**: configuration, pack, sanitization or record-write failure. Nothing was sent or recorded.</span>
+</div>

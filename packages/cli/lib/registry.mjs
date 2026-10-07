@@ -48,6 +48,7 @@ export const GROUPS = [
       { name: 'review-calibration', packageName: '@adlc/review-calibration', summary: 'Measure reviewer recall by scoring whether review catches mutants.' },
       { name: 'model-ratchet', packageName: '@adlc/model-ratchet', summary: 'Identify hot files for re-prosecution after model or repo drift.' },
       { name: 'gate-fuzzing', packageName: '@adlc/gate-fuzzing', summary: 'Run hostile candidates against gate suites to find defeats.' },
+      { name: 'decision', packageName: '@adlc/decision-layer', binName: 'adlc-decision', summary: 'Ask a typed classifier versioned questions about a change and record the answers (shadow mode: never changes an outcome).' },
       { name: 'review', packageName: 'adversarial-review', external: true, summary: 'Run the model-judged adversarial review (via `npx adversarial-review`) that `prosecute` records evidence for.' },
     ],
   },

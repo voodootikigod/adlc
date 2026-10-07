@@ -3,10 +3,11 @@
 // Shipped packs live in this package's packs/<id>/pack.json. A project may add
 // its own under .adlc/decision-packs/<id>/pack.json, but never one that shares
 // a shipped ID. DecisionPack.schema.json documents the same shape this module
-// enforces; the validator is hand-written so the package has no dependencies.
+// checks; the validator is hand-written so the package has no dependencies.
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isPlainObject } from '@adlc/core';
 import { canonicalHash } from './canonical.mjs';
 
 export const SHIPPED_PACKS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'packs');
@@ -28,7 +29,6 @@ export class PackError extends Error {
   }
 }
 
-const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const isProbability = (value) => typeof value === 'number' && value >= 0 && value <= 1;
 
 /** sha256 of the canonical pack; part of every run record. */

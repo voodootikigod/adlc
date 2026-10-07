@@ -20,6 +20,7 @@ Follow each README for full options, output schemas, examples, and implementatio
 | `@adlc/flail-detector` | `flail-detector` | Detects repeated errors, scope violations, edit churn, oversized session logs, and token spend past the ticket budget. | [`packages/flail-detector/README.md`](../packages/flail-detector/README.md) |
 | `@adlc/fleet` | `adlc-fleet` | Orchestrates parallel ticket execution — dispatches ready tickets to sandboxed workers, then gates, prosecutes, and merges to an integration branch. Operator-local extension flags (`--no-pr`, `--no-complete`, `--max-strikes`, `--wall-clock-minutes`, `--pre-strike-argv`, bounded reads, git mirror, egress allowlist, `--worker-deps`) and a `--json` result with a closed `reason` set let an orchestrator such as the issue autopilot compose it. | [`packages/fleet/README.md`](../packages/fleet/README.md) |
 | `@adlc/gate-fuzzing` | `gate-fuzzing` | Runs hostile candidates against gate suites to find defeats and calibration gaps. | [`packages/gate-fuzzing/README.md`](../packages/gate-fuzzing/README.md) |
+| `@adlc/decision-layer` | `decision` | Asks a typed classifier versioned questions about a change and records the answers (shadow mode: never changes an outcome). | [`packages/decision-layer/README.md`](../packages/decision-layer/README.md) |
 | `@adlc/gate-manifest` | `gate-manifest` | Records, verifies, shows, and attests append-only gate evidence. | [`packages/gate-manifest/README.md`](../packages/gate-manifest/README.md) |
 | `@adlc/gate-manifest` | `adlc-spend` | Aggregates recorded token usage into per-phase spend, the barbell shape, and the §6 diagnostics. Invoke as `adlc spend`. | [`packages/gate-manifest/README.md`](../packages/gate-manifest/README.md) |
 | `@adlc/hollow-test` | `hollow-test` | Mutates changed code to find tests that pass without testing the intended behavior. | [`packages/hollow-test/README.md`](../packages/hollow-test/README.md) |
@@ -53,6 +54,7 @@ adlc behavior-diff compare before.json after.json [--json]
 adlc coldstart <ticket-id> [options]
 adlc coldstart --all [options]
 adlc consensus-fix --test-cmd "..." --files a.mjs,b.mjs [options]
+adlc decision evaluate --mode shadow --provider mock --model <id> --pack <pack-id> [--revision <rev>] [--ticket <id>] [--pr <n>] [--json]
 adlc flail-detector <log-file> [--scope <glob>...] [--max-repeat <n>] [--max-bytes <n>] [--spent-tokens <n>] [--budget <n>] [--json]
 adlc gate-fuzzing [--suite <path>] [--n <int>] [--tier cheap|mid] [--json]
 adlc gate-manifest record <gate-name> [--ticket id] [--data '{json}'] [--files a,b,c] [--dir path] [--json]
@@ -117,6 +119,7 @@ Review evidence and calibration:
 - `review-calibration`
 - `model-ratchet`
 - `gate-fuzzing`
+- `decision`
 
 Compounding defenses:
 

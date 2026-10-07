@@ -1,0 +1,163 @@
+// Configuration errors (AC2): each exits 1 before reading or sending anything,
+// and writes no record. Every run here has fetch made fatal (exit 97), so an
+// exit of 1 also shows nothing was sent.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { tmp } from '@adlc/core/test-kit';
+import { FETCH_EXIT_CODE, NO_NETWORK_PRELOAD, installNoNetwork } from './helpers/no-network.mjs';
+import { changeRepo, responseFile, runCli } from './helpers/fixtures.mjs';
+import { JEV_FIXTURE_PATH } from '../lib/config.mjs';
+
+installNoNetwork();
+
+const SHADOW = ['evaluate', '--mode', 'shadow', '--provider', 'mock', '--model', 'mock-1', '--pack', 'change-risk-v1'];
+const recordFile = (dir) => join(dir, '.adlc', 'decisions', 'runs.jsonl');
+
+function refused(t, args, pattern, { env, prepare } = {}) {
+  const { dir } = changeRepo(t);
+  prepare?.(dir);
+  const result = runCli(t, args, { cwd: dir, env });
+  assert.equal(result.status, 1, `${args.join(' ')}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+  assert.match(result.stderr, pattern);
+  assert.equal(result.stdout, '');
+  assert.equal(existsSync(recordFile(dir)), false, 'a refused run wrote a record');
+}
+
+test('the fetch guard is live in spawned processes', (t) => {
+  const result = spawnSync(process.execPath, [`--import=${NO_NETWORK_PRELOAD}`, '-e', "fetch('https://example.invalid')"], {
+    cwd: tmp(t, 'decision-guard-'),
+    encoding: 'utf8',
+    timeout: 30_000,
+    env: { PATH: process.env.PATH },
+  });
+  assert.equal(result.status, FETCH_EXIT_CODE);
+});
+
+for (const mode of ['enforce', 'live', '']) {
+  test(`--mode ${JSON.stringify(mode)} is refused`, (t) => {
+    refused(t, ['evaluate', '--mode', mode, '--provider', 'mock', '--model', 'm', '--pack', 'change-risk-v1'], /unknown --mode/);
+  });
+}
+
+test('a provider without --mode shadow is refused, including with --mode off', (t) => {
+  refused(t, ['evaluate', '--provider', 'mock', '--model', 'm', '--pack', 'change-risk-v1'], /--provider needs --mode shadow/);
+  refused(t, ['evaluate', '--mode', 'off', '--provider', 'mock'], /--provider needs --mode shadow/);
+});
+
+test('jev without an API key is refused', (t) => {
+  refused(t, [...SHADOW.slice(0, 4), 'jev', ...SHADOW.slice(5)], /needs TYPESAFE_API_KEY or JEV_API_KEY/);
+});
+
+for (const variable of ['TYPESAFE_API_KEY', 'JEV_API_KEY']) {
+  test(`jev with ${variable} but without the live fixture is refused, naming the fixture`, (t) => {
+    const fixture = JEV_FIXTURE_PATH.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    refused(t, [...SHADOW.slice(0, 4), 'jev', ...SHADOW.slice(5)], new RegExp(`live contract fixture is captured at ${fixture}`), {
+      env: { [variable]: 'not-a-real-key' },
+    });
+  });
+}
+
+test('--mock-response without --provider mock is refused', (t) => {
+  refused(t, ['evaluate', '--mode', 'shadow', '--provider', 'jev', '--model', 'm', '--pack', 'change-risk-v1', '--mock-response', 'x.json'],
+    /--mock-response is valid only with --provider mock/, { env: { TYPESAFE_API_KEY: 'k' } });
+  refused(t, ['evaluate', '--mock-response', 'x.json'], /--mock-response is valid only with --provider mock/);
+});
+
+test('an unknown --ticket is refused', (t) => {
+  refused(t, [...SHADOW, '--ticket', 'T-404'], /unknown --ticket T-404/);
+});
+
+test('a ticket ID with an invalid shape is refused', (t) => {
+  refused(t, [...SHADOW, '--ticket', '../etc'], /is not a ticket ID/);
+});
+
+test('--ticket in a repository without a ticket store is refused', (t) => {
+  refused(t, [...SHADOW, '--ticket', 'T-1'], /cannot read the ticket store/, {
+    prepare: (dir) => writeFileSync(join(dir, '.adlc', 'tickets.json'), '{broken'),
+  });
+});
+
+test('a project pack shadowing a shipped one is refused', (t) => {
+  refused(t, SHADOW, /shadows the shipped pack "change-risk-v1"/, {
+    prepare: (dir) => {
+      mkdirSync(join(dir, '.adlc', 'decision-packs', 'change-risk-v1'), { recursive: true });
+      writeFileSync(join(dir, '.adlc', 'decision-packs', 'change-risk-v1', 'pack.json'), '{}');
+    },
+  });
+});
+
+test('an unknown pack is refused', (t) => {
+  refused(t, [...SHADOW.slice(0, -1), 'no-such-pack'], /no pack "no-such-pack"/);
+});
+
+for (const [name, args, pattern] of [
+  ['a missing --provider', ['evaluate', '--mode', 'shadow', '--model', 'm', '--pack', 'change-risk-v1'], /needs --provider/],
+  ['an unknown provider', ['evaluate', '--mode', 'shadow', '--provider', 'gpt', '--model', 'm', '--pack', 'change-risk-v1'], /unknown --provider "gpt"/],
+  ['a missing --model', ['evaluate', '--mode', 'shadow', '--provider', 'mock', '--pack', 'change-risk-v1'], /needs --model/],
+  ['a model with spaces', ['evaluate', '--mode', 'shadow', '--provider', 'mock', '--model', 'a b', '--pack', 'change-risk-v1'], /--model "a b" must match/],
+  ['a missing --pack', ['evaluate', '--mode', 'shadow', '--provider', 'mock', '--model', 'm'], /needs --pack/],
+  ['a malformed pack ID', ['evaluate', '--mode', 'shadow', '--provider', 'mock', '--model', 'm', '--pack', 'Bad_Pack'], /--pack "Bad_Pack" must match/],
+  ['a zero --pr', [...SHADOW, '--pr', '0'], /--pr "0" must be a positive integer/],
+  ['a non-numeric --pr', [...SHADOW, '--pr', '12a'], /--pr "12a" must be a positive integer/],
+  ['an oversized --pr', [...SHADOW, '--pr', '99999999999999999999'], /must be a positive integer/],
+  ['an unresolvable --revision', [...SHADOW, '--revision', 'no-such-ref'], /--revision "no-such-ref" does not resolve/],
+  ['an unreadable --mock-response', [...SHADOW, '--mock-response', 'missing.json'], /cannot read --mock-response missing.json/],
+  ['an unknown flag', [...SHADOW, '--verbose'], /verbose/],
+  ['no command', ['--mode', 'off'], /missing command/],
+  ['an unknown command', ['run', '--mode', 'off'], /unknown command "run"/],
+  ['an extra argument', ['evaluate', 'extra', '--mode', 'off'], /unexpected argument "extra"/],
+]) {
+  test(`${name} is refused`, (t) => refused(t, args, pattern));
+}
+
+test('a run outside a git repository is refused', (t) => {
+  const dir = tmp(t, 'decision-nogit-');
+  const result = runCli(t, SHADOW, { cwd: dir });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /is not inside a git work tree/);
+});
+
+test('--mode off does nothing: exit 0, no output, no record, even outside a repository', (t) => {
+  const dir = tmp(t, 'decision-off-');
+  for (const args of [['evaluate'], ['evaluate', '--mode', 'off'], ['evaluate', '--mode', 'off', '--pack', 'whatever']]) {
+    const result = runCli(t, args, { cwd: dir });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr, '');
+  }
+  assert.equal(existsSync(recordFile(dir)), false);
+});
+
+test('--help prints usage and exits 0', (t) => {
+  const result = runCli(t, ['--help'], { cwd: tmp(t, 'decision-help-') });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /adlc decision evaluate --mode shadow/);
+  assert.match(result.stdout, /Exit codes:/);
+});
+
+test('a shadow run with the mock prints a one-line summary and exits 0', (t) => {
+  const { dir } = changeRepo(t);
+  const result = runCli(t, SHADOW, { cwd: dir });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, `decision: unknown (status ok) recorded to ${recordFile(dir)}\n`);
+});
+
+test('--json prints the run record', (t) => {
+  const { dir } = changeRepo(t);
+  const result = runCli(t, [...SHADOW, '--json', '--mock-response', responseFile(t, { simulate: 'timeout' })], { cwd: dir });
+  assert.equal(result.status, 0, result.stderr);
+  const printed = JSON.parse(result.stdout);
+  assert.equal(printed.status, 'unknown');
+  assert.deepEqual(printed, JSON.parse(readFileSync(recordFile(dir), 'utf8').trim()));
+});
+
+test('a record that cannot be written exits 1', (t) => {
+  const { dir } = changeRepo(t);
+  writeFileSync(join(dir, '.adlc', 'decisions'), 'a file where the directory should be');
+  const result = runCli(t, SHADOW, { cwd: dir });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /could not write the run record/);
+});

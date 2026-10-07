@@ -9,7 +9,7 @@ export const TOOLKIT_GROUPS = [
   },
   {
     group: 'Review evidence & calibration',
-    packages: ['behavior-diff', 'gate-manifest', 'hollow-test', 'prosecute', 'review-calibration', 'model-ratchet', 'gate-fuzzing'],
+    packages: ['behavior-diff', 'gate-manifest', 'hollow-test', 'prosecute', 'review-calibration', 'model-ratchet', 'gate-fuzzing', 'decision-layer'],
   },
   {
     group: 'Compounding defenses',
