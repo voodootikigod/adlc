@@ -72,7 +72,9 @@ are dropped, and a usage of any other shape makes the reply `malformed-response`
 ## Question packs
 
 Shipped packs live in `packs/<id>/pack.json`. A project may add its own at
-`.adlc/decision-packs/<id>/pack.json`, but never one with a shipped ID. A
+`.adlc/decision-packs/<id>/pack.json`, but never one with a shipped ID. A pack
+file may be at most 64 KiB, checked before it is read, and its description at
+most 1024 characters. A
 project pack is repository text, so its prompts and domain values are scanned
 like the inputs: a pack carrying a credential-shaped value is refused before
 anything is sent, and the whole request is held to the same 4 KiB per string and

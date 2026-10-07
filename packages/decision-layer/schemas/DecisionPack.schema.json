@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/voodootikigod/adlc/packages/decision-layer/schemas/DecisionPack.schema.json",
   "title": "DecisionPack",
-  "description": "A versioned question pack for @adlc/decision-layer (shadow mode). lib/pack.mjs validates the same rules without a schema engine, plus the cross-references a schema cannot express: question inputs must be declared, aggregation conditions must name a question and stay inside its domain, and question IDs must be unique, and a Score domain min < max.",
+  "description": "A versioned question pack for @adlc/decision-layer (shadow mode). lib/pack.mjs validates the same rules without a schema engine, plus the cross-references a schema cannot express: question inputs must be declared, aggregation conditions must name a question and stay inside its domain, and question IDs must be unique, a Score domain min < max, and a pack file at most 64 KiB (checked before it is parsed).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -26,7 +26,8 @@
       "const": "shadow"
     },
     "description": {
-      "type": "string"
+      "type": "string",
+      "maxLength": 1024
     },
     "limits": {
       "type": "object",

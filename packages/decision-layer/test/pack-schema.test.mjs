@@ -127,6 +127,8 @@ const CASES = [
   ['minProbability above 1', variant((p) => { p.aggregation.allowIf[0].minProbability = 1.5; }), false],
   ['a missing allowIf', variant((p) => { delete p.aggregation.allowIf; }), false],
   ['a numeric description', variant((p) => { p.description = 7; }), false],
+  ['a description of 1024 characters', variant((p) => { p.description = 'd'.repeat(1024); }), true],
+  ['a description over 1024 characters', variant((p) => { p.description = 'd'.repeat(1025); }), false],
   ['a numeric prompt', variant((p) => { p.questions[0].prompt = 7; }), false],
   ['a prompt of 512 characters', variant((p) => { p.questions[0].prompt = 'x'.repeat(512); }), true],
   ['a prompt over 512 characters', variant((p) => { p.questions[0].prompt = 'x'.repeat(513); }), false],

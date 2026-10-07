@@ -20,7 +20,8 @@ const rejects = (pack, pattern) => assert.throws(() => validatePack(pack), (erro
 const ISOLATED = [
   ['a numeric pack id', (p) => { p.id = 7; }, /^pack id 7 must match/],
   ['fieldBytes 0', (p) => { p.limits.fieldBytes = 0; }, /^limits\.fieldBytes must be an integer from 1/],
-  ['a numeric description', (p) => { p.description = 7; }, /^the pack description must be a string$/],
+  ['a numeric description', (p) => { p.description = 7; }, /^the pack description must be a string of at most 1024 characters$/],
+  ['an overlong description', (p) => { p.description = 'd'.repeat(1025); }, /^the pack description must be a string of at most 1024 characters$/],
   ['a numeric prompt', (p) => { p.questions[0].prompt = 7; }, /^question "risk" prompt must be a string of at most 512 characters$/],
   ['an overlong prompt', (p) => { p.questions[0].prompt = 'x'.repeat(513); }, /^question "risk" prompt must be a string of at most 512 characters$/],
   ['inputs given as a list', (p) => { p.inputs = ['linesAdded']; }, /^a pack must declare its inputs$/],
@@ -260,6 +261,21 @@ test('loadPack finds a shipped pack and a project pack, and validates what it lo
   assert.equal(loadPack('own-pack', { projectRoot: root }).id, 'own-pack');
   writeFileSync(join(root, '.adlc', 'decision-packs', 'own-pack', 'pack.json'), JSON.stringify({ ...own, mode: 'live' }));
   assert.throws(() => loadPack('own-pack', { projectRoot: root }), PackError);
+});
+
+test('a pack file over 64 KiB is refused before it is read or parsed', (t) => {
+  const root = tmp(t, 'decision-packs-');
+  mkdirSync(join(root, '.adlc', 'decision-packs', 'huge-pack'), { recursive: true });
+  writeFileSync(join(root, '.adlc', 'decision-packs', 'huge-pack', 'pack.json'), `{ not json ${' '.repeat(70_000)}`);
+  assert.throws(() => loadPack('huge-pack', { projectRoot: root }), (error) => error instanceof PackError && /is 70011 bytes; a pack file may be at most 65536/.test(error.message));
+});
+
+test('a pack file of exactly 64 KiB is read', (t) => {
+  const root = tmp(t, 'decision-packs-');
+  mkdirSync(join(root, '.adlc', 'decision-packs', 'big-pack'), { recursive: true });
+  const text = JSON.stringify({ ...clone(), id: 'big-pack' });
+  writeFileSync(join(root, '.adlc', 'decision-packs', 'big-pack', 'pack.json'), text.padEnd(65_536, ' '));
+  assert.equal(loadPack('big-pack', { projectRoot: root }).id, 'big-pack');
 });
 
 test('a pack file whose id differs from its directory is rejected', (t) => {

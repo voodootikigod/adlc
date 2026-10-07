@@ -16,6 +16,8 @@ export const PACK_SCHEMA_VERSION = 1;
 export const MAX_FIELD_BYTES = 4096;
 export const MAX_TOTAL_BYTES = 32768;
 export const MAX_PROMPT_LENGTH = 512;
+export const MAX_DESCRIPTION_LENGTH = 1024;
+export const MAX_PACK_FILE_BYTES = 65536;
 
 const KINDS = new Set(['Choice', 'Score', 'Noul']);
 const PHASES = new Set(['P0', 'D1']);
@@ -71,7 +73,9 @@ export function validatePack(pack) {
     throw new PackError(`pack id ${JSON.stringify(pack.id)} must match ${PACK_ID_PATTERN}`);
   }
   if (pack.mode !== 'shadow') throw new PackError(`pack mode ${JSON.stringify(pack.mode)} is not allowed; only "shadow" exists`);
-  if (pack.description !== undefined && typeof pack.description !== 'string') throw new PackError('the pack description must be a string');
+  if (pack.description !== undefined && !(typeof pack.description === 'string' && pack.description.length <= MAX_DESCRIPTION_LENGTH)) {
+    throw new PackError(`the pack description must be a string of at most ${MAX_DESCRIPTION_LENGTH} characters`);
+  }
   validateLimits(pack.limits);
   validateInputs(pack.inputs);
   const questions = validateQuestions(pack.questions, pack.inputs);
@@ -202,6 +206,10 @@ function validateAggregation(aggregation, questions) {
 }
 
 function readPackFile(path, id) {
+  const { size } = statSync(path);
+  if (size > MAX_PACK_FILE_BYTES) {
+    throw new PackError(`pack "${id}" at ${path} is ${size} bytes; a pack file may be at most ${MAX_PACK_FILE_BYTES}`);
+  }
   let pack;
   try {
     pack = JSON.parse(readFileSync(path, 'utf8'));
