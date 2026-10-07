@@ -13,7 +13,7 @@
 // Each question is sent only the input fields it declares.
 //
 // Pack-authored text is repository text when the pack is a project pack, so
-// every prompt and domain value is scanned before dispatch and a pack carrying
+// every pack and question id, prompt and domain value is scanned before dispatch and a pack carrying
 // a credential-shaped value is refused (it is not silently redacted). The whole
 // request is held to the sanitizer's limits: 4 KiB per string, 32 KiB in total.
 //
@@ -55,11 +55,16 @@ const isUnitInterval = (value) => typeof value === 'number' && value >= 0 && val
 const malformed = (message) => new UnusableReply('malformed-response', message);
 
 function refuseCredentialText(pack) {
+  if (scanText(pack.id).redactions > 0) throw new PackError('the pack id carries a credential-shaped value; the pack is refused');
   for (const question of pack.questions) {
-    const fields = [['prompt', question.prompt], ...(Array.isArray(question.domain) ? question.domain.map((value) => ['domain', value]) : [])];
+    const fields = [
+      ['id', question.id],
+      ['prompt', question.prompt],
+      ...(Array.isArray(question.domain) ? question.domain.map((value) => ['domain', value]) : []),
+    ];
     for (const [field, text] of fields) {
       if (typeof text === 'string' && scanText(text).redactions > 0) {
-        throw new PackError(`question "${question.id}" ${field} carries a credential-shaped value; the pack is refused`);
+        throw new PackError(`a question ${field} carries a credential-shaped value; the pack is refused`);
       }
     }
   }

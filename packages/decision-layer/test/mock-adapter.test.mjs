@@ -141,6 +141,24 @@ test('a pack whose prompt or domain carries a credential-shaped string is refuse
   }
 });
 
+test('a pack or question id that matches the id pattern but is hex-secret-shaped is refused before anything is sent', async () => {
+  const hexId = createHash('sha256').update('hex-question-id').digest('hex').slice(0, 40);
+  for (const mutate of [
+    (pack) => { pack.questions[0].id = hexId; },
+    (pack) => { pack.id = hexId; },
+  ]) {
+    const pack = structuredClone(PACK);
+    mutate(pack);
+    let calls = 0;
+    const provider = { name: 'spy', call: async () => { calls += 1; return { body: JSON.parse(body(ok)) }; } };
+    await assert.rejects(
+      evaluateDecision({ provider, model: 'm', pack, sanitizedInput: INPUT, retryDelayMs: 0 }),
+      (error) => error instanceof PackError && /credential-shaped/.test(error.message),
+    );
+    assert.equal(calls, 0);
+  }
+});
+
 test('the whole outbound request is bounded: 4 KiB per string, 32 KiB in total', async () => {
   const send = (pack, input = INPUT) => evaluateDecision({
     provider: { name: 'spy', call: async () => ({ body: JSON.parse(body(ok)) }) }, model: 'm', pack, sanitizedInput: input, retryDelayMs: 0,

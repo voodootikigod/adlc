@@ -11,7 +11,9 @@ import { isPlainObject } from '@adlc/core';
 import { canonicalHash } from './canonical.mjs';
 
 export const SHIPPED_PACKS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'packs');
-export const PACK_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+/** Pack and question IDs reach the provider verbatim, so they are plain identifiers, never free text. */
+export const PACK_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+export const QUESTION_ID_PATTERN = PACK_ID_PATTERN;
 export const PACK_SCHEMA_VERSION = 1;
 export const MAX_FIELD_BYTES = 4096;
 export const MAX_TOTAL_BYTES = 32768;
@@ -142,6 +144,7 @@ function validateQuestions(questions, inputs) {
     if (!isPlainObject(question) || typeof question.id !== 'string' || question.id.length === 0) {
       throw new PackError('every question needs a string id');
     }
+    if (!QUESTION_ID_PATTERN.test(question.id)) throw new PackError(`question id ${JSON.stringify(question.id)} must match ${QUESTION_ID_PATTERN}`);
     if (byId.has(question.id)) throw new PackError(`duplicate question id "${question.id}"`);
     closed(question, QUESTION_KEYS, `question "${question.id}"`);
     byId.set(question.id, question);

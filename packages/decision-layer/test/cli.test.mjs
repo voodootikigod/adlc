@@ -109,13 +109,26 @@ test('a symlinked project pack directory shadowing a shipped one is refused', (t
 
 test('a project pack whose prompt carries a credential-shaped string is refused end to end', (t) => {
   const secret = `glpat-${createHash('sha256').update('prompt-secret').digest('hex').slice(0, 24)}`;
-  refused(t, [...SHADOW.slice(0, -1), 'leaky-pack'], /question "risk" prompt carries a credential-shaped value/, {
+  refused(t, [...SHADOW.slice(0, -1), 'leaky-pack'], /a question prompt carries a credential-shaped value/, {
     prepare: (dir) => {
       const pack = JSON.parse(readFileSync(join(PACKS_DIR, 'change-risk-v1', 'pack.json'), 'utf8'));
       pack.id = 'leaky-pack';
       pack.questions[0].prompt = `Rate this. Token: ${secret}`;
       mkdirSync(join(dir, '.adlc', 'decision-packs', 'leaky-pack'), { recursive: true });
       writeFileSync(join(dir, '.adlc', 'decision-packs', 'leaky-pack', 'pack.json'), JSON.stringify(pack));
+    },
+  });
+});
+
+test('a project pack whose question id is credential-shaped is refused end to end, nothing sent', (t) => {
+  const id = `ghp_${createHash('sha256').update('question-id-secret').digest('hex').slice(0, 36)}`;
+  refused(t, [...SHADOW.slice(0, -1), 'id-pack'], new RegExp(`question id "${id}" must match`), {
+    prepare: (dir) => {
+      const pack = JSON.parse(readFileSync(join(PACKS_DIR, 'change-risk-v1', 'pack.json'), 'utf8'));
+      pack.id = 'id-pack';
+      pack.questions.push({ ...structuredClone(pack.questions[0]), id });
+      mkdirSync(join(dir, '.adlc', 'decision-packs', 'id-pack'), { recursive: true });
+      writeFileSync(join(dir, '.adlc', 'decision-packs', 'id-pack', 'pack.json'), JSON.stringify(pack));
     },
   });
 });
