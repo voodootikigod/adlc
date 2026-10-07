@@ -54,6 +54,7 @@ export function mainCheckoutRoot(cwd) {
   const configured = git(cwd, ['config', '--file', join(common, 'config'), 'core.worktree'])?.trim();
   if (configured) return resolve(common, configured);
   const gitDir = git(cwd, ['rev-parse', '--absolute-git-dir'])?.trim();
+  // A bare repository has no main checkout, so a run in one of its worktrees is refused here.
   return gitDir === common ? projectRoot(cwd) : fail();
 }
 

@@ -427,15 +427,23 @@ test('a checkout with a separate git directory records into its work tree', (t) 
   assert.equal(readRecords(clone).length, 1);
 });
 
-test('a worktree of a bare repository is refused: there is no main work tree to record into', (t) => {
+test('a linked worktree of a bare repository is refused with exit 1 and no record', (t) => {
+  // The layout under review: `git clone --bare`, then `git worktree add` from it.
   const { dir } = changeRepo(t);
   const bare = join(tmp(t, 'decision-bare-'), 'repo.git');
   execFileSync('git', ['clone', '-q', '--bare', dir, bare], { stdio: 'ignore' });
   const worktree = join(tmp(t, 'decision-bare-wt-'), 'wt');
   execFileSync('git', ['-C', bare, 'worktree', 'add', '-q', worktree, 'feature'], { stdio: 'ignore' });
+  assert.equal(execFileSync('git', ['-C', bare, 'rev-parse', '--is-bare-repository'], { encoding: 'utf8' }).trim(), 'true');
+
   const result = runCli(t, SHADOW, { cwd: worktree });
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /cannot locate the main work tree/);
+
+  assert.equal(result.status, 1, 'a bare repository has no main checkout, so the run must be refused');
+  assert.equal(result.stderr, 'adlc decision: cannot locate the main work tree of this repository\n');
+  assert.equal(result.stdout, '');
+  for (const root of [worktree, bare]) {
+    assert.equal(existsSync(join(root, '.adlc', 'decisions', 'runs.jsonl')), false, `a record was written under ${root}`);
+  }
 });
 
 test('a linked worktree of a separate-git-dir checkout is refused rather than guessed', (t) => {
