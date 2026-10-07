@@ -11,7 +11,7 @@ import { installNoNetwork } from './helpers/no-network.mjs';
 import { REPLIES, TICKET_CATEGORY_MARKER, changeRepo, responseFile, runCli } from './helpers/fixtures.mjs';
 import { canonicalHash } from '../lib/canonical.mjs';
 import { GIT_OPTIONS, parseNumstat } from '../lib/inputs.mjs';
-import { RecordError } from '../lib/errors.mjs';
+import { GitOutputError, RecordError } from '../lib/errors.mjs';
 import { writeFileSync } from 'node:fs';
 import { runEvaluate } from '../lib/evaluate.mjs';
 import { loadPack, packHash } from '../lib/pack.mjs';
@@ -239,6 +239,59 @@ test('a real file whose name contains a tab is counted under its own extension',
   assert.equal(result.exitCode, 0);
   const expected = { ...EXPECTED_INPUT, extensionCounts: { ...EXPECTED_INPUT.extensionCounts, py: 1 }, filesChanged: 5, linesAdded: 6 };
   assert.equal(result.record.inputHash, canonicalHash(expected));
+});
+
+test('parseNumstat counts a pure rename as one file, under the new extension, with 0/0 lines', () => {
+  const out = ['0\t0\t', 'docs/old.md', 'docs/new.txt', ''].join('\0');
+  assert.deepEqual(parseNumstat(out), { extensionCounts: { txt: 1 }, linesAdded: 0, linesDeleted: 0, filesChanged: 1 });
+});
+
+test('parseNumstat keeps the real line counts of an edited rename', () => {
+  const out = ['3\t1\t', 'a.mjs', 'b.js', '2\t0\tplain.md', ''].join('\0');
+  assert.deepEqual(parseNumstat(out), { extensionCounts: { js: 1, md: 1 }, linesAdded: 5, linesDeleted: 1, filesChanged: 2 });
+});
+
+test('parseNumstat handles a renamed binary file and a renamed path containing a tab', () => {
+  const out = ['-\t-\t', 'old.png', 'new.gif', '1\t1\t', 'dir/a\tb.mjs', 'dir/c\td.py', ''].join('\0');
+  assert.deepEqual(parseNumstat(out), { extensionCounts: { gif: 1, py: 1 }, linesAdded: 1, linesDeleted: 1, filesChanged: 2 });
+});
+
+for (const [name, out] of [
+  ['a record with too few fields', ['3\t1', '']],
+  ['a non-numeric count', ['3\tx\tfile.js', '']],
+  ['a negative count', ['-3\t1\tfile.js', '']],
+  ['a rename missing its new path', ['1\t1\t', 'old.js', '']],
+  ['a rename missing both paths', ['1\t1\t', '']],
+]) {
+  test(`parseNumstat refuses ${name} rather than guessing`, () => {
+    assert.throws(() => parseNumstat(out.join('\0')), (error) => error instanceof GitOutputError && /git diff --numstat/.test(error.message));
+  });
+}
+
+test('a renamed file counts once, even where the repository disables rename detection', async (t) => {
+  const { dir, git } = changeRepo(t);
+  git('checkout', '-q', 'main');
+  git('checkout', '-q', '-b', 'rename');
+  git('config', 'diff.renames', 'false');
+  git('mv', 'README.md', 'README.txt');
+  git('commit', '-q', '-m', 'rename');
+  const result = await runEvaluate({
+    mode: 'shadow', provider: 'mock', model: 'm', pack: 'change-risk-v1', revision: 'HEAD', ticket: null, pr: null, mockResponse: null,
+  }, { cwd: dir });
+  assert.equal(result.exitCode, 0);
+  const expected = { declaredRailCount: 'none', extensionCounts: { txt: 1 }, filesChanged: 1, linesAdded: 0, linesDeleted: 0, ticketCategory: 'none' };
+  assert.equal(result.record.inputHash, canonicalHash(expected));
+});
+
+test('unreadable git diff output exits 1 before dispatch, with no record', (t) => {
+  const { dir } = changeRepo(t);
+  const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+  const shimDir = tmp(t, 'decision-git-shim-');
+  writeFileSync(join(shimDir, 'git'), `#!/bin/sh\ncase " $* " in *" --numstat "*) printf 'garbage'; exit 0;; esac\nexec '${realGit}' "$@"\n`, { mode: 0o755 });
+  const result = runCli(t, SHADOW, { cwd: dir, env: { PATH: `${shimDir}:${process.env.PATH}` } });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /^adlc decision: unreadable git diff --numstat output: [^\n]*\n$/, 'expected one reported error line, not a crash');
+  assert.equal(existsSync(join(dir, '.adlc', 'decisions', 'runs.jsonl')), false);
 });
 
 test('parseNumstat counts extensions named after Object.prototype members', () => {

@@ -38,7 +38,7 @@ never select a mode, provider or model.
 | Code | Meaning |
 |---|---|
 | `0` | The run was recorded, whatever the answers; or `--mode off` |
-| `1` | A configuration, pack or sanitization failure before dispatch: nothing was sent and nothing recorded. Or the record could not be written: the provider may have been asked, but the run was not recorded. |
+| `1` | A configuration, pack, unreadable-git-output or sanitization failure before dispatch: nothing was sent and nothing recorded. Or the record could not be written: the provider may have been asked, but the run was not recorded. |
 
 ## What is sent
 
@@ -46,7 +46,7 @@ Only declared metadata, after sanitization:
 
 | Field | Source |
 |---|---|
-| `extensionCounts` | files changed per extension, from `git diff --numstat` between the merge-base of `--revision` with the default branch and `--revision` |
+| `extensionCounts` | files changed per extension, from `git diff --numstat --find-renames` between the merge-base of `--revision` with the default branch and `--revision` (a rename counts once, under its new name) |
 | `linesAdded`, `linesDeleted`, `filesChanged` | the same diff; binary files count with 0 lines |
 | `ticketCategory`, `declaredRailCount` | the `--ticket` in the ticket store, or `none` |
 

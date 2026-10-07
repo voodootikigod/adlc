@@ -4,7 +4,7 @@
 import { execFileSync } from 'node:child_process';
 import { extname, join, resolve } from 'node:path';
 import { loadTicketSnapshot } from '@adlc/tickets';
-import { ConfigError } from './errors.mjs';
+import { ConfigError, GitOutputError } from './errors.mjs';
 
 /** Bounds on every git call: a hung or runaway git cannot stall or flood a run. */
 export const GIT_OPTIONS = Object.freeze({ timeout: 30_000, maxBuffer: 64 * 1024 * 1024 });
@@ -71,21 +71,42 @@ function defaultBranchRef(root) {
   throw new ConfigError('cannot determine the default branch (no origin/HEAD, main or master)');
 }
 
+const COUNT = /^(?:-|\d+)$/;
+
+function unreadable(detail) {
+  return new GitOutputError(`unreadable git diff --numstat output: ${detail}`);
+}
+
+function lineCount(value) {
+  if (!COUNT.test(value ?? '')) throw unreadable(`count ${JSON.stringify(value)} is neither a number nor "-"`);
+  return value === '-' ? 0 : Number(value);
+}
+
 /**
- * Parse `git diff --numstat -z --no-renames` output: "added\tdeleted\tpath\0" per file,
- * "-" for binary. The path is verbatim and may itself contain a tab.
+ * Parse `git diff --numstat -z --find-renames` output. A record is
+ * "added\tdeleted\tpath\0", with "-" counts for a binary file and the path
+ * verbatim (it may itself contain a tab). A rename leaves the path field empty
+ * and is followed by "old\0new\0"; it counts as one file under the new path,
+ * with its real line counts. Anything else is refused rather than guessed.
  */
 export function parseNumstat(output) {
+  const tokens = output.split('\0');
   const counts = new Map();
   const stats = { linesAdded: 0, linesDeleted: 0, filesChanged: 0 };
-  for (const record of output.split('\0')) {
-    if (record === '') continue;
-    const [added, deleted, ...rest] = record.split('\t');
-    const path = rest.join('\t');
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (tokens[i] === '' && i === tokens.length - 1) break;
+    const [added, deleted, ...rest] = tokens[i].split('\t');
+    if (rest.length === 0) throw unreadable(`record ${JSON.stringify(tokens[i])} has too few fields`);
+    let path = rest.join('\t');
+    if (path === '') {
+      path = tokens[i + 2];
+      if (!tokens[i + 1] || !path) throw unreadable('a rename is missing its paths');
+      i += 2;
+    }
+    stats.linesAdded += lineCount(added);
+    stats.linesDeleted += lineCount(deleted);
     const extension = extname(path).slice(1).toLowerCase() || 'none';
     counts.set(extension, (counts.get(extension) ?? 0) + 1);
-    stats.linesAdded += added === '-' ? 0 : Number(added);
-    stats.linesDeleted += deleted === '-' ? 0 : Number(deleted);
     stats.filesChanged += 1;
   }
   return { extensionCounts: Object.fromEntries(counts), ...stats };
@@ -95,7 +116,7 @@ export function parseNumstat(output) {
 export function diffStats(root, revision) {
   const base = git(root, ['merge-base', defaultBranchRef(root), revision]);
   if (!base) throw new ConfigError(`${revision} shares no history with the default branch`);
-  const out = git(root, ['diff', '--numstat', '-z', '--no-renames', base.trim(), revision]);
+  const out = git(root, ['diff', '--numstat', '-z', '--find-renames', base.trim(), revision]);
   if (out === null) throw new ConfigError(`git diff failed for ${revision}`);
   return parseNumstat(out);
 }

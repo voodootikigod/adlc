@@ -149,7 +149,7 @@ test('--help prints usage and exits 0', (t) => {
   assert.ok(result.stdout.includes('--pack <pack-id> [--revision <rev>] [--ticket <id>] [--pr <number>]'), result.stdout);
   assert.ok(result.stdout.includes('[--mock-response <file>] [--json]'), result.stdout);
   assert.match(result.stdout, /Exit codes:/);
-  assert.match(result.stdout, /before dispatch: nothing\s+was sent and nothing recorded/);
+  assert.match(result.stdout, /git-output or sanitization failure before dispatch:\s+nothing was sent and nothing recorded/);
   assert.match(result.stdout, /the record could not be written: the\s+provider may have been asked, but the run was not recorded/);
 });
 

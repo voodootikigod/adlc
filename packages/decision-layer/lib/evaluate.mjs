@@ -3,7 +3,7 @@
 // the run was recorded, 1 when it failed before dispatch or was not recorded.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { ConfigError, RecordError } from './errors.mjs';
+import { ConfigError, GitOutputError, RecordError } from './errors.mjs';
 import { diffStats, mainCheckoutRoot, projectRoot, resolveRevision, ticketFacts } from './inputs.mjs';
 import { createMockProvider } from './mock-provider.mjs';
 import { PackError, loadPack } from './pack.mjs';
@@ -12,7 +12,7 @@ import { RECORD_SCHEMA_VERSION, appendRecord, recordPath } from './record.mjs';
 import { reduce } from './reducer.mjs';
 import { SanitizationError, sanitize } from './sanitizer.mjs';
 
-const EXPECTED_FAILURES = [ConfigError, PackError, SanitizationError, RecordError];
+const EXPECTED_FAILURES = [ConfigError, GitOutputError, PackError, SanitizationError, RecordError];
 
 function readMockResponse(cwd, file) {
   if (file === null) return undefined;

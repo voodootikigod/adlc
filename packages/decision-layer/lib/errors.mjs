@@ -15,3 +15,11 @@ export class RecordError extends Error {
     this.name = 'RecordError';
   }
 }
+
+/** Git's own output could not be parsed; nothing is sent and nothing recorded. */
+export class GitOutputError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'GitOutputError';
+  }
+}
