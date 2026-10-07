@@ -18,8 +18,15 @@ export const MAX_TOTAL_BYTES = 32768;
 
 const KINDS = new Set(['Choice', 'Score', 'Noul']);
 const PHASES = new Set(['P0', 'D1']);
-const SOURCES = new Set(['git-diff', 'ticket-store']);
-const TYPES = new Set(['integer', 'string', 'count-map', 'integer-or-none']);
+/** Every field a v1 run collects, with its real source and type. A pack declares a subset. */
+export const COLLECTABLE_FIELDS = Object.freeze({
+  extensionCounts: Object.freeze({ source: 'git-diff', type: 'count-map' }),
+  linesAdded: Object.freeze({ source: 'git-diff', type: 'integer' }),
+  linesDeleted: Object.freeze({ source: 'git-diff', type: 'integer' }),
+  filesChanged: Object.freeze({ source: 'git-diff', type: 'integer' }),
+  ticketCategory: Object.freeze({ source: 'ticket-store', type: 'string' }),
+  declaredRailCount: Object.freeze({ source: 'ticket-store', type: 'integer-or-none' }),
+});
 const NOUL_DOMAIN = ['yes', 'no'];
 const PACK_KEYS = ['schemaVersion', 'id', 'mode', 'description', 'limits', 'inputs', 'questions', 'aggregation'];
 const LIMIT_KEYS = ['fieldBytes', 'totalBytes'];
@@ -86,8 +93,13 @@ function validateInputs(inputs) {
   for (const [name, field] of Object.entries(inputs)) {
     if (!isPlainObject(field)) throw new PackError(`input "${name}" must be an object`);
     closed(field, INPUT_KEYS, `input "${name}"`);
-    if (!SOURCES.has(field.source)) throw new PackError(`input "${name}" has unknown source ${JSON.stringify(field.source)}`);
-    if (!TYPES.has(field.type)) throw new PackError(`input "${name}" has unknown type ${JSON.stringify(field.type)}`);
+    if (!Object.hasOwn(COLLECTABLE_FIELDS, name)) throw new PackError(`input "${name}" is not a collectable field`);
+    const collectable = COLLECTABLE_FIELDS[name];
+    for (const key of ['source', 'type']) {
+      if (field[key] !== collectable[key]) {
+        throw new PackError(`input "${name}" must declare ${key} ${JSON.stringify(collectable[key])}, not ${JSON.stringify(field[key])}`);
+      }
+    }
     if (field.classification !== 'metadata') {
       throw new PackError(`input "${name}" classification ${JSON.stringify(field.classification)} is not allowed; v1 packs are metadata-only`);
     }
@@ -155,6 +167,7 @@ function validateCondition(condition, questions, list) {
     throw new PackError(`${where}: minProbability for "${question.id}" must be between 0 and 1`);
   }
   if (question.kind === 'Score') {
+    if (Object.hasOwn(condition, 'equals')) throw new PackError(`${where}: a Score condition for "${question.id}" may not use equals`);
     const bounds = ['atLeast', 'atMost'].filter((key) => condition[key] !== undefined);
     if (bounds.length === 0) throw new PackError(`${where}: a Score condition needs atLeast or atMost`);
     for (const key of bounds) {
@@ -165,6 +178,10 @@ function validateCondition(condition, questions, list) {
     }
     return;
   }
+  if (Object.hasOwn(condition, 'atLeast') || Object.hasOwn(condition, 'atMost')) {
+    throw new PackError(`${where}: a ${question.kind} condition for "${question.id}" may not use atLeast/atMost`);
+  }
+  if (!Object.hasOwn(condition, 'equals')) throw new PackError(`${where}: a ${question.kind} condition for "${question.id}" needs equals`);
   if (!question.domain.includes(condition.equals)) {
     throw new PackError(`${where}: ${JSON.stringify(condition.equals)} is not in the domain of "${question.id}"`);
   }

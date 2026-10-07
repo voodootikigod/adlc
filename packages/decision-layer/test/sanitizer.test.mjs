@@ -43,8 +43,13 @@ test('a valid input becomes canonical sanitized input with a hash of exactly tha
   assert.equal(inputHash, canonicalHash(raw()));
 });
 
-test('an undeclared field is rejected before dispatch', () => {
-  fails(raw({ diffHunks: '@@ -1 +1 @@' }), 'undeclared-field');
+test('collected fields the pack does not declare are dropped, never sent', () => {
+  const { sanitizedInput } = sanitize(raw({ diffHunks: '@@ -1 +1 @@' }), PACK);
+  assert.equal('diffHunks' in sanitizedInput, false);
+  const subset = { ...PACK, inputs: { linesAdded: PACK.inputs.linesAdded, filesChanged: PACK.inputs.filesChanged } };
+  const projected = sanitize(raw(), subset);
+  assert.deepEqual(projected.sanitizedInput, { filesChanged: 4, linesAdded: 120 });
+  assert.equal(projected.inputHash, canonicalHash({ filesChanged: 4, linesAdded: 120 }));
 });
 
 test('a declared field that is missing is rejected', () => {

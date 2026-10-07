@@ -70,6 +70,47 @@ test('a question may only see declared inputs', () => {
   rejects(pack, /undeclared input "diffHunks"/);
 });
 
+test('an input name that is not a collectable field is rejected', () => {
+  const pack = clone();
+  pack.inputs.diffHunks = { source: 'git-diff', type: 'string', classification: 'metadata', maxBytes: 64 };
+  rejects(pack, /input "diffHunks" is not a collectable field/);
+});
+
+test('an input must declare the real type and source of its field', () => {
+  for (const [field, key, value] of [['linesAdded', 'type', 'string'], ['ticketCategory', 'type', 'integer'], ['extensionCounts', 'source', 'ticket-store']]) {
+    const pack = clone();
+    pack.inputs[field] = { ...pack.inputs[field], [key]: value };
+    rejects(pack, new RegExp(`input "${field}" .*${key}`));
+  }
+});
+
+test('a pack may declare a subset of the collectable fields', () => {
+  const pack = clone();
+  pack.inputs = { linesAdded: pack.inputs.linesAdded, filesChanged: pack.inputs.filesChanged };
+  for (const question of pack.questions) question.inputs = ['linesAdded', 'filesChanged'];
+  assert.doesNotThrow(() => validatePack(pack));
+});
+
+test('a Score condition may not use equals, and needs a bound', () => {
+  const score = clone();
+  score.questions[0] = { ...score.questions[0], kind: 'Score', domain: { min: 0, max: 1 } };
+  score.aggregation = { escalateIf: [{ question: 'risk', equals: 'high' }], allowIf: [] };
+  rejects(score, /Score condition .*equals/);
+  score.aggregation = { escalateIf: [{ question: 'risk', minProbability: 0.5 }], allowIf: [] };
+  rejects(score, /atLeast or atMost/);
+});
+
+test('a Choice or Noul condition needs equals and may not use bounds', () => {
+  for (const [index, extra] of [[0, { atLeast: 1 }], [1, { atMost: 0 }]]) {
+    const pack = clone();
+    pack.aggregation = { escalateIf: [{ ...pack.aggregation.escalateIf[index], ...extra }], allowIf: [] };
+    rejects(pack, /atLeast\/atMost/);
+  }
+  const missing = clone();
+  missing.aggregation = { escalateIf: [{ question: 'risk' }], allowIf: [] };
+  rejects(missing, /needs equals/);
+});
+
 test('unknown question kinds are rejected', () => {
   const pack = clone();
   pack.questions[0].kind = 'Boolean';

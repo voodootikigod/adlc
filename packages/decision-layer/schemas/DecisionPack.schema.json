@@ -51,38 +51,110 @@
     "inputs": {
       "type": "object",
       "minProperties": 1,
-      "additionalProperties": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "source",
-          "type",
-          "classification",
-          "maxBytes"
-        ],
-        "properties": {
-          "source": {
-            "enum": [
-              "git-diff",
-              "ticket-store"
-            ]
-          },
-          "type": {
-            "enum": [
-              "integer",
-              "string",
-              "count-map",
-              "integer-or-none"
-            ]
-          },
-          "classification": {
-            "const": "metadata"
-          },
-          "maxBytes": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 4096
-          }
+      "additionalProperties": false,
+      "description": "A subset of the fields a v1 run collects; each declares that field's real source and type.",
+      "properties": {
+        "extensionCounts": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/input"
+            },
+            {
+              "properties": {
+                "source": {
+                  "const": "git-diff"
+                },
+                "type": {
+                  "const": "count-map"
+                }
+              }
+            }
+          ]
+        },
+        "linesAdded": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/input"
+            },
+            {
+              "properties": {
+                "source": {
+                  "const": "git-diff"
+                },
+                "type": {
+                  "const": "integer"
+                }
+              }
+            }
+          ]
+        },
+        "linesDeleted": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/input"
+            },
+            {
+              "properties": {
+                "source": {
+                  "const": "git-diff"
+                },
+                "type": {
+                  "const": "integer"
+                }
+              }
+            }
+          ]
+        },
+        "filesChanged": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/input"
+            },
+            {
+              "properties": {
+                "source": {
+                  "const": "git-diff"
+                },
+                "type": {
+                  "const": "integer"
+                }
+              }
+            }
+          ]
+        },
+        "ticketCategory": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/input"
+            },
+            {
+              "properties": {
+                "source": {
+                  "const": "ticket-store"
+                },
+                "type": {
+                  "const": "string"
+                }
+              }
+            }
+          ]
+        },
+        "declaredRailCount": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/input"
+            },
+            {
+              "properties": {
+                "source": {
+                  "const": "ticket-store"
+                },
+                "type": {
+                  "const": "integer-or-none"
+                }
+              }
+            }
+          ]
         }
       }
     },
@@ -235,7 +307,53 @@
           "maximum": 1
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "description": "Choice or Noul: equals, no bounds",
+          "required": [
+            "equals"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "atLeast"
+                ]
+              },
+              {
+                "required": [
+                  "atMost"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "description": "Score: at least one bound, no equals",
+          "allOf": [
+            {
+              "anyOf": [
+                {
+                  "required": [
+                    "atLeast"
+                  ]
+                },
+                {
+                  "required": [
+                    "atMost"
+                  ]
+                }
+              ]
+            }
+          ],
+          "not": {
+            "required": [
+              "equals"
+            ]
+          }
+        }
+      ]
     },
     "choiceDomain": {
       "type": "array",
@@ -271,6 +389,40 @@
         },
         "max": {
           "type": "number"
+        }
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "type",
+        "classification",
+        "maxBytes"
+      ],
+      "properties": {
+        "source": {
+          "enum": [
+            "git-diff",
+            "ticket-store"
+          ]
+        },
+        "type": {
+          "enum": [
+            "integer",
+            "string",
+            "count-map",
+            "integer-or-none"
+          ]
+        },
+        "classification": {
+          "const": "metadata"
+        },
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
         }
       }
     }

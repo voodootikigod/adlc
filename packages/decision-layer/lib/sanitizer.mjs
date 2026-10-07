@@ -1,6 +1,6 @@
 // The pre-dispatch sanitizer. A provider only ever receives its output:
 //
-//   raw local state -> pack input allowlist -> type projection
+//   collected local state -> projection onto the pack's declared inputs -> type check
 //     -> UTF-8 / control-character normalization -> credential redaction
 //     -> per-field and total size limits -> canonical sanitizedInput
 //
@@ -114,16 +114,14 @@ function cleanValue(value, scanner, tally) {
 }
 
 /**
- * @param {Record<string, unknown>} raw collected inputs, before any cleaning
+ * @param {Record<string, unknown>} raw collected inputs, before any cleaning; only the
+ *   pack's declared inputs are kept, and anything else is dropped unread
  * @param {object} pack a validated pack
  * @param {{ scanner?: (text: string) => { text: string, redactions: number } }} [options]
  * @returns {{ sanitizedInput: Record<string, unknown>, inputHash: string, redactions: number }}
  */
 export function sanitize(raw, pack, { scanner = scanText } = {}) {
   const declared = pack.inputs;
-  for (const name of Object.keys(raw)) {
-    if (!Object.hasOwn(declared, name)) throw new SanitizationError('undeclared-field', `input "${name}" is not declared by pack "${pack.id}"`);
-  }
   const fieldLimit = Math.min(pack.limits.fieldBytes, MAX_FIELD_BYTES);
   const tally = { redactions: 0 };
   const cleaned = {};

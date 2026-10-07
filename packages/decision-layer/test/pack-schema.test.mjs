@@ -54,6 +54,8 @@ function conforms(schema, value, root = SCHEMA) {
         .every((key) => conforms(arg, value[key], root)),
       items: () => !Array.isArray(value) || value.every((item) => conforms(arg, item, root)),
       oneOf: () => arg.filter((sub) => conforms(sub, value, root)).length === 1,
+      anyOf: () => arg.some((sub) => conforms(sub, value, root)),
+      not: () => !conforms(arg, value, root),
       allOf: () => arg.every((sub) => conforms(sub, value, root)),
       if: () => !conforms(arg, value, root) || conforms(schema.then ?? true, value, root),
       then: () => true,
@@ -123,6 +125,17 @@ const CASES = [
   ['no questions', variant((p) => { p.questions = []; }), false],
   ['minProbability above 1', variant((p) => { p.aggregation.allowIf[0].minProbability = 1.5; }), false],
   ['a missing allowIf', variant((p) => { delete p.aggregation.allowIf; }), false],
+  ['an input that is not a collectable field', variant((p) => {
+    p.inputs.diffHunks = { source: 'git-diff', type: 'string', classification: 'metadata', maxBytes: 64 };
+  }), false],
+  ['an input with the wrong type', variant((p) => { p.inputs.linesAdded.type = 'string'; }), false],
+  ['an input with the wrong source', variant((p) => { p.inputs.ticketCategory.source = 'git-diff'; }), false],
+  ['a subset of the inputs', variant((p) => {
+    p.inputs = { linesAdded: p.inputs.linesAdded };
+    for (const question of p.questions) question.inputs = ['linesAdded'];
+  }), true],
+  ['a condition with both equals and a bound', variant((p) => { p.aggregation.escalateIf[0].atLeast = 1; }), false],
+  ['a condition with neither equals nor a bound', variant((p) => { delete p.aggregation.escalateIf[0].equals; }), false],
 ];
 
 for (const [name, pack, expected] of CASES) {
