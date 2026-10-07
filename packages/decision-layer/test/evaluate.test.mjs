@@ -195,6 +195,23 @@ test('the default branch comes from origin/HEAD when there is one', (t) => {
   assert.equal(JSON.parse(result.stdout).inputHash, canonicalHash({ ...EXPECTED_INPUT, declaredRailCount: 'none', ticketCategory: 'none' }));
 });
 
+test('a dangling origin/HEAD falls through to local main', (t) => {
+  const { dir, git } = changeRepo(t);
+  git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/gone');
+  const result = runCli(t, [...SHADOW, '--json'], { cwd: dir });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).inputHash, canonicalHash({ ...EXPECTED_INPUT, declaredRailCount: 'none', ticketCategory: 'none' }));
+});
+
+test('a dangling origin/HEAD with no local main or master reports a missing default branch', (t) => {
+  const { dir, git } = changeRepo(t);
+  git('branch', '-q', '-m', 'main', 'trunk');
+  git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/gone');
+  const result = runCli(t, SHADOW, { cwd: dir });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /cannot determine the default branch/);
+});
+
 test('master is the default branch when there is no main or origin/HEAD', (t) => {
   const { dir, git } = changeRepo(t);
   git('branch', '-q', '-m', 'main', 'master');

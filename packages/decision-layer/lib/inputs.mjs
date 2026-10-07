@@ -64,9 +64,10 @@ export function resolveRevision(root, rev) {
   return out.trim();
 }
 
+/** origin/HEAD's target when it resolves to a commit, else local main or master. */
 function defaultBranchRef(root) {
-  const remoteHead = git(root, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']);
-  if (remoteHead) return remoteHead.trim();
+  const remoteHead = git(root, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD'])?.trim();
+  if (remoteHead && git(root, ['rev-parse', '--verify', '--quiet', `${remoteHead}^{commit}`])) return remoteHead;
   for (const ref of ['refs/heads/main', 'refs/heads/master']) {
     if (git(root, ['rev-parse', '--verify', '--quiet', ref])) return ref;
   }
