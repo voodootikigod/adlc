@@ -7,7 +7,10 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
-import { installNoNetwork } from './helpers/no-network.mjs';
+import { NO_NETWORK_PRELOAD, installNoNetwork } from './helpers/no-network.mjs';
+import { pathToFileURL } from 'node:url';
+import { dirname as pathDirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { REPLIES, TICKET_CATEGORY_MARKER, changeRepo, responseFile, runCli } from './helpers/fixtures.mjs';
 import { canonicalHash } from '../lib/canonical.mjs';
 import { GIT_OPTIONS, parseNumstat } from '../lib/inputs.mjs';
@@ -28,6 +31,7 @@ const EXPECTED_INPUT = {
   linesDeleted: 0,
   ticketCategory: TICKET_CATEGORY_MARKER,
 };
+const PACK_INPUTS = ['declaredRailCount', 'extensionCounts', 'filesChanged', 'linesAdded', 'linesDeleted', 'ticketCategory'];
 const RECORD_FIELDS = [
   'answers', 'attemptCount', 'errorClass', 'inputHash', 'latencyMs', 'outcome', 'packHash', 'packId', 'prNumber', 'provider',
   'recordedAt', 'requestedModel', 'resolvedModel', 'revision', 'schemaVersion', 'status', 'ticketId', 'usage', 'wouldAct',
@@ -177,6 +181,33 @@ test('a symlinked .adlc directory is refused', (t) => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /symbolic link/);
   assert.equal(existsSync(join(outside, 'moved', 'decisions')), false);
+});
+
+test('the provider receives the sanitized, redacted input and nothing undeclared', (t) => {
+  const { dir, git } = changeRepo(t);
+  const secret = `ghp_${'A1b2C3d4E5f6G7h8I9j0'.repeat(2)}`;
+  writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({
+    schema: 1,
+    tickets: [{ id: 'T-1', title: 'fixture ticket', category: `feature ${secret}`, rails: ['src/a.mjs'] }],
+  }));
+  git('add', '-A');
+  git('commit', '-q', '-m', 'ticket with a secret-shaped category');
+  const log = join(tmp(t, 'decision-requests-'), 'requests.jsonl');
+  const register = pathToFileURL(join(pathDirname(fileURLToPath(import.meta.url)), 'helpers', 'recording-provider-register.mjs')).href;
+  const result = runCli(t, [...SHADOW, '--ticket', 'T-1'], {
+    cwd: dir,
+    env: { DECISION_REQUEST_LOG: log, NODE_OPTIONS: `--import=${NO_NETWORK_PRELOAD} --import=${register}` },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const requests = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.equal(requests.length, 1);
+  const text = JSON.stringify(requests[0]);
+  assert.ok(!text.includes(secret), 'the provider received the secret');
+  for (const question of requests[0].questions) {
+    assert.deepEqual(Object.keys(question.input).sort(), [...PACK_INPUTS].sort());
+    assert.equal(question.input.ticketCategory, 'feature <redacted:credential>');
+    assert.deepEqual(question.input.extensionCounts, { md: 1, mjs: 1, none: 1, png: 1, json: 1 });
+  }
 });
 
 test('records append: each run adds one line', (t) => {
