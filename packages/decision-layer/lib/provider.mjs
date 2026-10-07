@@ -12,6 +12,7 @@
 // The resolved model is whatever the reply reported, kept even when the reply
 // is otherwise unusable, and null when no reply arrived or none was reported.
 import { isPlainObject } from '@adlc/core';
+import { packHash } from './pack.mjs';
 
 export const MAX_RETRIES = 2;
 export const DEFAULT_TIMEOUT_MS = 10_000;
@@ -105,7 +106,7 @@ function checkResolvedModel(model, resolvedModel) {
 
 /**
  * Ask `provider` the pack's questions about `sanitizedInput`.
- * @returns {Promise<{ status: 'ok'|'unknown'|'error', answers: object[], requestedModel: string, resolvedModel: string|null,
+ * @returns {Promise<{ status: 'ok'|'unknown'|'error', answers: object[], requestedModel: string, resolvedModel: string|null, packHash: string,
  *   errorClass: string|null, usage: object|null, attemptCount: number, latencyMs: number }>}
  */
 export async function evaluateDecision({
@@ -139,7 +140,7 @@ export async function evaluateDecision({
     if (!(outcome.failure && RETRYABLE.has(outcome.failure) && attemptCount <= MAX_RETRIES)) break;
     await sleep(retryDelayMs);
   }
-  const base = { requestedModel: model, attemptCount, latencyMs: Date.now() - started };
+  const base = { requestedModel: model, packHash: packHash(pack), attemptCount, latencyMs: Date.now() - started };
   if (outcome.failure) {
     return { status: 'unknown', answers: [], resolvedModel: null, errorClass: outcome.failure, usage: null, ...base };
   }

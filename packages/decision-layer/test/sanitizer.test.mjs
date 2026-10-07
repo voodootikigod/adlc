@@ -43,7 +43,7 @@ test('a valid input becomes canonical sanitized input with a hash of exactly tha
   assert.equal(inputHash, canonicalHash(raw()));
 });
 
-test('collected fields the pack does not declare are dropped, never sent', () => {
+test('sends only the fields the pack declares (other collected fields are dropped)', () => {
   const { sanitizedInput } = sanitize(raw({ diffHunks: '@@ -1 +1 @@' }), PACK);
   assert.equal('diffHunks' in sanitizedInput, false);
   const subset = { ...PACK, inputs: { linesAdded: PACK.inputs.linesAdded, filesChanged: PACK.inputs.filesChanged } };

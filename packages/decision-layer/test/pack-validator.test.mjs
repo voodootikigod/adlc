@@ -70,7 +70,7 @@ test('a question may only see declared inputs', () => {
   rejects(pack, /undeclared input "diffHunks"/);
 });
 
-test('an input name that is not a collectable field is rejected', () => {
+test('an input outside the input table is rejected', () => {
   const pack = clone();
   pack.inputs.diffHunks = { source: 'git-diff', type: 'string', classification: 'metadata', maxBytes: 64 };
   rejects(pack, /input "diffHunks" is not a collectable field/);

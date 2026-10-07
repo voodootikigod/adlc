@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { installNoNetwork } from './helpers/no-network.mjs';
 import { MOCK_DEFAULT_RESPONSE, createMockProvider } from '../lib/mock-provider.mjs';
+import { packHash } from '../lib/pack.mjs';
 import { DEFAULT_TIMEOUT_MS, MAX_RETRIES, evaluateDecision, isPinnedModel } from '../lib/provider.mjs';
 import { reduce } from '../lib/reducer.mjs';
 
@@ -53,6 +54,7 @@ test('a scripted response is normalized into pack order with the question kinds'
     ],
     requestedModel: 'mock-1',
     resolvedModel: 'mock-1.0.3',
+    packHash: packHash(PACK),
     errorClass: null,
     usage: { calls: 1 },
     attemptCount: 1,
@@ -103,6 +105,18 @@ for (const failure of ['rate-limit', 'network']) {
     assert.equal(result.attemptCount, 1 + MAX_RETRIES);
   });
 }
+
+test('every result carries the pack hash: ok, unknown and error', async () => {
+  const results = {
+    ok: await run(body(ok)),
+    unknown: await run(JSON.stringify({ simulate: 'timeout' })),
+    error: await run('{oops'),
+  };
+  for (const [status, result] of Object.entries(results)) {
+    assert.equal(result.status, status);
+    assert.equal(result.packHash, packHash(PACK), status);
+  }
+});
 
 test('MAX_RETRIES is 2', () => {
   assert.equal(MAX_RETRIES, 2);

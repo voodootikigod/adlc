@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import { ConfigError, RecordError } from './errors.mjs';
 import { diffStats, mainCheckoutRoot, projectRoot, resolveRevision, ticketFacts } from './inputs.mjs';
 import { createMockProvider } from './mock-provider.mjs';
-import { PackError, loadPack, packHash } from './pack.mjs';
+import { PackError, loadPack } from './pack.mjs';
 import { evaluateDecision } from './provider.mjs';
 import { RECORD_SCHEMA_VERSION, appendRecord, recordPath } from './record.mjs';
 import { reduce } from './reducer.mjs';
@@ -49,7 +49,7 @@ async function shadowRun(config, { cwd, retryDelayMs, now }) {
     requestedModel: result.requestedModel,
     resolvedModel: result.resolvedModel,
     packId: pack.id,
-    packHash: packHash(pack),
+    packHash: result.packHash,
     inputHash,
     ticketId: config.ticket,
     prNumber: config.pr,
