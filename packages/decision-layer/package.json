@@ -1,0 +1,48 @@
+{
+  "name": "@adlc/decision-layer",
+  "version": "1.11.1",
+  "description": "Opt-in shadow decision layer — ask a typed classifier versioned questions about a change and record the answers, which never change an ADLC outcome.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Chris Williams (@voodootikigod)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voodootikigod/adlc.git",
+    "directory": "packages/decision-layer"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/packages/decision-layer#readme",
+  "bugs": "https://github.com/voodootikigod/adlc/issues",
+  "keywords": [
+    "adlc",
+    "agentic",
+    "ai",
+    "llm",
+    "cli",
+    "decision",
+    "shadow"
+  ],
+  "bin": {
+    "adlc-decision": "./bin/adlc-decision.mjs"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "packs/",
+    "schemas/",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@adlc/tickets": "1.11.1"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

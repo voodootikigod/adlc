@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "id": "change-risk-v1",
+  "mode": "shadow",
+  "description": "P0/D1 risk signal for a change, from diff counts and the ticket's category and rail count.",
+  "limits": {
+    "fieldBytes": 4096,
+    "totalBytes": 32768
+  },
+  "inputs": {
+    "extensionCounts": { "source": "git-diff", "type": "count-map", "classification": "metadata", "maxBytes": 2048 },
+    "linesAdded": { "source": "git-diff", "type": "integer", "classification": "metadata", "maxBytes": 32 },
+    "linesDeleted": { "source": "git-diff", "type": "integer", "classification": "metadata", "maxBytes": 32 },
+    "filesChanged": { "source": "git-diff", "type": "integer", "classification": "metadata", "maxBytes": 32 },
+    "ticketCategory": { "source": "ticket-store", "type": "string", "classification": "metadata", "maxBytes": 64 },
+    "declaredRailCount": { "source": "ticket-store", "type": "integer-or-none", "classification": "metadata", "maxBytes": 32 }
+  },
+  "questions": [
+    {
+      "id": "risk",
+      "kind": "Choice",
+      "prompt": "How risky is this change?",
+      "domain": ["low", "medium", "high"],
+      "phases": ["P0", "D1"],
+      "inputs": ["extensionCounts", "linesAdded", "linesDeleted", "filesChanged", "ticketCategory", "declaredRailCount"]
+    },
+    {
+      "id": "needs-deeper-interrogation",
+      "kind": "Noul",
+      "prompt": "Should the spec get more interrogation before building?",
+      "domain": ["yes", "no"],
+      "phases": ["P0", "D1"],
+      "inputs": ["extensionCounts", "linesAdded", "linesDeleted", "filesChanged", "ticketCategory", "declaredRailCount"]
+    }
+  ],
+  "aggregation": {
+    "escalateIf": [
+      { "question": "risk", "equals": "high" },
+      { "question": "needs-deeper-interrogation", "equals": "yes" }
+    ],
+    "allowIf": [
+      { "question": "risk", "equals": "low", "minProbability": 0.7 },
+      { "question": "needs-deeper-interrogation", "equals": "no", "minProbability": 0.7 }
+    ]
+  }
+}
