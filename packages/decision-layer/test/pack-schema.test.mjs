@@ -43,6 +43,7 @@ function conforms(schema, value, root = SCHEMA) {
       minimum: () => typeof value !== 'number' || value >= arg,
       maximum: () => typeof value !== 'number' || value <= arg,
       minLength: () => typeof value !== 'string' || value.length >= arg,
+      maxLength: () => typeof value !== 'string' || value.length <= arg,
       minItems: () => !Array.isArray(value) || value.length >= arg,
       maxItems: () => !Array.isArray(value) || value.length <= arg,
       uniqueItems: () => !Array.isArray(value) || !arg || new Set(value.map((item) => JSON.stringify(item))).size === value.length,
@@ -125,6 +126,10 @@ const CASES = [
   ['no questions', variant((p) => { p.questions = []; }), false],
   ['minProbability above 1', variant((p) => { p.aggregation.allowIf[0].minProbability = 1.5; }), false],
   ['a missing allowIf', variant((p) => { delete p.aggregation.allowIf; }), false],
+  ['a numeric description', variant((p) => { p.description = 7; }), false],
+  ['a numeric prompt', variant((p) => { p.questions[0].prompt = 7; }), false],
+  ['a prompt of 512 characters', variant((p) => { p.questions[0].prompt = 'x'.repeat(512); }), true],
+  ['a prompt over 512 characters', variant((p) => { p.questions[0].prompt = 'x'.repeat(513); }), false],
   ['an input that is not a collectable field', variant((p) => {
     p.inputs.diffHunks = { source: 'git-diff', type: 'string', classification: 'metadata', maxBytes: 64 };
   }), false],

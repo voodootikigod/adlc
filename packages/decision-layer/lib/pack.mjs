@@ -15,6 +15,7 @@ export const PACK_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 export const PACK_SCHEMA_VERSION = 1;
 export const MAX_FIELD_BYTES = 4096;
 export const MAX_TOTAL_BYTES = 32768;
+export const MAX_PROMPT_LENGTH = 512;
 
 const KINDS = new Set(['Choice', 'Score', 'Noul']);
 const PHASES = new Set(['P0', 'D1']);
@@ -70,6 +71,7 @@ export function validatePack(pack) {
     throw new PackError(`pack id ${JSON.stringify(pack.id)} must match ${PACK_ID_PATTERN}`);
   }
   if (pack.mode !== 'shadow') throw new PackError(`pack mode ${JSON.stringify(pack.mode)} is not allowed; only "shadow" exists`);
+  if (pack.description !== undefined && typeof pack.description !== 'string') throw new PackError('the pack description must be a string');
   validateLimits(pack.limits);
   validateInputs(pack.inputs);
   const questions = validateQuestions(pack.questions, pack.inputs);
@@ -139,6 +141,9 @@ function validateQuestions(questions, inputs) {
     if (byId.has(question.id)) throw new PackError(`duplicate question id "${question.id}"`);
     closed(question, QUESTION_KEYS, `question "${question.id}"`);
     byId.set(question.id, question);
+    if (question.prompt !== undefined && !(typeof question.prompt === 'string' && question.prompt.length <= MAX_PROMPT_LENGTH)) {
+      throw new PackError(`question "${question.id}" prompt must be a string of at most ${MAX_PROMPT_LENGTH} characters`);
+    }
     if (!KINDS.has(question.kind)) throw new PackError(`question "${question.id}" has unknown kind ${JSON.stringify(question.kind)}`);
     validateDomain(question);
     if (!Array.isArray(question.inputs) || question.inputs.length === 0) {

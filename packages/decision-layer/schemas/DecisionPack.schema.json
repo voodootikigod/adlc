@@ -183,7 +183,8 @@
             ]
           },
           "prompt": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 512
           },
           "domain": {
             "description": "Bound to the kind by allOf below."
