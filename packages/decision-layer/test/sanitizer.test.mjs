@@ -166,6 +166,7 @@ test('a scanner failure stops the run; there is no raw fallback', () => {
 
 test('a scanner that returns something other than text stops the run', () => {
   fails(raw(), 'scanner-failure', PACK, { scanner: () => ({ text: 42, redactions: 0 }) });
+  fails(raw(), 'scanner-failure', PACK, { scanner: (text) => ({ text, redactions: '1' }) });
 });
 
 test('sanitize does not mutate its input', () => {

@@ -15,6 +15,62 @@ const SHIPPED = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.u
 const clone = () => structuredClone(SHIPPED);
 const rejects = (pack, pattern) => assert.throws(() => validatePack(pack), (error) => error instanceof PackError && pattern.test(error.message));
 
+// Each case trips exactly one condition of a guard, and asserts that guard's
+// own message, so a later check rejecting the same pack cannot stand in for it.
+const ISOLATED = [
+  ['a numeric pack id', (p) => { p.id = 7; }, /^pack id 7 must match/],
+  ['fieldBytes 0', (p) => { p.limits.fieldBytes = 0; }, /^limits\.fieldBytes must be an integer from 1/],
+  ['inputs given as a list', (p) => { p.inputs = ['linesAdded']; }, /^a pack must declare its inputs$/],
+  ['no inputs', (p) => { p.inputs = {}; }, /^a pack must declare its inputs$/],
+  ['a Noul domain that is not a list', (p) => { p.questions[1].domain = { length: 2 }; }, /a Noul domain is exactly/],
+  ['a Noul domain with yes twice', (p) => { p.questions[1].domain = ['yes', 'yes']; }, /a Noul domain is exactly/],
+  ['a Choice domain that is a string', (p) => { p.questions[0].domain = 'low'; }, /a Choice domain is a list/],
+  ['an empty Choice domain', (p) => { p.questions[0].domain = []; }, /a Choice domain is a list/],
+  ['a numeric Choice value', (p) => { p.questions[0].domain = [3]; }, /a Choice domain is a list/],
+  ['a Choice value that is an object with a length', (p) => { p.questions[0].domain = [{ length: 1 }]; }, /a Choice domain is a list/],
+  ['an empty Choice value', (p) => { p.questions[0].domain = ['']; }, /a Choice domain is a list/],
+  ['a repeated Choice value', (p) => { p.questions[0].domain = ['low', 'low']; }, /a Choice domain is a list/],
+  ['a null Score domain', (p) => { p.questions[0] = { ...p.questions[0], kind: 'Score', domain: null }; }, /a Score domain is \{ min, max \}/],
+  ['a Score min that is not a number', (p) => { p.questions[0] = { ...p.questions[0], kind: 'Score', domain: { min: '0', max: 1 } }; }, /a Score domain is/],
+  ['a Score max that is not a number', (p) => { p.questions[0] = { ...p.questions[0], kind: 'Score', domain: { min: 0, max: '1' } }; }, /a Score domain is/],
+  ['a Score domain with min equal to max', (p) => { p.questions[0] = { ...p.questions[0], kind: 'Score', domain: { min: 1, max: 1 } }; }, /a Score domain is/],
+  ['questions given as an object', (p) => { p.questions = {}; }, /^a pack must declare at least one question$/],
+  ['no questions', (p) => { p.questions = []; }, /^a pack must declare at least one question$/],
+  ['a question that is not an object', (p) => { p.questions[0] = 'risk'; }, /^every question needs a string id$/],
+  ['a null question', (p) => { p.questions[0] = null; }, /^every question needs a string id$/],
+  ['a numeric question id', (p) => { p.questions[0].id = 5; }, /^every question needs a string id$/],
+  ['an empty question id', (p) => { p.questions[0].id = ''; }, /^every question needs a string id$/],
+  ['question inputs given as a string', (p) => { p.questions[0].inputs = 'linesAdded'; }, /must list the inputs it may see/],
+  ['no question inputs', (p) => { p.questions[0].inputs = []; }, /must list the inputs it may see/],
+  ['question phases given as a string', (p) => { p.questions[0].phases = 'P0'; }, /must name the phases it describes/],
+  ['no question phases', (p) => { p.questions[0].phases = []; }, /must name the phases it describes/],
+  ['a minProbability given as a string', (p) => { p.aggregation.allowIf[0].minProbability = '0.5'; }, /minProbability for "risk" must be between 0 and 1/],
+];
+
+for (const [name, mutate, message] of ISOLATED) {
+  test(`rejected by its own guard: ${name}`, () => {
+    const pack = clone();
+    mutate(pack);
+    assert.throws(() => validatePack(pack), (error) => error instanceof PackError && message.test(error.message), name);
+  });
+}
+
+test('a Score bound that is not a number, or below the domain, is rejected by the bound check', () => {
+  for (const atLeast of ['0.5', -1]) {
+    const pack = clone();
+    pack.questions[0] = { ...pack.questions[0], kind: 'Score', domain: { min: 0, max: 1 } };
+    pack.aggregation = { escalateIf: [{ question: 'risk', atLeast }], allowIf: [] };
+    assert.throws(() => validatePack(pack), (error) => error instanceof PackError && /atLeast for "risk" is outside its domain/.test(error.message), String(atLeast));
+  }
+});
+
+test('loadPack checks the requested id itself', (t) => {
+  const root = tmp(t, 'decision-packs-');
+  for (const id of [7, 'Bad_Id']) {
+    assert.throws(() => loadPack(id, { projectRoot: root }), (error) => error instanceof PackError && /^pack id .* must match/.test(error.message), String(id));
+  }
+});
+
 test('the shipped change-risk-v1 pack is valid', () => {
   assert.doesNotThrow(() => validatePack(SHIPPED));
 });

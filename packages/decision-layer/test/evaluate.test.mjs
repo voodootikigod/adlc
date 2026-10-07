@@ -262,6 +262,8 @@ for (const [name, out] of [
   ['a negative count', ['-3\t1\tfile.js', '']],
   ['a rename missing its new path', ['1\t1\t', 'old.js', '']],
   ['a rename missing both paths', ['1\t1\t', '']],
+  ['a rename with an empty old path', ['1\t1\t', '', 'new.js', '']],
+  ['an empty record between two records', ['1\t1\ta.js', '', '2\t0\tb.js', '']],
 ]) {
   test(`parseNumstat refuses ${name} rather than guessing`, () => {
     assert.throws(() => parseNumstat(out.join('\0')), (error) => error instanceof GitOutputError && /git diff --numstat/.test(error.message));
@@ -281,6 +283,16 @@ test('a renamed file counts once, even where the repository disables rename dete
   assert.equal(result.exitCode, 0);
   const expected = { declaredRailCount: 'none', extensionCounts: { txt: 1 }, filesChanged: 1, linesAdded: 0, linesDeleted: 0, ticketCategory: 'none' };
   assert.equal(result.record.inputHash, canonicalHash(expected));
+});
+
+test('a worktree list git cannot describe is refused, not guessed', (t) => {
+  const { dir } = changeRepo(t);
+  const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+  const shimDir = tmp(t, 'decision-git-shim-');
+  writeFileSync(join(shimDir, 'git'), `#!/bin/sh\ncase " $* " in *" worktree list "*) printf 'HEAD 0\\0\\0'; exit 0;; esac\nexec '${realGit}' "$@"\n`, { mode: 0o755 });
+  const result = runCli(t, SHADOW, { cwd: dir, env: { PATH: `${shimDir}:${process.env.PATH}` } });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /^adlc decision: cannot locate the main work tree of this repository\n$/);
 });
 
 test('unreadable git diff output exits 1 before dispatch, with no record', (t) => {

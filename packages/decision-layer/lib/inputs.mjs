@@ -39,14 +39,16 @@ export function projectRoot(cwd) {
  * so every linked worktree shares it. In a submodule or a --separate-git-dir
  * checkout git reports the git directory there instead; the work tree is then
  * its `core.worktree` (submodules), or this checkout's own top level when this
- * checkout is the main one. A bare main repository has no work tree.
+ * checkout is the main one. A bare main repository has no work tree: git lists
+ * its directory, which is also the common directory, and no checkout of it is
+ * the main one, so it is refused below.
  */
 export function mainCheckoutRoot(cwd) {
   const fail = () => { throw new ConfigError('cannot locate the main work tree of this repository'); };
   const out = git(cwd, ['worktree', 'list', '--porcelain', '-z']);
   const fields = (out ?? '').split('\0\0')[0].split('\0');
   const path = fields.find((field) => field.startsWith('worktree '))?.slice('worktree '.length);
-  if (!path || fields.includes('bare')) fail();
+  if (!path) fail();
   const common = git(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir'])?.trim();
   if (path !== common) return path;
   const configured = git(cwd, ['config', '--file', join(common, 'config'), 'core.worktree'])?.trim();

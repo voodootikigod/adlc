@@ -102,7 +102,8 @@ function cleanString(value, scanner, tally) {
 
 function cleanValue(value, scanner, tally) {
   if (typeof value === 'string') return cleanString(value, scanner, tally);
-  if (value !== null && typeof value === 'object') {
+  // checkType has already refused null, so an object here is a count map.
+  if (typeof value === 'object') {
     const merged = new Map();
     for (const [key, count] of Object.entries(value)) {
       const cleanKey = cleanString(key, scanner, tally);
