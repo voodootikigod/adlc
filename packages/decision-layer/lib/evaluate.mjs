@@ -62,9 +62,8 @@ async function shadowRun(config, { cwd, retryDelayMs, now }) {
     latencyMs: result.latencyMs,
     usage: result.usage,
   };
-  const path = recordPath(mainRoot);
-  appendRecord(path, record);
-  return { exitCode: 0, record, path };
+  appendRecord(mainRoot, record);
+  return { exitCode: 0, record, path: recordPath(mainRoot) };
 }
 
 /**

@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
 import { installNoNetwork } from './helpers/no-network.mjs';
@@ -61,7 +61,7 @@ test('the record carries every field, hashes the sanitized input, and holds none
   assert.equal(record.revision, git('rev-parse', 'HEAD').trim());
   assert.equal(record.provider, 'mock');
   assert.equal(record.requestedModel, 'mock-1');
-  assert.equal(record.resolvedModel, 'mock-1');
+  assert.equal(record.resolvedModel, null);
   assert.equal(record.packId, 'change-risk-v1');
   assert.equal(record.packHash, packHash(loadPack('change-risk-v1', { projectRoot: dir })));
   assert.equal(record.inputHash, canonicalHash(EXPECTED_INPUT));
@@ -116,6 +116,67 @@ test('ambient GIT_* variables cannot point the run at another repository', (t) =
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).revision, git('rev-parse', 'HEAD').trim());
   assert.equal(readRecords(dir).length, 1);
+});
+
+test('the diff runs from the merge-base, so later default-branch commits are not counted', async (t) => {
+  const { dir, git } = changeRepo(t);
+  git('checkout', '-q', 'main');
+  writeFileSync(join(dir, 'other.txt'), `${'line\n'.repeat(10)}`);
+  writeFileSync(join(dir, 'README.md'), '');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'main moves on');
+  git('checkout', '-q', 'feature');
+  const result = await runEvaluate({
+    mode: 'shadow', provider: 'mock', model: 'm', pack: 'change-risk-v1', revision: 'HEAD', ticket: 'T-1', pr: null, mockResponse: null,
+  }, { cwd: dir });
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.record.inputHash, canonicalHash(EXPECTED_INPUT));
+});
+
+test('a project pack declaring a subset of inputs runs, and hashes only those inputs', (t) => {
+  const { dir } = changeRepo(t);
+  const pack = loadPack('change-risk-v1', { projectRoot: dir });
+  const subset = { ...structuredClone(pack), id: 'subset-pack', inputs: { linesAdded: pack.inputs.linesAdded, filesChanged: pack.inputs.filesChanged } };
+  for (const question of subset.questions) question.inputs = ['linesAdded', 'filesChanged'];
+  mkdirSync(join(dir, '.adlc', 'decision-packs', 'subset-pack'), { recursive: true });
+  writeFileSync(join(dir, '.adlc', 'decision-packs', 'subset-pack', 'pack.json'), JSON.stringify(subset));
+  const result = runCli(t, [...SHADOW.slice(0, -1), 'subset-pack', '--json'], { cwd: dir });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).inputHash, canonicalHash({ filesChanged: 4, linesAdded: 5 }));
+});
+
+test('a symlinked runs.jsonl is refused and its target is untouched', (t) => {
+  const { dir } = changeRepo(t);
+  const outside = join(tmp(t, 'decision-outside-'), 'target.txt');
+  writeFileSync(outside, 'original\n');
+  mkdirSync(join(dir, '.adlc', 'decisions'), { recursive: true });
+  symlinkSync(outside, join(dir, '.adlc', 'decisions', 'runs.jsonl'));
+  const result = runCli(t, SHADOW, { cwd: dir });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /symbolic link/);
+  assert.equal(readFileSync(outside, 'utf8'), 'original\n');
+});
+
+test('a symlinked decisions directory is refused and nothing is written through it', (t) => {
+  const { dir } = changeRepo(t);
+  const outside = tmp(t, 'decision-outside-dir-');
+  symlinkSync(outside, join(dir, '.adlc', 'decisions'));
+  const result = runCli(t, SHADOW, { cwd: dir });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /symbolic link/);
+  assert.deepEqual(readdirSync(outside), []);
+});
+
+test('a symlinked .adlc directory is refused', (t) => {
+  const { dir, git } = changeRepo(t);
+  const outside = tmp(t, 'decision-outside-adlc-');
+  git('rm', '-q', '-r', '--cached', '.adlc');
+  renameSync(join(dir, '.adlc'), join(outside, 'moved'));
+  symlinkSync(join(outside, 'moved'), join(dir, '.adlc'));
+  const result = runCli(t, SHADOW, { cwd: dir });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /symbolic link/);
+  assert.equal(existsSync(join(outside, 'moved', 'decisions')), false);
 });
 
 test('records append: each run adds one line', (t) => {
