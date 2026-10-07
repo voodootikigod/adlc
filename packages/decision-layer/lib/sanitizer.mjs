@@ -34,6 +34,11 @@ const CREDENTIAL_PATTERNS = [
 ];
 const TOKEN_CANDIDATE = /[A-Za-z0-9+/=_-]{24,}/g;
 const MIN_TOKEN_ENTROPY = 4.2;
+// Hex has 16 symbols, so it can never reach MIN_TOKEN_ENTROPY: it is judged
+// against its own ceiling, log2(16) = 4. v1 inputs never carry a commit SHA, so
+// long, evenly spread hex is treated as a secret.
+const HEX_CANDIDATE = /\b[0-9a-fA-F]{32,}\b/g;
+const MIN_HEX_ENTROPY = 3.5;
 
 function shannonEntropy(text) {
   const counts = new Map();
@@ -62,6 +67,11 @@ export function scanText(text) {
     if (shannonEntropy(token) < MIN_TOKEN_ENTROPY) return token;
     redactions += 1;
     return '<redacted:high-entropy>';
+  });
+  result = result.replace(HEX_CANDIDATE, (token) => {
+    if (shannonEntropy(token) < MIN_HEX_ENTROPY) return token;
+    redactions += 1;
+    return '<redacted:credential>';
   });
   return { text: result, redactions };
 }

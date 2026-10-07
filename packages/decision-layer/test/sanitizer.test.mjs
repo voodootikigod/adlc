@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { installNoNetwork } from './helpers/no-network.mjs';
@@ -141,8 +142,27 @@ test('the samples are too low in entropy for the fallback to catch on its own', 
   }
 });
 
+test('a 40-character hex string is redacted: v1 inputs never carry a commit SHA, so long hex is treated as a secret', () => {
+  assert.equal(scanText('0123456789abcdef0123456789abcdef01234567').text, '<redacted:credential>');
+});
+
+test('random hex of 32 or more characters is redacted, though the general entropy check cannot reach it', () => {
+  const hex32 = createHash('sha256').update('decision-layer-hex-32').digest('hex').slice(0, 32);
+  const hex64 = createHash('sha256').update('decision-layer-hex-64').digest('hex');
+  for (const hex of [hex32, hex64, hex64.toUpperCase()]) {
+    assert.equal(scanText(`key ${hex} end`).text, 'key <redacted:credential> end', hex);
+  }
+});
+
+test('short hex, and long hex too regular to be a secret, are kept', () => {
+  const hex31 = createHash('sha256').update('decision-layer-hex-31').digest('hex').slice(0, 31);
+  for (const value of ['3e424d6', 'deadbeef', 'cafe', hex31, '0123'.repeat(10), 'a'.repeat(40), 'ab'.repeat(20)]) {
+    assert.equal(scanText(value).text, value, value);
+  }
+});
+
 test('ordinary metadata is not redacted', () => {
-  for (const value of ['feature', 'bugfix', 'mjs', 'none', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '0123456789abcdef0123456789abcdef01234567']) {
+  for (const value of ['feature', 'bugfix', 'mjs', 'none', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']) {
     assert.equal(scanText(value).text, value);
   }
 });
