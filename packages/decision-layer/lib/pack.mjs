@@ -4,7 +4,7 @@
 // its own under .adlc/decision-packs/<id>/pack.json, but never one that shares
 // a shipped ID. DecisionPack.schema.json documents the same shape this module
 // checks; the validator is hand-written so the package has no dependencies.
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isPlainObject } from '@adlc/core';
@@ -213,9 +213,14 @@ function readPackFile(path, id) {
   return pack;
 }
 
+/**
+ * The pack directories under `dir`. A symbolic link counts as a directory when
+ * its target is one, exactly as loading a pack through it would, so a linked
+ * project pack cannot slip past the shadowing check.
+ */
 function packDirectories(dir) {
   if (!existsSync(dir)) return [];
-  return readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+  return readdirSync(dir).filter((name) => statSync(join(dir, name), { throwIfNoEntry: false })?.isDirectory());
 }
 
 /**

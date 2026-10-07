@@ -3,13 +3,14 @@
 // exit of 1 also shows nothing was sent.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { tmp } from '@adlc/core/test-kit';
 import { FETCH_EXIT_CODE, NO_NETWORK_PRELOAD, installNoNetwork } from './helpers/no-network.mjs';
 import { changeRepo, responseFile, runCli } from './helpers/fixtures.mjs';
 import { JEV_FIXTURE_PATH } from '../lib/config.mjs';
+import { SHIPPED_PACKS_DIR as PACKS_DIR } from '../lib/pack.mjs';
 
 installNoNetwork();
 
@@ -21,6 +22,7 @@ function refused(t, args, pattern, { env, prepare } = {}) {
   prepare?.(dir);
   const result = runCli(t, args, { cwd: dir, env });
   assert.equal(result.status, 1, `${args.join(' ')}\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+  assert.match(result.stderr, /^adlc decision: [^\n]*\n$/, `expected exactly one error line, got ${JSON.stringify(result.stderr)}`);
   assert.match(result.stderr, pattern);
   assert.equal(result.stdout, '');
   assert.equal(existsSync(recordFile(dir)), false, 'a refused run wrote a record');
@@ -89,6 +91,29 @@ test('a project pack shadowing a shipped one is refused', (t) => {
     prepare: (dir) => {
       mkdirSync(join(dir, '.adlc', 'decision-packs', 'change-risk-v1'), { recursive: true });
       writeFileSync(join(dir, '.adlc', 'decision-packs', 'change-risk-v1', 'pack.json'), '{}');
+    },
+  });
+});
+
+test('a symlinked project pack directory shadowing a shipped one is refused', (t) => {
+  refused(t, SHADOW, /shadows the shipped pack "change-risk-v1"/, {
+    prepare: (dir) => {
+      const target = tmp(t, 'decision-linked-pack-');
+      writeFileSync(join(target, 'pack.json'), '{}');
+      mkdirSync(join(dir, '.adlc', 'decision-packs'), { recursive: true });
+      symlinkSync(target, join(dir, '.adlc', 'decision-packs', 'change-risk-v1'));
+    },
+  });
+});
+
+test('a sanitization failure exits 1 with one error line and no record', (t) => {
+  refused(t, [...SHADOW.slice(0, -1), 'tiny-pack'], /input "\w+" exceeds 4 bytes/, {
+    prepare: (dir) => {
+      const pack = JSON.parse(readFileSync(join(PACKS_DIR, 'change-risk-v1', 'pack.json'), 'utf8'));
+      pack.id = 'tiny-pack';
+      pack.limits.fieldBytes = 4;
+      mkdirSync(join(dir, '.adlc', 'decision-packs', 'tiny-pack'), { recursive: true });
+      writeFileSync(join(dir, '.adlc', 'decision-packs', 'tiny-pack', 'pack.json'), JSON.stringify(pack));
     },
   });
 });
