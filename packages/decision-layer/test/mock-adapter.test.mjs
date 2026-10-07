@@ -61,8 +61,24 @@ test('a scripted response is normalized into pack order with the question kinds'
   assert.ok(Number.isFinite(result.latencyMs) && result.latencyMs >= 0);
 });
 
-test('the resolved model defaults to the requested one', async () => {
-  assert.equal((await run(body(ok))).resolvedModel, 'mock-1');
+test('a reply that reports no resolved model records null, not the requested model', async () => {
+  assert.equal((await run(body(ok))).resolvedModel, null);
+  assert.equal((await run(undefined)).resolvedModel, null);
+});
+
+test('a failure with no reply records no resolved model', async () => {
+  for (const simulate of ['timeout', 'rate-limit', 'network']) {
+    assert.equal((await run(JSON.stringify({ simulate }))).resolvedModel, null, simulate);
+  }
+});
+
+test('an unusable reply keeps the resolved model it reported', async () => {
+  const outOfDomain = await run(body([{ ...ok[0], value: 'extreme' }, ok[1]], { resolvedModel: 'mock-9.9.9' }));
+  assert.equal(outOfDomain.status, 'error');
+  assert.equal(outOfDomain.resolvedModel, 'mock-9.9.9');
+  const malformed = await run(body(ok.slice(0, 1), { resolvedModel: 'mock-9.9.9' }));
+  assert.equal(malformed.resolvedModel, 'mock-9.9.9');
+  assert.equal((await run(body(ok, { resolvedModel: 7, usage: 'x' }))).resolvedModel, null);
 });
 
 test('the mock never derives answers from its input', async () => {

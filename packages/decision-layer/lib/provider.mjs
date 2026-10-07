@@ -8,8 +8,9 @@
 //
 // Each question is sent only the input fields it declares. A model ID ending
 // in -<major>.<minor>.<patch> is pinned: a reply that resolves it to any other
-// model is `error`. Any other ID is an alias, which may resolve to anything;
-// both IDs are recorded.
+// model is `error`. Any other ID is an alias, which may resolve to anything.
+// The resolved model is whatever the reply reported, kept even when the reply
+// is otherwise unusable, and null when no reply arrived or none was reported.
 import { isPlainObject } from '@adlc/core';
 
 export const MAX_RETRIES = 2;
@@ -26,10 +27,9 @@ export function isPinnedModel(model) {
 }
 
 class UnusableReply extends Error {
-  constructor(errorClass, message, resolvedModel) {
+  constructor(errorClass, message) {
     super(message);
     this.errorClass = errorClass;
-    this.resolvedModel = resolvedModel;
   }
 }
 
@@ -99,13 +99,13 @@ async function callOnce(provider, request, timeoutMs) {
 
 function checkResolvedModel(model, resolvedModel) {
   if (resolvedModel !== undefined && resolvedModel !== model && isPinnedModel(model)) {
-    throw new UnusableReply('model-mismatch', `pinned model ${model} resolved to ${resolvedModel}`, resolvedModel);
+    throw new UnusableReply('model-mismatch', `pinned model ${model} resolved to ${resolvedModel}`);
   }
 }
 
 /**
  * Ask `provider` the pack's questions about `sanitizedInput`.
- * @returns {Promise<{ status: 'ok'|'unknown'|'error', answers: object[], requestedModel: string, resolvedModel: string,
+ * @returns {Promise<{ status: 'ok'|'unknown'|'error', answers: object[], requestedModel: string, resolvedModel: string|null,
  *   errorClass: string|null, usage: object|null, attemptCount: number, latencyMs: number }>}
  */
 export async function evaluateDecision({
@@ -141,20 +141,21 @@ export async function evaluateDecision({
   }
   const base = { requestedModel: model, attemptCount, latencyMs: Date.now() - started };
   if (outcome.failure) {
-    return { status: 'unknown', answers: [], resolvedModel: model, errorClass: outcome.failure, usage: null, ...base };
+    return { status: 'unknown', answers: [], resolvedModel: null, errorClass: outcome.failure, usage: null, ...base };
   }
+  const reported = isPlainObject(outcome.body) && typeof outcome.body.resolvedModel === 'string' ? outcome.body.resolvedModel : null;
   try {
     const reply = normalizeReply(outcome.body, pack);
     checkResolvedModel(model, reply.resolvedModel);
     return {
       status: 'ok',
       answers: reply.answers,
-      resolvedModel: reply.resolvedModel ?? model,
+      resolvedModel: reported,
       errorClass: null,
       usage: reply.usage ?? null,
       ...base,
     };
   } catch (error) {
-    return { status: 'error', answers: [], resolvedModel: error.resolvedModel ?? model, errorClass: error.errorClass, usage: null, ...base };
+    return { status: 'error', answers: [], resolvedModel: reported, errorClass: error.errorClass, usage: null, ...base };
   }
 }

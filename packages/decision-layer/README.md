@@ -60,7 +60,8 @@ replaced with `<redacted:…>` tokens, and fields are capped at 4 KiB each and
 
 Each run appends one JSON line to `.adlc/decisions/runs.jsonl` in the
 repository's main checkout, so removing a worktree keeps its records. The record
-holds the revision, provider, requested and resolved model, pack ID and hash,
+holds the revision, provider, requested model and resolved model (`null` when
+the provider reported none), pack ID and hash,
 the hash of the sanitized input (not the input), ticket and PR join keys, the
 normalized answers, the reducer outcome (`allow`, `escalate` or `unknown`) and
 the phase action it would take (`wouldAct`), status, error class, attempt count,
