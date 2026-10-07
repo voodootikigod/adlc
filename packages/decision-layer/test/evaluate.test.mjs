@@ -105,6 +105,19 @@ test('a run from a linked worktree records into the main checkout, with its join
   execFileSync('git', ['-C', dir, 'check-ignore', '-q', '.adlc/decisions/runs.jsonl'], { stdio: 'ignore' });
 });
 
+test('ambient GIT_* variables cannot point the run at another repository', (t) => {
+  const { dir, git } = changeRepo(t);
+  const other = changeRepo(t);
+  other.git('checkout', '-q', 'main');
+  const result = runCli(t, [...SHADOW, '--json'], {
+    cwd: dir,
+    env: { GIT_DIR: join(other.dir, '.git'), GIT_WORK_TREE: other.dir, GIT_INDEX_FILE: join(other.dir, '.git', 'index') },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).revision, git('rev-parse', 'HEAD').trim());
+  assert.equal(readRecords(dir).length, 1);
+});
+
 test('records append: each run adds one line', (t) => {
   const { dir } = changeRepo(t);
   for (let i = 0; i < 3; i += 1) assert.equal(runCli(t, SHADOW, { cwd: dir }).status, 0);

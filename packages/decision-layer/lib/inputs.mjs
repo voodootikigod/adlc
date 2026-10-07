@@ -8,12 +8,9 @@ import { ConfigError } from './errors.mjs';
 
 /** Bounds on every git call: a hung or runaway git cannot stall or flood a run. */
 export const GIT_OPTIONS = Object.freeze({ timeout: 30_000, maxBuffer: 64 * 1024 * 1024 });
-const AMBIENT_GIT_VARIABLES = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_COMMON_DIR', 'GIT_PREFIX'];
-
+/** The process environment without GIT_* variables, which could point git at another repository. */
 function gitEnv() {
-  const env = { ...process.env };
-  for (const name of AMBIENT_GIT_VARIABLES) delete env[name];
-  return env;
+  return Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')));
 }
 
 /** Run git in `root`; null when it fails. */
