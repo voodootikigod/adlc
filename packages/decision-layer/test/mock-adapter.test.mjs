@@ -145,21 +145,41 @@ test('by default retries back off between attempts', async () => {
   for (const ms of delays) assert.ok(ms >= 100, `retry backoff ${ms} ms is too short to relieve a rate limit`);
 });
 
-test('the provider receives the model, revision, pack ID and each question with only its declared inputs', async () => {
+test('the provider receives the model, the pack ID and each question with only its declared inputs', async () => {
   let seen;
   const provider = { name: 'spy', call: async (request) => { seen = request; return { body: JSON.parse(body(ok)) }; } };
   const pack = structuredClone(PACK);
   pack.questions[0].inputs = ['linesAdded', 'filesChanged'];
   pack.questions[1].inputs = ['ticketCategory'];
   await evaluateDecision({ provider, model: 'm-7', pack, sanitizedInput: INPUT, revision: 'abc123', retryDelayMs: 0 });
+  assert.deepEqual(Object.keys(seen).sort(), ['model', 'packId', 'questions'], 'the request carries something besides the model, pack ID and questions');
   assert.equal(seen.model, 'm-7');
-  assert.equal(seen.revision, 'abc123');
   assert.equal(seen.packId, 'change-risk-v1');
+  for (const question of seen.questions) assert.deepEqual(Object.keys(question).sort(), ['domain', 'id', 'input', 'kind', 'prompt']);
   assert.deepEqual(seen.questions, [
     { id: 'risk', kind: 'Choice', prompt: PACK.questions[0].prompt, domain: ['low', 'medium', 'high'], input: { filesChanged: 1, linesAdded: 1 } },
     { id: 'needs-deeper-interrogation', kind: 'Noul', prompt: PACK.questions[1].prompt, domain: ['yes', 'no'], input: { ticketCategory: 'none' } },
   ]);
   assert.equal('input' in seen, false, 'the whole input was sent beside the per-question inputs');
+});
+
+test('the revision is never sent to the provider', async () => {
+  let seen;
+  const provider = { name: 'spy', call: async (request) => { seen = request; return { body: JSON.parse(body(ok)) }; } };
+  await evaluateDecision({ provider, model: 'm', pack: PACK, sanitizedInput: INPUT, revision: 'f00dfeed', retryDelayMs: 0 });
+  assert.ok(!JSON.stringify(seen).includes('f00dfeed'), 'the revision reached the provider');
+});
+
+test('a probability or confidence of exactly 0 is valid; below 0 is malformed', async () => {
+  const zero = await run(body([{ ...ok[0], probability: 0, confidence: 0 }, ok[1]]));
+  assert.equal(zero.status, 'ok');
+  assert.equal(zero.answers[0].probability, 0);
+  assert.equal(zero.answers[0].confidence, 0);
+  for (const key of ['probability', 'confidence']) {
+    const negative = await run(body([{ ...ok[0], [key]: -0.01 }, ok[1]]));
+    assert.equal(negative.status, 'error', key);
+    assert.equal(negative.errorClass, 'malformed-response', key);
+  }
 });
 
 test('a provider that does not answer within timeoutMs is an unknown timeout, not retried', async () => {

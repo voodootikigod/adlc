@@ -6,6 +6,10 @@
 // Rate-limit and network failures are retried at most MAX_RETRIES times; a
 // call that has not answered within timeoutMs is a timeout, never retried.
 //
+// The request carries the model, the pack ID and each question's pack-authored
+// text (id, kind, prompt, domain) with only the sanitized input fields that
+// question declares. Nothing else derived from the repository is sent: in
+// particular not the revision, which the run records but the provider never sees.
 // Each question is sent only the input fields it declares. A model ID ending
 // in -<major>.<minor>.<patch> is pinned: a reply that resolves it to any other
 // model is `error`. Any other ID is an alias, which may resolve to anything.
@@ -121,7 +125,6 @@ export async function evaluateDecision({
 }) {
   const request = {
     model,
-    revision,
     packId: pack.id,
     questions: pack.questions.map(({ id, kind, prompt, domain, inputs }) => ({
       id,
