@@ -22,7 +22,9 @@ the answers never change an exit code, ticket, rail, routing or verdict.
 
 Exit codes:
   0  the run was recorded (whatever the answers), or --mode off
-  1  configuration, pack, sanitization or record-write failure; nothing sent or recorded`;
+  1  a configuration, pack or sanitization failure before dispatch: nothing
+     was sent and nothing recorded; or the record could not be written: the
+     provider may have been asked, but the run was not recorded`;
 
 /**
  * @param {string[]} argv

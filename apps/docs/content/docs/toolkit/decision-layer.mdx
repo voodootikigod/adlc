@@ -56,5 +56,5 @@ attempts, latency and usage.
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
   <span style={{ color: 'var(--adlc-pass)' }}>**0**: the run was recorded, whatever the answers; or `--mode off`.</span>
-  <span style={{ color: 'var(--adlc-fail)' }}>**1**: configuration, pack, sanitization or record-write failure. Nothing was sent or recorded.</span>
+  <span style={{ color: 'var(--adlc-fail)' }}>**1**: a configuration, pack or sanitization failure before dispatch (nothing was sent or recorded), or a record that could not be written (the provider may have been asked, but the run was not recorded).</span>
 </div>

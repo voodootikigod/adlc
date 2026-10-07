@@ -38,7 +38,7 @@ never select a mode, provider or model.
 | Code | Meaning |
 |---|---|
 | `0` | The run was recorded, whatever the answers; or `--mode off` |
-| `1` | Configuration, pack, sanitization or record-write failure. Nothing was sent and nothing recorded. |
+| `1` | A configuration, pack or sanitization failure before dispatch: nothing was sent and nothing recorded. Or the record could not be written: the provider may have been asked, but the run was not recorded. |
 
 ## What is sent
 
