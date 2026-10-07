@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmp } from '@adlc/core/test-kit';
+import { gitRepo, tmp } from '@adlc/core/test-kit';
 import { NO_NETWORK_PRELOAD, installNoNetwork } from './helpers/no-network.mjs';
 import { pathToFileURL } from 'node:url';
 import { dirname as pathDirname } from 'node:path';
@@ -208,6 +208,47 @@ test('the provider receives the sanitized, redacted input and nothing undeclared
     assert.equal(question.input.ticketCategory, 'feature <redacted:credential>');
     assert.deepEqual(question.input.extensionCounts, { md: 1, mjs: 1, none: 1, png: 1, json: 1 });
   }
+});
+
+test('a repository with no .adlc directory and no ticket store records one run', (t) => {
+  const { dir, git } = gitRepo(t, 'decision-bare-repo-');
+  writeFileSync(join(dir, 'a.mjs'), 'export const a = 1;\n');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'base');
+  git('checkout', '-q', '-b', 'feature');
+  writeFileSync(join(dir, 'b.mjs'), 'export const b = 2;\n');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'change');
+  assert.equal(existsSync(join(dir, '.adlc')), false);
+  const result = runCli(t, SHADOW, { cwd: dir });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(readRecords(dir).length, 1);
+});
+
+test('a ticket with no category and no rails reads as category none and zero rails', async (t) => {
+  const { dir, git } = changeRepo(t);
+  writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({ schema: 1, tickets: [{ id: 'T-2', title: 'bare ticket' }] }));
+  git('add', '-A');
+  git('commit', '-q', '-m', 'a bare ticket');
+  const result = await runEvaluate({
+    mode: 'shadow', provider: 'mock', model: 'm', pack: 'change-risk-v1', revision: 'HEAD', ticket: 'T-2', pr: null, mockResponse: null,
+  }, { cwd: dir });
+  assert.equal(result.exitCode, 0, result.error?.message);
+  const expected = { ...EXPECTED_INPUT, extensionCounts: { ...EXPECTED_INPUT.extensionCounts, json: 1 }, filesChanged: 5, linesAdded: 6, linesDeleted: 1, ticketCategory: 'none', declaredRailCount: 0 };
+  assert.equal(result.record.inputHash, canonicalHash(expected));
+});
+
+test('git output larger than the default 1 MiB buffer is read: the git bounds are applied', (t) => {
+  const { dir } = changeRepo(t);
+  const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+  const shimDir = tmp(t, 'decision-git-flood-');
+  const flood = join(shimDir, 'flood.mjs');
+  writeFileSync(flood, "for (let i = 0; i < 150000; i += 1) process.stdout.write(`1\\t0\\tf${i}.js\\0`);\n");
+  writeFileSync(join(shimDir, 'git'), `#!/bin/sh\ncase " $* " in *" --numstat "*) exec '${process.execPath}' '${flood}';; esac\nexec '${realGit}' "$@"\n`, { mode: 0o755 });
+  const result = runCli(t, [...SHADOW, '--json'], { cwd: dir, env: { PATH: `${shimDir}:${process.env.PATH}` } });
+  assert.equal(result.status, 0, result.stderr);
+  const expected = { declaredRailCount: 'none', extensionCounts: { js: 150000 }, filesChanged: 150000, linesAdded: 150000, linesDeleted: 0, ticketCategory: 'none' };
+  assert.equal(JSON.parse(result.stdout).inputHash, canonicalHash(expected));
 });
 
 test('records append: each run adds one line', (t) => {
