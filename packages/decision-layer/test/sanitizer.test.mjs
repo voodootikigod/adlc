@@ -110,6 +110,37 @@ test('the JWT and API-key patterns start at their minimum lengths', () => {
   assert.equal(scanText(key(19)).text, key(19));
 });
 
+// One sample per credential pattern, at that pattern's minimum length and with a
+// digit in the body, built from low-entropy text so only the pattern itself, never
+// the high-entropy fallback, can redact it.
+const body = (n) => '0Ab1'.repeat(n).slice(0, n);
+const CREDENTIAL_SAMPLES = [
+  ['sk-', `sk-${body(20)}`],
+  ['sk-ant-', `sk-ant-${body(20)}`],
+  ['ghp_', `ghp_${body(20)}`],
+  ['ghs_', `ghs_${body(20)}`],
+  ['github_pat_', `github_pat_${body(20)}`],
+  ['glpat-', `glpat-${body(20)}`],
+  ['AKIA', `AKIA${body(16).toUpperCase()}`],
+  ['ASIA', `ASIA${body(16).toUpperCase()}`],
+  ['xoxb-', `xoxb-${body(10)}`],
+  ['xoxp-', `xoxp-${body(10)}`],
+  ['AIza', `AIza${body(35)}`],
+  ['npm_', `npm_${body(36)}`],
+];
+
+for (const [prefix, sample] of CREDENTIAL_SAMPLES) {
+  test(`the ${prefix} pattern redacts a minimum-length key to <redacted:credential>`, () => {
+    assert.equal(scanText(`key ${sample} end`).text, 'key <redacted:credential> end');
+  });
+}
+
+test('the samples are too low in entropy for the fallback to catch on its own', () => {
+  for (const [, sample] of CREDENTIAL_SAMPLES) {
+    assert.ok(!/<redacted:high-entropy>/.test(scanText(sample.replace(/^[A-Za-z]+[-_]+/, '')).text), sample);
+  }
+});
+
 test('ordinary metadata is not redacted', () => {
   for (const value of ['feature', 'bugfix', 'mjs', 'none', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '0123456789abcdef0123456789abcdef01234567']) {
     assert.equal(scanText(value).text, value);
