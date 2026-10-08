@@ -15,7 +15,7 @@ import {
   readRailsFromTicketFile, expandRailsToFiles,
 } from '../lib/targets.mjs';
 import { buildJsonReport, printTable } from '../lib/report.mjs';
-import { checkSyntax, classifyTestResult, runTest, launchFor, GROUP_KILL } from '../lib/runner.mjs';
+import { checkSyntax, classifyTestResult, runTest, heapCapMb, withHeapCap, withHeapCapHint, launchFor, GROUP_KILL } from '../lib/runner.mjs';
 
 // ── filterTargetFiles ────────────────────────────────────────────────────────
 
@@ -664,5 +664,115 @@ describe('runTest ends everything the suite started on timeout', { skip: !GROUP_
     assert.match(args[2], /HOLLOW_TEST_WATCHDOG/, 'the watchdog source itself is the argument');
     assert.ok(!args.some((a) => /watchdog\.mjs$/.test(a)), 'no on-disk path: a mutant written there mid-run must not become the harness');
     assert.deepEqual(args.slice(-2), ['--', 'true']);
+  });
+});
+
+// ── runTest: every run has a heap cap ───────────────────────────────────────
+
+describe('runTest caps the heap of every node it starts', () => {
+  const heapLimit = `node -e "console.log(require('v8').getHeapStatistics().heap_size_limit)"`;
+  const withEnv = (value, fn) => {
+    const had = Object.hasOwn(process.env, 'HOLLOW_TEST_MAX_OLD_SPACE_MB');
+    const prev = process.env.HOLLOW_TEST_MAX_OLD_SPACE_MB;
+    if (value === undefined) delete process.env.HOLLOW_TEST_MAX_OLD_SPACE_MB; else process.env.HOLLOW_TEST_MAX_OLD_SPACE_MB = value;
+    try { return fn(); } finally {
+      if (had) process.env.HOLLOW_TEST_MAX_OLD_SPACE_MB = prev; else delete process.env.HOLLOW_TEST_MAX_OLD_SPACE_MB;
+    }
+  };
+
+  it('HOLLOW_TEST_MAX_OLD_SPACE_MB bounds the child heap (inherited via NODE_OPTIONS)', () => {
+    const r = withEnv('256', () => runTest(heapLimit, 20000, process.cwd()));
+    assert.equal(r.status, 0, r.stderr);
+    const limit = Number(r.stdout.trim());
+    // V8 reports old space plus young generation and overhead: 256 MiB lands near 450 MiB.
+    assert.ok(limit > 0 && limit < 600 * 1024 * 1024, `heap limit ${limit} is not capped near 256 MiB`);
+  });
+
+  it('HOLLOW_TEST_MAX_OLD_SPACE_MB=0 runs uncapped', () => {
+    const r = withEnv('0', () => runTest(heapLimit, 20000, process.cwd()));
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(Number(r.stdout.trim()) > 512 * 1024 * 1024, 'the cap must be off');
+  });
+
+  // Literal 2048 on purpose: comparing against the exported constant would pass
+  // for ANY value of it, including undefined (a mutant the gate produced).
+  it('heapCapMb: 2048 when unset, 0 disables, garbage falls back to 2048', () => {
+    assert.equal(heapCapMb({}), 2048);
+    assert.equal(heapCapMb({ HOLLOW_TEST_MAX_OLD_SPACE_MB: '' }), 2048);
+    assert.equal(heapCapMb({ HOLLOW_TEST_MAX_OLD_SPACE_MB: '0' }), 0);
+    assert.equal(heapCapMb({ HOLLOW_TEST_MAX_OLD_SPACE_MB: '512' }), 512);
+    assert.equal(heapCapMb({ HOLLOW_TEST_MAX_OLD_SPACE_MB: 'lots' }), 2048);
+    assert.equal(heapCapMb({ HOLLOW_TEST_MAX_OLD_SPACE_MB: '-5' }), 2048);
+  });
+
+  it('withHeapCap: appends the cap to NODE_OPTIONS, keeps what was there, drops NODE_TEST_CONTEXT', () => {
+    assert.equal(withHeapCap({}).NODE_OPTIONS, '--max-old-space-size=2048');
+    assert.equal(withHeapCap({ HOLLOW_TEST_MAX_OLD_SPACE_MB: '1' }).NODE_OPTIONS, '--max-old-space-size=1', 'a 1 MiB cap is still a cap');
+    assert.equal(withHeapCap({ NODE_OPTIONS: '--no-warnings', HOLLOW_TEST_MAX_OLD_SPACE_MB: '300' }).NODE_OPTIONS, '--no-warnings --max-old-space-size=300');
+    const off = withHeapCap({ NODE_OPTIONS: '--no-warnings', HOLLOW_TEST_MAX_OLD_SPACE_MB: '0', NODE_TEST_CONTEXT: 'child-v8' });
+    assert.equal(off.NODE_OPTIONS, '--no-warnings', '0 leaves NODE_OPTIONS untouched');
+    assert.equal('NODE_TEST_CONTEXT' in off, false);
+    const env = { KEEP: 'me' };
+    withHeapCap(env);
+    assert.deepEqual(env, { KEEP: 'me' }, 'the input env is not mutated');
+  });
+
+  // hollow-test's own suite runs under an outer hollow-test (the repo's mutation
+  // gate), which injects its 2048 into NODE_OPTIONS. An explicit variable must
+  // win over that, or the test above cannot pass inside the gate — and the
+  // package that adds the cap is the package that can no longer gate itself.
+  it('a node that dies at a cap THIS runner set gets the knob named in its stderr', () => {
+    const oom = 'FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\n';
+    const byDefault = withHeapCapHint({ status: 134, stderr: oom }, { mb: 2048, explicit: false });
+    assert.match(byDefault.stderr, /--max-old-space-size=2048, hollow-test's default/);
+    assert.match(byDefault.stderr, /Set HOLLOW_TEST_MAX_OLD_SPACE_MB higher, or 0/);
+    const explicit = withHeapCapHint({ status: 134, stderr: oom }, { mb: 256, explicit: true });
+    assert.match(explicit.stderr, /--max-old-space-size=256, from HOLLOW_TEST_MAX_OLD_SPACE_MB/);
+    assert.equal(withHeapCapHint({ status: 1, stderr: 'ordinary failure\n' }, { mb: 2048, explicit: false }).stderr, 'ordinary failure\n', 'no hint without a heap OOM');
+    assert.equal(withHeapCapHint({ status: 134, stderr: oom }, null).stderr, oom, "an operator's own flag is not blamed on the variable");
+    // End to end: a tiny cap, a loop that fills the heap, the hint in the real stderr.
+    const r = withEnv('24', () => runTest(`node -e "const a = []; for (;;) a.push(new Array(1e5).fill(1))"`, 60000, process.cwd()));
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /--max-old-space-size=24, from HOLLOW_TEST_MAX_OLD_SPACE_MB/, r.stderr.slice(-400));
+    // An operator's own flag, variable unset: the OOM is theirs, no hint.
+    const prev = process.env.NODE_OPTIONS;
+    process.env.NODE_OPTIONS = '--max-old-space-size=24';
+    try {
+      const theirs = withEnv(undefined, () => runTest(`node -e "const a = []; for (;;) a.push(new Array(1e5).fill(1))"`, 60000, process.cwd()));
+      assert.notEqual(theirs.status, 0);
+      assert.doesNotMatch(theirs.stderr, /HOLLOW_TEST_MAX_OLD_SPACE_MB/);
+    } finally {
+      if (prev === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = prev;
+    }
+  });
+
+  it('withHeapCap: an explicit HOLLOW_TEST_MAX_OLD_SPACE_MB replaces an inherited flag, in either spelling', () => {
+    for (const inherited of ['--max-old-space-size=2048', '--max_old_space_size=2048', '--max-old-space-size 2048']) {
+      const o = withHeapCap({ NODE_OPTIONS: `--no-warnings ${inherited} --stack-size=900`, HOLLOW_TEST_MAX_OLD_SPACE_MB: '256' });
+      assert.equal(o.NODE_OPTIONS, '--no-warnings --stack-size=900 --max-old-space-size=256', inherited);
+    }
+    const zero = withHeapCap({ NODE_OPTIONS: '--max-old-space-size=2048', HOLLOW_TEST_MAX_OLD_SPACE_MB: '0' });
+    assert.equal(zero.NODE_OPTIONS, '--max-old-space-size=2048', 'explicit 0 leaves NODE_OPTIONS exactly as found');
+    const malformed = withHeapCap({ NODE_OPTIONS: '--max-old-space-size=8192', HOLLOW_TEST_MAX_OLD_SPACE_MB: 'lots' });
+    assert.equal(malformed.NODE_OPTIONS, '--max-old-space-size=8192', 'a malformed value does not outrank the operator\'s own flag');
+  });
+
+  it('withHeapCap: an operator\'s own --max-old-space-size in NODE_OPTIONS wins over the default', () => {
+    // V8 accepts `_` for `-` in flag names; both spellings are the operator's choice.
+    for (const theirs of ['--max-old-space-size=8192', '--no-warnings --max-old-space-size=8192', '--max-old-space-size 8192', '--max_old_space_size=8192']) {
+      assert.equal(withHeapCap({ NODE_OPTIONS: theirs }).NODE_OPTIONS, theirs, theirs);
+    }
+    const r = runTest(`node -e "console.log(require('v8').getHeapStatistics().heap_size_limit)"`, 20000, process.cwd());
+    assert.equal(r.status, 0, r.stderr);
+    const capped = Number(r.stdout.trim());
+    const prev = process.env.NODE_OPTIONS;
+    process.env.NODE_OPTIONS = '--max-old-space-size=3000';
+    try {
+      const r2 = runTest(`node -e "console.log(require('v8').getHeapStatistics().heap_size_limit)"`, 20000, process.cwd());
+      assert.equal(r2.status, 0, r2.stderr);
+      assert.ok(Number(r2.stdout.trim()) > capped, 'the operator\'s larger heap must survive into the child');
+    } finally {
+      if (prev === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = prev;
+    }
   });
 });

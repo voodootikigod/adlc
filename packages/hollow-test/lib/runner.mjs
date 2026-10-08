@@ -15,6 +15,78 @@ import { writeFileAtomic } from './inflight.mjs';
 // (which causes it to skip all test files and exit 0, making every mutant
 // look like it survived).
 /**
+ * The env a trial runs with: NODE_TEST_CONTEXT dropped (a nested `node --test`
+ * would otherwise think it is a worker) and the V8 heap cap appended to
+ * NODE_OPTIONS. Pure, so tests can see exactly what a child receives.
+ */
+export function withHeapCap(env) {
+  const out = { ...env };
+  delete out.NODE_TEST_CONTEXT;
+  const mb = heapCapMb(out);
+  const explicit = explicitHeapCap(out);
+  const theirs = HEAP_FLAG.test(out.NODE_OPTIONS ?? '');
+  // Three cases. Variable unset and the operator already sized the heap in
+  // NODE_OPTIONS (a large suite, a tsc-backed build): theirs stands — V8 takes
+  // the LAST flag, so appending ours would silently shrink it with nothing in
+  // the failure output pointing at HOLLOW_TEST_MAX_OLD_SPACE_MB. Variable set
+  // explicitly: it REPLACES any inherited flag — hollow-test's own suite runs
+  // under an outer hollow-test that injects its 2048, and a test asking for 256
+  // must get 256. Explicit 0: NODE_OPTIONS is left exactly as found.
+  if (mb === 0) return out;
+  if (theirs && !explicit) return out;
+  const kept = (out.NODE_OPTIONS ?? '').replace(HEAP_FLAG_G, ' ').trim().replace(/\s+/g, ' ');
+  out.NODE_OPTIONS = [kept, `--max-old-space-size=${mb}`].filter(Boolean).join(' ');
+  return out;
+}
+
+/**
+ * V8's "heap out of memory" names no knob. When a node died that way under a
+ * cap this runner set, say which cap and how to change it, in the stderr the
+ * baseline failure prints — a suite that needs more than the default must be
+ * one line away from knowing why it went red.
+ */
+const HEAP_OOM = /Reached heap limit|JavaScript heap out of memory/;
+export function withHeapCapHint(outcome, cap) {
+  if (!cap || !HEAP_OOM.test(outcome.stderr ?? '')) return outcome;
+  const origin = cap.explicit ? 'from HOLLOW_TEST_MAX_OLD_SPACE_MB' : "hollow-test's default";
+  const hint = `\nhollow-test: a node hit its V8 heap cap (--max-old-space-size=${cap.mb}, ${origin}). ` +
+    'Set HOLLOW_TEST_MAX_OLD_SPACE_MB higher, or 0 to run uncapped.\n';
+  return { ...outcome, stderr: `${outcome.stderr ?? ''}${hint}` };
+}
+
+// V8 treats `-` and `_` in flag names as the same, so both spellings count.
+const HEAP_FLAG = /(^|\s)--max[-_]old[-_]space[-_]size(=\S*|\s+\d+)?(?=\s|$)/;
+const HEAP_FLAG_G = new RegExp(HEAP_FLAG.source, 'g');
+
+/**
+ * Per-process V8 heap cap, in MiB, for every node the test command starts
+ * (NODE_OPTIONS is inherited, so the suite's own child processes get it too). A
+ * mutant that makes JS-heap growth unbounded dies with "heap out of memory" —
+ * a failed run, a kill — instead of growing for the whole timeout. It bounds ONE
+ * isolate's old space: `node --test` runs files in parallel, and Buffer /
+ * ArrayBuffer / native memory sit outside it entirely (the 2026-10-08 runaway
+ * was an endless stream of Buffers). The host-level bound is the caller's cgroup;
+ * the watchdog's tree kill is what ends a runaway here.
+ *
+ * `HOLLOW_TEST_MAX_OLD_SPACE_MB=0` disables the cap; anything unparseable falls
+ * back to the default rather than silently running uncapped.
+ */
+export const DEFAULT_MAX_OLD_SPACE_MB = 2048;
+/** True only for a value that parses: a malformed one must not outrank an operator's own flag. */
+export function explicitHeapCap(env) {
+  const raw = env.HOLLOW_TEST_MAX_OLD_SPACE_MB;
+  if (raw === undefined || raw === '') return false;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0;
+}
+export function heapCapMb(env = process.env) {
+  const raw = env.HOLLOW_TEST_MAX_OLD_SPACE_MB;
+  if (raw === undefined || raw === '') return DEFAULT_MAX_OLD_SPACE_MB;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 ? n : DEFAULT_MAX_OLD_SPACE_MB;
+}
+
+/**
  * How a trial is launched on POSIX: through lib/watchdog.mjs, a child that runs
  * `/bin/sh -c <cmd>` in the caller's own process group and session and, when
  * spawnSync's timeout SIGTERMs it, freezes and then kills the suite's whole
@@ -95,21 +167,27 @@ export function formatDiagnosticOutput(output, maxBytes = MAX_BASELINE_OUTPUT_BY
  * @returns {{ status: number | null, timedOut: boolean, spawnFailed: boolean, reason: string | null, stdout: string, stderr: string }}
  */
 export function runTest(testCmd, timeoutMs, cwd) {
-  return classifyTestResult(spawnTrial(testCmd, { cwd, timeoutMs }));
+  const result = spawnTrial(testCmd, { cwd, timeoutMs });
+  return withHeapCapHint(classifyTestResult(result), result.hollowCap);
 }
 
 /**
  * The ONE way a test command is launched — by runTest for the baseline and
  * every mutant trial, and by the mutation gate's own measurement of the fast
  * target (scripts/mutation-gate.mjs), so the run that sizes the draw and the
- * runs that spend it have byte-for-byte the same settings: watchdog, env,
- * pipes, maxBuffer, timeout. Returns spawnSync's result with the watchdog's
- * report folded into stderr.
+ * runs that spend it have byte-for-byte the same settings: watchdog, env with
+ * the heap cap, pipes, maxBuffer, timeout. Returns spawnSync's result with the
+ * watchdog's report folded into stderr and the cap this runner set (if any)
+ * on `hollowCap`, for the hint.
  */
 export function spawnTrial(testCmd, { cwd, timeoutMs, maxBuffer = MAX_TEST_OUTPUT_BYTES }) {
   const [command, args] = launchFor(testCmd);
-  const env = { ...process.env };
-  delete env.NODE_TEST_CONTEXT;
+  const base = { ...process.env };
+  const env = withHeapCap(base);
+  // The hint is for a cap THIS runner set; an operator's own flag is theirs.
+  const hollowCap = (env.NODE_OPTIONS ?? '') !== (base.NODE_OPTIONS ?? '')
+    ? { mb: heapCapMb(env), explicit: explicitHeapCap(env) }
+    : null;
   // The watchdog's own report (what it ended, what it could not read) comes back
   // through a file: spawnSync closes its pipes the instant its timeout fires, so
   // on the very path that matters nothing the watchdog says afterwards would
@@ -125,7 +203,7 @@ export function spawnTrial(testCmd, { cwd, timeoutMs, maxBuffer = MAX_TEST_OUTPU
     maxBuffer,
     env,
   });
-  return withWatchdogReport(result, report);
+  return { ...withWatchdogReport(result, report), hollowCap };
 }
 
 function withWatchdogReport(result, report) {

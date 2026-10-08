@@ -131,6 +131,20 @@ hollow-test --test-cmd "node --test test/*.test.mjs" --json
    them took a host down (2026-10-08: RAM and swap full, nothing killed, SSH
    logins that never got a shell). Windows runs the command unwrapped.
 
+6. **Every node gets a V8 heap cap**: each node the test command starts gets
+   `--max-old-space-size` via `NODE_OPTIONS` (default 2048 MiB, inherited by the
+   suite's own child processes), so a mutant that makes JS-heap growth unbounded
+   dies with "heap out of memory" instead of running until the timeout. This is a
+   per-process bound on one isolate's old space, not a host bound: `node --test`
+   runs files in parallel, and Buffer, ArrayBuffer and native memory are outside
+   it (the 2026-10-08 runaway was an endless stream of Buffers). Bound the host
+   with a cgroup (`systemd-run --scope -p MemoryMax=…`); rely on guarantee 5 to
+   end a runaway. `HOLLOW_TEST_MAX_OLD_SPACE_MB=<n>` changes the cap; `0` disables
+   it; when the variable is unset, a `--max-old-space-size` (or `--max_old_space_size`) you already put in `NODE_OPTIONS` is kept; when it is set, it replaces any inherited flag. The baseline run uses the same settings, so a suite that genuinely needs
+   more fails loudly there, not silently mid-gate, and the stderr it prints names
+   the cap and the variable. The default is below Node's own default on large
+   hosts; a suite that needs more sets the variable once.
+
 ## What is mutated (and what is skipped)
 
 Mutation applies to plain JavaScript only: `.mjs`, `.cjs`, `.js`. This is an

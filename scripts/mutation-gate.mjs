@@ -70,7 +70,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isMutableSource } from '../packages/hollow-test/lib/targets.mjs';
-import { spawnTrial } from '../packages/hollow-test/lib/runner.mjs';
+import { spawnTrial, withHeapCapHint } from '../packages/hollow-test/lib/runner.mjs';
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -371,7 +371,7 @@ export function mutantBudget(decision, { runMs = null, windowMs = HOLLOW_WINDOW_
  */
 /**
  * The baseline measurement launches exactly the way hollow-test's own trials
- * do, through runner.mjs's spawnTrial (watchdog, report). spawnSync's timeout signals its direct child only,
+ * do, through runner.mjs's spawnTrial (watchdog, heap cap, report). spawnSync's timeout signals its direct child only,
  * and with a bare `shell: true` that child is /bin/sh — `node --test` and its
  * workers kept running after this measurement timed out, the same orphan
  * class the 2026-10-08 incident was made of, on every `npm run preflight`.
@@ -379,10 +379,12 @@ export function mutantBudget(decision, { runMs = null, windowMs = HOLLOW_WINDOW_
  */
 function spawnThroughWatchdog(testCmd, _args, { cwd, timeout }) {
   // hollow-test's own launch path, so this measurement and the trials it sizes
-  // have identical settings (watchdog, env, report, pipes, and the trial's
+  // have identical settings (watchdog, heap cap, report, pipes, and the trial's
   // own maxBuffer — a verbose suite must not die of ENOBUFS here and run fine
   // under hollow-test).
-  return spawnTrial(testCmd, { cwd, timeoutMs: timeout });
+  const r = spawnTrial(testCmd, { cwd, timeoutMs: timeout });
+  // A node that died at the cap gets the knob named here as well, not only in a trial.
+  return { ...r, stderr: withHeapCapHint({ stderr: r.stderr }, r.hollowCap).stderr };
 }
 
 export function measureRun(testCmd, { spawn = spawnThroughWatchdog, now = Date.now, cwd = ROOT, timeoutMs = FAST_RUN_TIMEOUT_MS } = {}) {
