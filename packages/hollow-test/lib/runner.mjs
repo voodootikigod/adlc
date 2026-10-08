@@ -3,16 +3,47 @@
 // Returns { killed: boolean, timedOut: boolean, exitCode: number | null }
 
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { readFileSync, unlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { writeFileAtomic } from './inflight.mjs';
 
 // Strip NODE_TEST_CONTEXT from the child environment so that a test command
 // using `node --test` does not hit Node.js v22's recursive-invocation guard
 // (which causes it to skip all test files and exit 0, making every mutant
 // look like it survived).
-function childEnv() {
-  const env = { ...process.env };
-  delete env.NODE_TEST_CONTEXT;
-  return env;
+/**
+ * How a trial is launched on POSIX: through lib/watchdog.mjs, a child that runs
+ * `/bin/sh -c <cmd>` in the caller's own process group and session and, when
+ * spawnSync's timeout SIGTERMs it, freezes and then kills the suite's whole
+ * descendant tree (see watchdog.mjs for why freeze-then-kill, and why /proc).
+ *
+ * spawnSync's `timeout` signals its direct child only. When that child was the
+ * shell, `node --test`, its file workers and whatever the suite spawned lived on
+ * as orphans, still running the mutant, still allocating; each timed-out mutant
+ * left its workers behind, and on 2026-10-08 the pile of them took a host down
+ * (RAM and swap full, nothing killed, SSH logins that never got a shell).
+ *
+ * Not `detached: true`: that would setsid() the suite out of the terminal's
+ * foreground group, so Ctrl-C could no longer stop an in-flight trial and a
+ * kill -9 of hollow-test would strand the suite — the same orphan class on the
+ * interrupt path. The watchdog keeps Ctrl-C semantics exactly as before.
+ *
+ * Windows has no process groups in this sense; there the command runs as before.
+ */
+export const GROUP_KILL = process.platform !== 'win32';
+// The watchdog's SOURCE, read once when this module loads and handed to each
+// trial's node through -e. Not its path: a trial spawns a fresh node, and a
+// path would be re-read from disk at that moment — under this repo's own
+// mutation gate that disk copy can be a MUTANT of the harness, which then runs
+// as the harness and can be scored "killed" without any test having run. The
+// bytes loaded with the runner are the harness for the whole run.
+const WATCHDOG_SOURCE = readFileSync(fileURLToPath(new URL('./watchdog.mjs', import.meta.url)), 'utf8');
+/** The spawnSync (command, args) a trial is launched with. Exported for tests. */
+export function launchFor(testCmd) {
+  return GROUP_KILL ? [process.execPath, ['--input-type=module', '-e', WATCHDOG_SOURCE, '--', testCmd]] : [testCmd, []];
 }
 
 // spawnSync's default maxBuffer is 1 MiB, and it does not truncate: once the
@@ -64,16 +95,51 @@ export function formatDiagnosticOutput(output, maxBytes = MAX_BASELINE_OUTPUT_BY
  * @returns {{ status: number | null, timedOut: boolean, spawnFailed: boolean, reason: string | null, stdout: string, stderr: string }}
  */
 export function runTest(testCmd, timeoutMs, cwd) {
-  const result = spawnSync(testCmd, {
-    shell: true,
+  return classifyTestResult(spawnTrial(testCmd, { cwd, timeoutMs }));
+}
+
+/**
+ * The ONE way a test command is launched — by runTest for the baseline and
+ * every mutant trial, and by the mutation gate's own measurement of the fast
+ * target (scripts/mutation-gate.mjs), so the run that sizes the draw and the
+ * runs that spend it have byte-for-byte the same settings: watchdog, env,
+ * pipes, maxBuffer, timeout. Returns spawnSync's result with the watchdog's
+ * report folded into stderr.
+ */
+export function spawnTrial(testCmd, { cwd, timeoutMs, maxBuffer = MAX_TEST_OUTPUT_BYTES }) {
+  const [command, args] = launchFor(testCmd);
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  // The watchdog's own report (what it ended, what it could not read) comes back
+  // through a file: spawnSync closes its pipes the instant its timeout fires, so
+  // on the very path that matters nothing the watchdog says afterwards would
+  // arrive through stderr. Relayed into stderr below.
+  const report = GROUP_KILL ? join(tmpdir(), `hollow-test-watchdog-${process.pid}-${randomUUID()}.log`) : null;
+  if (report) env.HOLLOW_TEST_WATCHDOG_REPORT = report;
+  const result = spawnSync(command, args, {
+    shell: !GROUP_KILL,
     cwd,
     timeout: timeoutMs,
     encoding: 'utf8',
     stdio: 'pipe',
-    maxBuffer: MAX_TEST_OUTPUT_BYTES,
-    env: childEnv(),
+    maxBuffer,
+    env,
   });
-  return classifyTestResult(result);
+  return withWatchdogReport(result, report);
+}
+
+function withWatchdogReport(result, report) {
+  if (!report) return result;
+  let said = '';
+  try { said = readFileSync(report, 'utf8'); } catch { /* the watchdog had nothing to say */ }
+  try { unlinkSync(report); } catch { /* never written */ }
+  if (!said) return result;
+  // Shown on THIS process's stderr as it happens, not only folded into the
+  // result: runMutant keeps no trial stderr and the CLI prints baseline stderr
+  // only when the baseline is red, so a daemon the suite detached, or a wrong
+  // victim, would otherwise be ended with nothing on screen.
+  process.stderr.write(said);
+  return { ...result, stderr: `${result.stderr ?? ''}${said}` };
 }
 
 /**

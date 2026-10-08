@@ -16,6 +16,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readFileSync as readFileSyncForLaunch } from 'node:fs';
+import { tmp as tmpForLaunch } from '@adlc/core/test-kit';
 
 import { testTargetFor, hollowTestWouldMutate, classify, mutableChangedFiles, SURVIVOR_GUIDANCE, mutantBudget, MUTANTS_PER_CHANGED_FILE, HOLLOW_WINDOW_MS, FAST_RUN_TIMEOUT_MS, measureRun } from '../mutation-gate.mjs';
 import { generateMutants } from '../../packages/core/lib/mutate.mjs';
@@ -894,4 +896,49 @@ test('every field of the budget document is pinned on every path (the gate on it
   assert.deepEqual(big, { ok: true, draw: 32, want: 134, fits: 32, capped: true });
   const small = mutantBudget(fast(5), { runMs: 80_000, windowMs: 45 * 60_000 });
   assert.deepEqual(small, { ok: true, draw: 12, want: 12, fits: 32, capped: false });
+});
+
+// ------------------------------------------------- measureRun's REAL launch path
+// Through hollow-test's watchdog (runner.mjs spawnTrial), so a measurement that
+// times out ends what it started instead of leaving `node --test` and its
+// workers behind (2026-10-08). These live HERE, not in a sibling file, because
+// this file is the gate's fast target for scripts/mutation-gate.mjs (see the
+// self-verification test above): a test the gate does not run kills nothing.
+
+const launchAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const launchSettle = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test('measureRun (real launch): a green command measures and returns its output', () => {
+  const r = measureRun('echo measured', { timeoutMs: 20000 });
+  assert.equal(r.ok, true, r.reason);
+  assert.match(r.output, /measured/);
+  assert.ok(r.runMs >= 1);
+});
+
+test('measureRun (real launch): a timed-out measurement leaves nothing it started running', { skip: process.platform === 'win32' }, async (t) => {
+  const dir = tmpForLaunch(t, 'gate-measure-');
+  const pidFile = join(dir, 'worker.pid');
+  const r = measureRun(`sleep 30 & echo $! > "${pidFile}"; wait`, { cwd: dir, timeoutMs: 3000 });
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /timed out/);
+  const pid = Number(readFileSyncForLaunch(pidFile, 'utf8').trim());
+  for (let i = 0; i < 40 && launchAlive(pid); i++) await launchSettle(50);
+  assert.equal(launchAlive(pid), false, `worker ${pid} outlived the timed-out measurement`);
+  assert.match(r.output, /watchdog: ended 1 process\(es\)/, 'the measurement carries the watchdog\'s report, like a trial');
+});
+
+// spawnSync's result shapes, synthetic: the classification must keep a launch
+// that never happened apart from a run that was killed, and a timeout is never
+// a green measurement.
+test('measureRun: a real timeout (ETIMEDOUT + SIGTERM) is a timeout and not ok; a launch failure is neither', () => {
+  const run = (result) => measureRun('node --test x', { spawn: () => result, now: () => 0 });
+  const timedOut = run({ status: null, signal: 'SIGTERM', error: Object.assign(new Error('spawnSync node ETIMEDOUT'), { code: 'ETIMEDOUT' }) });
+  assert.equal(timedOut.ok, false, 'a timeout is never a green measurement');
+  assert.match(timedOut.reason, /timed out/);
+  assert.match(run({ status: null, signal: null, error: Object.assign(new Error('spawnSync node ENOENT'), { code: 'ENOENT' }) }).reason, /could not run/);
+  assert.match(run({ status: null, signal: null, error: Object.assign(new Error('spawnSync node EAGAIN'), { code: 'EAGAIN' }) }).reason, /could not run/);
+  assert.match(run({ status: null, signal: 'SIGTERM', error: Object.assign(new Error('spawnSync node ENOBUFS'), { code: 'ENOBUFS' }) }).reason, /could not run/);
+  assert.match(run({ status: null, signal: 'SIGKILL' }).reason, /killed by SIGKILL/);
+  assert.match(run({ status: 3, stdout: '', stderr: '' }).reason, /exited 3/);
+  assert.equal(run({ status: 0, stdout: 'ok', stderr: '' }).ok, true);
 });

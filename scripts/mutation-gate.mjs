@@ -70,6 +70,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isMutableSource } from '../packages/hollow-test/lib/targets.mjs';
+import { spawnTrial } from '../packages/hollow-test/lib/runner.mjs';
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -368,11 +369,33 @@ export function mutantBudget(decision, { runMs = null, windowMs = HOLLOW_WINDOW_
  * so the draw can be sized to what actually fits. A red run is the gate's own baseline
  * failure, reported with the suite's output before any mutant is drawn.
  */
-export function measureRun(testCmd, { spawn = spawnSync, now = Date.now, cwd = ROOT, timeoutMs = FAST_RUN_TIMEOUT_MS } = {}) {
+/**
+ * The baseline measurement launches exactly the way hollow-test's own trials
+ * do, through runner.mjs's spawnTrial (watchdog, report). spawnSync's timeout signals its direct child only,
+ * and with a bare `shell: true` that child is /bin/sh — `node --test` and its
+ * workers kept running after this measurement timed out, the same orphan
+ * class the 2026-10-08 incident was made of, on every `npm run preflight`.
+ * Injectable: the tests hand in a fake with the same (cmd, args, opts) shape.
+ */
+function spawnThroughWatchdog(testCmd, _args, { cwd, timeout }) {
+  // hollow-test's own launch path, so this measurement and the trials it sizes
+  // have identical settings (watchdog, env, report, pipes, and the trial's
+  // own maxBuffer — a verbose suite must not die of ENOBUFS here and run fine
+  // under hollow-test).
+  return spawnTrial(testCmd, { cwd, timeoutMs: timeout });
+}
+
+export function measureRun(testCmd, { spawn = spawnThroughWatchdog, now = Date.now, cwd = ROOT, timeoutMs = FAST_RUN_TIMEOUT_MS } = {}) {
   const t0 = now();
   const r = spawn(testCmd, [], { shell: true, cwd, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 });
   const runMs = Math.max(1, now() - t0);
   const output = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+  // A real timeout arrives as error ETIMEDOUT (with the SIGTERM spawnSync sent).
+  // Every other error — ENOENT, EAGAIN/ENOMEM on a starved host, ENOBUFS — is a
+  // launch that did not happen, and must never read as "the suite ran and was
+  // killed": that false signal is exactly what runner.mjs's classifyTestResult
+  // was split out to prevent.
+  if (r.error?.code === 'ETIMEDOUT') return { ok: false, runMs, output, reason: `the fast target command timed out (${timeoutMs} ms) or was killed by ${r.signal ?? 'a signal'}` };
   if (r.error) return { ok: false, runMs, output, reason: `could not run the fast target command: ${r.error.message}` };
   if (r.signal || r.status == null) return { ok: false, runMs, output, reason: `the fast target command timed out (${timeoutMs} ms) or was killed by ${r.signal ?? 'a signal'}` };
   if (r.status !== 0) return { ok: false, runMs, output, reason: `the fast target command exited ${r.status}` };

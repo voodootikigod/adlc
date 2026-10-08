@@ -11,6 +11,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+- **hollow-test:** a trial now ends everything it started — on timeout, on Ctrl-C, when hollow-test itself is killed, and when the suite crashes on its own. Trials run through a watchdog child that keeps the suite in the caller's process group and, on each of those, freezes then SIGKILLs the suite's whole descendant tree plus any earlier-detached helper still carrying its environment marker (a chain, so a nested hollow-test does not hide its subtree; parent links from /proc, no fork), and reports what it ended. Timed-out mutants used to leave `node --test` and its workers running as orphans, still executing the mutant; on 2026-10-08 the pile of them filled a host's RAM and swap with nothing ever killed, and the box had to be power-cycled twice.
+- **mutation-gate (scripts):** the baseline measurement launches through the same watchdog, so a timed-out measurement no longer strands `node --test` either, and a real timeout (which spawnSync reports as `ETIMEDOUT` plus `SIGTERM`) is classified as a timeout rather than a launch failure.
+
 ### Breaking
 - **tickets:** `@adlc/tickets` no longer exports the `./lib/generation-descriptor.mjs` subpath (it was published in 1.11.1). An `import '@adlc/tickets/lib/generation-descriptor.mjs'` now fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`; the remaining subpaths are `./lib/key-contract.mjs`, `./lib/durability.mjs` and `./lib/manifest-primitives.mjs`.
 - **parallax:** `parallax --prompt-only --record-verdict <file|->` now requires `--ticket <id>` and exits 1 without it, so a recorded verdict is always bound to the ticket it is evidence for.
