@@ -353,6 +353,7 @@ for (const [name, body] of [
   ['answers as an array', JSON.stringify({ model: 'jev-1.13.0', answers: [] })],
   ['answers missing', JSON.stringify({ model: 'jev-1.13.0' })],
   ['a usage that is not an object', JSON.stringify({ ...OK_LATEST.body, usage: 'x' })],
+  ['a usage that is an array', JSON.stringify({ ...OK_LATEST.body, usage: [] })],
 ]) {
   test(`a 2xx reply with ${name} is error (malformed)`, async () => {
     const result = await run({ fetch: replay({ status: 200, body }).fetch });

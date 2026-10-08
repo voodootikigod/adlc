@@ -115,7 +115,7 @@ export function neutralBody(reply) {
   const { answers, model, usage } = reply;
   const resolvedModel = { resolvedModel: typeof model === 'string' ? model : null };
   if (answers === null || typeof answers !== 'object' || Array.isArray(answers)) return { answers, ...resolvedModel };
-  const counters = usage === null ? undefined : typeof usage === 'object'
+  const counters = usage === null ? undefined : typeof usage === 'object' && !Array.isArray(usage)
     ? {
       ...(usage.input_tokens === undefined ? {} : { inputTokens: usage.input_tokens }),
       ...(usage.output_tokens === undefined ? {} : { outputTokens: usage.output_tokens }),

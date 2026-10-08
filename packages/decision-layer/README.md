@@ -51,7 +51,11 @@ Only declared metadata, after sanitization:
 | `ticketCategory`, `declaredRailCount` | the `--ticket` in the ticket store, or `none` |
 
 Never source text, diff hunks, issue bodies, prompts, environment files, git
-history, file paths or credentials. Strings are normalized, credential-shaped
+history, file paths or credentials. What the provider does receive, besides
+these fields, is the pack itself: its ID and each question's ID, kind, prompt
+and domain labels, since the provider cannot answer a question it is not shown.
+For a project pack under `.adlc/decision-packs/` that is repository text, so
+write its questions as you would anything sent to a third party. Strings are normalized, credential-shaped
 values (API-key prefixes, JWTs, private-key blocks, high-entropy tokens) are
 replaced with `<redacted:…>` tokens, and fields are capped at 4 KiB each and
 32 KiB in total. Any sanitization failure stops the run before dispatch.
