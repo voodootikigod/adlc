@@ -78,7 +78,7 @@ export function typesafeRequest(request) {
 }
 
 function neutralAnswer(id, answer) {
-  if (answer === null || typeof answer !== 'object') return { id, value: answer };
+  if (answer === null || typeof answer !== 'object' || Array.isArray(answer)) return { id, kind: 'not-an-answer', value: answer };
   if (answer.type === 'choice') {
     const { probabilities } = answer;
     const probability = probabilities !== null && typeof probabilities === 'object' && Object.hasOwn(probabilities, answer.choice)
@@ -94,11 +94,15 @@ function neutralAnswer(id, answer) {
   }
   if (answer.type === 'noul') {
     const p = answer.noul;
-    if (typeof p !== 'number') return { id, kind: 'Noul', value: p };
+    if (typeof p !== 'number') return { id, kind: 'Noul', value: p, probability: p };
     return p >= 0.5 ? { id, kind: 'Noul', value: 'yes', probability: p } : { id, kind: 'Noul', value: 'no', probability: round(1 - p) };
   }
   return { id, kind: String(answer.type), value: undefined };
 }
+
+// An answer that is not TypeSafe's shape keeps a kind or probability the
+// neutral validation always rejects, so it is malformed even when its raw value
+// happens to be in the pack's domain.
 
 /**
  * Translate a TypeSafe reply into the neutral reply body evaluateDecision

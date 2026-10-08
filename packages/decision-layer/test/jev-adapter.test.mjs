@@ -383,6 +383,9 @@ for (const key of ['abc\r', 'ab c', 'ab\ncd']) {
 test('a key with a trailing carriage return is refused by config, the provider and providerFor', () => {
   assert.throws(() => validateConfig(SHADOW_JEV, { TYPESAFE_API_KEY: 'abc\r' }), /characters a header cannot carry/);
   assert.throws(() => createJevProvider({ apiKey: 'abc\r' }), TypeError);
+  for (const variable of ['TYPESAFE_API_KEY', 'JEV_API_KEY']) {
+    assert.throws(() => providerFor({ ...SHADOW_JEV, apiUrl: DEFAULT_API_URL }, { [variable]: 'abc\r' }), (error) => error instanceof ConfigError && /header cannot carry/.test(error.message));
+  }
   assert.throws(() => providerFor({ ...SHADOW_JEV, apiUrl: DEFAULT_API_URL }, {}), ConfigError);
 });
 
@@ -437,3 +440,17 @@ test('jevUnsupported names why a pack cannot be asked in one call, ignoring inpu
   assert.equal(jevUnsupported({ questions: [{ kind: 'Choice', inputs: ['a'] }, { kind: 'Noul', inputs: ['b'] }] }), 'unsupported-pack');
   assert.equal(jevUnsupported({ questions: [{ kind: 'Score', inputs: ['a'] }] }), 'unsupported-question');
 });
+
+for (const [name, answer] of [
+  ['a bare "yes" for a Noul question', { 'needs-deeper-interrogation': 'yes' }],
+  ['a Noul whose noul is the string "yes"', { 'needs-deeper-interrogation': { type: 'noul', noul: 'yes' } }],
+  ['a Noul whose noul is the string "no"', { 'needs-deeper-interrogation': { type: 'noul', noul: 'no' } }],
+  ['a bare "low" for a Choice question', { risk: 'low' }],
+  ['a Choice answer without a type', { risk: { choice: 'low', probabilities: { low: 1 } } }],
+  ['an answer that is an array', { risk: ['low'] }],
+]) {
+  test(`${name} is error (malformed), never an in-domain decision`, async () => {
+    const result = await run({ fetch: replay(okWith(answer)).fetch });
+    assert.deepEqual([result.status, result.errorClass, result.answers], ['error', 'malformed-response', []]);
+  });
+}
