@@ -29,8 +29,15 @@ export function jevOptions(config, env) {
   return { apiKey: env.TYPESAFE_API_KEY || env.JEV_API_KEY, apiUrl: config.apiUrl };
 }
 
-function providerFor(config, env, responseText) {
-  if (config.provider === 'jev') return createJevProvider(jevOptions(config, env));
+/** The provider a validated config names; a jev key that is absent or unusable here is a ConfigError. */
+export function providerFor(config, env, responseText) {
+  if (config.provider === 'jev') {
+    try {
+      return createJevProvider(jevOptions(config, env));
+    } catch (error) {
+      throw new ConfigError(error.message);
+    }
+  }
   return createMockProvider({ responseText });
 }
 

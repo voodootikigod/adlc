@@ -12,7 +12,7 @@ answers to .adlc/decisions/runs.jsonl in the main checkout. Shadow mode only:
 the answers never change an exit code, ticket, rail, routing or verdict.
 
   --mode            off (default: does nothing) or shadow
-  --provider        mock (offline), or jev (TypeSafe; needs TYPESAFE_API_KEY)
+  --provider        mock (offline), or jev (TypeSafe; needs TYPESAFE_API_KEY or JEV_API_KEY)
   --model           model identifier to request
   --pack            question pack ID (shipped: change-risk-v1)
   --revision        revision to describe (default HEAD)

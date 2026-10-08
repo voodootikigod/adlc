@@ -3,7 +3,7 @@
 import { parseArgs } from 'node:util';
 import { ConfigError } from './errors.mjs';
 import { PACK_ID_PATTERN } from './pack.mjs';
-import { DEFAULT_API_URL, assertSafeApiUrl } from './adapters/jev.mjs';
+import { API_KEY_PATTERN, DEFAULT_API_URL, assertSafeApiUrl } from './adapters/jev.mjs';
 
 export const MODES = Object.freeze(['off', 'shadow']);
 export const PROVIDERS = Object.freeze(['mock', 'jev']);
@@ -85,7 +85,9 @@ export function validateConfig(options, env) {
   if (ticket !== null && !TICKET_ID_PATTERN.test(ticket)) throw new ConfigError(`--ticket ${JSON.stringify(ticket)} is not a ticket ID`);
   const pr = prNumber(options.pr);
   if (provider === 'jev') {
-    if (!env.TYPESAFE_API_KEY && !env.JEV_API_KEY) throw new ConfigError('--provider jev needs TYPESAFE_API_KEY or JEV_API_KEY in the environment');
+    const key = env.TYPESAFE_API_KEY || env.JEV_API_KEY;
+    if (!key) throw new ConfigError('--provider jev needs TYPESAFE_API_KEY or JEV_API_KEY in the environment');
+    if (!API_KEY_PATTERN.test(key)) throw new ConfigError('the Jev API key holds whitespace or other characters a header cannot carry');
   }
   return {
     mode,

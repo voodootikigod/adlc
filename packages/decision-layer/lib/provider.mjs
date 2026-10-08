@@ -1,12 +1,13 @@
 // The provider-neutral call path and the adapter contract's status rules.
 //
 // A provider's call() resolves to { body } (a reply arrived), { failure }
-// (none did: 'timeout', 'rate-limit' or 'network') or { rejected } (the provider
-// answered but refused the request, naming why). No reply is `unknown`; a
-// reply that is unusable or a rejection is `error`. A call that times out is
-// aborted through the signal it was given. None ever carries a fabricated answer.
-// Rate-limit and network failures are retried at most MAX_RETRIES times; a
-// call that has not answered within timeoutMs is a timeout, never retried.
+// (none did: 'timeout', 'rate-limit', 'network', 'server-error' or
+// 'interrupted-response') or { rejected } (the provider answered but refused
+// the request, naming why). No reply is `unknown`; a reply that is unusable or
+// a rejection is `error`. A call that times out is aborted through the signal
+// it was given. None ever carries a fabricated answer. Only rate-limit and
+// network failures are retried, at most MAX_RETRIES times; every other failure
+// ends the run on its first attempt.
 //
 // The request is canonical JSON (keys sorted at every level) and carries the model, the pack ID and each question's pack-authored
 // text (id, kind, prompt, domain) with only the sanitized input fields that

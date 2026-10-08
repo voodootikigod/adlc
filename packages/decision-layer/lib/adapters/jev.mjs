@@ -15,11 +15,12 @@
 // answer is TypeSafe's P(yes) = p: `yes` with probability p when p >= 0.5,
 // otherwise `no` with probability 1 - p. A tie counts as `yes`, so a coin flip
 // escalates rather than passes. The model TypeSafe reports is the resolved
-// model; usage keeps its token counts.
+// model; a reply that reports none is malformed. Usage keeps its token counts.
 //
 // Failures. No response (a network error) is `network` and 429/529 is
-// `rate-limit`; both are retried. Any other 5xx is `server-error`: no answer,
-// so `unknown`, but not retried. Any other non-2xx status (a redirect, a
+// `rate-limit`; both are retried. Any other 5xx is `server-error`, and a 2xx
+// whose body breaks off mid-read is `interrupted-response`: no answer, so
+// `unknown`, but not retried, since the request may already have been served. Any other non-2xx status (a redirect, a
 // rejected key, a refused request) is a rejection, which is `error`, as is a
 // 2xx body that is not JSON or is larger than MAX_RESPONSE_BYTES; a body is
 // never read past that limit.
@@ -36,6 +37,9 @@ class Unsupported extends Error {
     this.errorClass = errorClass;
   }
 }
+
+/** A key that can travel in an HTTP header: printable ASCII, no spaces. */
+export const API_KEY_PATTERN = /^[\x21-\x7e]+$/;
 
 /** The key is only ever sent to an https URL that carries no credentials of its own. */
 export function assertSafeApiUrl(value) {
@@ -90,7 +94,8 @@ function neutralAnswer(id, answer) {
 export function neutralBody(reply) {
   if (reply === null || typeof reply !== 'object' || Array.isArray(reply)) return reply;
   const { answers, model, usage } = reply;
-  if (answers === null || typeof answers !== 'object' || Array.isArray(answers)) return { answers };
+  const resolvedModel = { resolvedModel: typeof model === 'string' ? model : null };
+  if (answers === null || typeof answers !== 'object' || Array.isArray(answers)) return { answers, ...resolvedModel };
   const counters = usage !== null && typeof usage === 'object'
     ? {
       ...(usage.input_tokens === undefined ? {} : { inputTokens: usage.input_tokens }),
@@ -99,7 +104,7 @@ export function neutralBody(reply) {
     : usage;
   return {
     answers: Object.entries(answers).map(([id, answer]) => neutralAnswer(id, answer)),
-    ...(model === undefined ? {} : { resolvedModel: model }),
+    ...resolvedModel,
     ...(counters === undefined ? {} : { usage: counters }),
   };
 }
@@ -142,17 +147,17 @@ async function post({ fetchImpl, apiUrl, apiKey, signal }, body) {
     return { failure: 'network' };
   }
   if (response.type === 'opaqueredirect') return { rejected: 'http-redirect' };
-  if (RATE_LIMITED.has(response.status)) return { failure: 'rate-limit' };
-  if (response.status >= 500) return { failure: 'server-error' };
   if (response.status < 200 || response.status >= 300) {
     await response.body?.cancel().catch(() => {});
+    if (RATE_LIMITED.has(response.status)) return { failure: 'rate-limit' };
+    if (response.status >= 500) return { failure: 'server-error' };
     return { rejected: `http-${response.status}` };
   }
   let text;
   try {
     text = await readBounded(response);
   } catch {
-    return { failure: 'network' };
+    return { failure: 'interrupted-response' };
   }
   if (text === null) return { rejected: 'response-too-large' };
   try {
@@ -167,6 +172,7 @@ async function post({ fetchImpl, apiUrl, apiKey, signal }, body) {
  * @returns {{ name: 'jev', call: (request: object, options?: { signal?: AbortSignal }) => Promise<{ body: unknown } | { failure: string } | { rejected: string }> }}
  */
 export function createJevProvider({ apiKey, apiUrl = DEFAULT_API_URL, fetch: fetchImpl = globalThis.fetch }) {
+  if (typeof apiKey !== 'string' || !API_KEY_PATTERN.test(apiKey)) throw new TypeError('the Jev API key is missing or holds characters a header cannot carry');
   const url = assertSafeApiUrl(apiUrl);
   return {
     name: 'jev',

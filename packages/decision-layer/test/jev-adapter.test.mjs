@@ -10,7 +10,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { installNoNetwork } from './helpers/no-network.mjs';
 import { DEFAULT_API_URL, MAX_RESPONSE_BYTES, createJevProvider, typesafeRequest } from '../lib/adapters/jev.mjs';
-import { jevOptions } from '../lib/evaluate.mjs';
+import { jevOptions, providerFor } from '../lib/evaluate.mjs';
+import { ConfigError } from '../lib/errors.mjs';
 import { validateConfig } from '../lib/config.mjs';
 import { scanText } from '../lib/sanitizer.mjs';
 import { MAX_RETRIES, evaluateDecision } from '../lib/provider.mjs';
@@ -92,7 +93,9 @@ test('the captured jev-latest reply maps to the pack answers', async () => {
 });
 
 test('the captured pinned reply resolves to the pinned model and is ok', async () => {
-  const result = await run({ fetch: replay({ status: 200, body: OK_PINNED.body }).fetch, model: 'jev-1.13.0' });
+  const { fetch, calls } = replay({ status: 200, body: OK_PINNED.body });
+  const result = await run({ fetch, model: 'jev-1.13.0' });
+  assert.deepEqual(calls[0].body, OK_PINNED.request);
   assert.equal(result.status, 'ok');
   assert.equal(result.resolvedModel, 'jev-1.13.0');
 });
@@ -207,11 +210,25 @@ test('a call that does not answer in time is unknown, not retried, and its fetch
   assert.equal(signal.aborted, true);
 });
 
-test('a 5xx other than 529 is unknown (server-error) and is not retried', async () => {
-  const { fetch, calls } = replay({ status: 503, body: {} });
-  const result = await run({ fetch });
-  assert.deepEqual([result.status, result.errorClass, result.attemptCount, calls.length], ['unknown', 'server-error', 1, 1]);
-});
+for (const status of [500, 503, 599]) {
+  test(`a ${status} is unknown (server-error) and is not retried`, async () => {
+    const { fetch, calls } = replay({ status, body: {} });
+    const result = await run({ fetch });
+    assert.deepEqual([result.status, result.errorClass, result.attemptCount, calls.length], ['unknown', 'server-error', 1, 1]);
+  });
+}
+
+for (const status of [429, 503, 401]) {
+  test(`the body of a ${status} is cancelled, not left holding the connection`, async () => {
+    let cancelled = 0;
+    const fetch = async () => new Response(new ReadableStream({
+      pull(controller) { controller.enqueue(new Uint8Array(1)); },
+      cancel() { cancelled += 1; },
+    }), { status });
+    const result = await run({ fetch });
+    assert.equal(cancelled, result.attemptCount);
+  });
+}
 
 test('a redirect is error and is not followed', async () => {
   const calls = [];
@@ -254,11 +271,16 @@ test('a declared Content-Length over the limit is error without reading the body
   assert.ok(pulled <= 1, `pulled ${pulled}`);
 });
 
-test('a body that fails mid-read is unknown (network)', async () => {
-  const body = new ReadableStream({ pull(controller) { controller.error(new Error('reset')); } });
-  const fetch = async () => new Response(body, { status: 200 });
+test('a 2xx body that breaks off mid-read is unknown (interrupted-response) and is not retried', async () => {
+  let reads = 0;
+  const fetch = async () => new Response(new ReadableStream({
+    pull(controller) {
+      reads += 1;
+      controller.error(new Error('reset'));
+    },
+  }), { status: 200 });
   const result = await run({ fetch });
-  assert.deepEqual([result.status, result.errorClass], ['unknown', 'network']);
+  assert.deepEqual([result.status, result.errorClass, result.attemptCount, reads], ['unknown', 'interrupted-response', 1, 1]);
 });
 
 test('a Choice reply without a probability for its choice keeps the choice without one', async () => {
@@ -321,5 +343,61 @@ test('an https TYPESAFE_API_URL replaces the default endpoint, and the request g
   const { fetch, calls } = replay({ status: 200, body: OK_LATEST.body });
   await evaluateDecision({ provider: createJevProvider({ ...options, fetch }), model: 'jev-latest', pack: PACK, sanitizedInput: INPUT, retryDelayMs: 0 });
   assert.equal(calls[0].url, options.apiUrl);
+  assert.equal(calls[0].init.headers.Authorization, 'Bearer primary');
+});
+
+for (const [name, body] of [
+  ['null', 'null'],
+  ['an array', '[]'],
+  ['a number', '7'],
+  ['answers as an array', JSON.stringify({ model: 'jev-1.13.0', answers: [] })],
+  ['answers missing', JSON.stringify({ model: 'jev-1.13.0' })],
+  ['a usage that is not an object', JSON.stringify({ ...OK_LATEST.body, usage: 'x' })],
+]) {
+  test(`a 2xx reply with ${name} is error (malformed)`, async () => {
+    const result = await run({ fetch: replay({ status: 200, body }).fetch });
+    assert.deepEqual([result.status, result.errorClass], ['error', 'malformed-response']);
+  });
+}
+
+test('a malformed reply still records the model TypeSafe reported', async () => {
+  const result = await run({ fetch: replay({ status: 200, body: { model: 'jev-1.13.0', answers: [] } }).fetch });
+  assert.deepEqual([result.status, result.resolvedModel], ['error', 'jev-1.13.0']);
+});
+
+for (const model of ['jev-1.13.0', 'jev-latest']) {
+  test(`a reply that reports no model is error, so a pin cannot pass unchecked (${model})`, async () => {
+    const { model: _omitted, ...body } = OK_LATEST.body;
+    const result = await run({ fetch: replay({ status: 200, body }).fetch, model });
+    assert.deepEqual([result.status, result.errorClass, result.resolvedModel], ['error', 'malformed-response', null]);
+  });
+}
+
+for (const key of ['abc\r', 'ab c', 'ab\ncd']) {
+  test(`a key a header cannot carry (${JSON.stringify(key)}) is refused before anything is sent`, () => {
+    assert.throws(() => validateConfig(SHADOW_JEV, { TYPESAFE_API_KEY: key }), ConfigError);
+    assert.throws(() => validateConfig(SHADOW_JEV, { JEV_API_KEY: key }), ConfigError);
+  });
+}
+
+test('the CLI refuses a key with a trailing carriage return as configuration', () => {
+  assert.throws(() => validateConfig(SHADOW_JEV, { TYPESAFE_API_KEY: 'abc\r' }), /characters a header cannot carry/);
+  assert.throws(() => createJevProvider({ apiKey: 'abc\r' }), TypeError);
+  assert.throws(() => providerFor({ ...SHADOW_JEV, apiUrl: DEFAULT_API_URL }, {}), ConfigError);
+});
+
+test('providerFor hands the jev provider the precedence key and the configured URL', async () => {
+  const env = { TYPESAFE_API_KEY: 'primary', JEV_API_KEY: 'fallback', TYPESAFE_API_URL: 'https://proxy.example.test/v1/systemone' };
+  const config = validateConfig(SHADOW_JEV, env);
+  const original = globalThis.fetch;
+  const { fetch, calls } = replay({ status: 200, body: OK_LATEST.body });
+  globalThis.fetch = fetch;
+  try {
+    const provider = providerFor(config, env);
+    await evaluateDecision({ provider, model: 'jev-latest', pack: PACK, sanitizedInput: INPUT, retryDelayMs: 0 });
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.equal(calls[0].url, 'https://proxy.example.test/v1/systemone');
   assert.equal(calls[0].init.headers.Authorization, 'Bearer primary');
 });
