@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runBin, tmp } from '@adlc/core/test-kit';
 import { installNoNetwork } from './helpers/no-network.mjs';
@@ -79,9 +79,9 @@ test('the CLI package never imports the decision layer', () => {
 
 test('the only mention of enforce in lib is the mode rejection', () => {
   const lib = join(PACKAGE_DIR, 'lib');
-  const hits = readdirSync(lib).flatMap((name) => readFileSync(join(lib, name), 'utf8').split('\n')
+  const hits = sourceFiles(lib).flatMap((file) => readFileSync(file, 'utf8').split('\n')
     .filter((line) => /enforce/i.test(line))
-    .map((line) => ({ name, line: line.trim() })));
+    .map((line) => ({ name: relative(lib, file), line: line.trim() })));
   assert.equal(hits.length, 1, JSON.stringify(hits));
   assert.equal(hits[0].name, 'config.mjs');
   assert.match(hits[0].line, /unknown --mode .*enforce mode is not part of this version/);

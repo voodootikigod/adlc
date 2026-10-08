@@ -3,12 +3,12 @@
 import { parseArgs } from 'node:util';
 import { ConfigError } from './errors.mjs';
 import { PACK_ID_PATTERN } from './pack.mjs';
+import { DEFAULT_API_URL } from './adapters/jev.mjs';
 
 export const MODES = Object.freeze(['off', 'shadow']);
 export const PROVIDERS = Object.freeze(['mock', 'jev']);
 export const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 export const TICKET_ID_PATTERN = /^[A-Za-z][A-Za-z0-9-]{0,63}$/;
-export const JEV_FIXTURE_PATH = 'packages/decision-layer/test/fixtures/jev-live-<date>.json';
 
 const OPTIONS = {
   mode: { type: 'string' },
@@ -50,6 +50,20 @@ function prNumber(value) {
   return number;
 }
 
+/** TYPESAFE_API_URL, when set, must be an https URL without credentials in it. */
+function apiUrl(value) {
+  if (value === undefined || value === '') return DEFAULT_API_URL;
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new ConfigError('TYPESAFE_API_URL is not a URL');
+  }
+  if (url.protocol !== 'https:') throw new ConfigError('TYPESAFE_API_URL must use https');
+  if (url.username || url.password) throw new ConfigError('TYPESAFE_API_URL may not carry credentials');
+  return url.href;
+}
+
 /**
  * Check the flags and the credential environment. A missing API key is a
  * configuration error, never a recorded `unknown`.
@@ -75,7 +89,6 @@ export function validateConfig(options, env) {
   const pr = prNumber(options.pr);
   if (provider === 'jev') {
     if (!env.TYPESAFE_API_KEY && !env.JEV_API_KEY) throw new ConfigError('--provider jev needs TYPESAFE_API_KEY or JEV_API_KEY in the environment');
-    throw new ConfigError(`--provider jev is not available until its live contract fixture is captured at ${JEV_FIXTURE_PATH}; use --provider mock`);
   }
   return {
     mode,
@@ -86,5 +99,6 @@ export function validateConfig(options, env) {
     ticket,
     pr,
     mockResponse: options['mock-response'] ?? null,
+    apiUrl: provider === 'jev' ? apiUrl(env.TYPESAFE_API_URL) : null,
   };
 }

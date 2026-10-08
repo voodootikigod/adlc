@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ConfigError, GitOutputError, RecordError } from './errors.mjs';
 import { diffStats, mainCheckoutRoot, projectRoot, resolveRevision, ticketFacts } from './inputs.mjs';
+import { createJevProvider } from './adapters/jev.mjs';
 import { createMockProvider } from './mock-provider.mjs';
 import { PackError, loadPack } from './pack.mjs';
 import { evaluateDecision } from './provider.mjs';
@@ -23,7 +24,12 @@ function readMockResponse(cwd, file) {
   }
 }
 
-async function shadowRun(config, { cwd, retryDelayMs, now }) {
+function providerFor(config, env, responseText) {
+  if (config.provider === 'jev') return createJevProvider({ apiKey: env.TYPESAFE_API_KEY || env.JEV_API_KEY, apiUrl: config.apiUrl });
+  return createMockProvider({ responseText });
+}
+
+async function shadowRun(config, { cwd, env, retryDelayMs, now }) {
   const root = projectRoot(cwd);
   const mainRoot = mainCheckoutRoot(cwd);
   const ticket = ticketFacts(root, config.ticket);
@@ -33,7 +39,7 @@ async function shadowRun(config, { cwd, retryDelayMs, now }) {
   const { sanitizedInput, inputHash } = sanitize({ ...diffStats(root, revision), ...ticket }, pack);
 
   const result = await evaluateDecision({
-    provider: createMockProvider({ responseText }),
+    provider: providerFor(config, env, responseText),
     model: config.model,
     pack,
     sanitizedInput,
@@ -68,13 +74,13 @@ async function shadowRun(config, { cwd, retryDelayMs, now }) {
 
 /**
  * @param {{ mode: string } & Record<string, unknown>} config output of validateConfig
- * @param {{ cwd: string, retryDelayMs?: number, now?: () => Date }} context
+ * @param {{ cwd: string, env?: Record<string, string|undefined>, retryDelayMs?: number, now?: () => Date }} context
  * @returns {Promise<{ exitCode: 0|1, record?: object, path?: string, error?: Error }>}
  */
-export async function runEvaluate(config, { cwd, retryDelayMs, now = () => new Date() }) {
+export async function runEvaluate(config, { cwd, env = {}, retryDelayMs, now = () => new Date() }) {
   if (config.mode === 'off') return { exitCode: 0 };
   try {
-    return await shadowRun(config, { cwd, retryDelayMs, now });
+    return await shadowRun(config, { cwd, env, retryDelayMs, now });
   } catch (error) {
     if (EXPECTED_FAILURES.some((type) => error instanceof type)) return { exitCode: 1, error };
     throw error;

@@ -1,0 +1,165 @@
+{
+  "capturedAt": "2026-10-08T10:35:00.469Z",
+  "endpoint": "https://api.typesafe.ai/v1/systemone",
+  "auth": "Authorization: Bearer <TYPESAFE_API_KEY>",
+  "note": "Live TypeSafe responses captured for the Jev adapter tests. Key removed; identifier-like fields redacted.",
+  "captures": [
+    {
+      "label": "ok-latest",
+      "request": {
+        "model": "jev-latest",
+        "state": {
+          "declaredRailCount": 2,
+          "extensionCounts": {
+            ".md": 1,
+            ".mjs": 3
+          },
+          "filesChanged": 4,
+          "linesAdded": 120,
+          "linesDeleted": 15,
+          "ticketCategory": "feature"
+        },
+        "questions": {
+          "risk": {
+            "type": "choice",
+            "instructions": "How risky is this change?",
+            "criteria": {
+              "low": "low risk",
+              "medium": "medium risk",
+              "high": "high risk"
+            }
+          },
+          "needs-deeper-interrogation": {
+            "type": "noul",
+            "instructions": "Should the spec get more interrogation before building?"
+          }
+        }
+      },
+      "status": 200,
+      "contentType": "application/json",
+      "latencyMs": 213,
+      "body": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "risk": {
+            "type": "choice",
+            "choice": "medium",
+            "confidence": 0.3,
+            "probabilities": {
+              "medium": 0.53,
+              "high": 0,
+              "low": 0.47
+            }
+          },
+          "needs-deeper-interrogation": {
+            "type": "noul",
+            "noul": 0.48
+          }
+        },
+        "usage": {
+          "input_tokens": 410,
+          "output_tokens": 61
+        }
+      }
+    },
+    {
+      "label": "ok-pinned",
+      "request": {
+        "model": "jev-1.13.0",
+        "state": {
+          "declaredRailCount": 2,
+          "extensionCounts": {
+            ".md": 1,
+            ".mjs": 3
+          },
+          "filesChanged": 4,
+          "linesAdded": 120,
+          "linesDeleted": 15,
+          "ticketCategory": "feature"
+        },
+        "questions": {
+          "risk": {
+            "type": "choice",
+            "instructions": "How risky is this change?",
+            "criteria": {
+              "low": "low risk",
+              "medium": "medium risk",
+              "high": "high risk"
+            }
+          },
+          "needs-deeper-interrogation": {
+            "type": "noul",
+            "instructions": "Should the spec get more interrogation before building?"
+          }
+        }
+      },
+      "status": 200,
+      "contentType": "application/json",
+      "latencyMs": 144,
+      "body": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "risk": {
+            "type": "choice",
+            "choice": "medium",
+            "confidence": 0.34,
+            "probabilities": {
+              "low": 0.44,
+              "medium": 0.56,
+              "high": 0
+            }
+          },
+          "needs-deeper-interrogation": {
+            "type": "noul",
+            "noul": 0.49
+          }
+        },
+        "usage": {
+          "input_tokens": 410,
+          "output_tokens": 61
+        }
+      }
+    },
+    {
+      "label": "auth-invalid-key",
+      "request": {
+        "model": "jev-latest",
+        "state": {
+          "declaredRailCount": 2,
+          "extensionCounts": {
+            ".md": 1,
+            ".mjs": 3
+          },
+          "filesChanged": 4,
+          "linesAdded": 120,
+          "linesDeleted": 15,
+          "ticketCategory": "feature"
+        },
+        "questions": {
+          "risk": {
+            "type": "choice",
+            "instructions": "How risky is this change?",
+            "criteria": {
+              "low": "low risk",
+              "medium": "medium risk",
+              "high": "high risk"
+            }
+          },
+          "needs-deeper-interrogation": {
+            "type": "noul",
+            "instructions": "Should the spec get more interrogation before building?"
+          }
+        }
+      },
+      "status": 401,
+      "contentType": "application/json",
+      "latencyMs": 79,
+      "body": {
+        "detail": {
+          "error_type": "authentication_error",
+          "message": "Cannot authenticate with the server. Please check your API key and try again."
+        }
+      }
+    }
+  ]
+}

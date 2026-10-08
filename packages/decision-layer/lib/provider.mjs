@@ -1,8 +1,10 @@
 // The provider-neutral call path and the adapter contract's status rules.
 //
-// A provider's call() resolves to { body } (a reply arrived) or { failure }
-// (none did: 'timeout', 'rate-limit' or 'network'). No reply is `unknown`; a
-// reply that is unusable is `error`. Neither ever carries a fabricated answer.
+// A provider's call() resolves to { body } (a reply arrived), { failure }
+// (none did: 'timeout', 'rate-limit' or 'network') or { rejected } (the provider
+// answered but refused the request, naming why). No reply is `unknown`; a
+// reply that is unusable or a rejection is `error`. A call that times out is
+// aborted through the signal it was given. None ever carries a fabricated answer.
 // Rate-limit and network failures are retried at most MAX_RETRIES times; a
 // call that has not answered within timeoutMs is a timeout, never retried.
 //
@@ -151,9 +153,15 @@ function normalizeReply(body, pack) {
 
 async function callOnce(provider, request, timeoutMs) {
   let timer;
-  const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve({ failure: 'timeout' }), timeoutMs); });
+  const controller = new AbortController();
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve({ failure: 'timeout' });
+    }, timeoutMs);
+  });
   try {
-    return await Promise.race([provider.call(request), timeout]);
+    return await Promise.race([provider.call(request, { signal: controller.signal }), timeout]);
   } catch {
     return { failure: 'network' };
   } finally {
@@ -207,6 +215,9 @@ export async function evaluateDecision({
   const base = { requestedModel: model, packHash: packHash(pack), attemptCount, latencyMs: Date.now() - started };
   if (outcome.failure) {
     return { status: 'unknown', answers: [], resolvedModel: null, errorClass: outcome.failure, usage: null, ...base };
+  }
+  if (outcome.rejected) {
+    return { status: 'error', answers: [], resolvedModel: null, errorClass: outcome.rejected, usage: null, ...base };
   }
   const reported = isPlainObject(outcome.body) && validModel(outcome.body.resolvedModel) ? outcome.body.resolvedModel : null;
   try {

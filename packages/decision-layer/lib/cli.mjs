@@ -12,7 +12,7 @@ answers to .adlc/decisions/runs.jsonl in the main checkout. Shadow mode only:
 the answers never change an exit code, ticket, rail, routing or verdict.
 
   --mode            off (default: does nothing) or shadow
-  --provider        mock, or jev (not available until its live fixture exists)
+  --provider        mock (offline), or jev (TypeSafe; needs TYPESAFE_API_KEY)
   --model           model identifier to request
   --pack            question pack ID (shipped: change-risk-v1)
   --revision        revision to describe (default HEAD)
@@ -47,7 +47,7 @@ export async function main(argv, { cwd, env, stdout, stderr }) {
     stderr.write(`adlc decision: ${error.message}\n`);
     return 1;
   }
-  const result = await runEvaluate(config, { cwd });
+  const result = await runEvaluate(config, { cwd, env });
   if (result.exitCode !== 0) {
     stderr.write(`adlc decision: ${result.error.message}\n`);
     return 1;

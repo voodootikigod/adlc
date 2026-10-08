@@ -33,7 +33,7 @@ adlc decision evaluate --mode shadow --provider mock --model mock-1 --pack chang
 | Flag | Description |
 | --- | --- |
 | `--mode off\|shadow` | `off` (default) does nothing. Any other value, including `enforce`, is refused. |
-| `--provider mock\|jev` | `mock` is offline. `jev` is refused until its live contract fixture has been captured. |
+| `--provider mock\|jev` | `mock` is offline. `jev` asks TypeSafe's System One API with `TYPESAFE_API_KEY` (or `JEV_API_KEY`). |
 | `--model <id>` | Model identifier to request. |
 | `--pack <id>` | Question pack. Shipped: `change-risk-v1`. |
 | `--revision <rev>` | Revision whose change is described (default `HEAD`). |

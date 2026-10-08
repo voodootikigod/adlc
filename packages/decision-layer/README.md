@@ -21,7 +21,7 @@ adlc decision evaluate --mode shadow --provider <jev|mock> --model <id> \
 | Flag | Description | Default |
 |---|---|---|
 | `--mode` | `off` (does nothing) or `shadow`. Anything else is refused. | `off` |
-| `--provider` | `mock`, or `jev` (refused until its live contract fixture exists) | — |
+| `--provider` | `mock` (offline), or `jev` (TypeSafe's API) | — |
 | `--model` | Model identifier to request | — |
 | `--pack` | Question pack ID. Shipped: `change-risk-v1` | — |
 | `--revision` | Revision whose change is described | `HEAD` |
@@ -99,5 +99,14 @@ object with `simulate` set to `timeout`, `rate-limit` or `network` makes it fail
 that way), or a fixed reply that reduces to `unknown`. It never derives answers
 from its input.
 
-`jev` is refused until one live response from TypeSafe's API has been captured
-as the adapter's contract fixture.
+`jev` asks TypeSafe's System One API (`https://api.typesafe.ai/v1/systemone`,
+overridable with an https `TYPESAFE_API_URL`) using `TYPESAFE_API_KEY`, or
+`JEV_API_KEY` when that is unset. Its tests replay live responses captured on
+2026-10-08 (`test/fixtures/jev-live-2026-10-08.json`). Questions that declare
+the same inputs are asked in one call; questions with different inputs are asked
+separately, so each sees only its own fields. TypeSafe answers a `Noul` question
+with P(yes) = p, recorded as `yes` with probability p when p is at least 0.5 (a
+tie counts as `yes`) and otherwise as `no` with probability 1 - p. A `Score`
+question must have an integer domain of 2 to 10 levels. 429, 529, any other
+5xx and network failures are `unknown` after two retries; any other non-2xx
+status, such as a rejected key, is `error`.
