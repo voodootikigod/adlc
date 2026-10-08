@@ -109,5 +109,7 @@ other pack is `error` before anything is sent. TypeSafe answers a `Noul`
 question with P(yes) = p, recorded as `yes` with probability p when p is at
 least 0.5 (a tie counts as `yes`) and otherwise as `no` with probability 1 - p.
 429, 529 and network failures are `unknown` after up to two retries; any other
-5xx is `unknown` without a retry; any other non-2xx status (a redirect, a
-rejected key) is `error`.
+5xx, or a reply that breaks off mid-body, is `unknown` without a retry; any
+other non-2xx status (a redirect, a rejected key) is `error`, as is a reply that
+does not report the model that answered. A key with whitespace or other
+characters an HTTP header cannot carry is a configuration error.
