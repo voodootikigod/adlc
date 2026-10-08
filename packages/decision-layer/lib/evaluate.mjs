@@ -24,8 +24,13 @@ function readMockResponse(cwd, file) {
   }
 }
 
+/** The Jev provider's key and endpoint: TYPESAFE_API_KEY, else JEV_API_KEY; the checked URL from config. */
+export function jevOptions(config, env) {
+  return { apiKey: env.TYPESAFE_API_KEY || env.JEV_API_KEY, apiUrl: config.apiUrl };
+}
+
 function providerFor(config, env, responseText) {
-  if (config.provider === 'jev') return createJevProvider({ apiKey: env.TYPESAFE_API_KEY || env.JEV_API_KEY, apiUrl: config.apiUrl });
+  if (config.provider === 'jev') return createJevProvider(jevOptions(config, env));
   return createMockProvider({ responseText });
 }
 

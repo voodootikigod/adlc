@@ -102,11 +102,12 @@ from its input.
 `jev` asks TypeSafe's System One API (`https://api.typesafe.ai/v1/systemone`,
 overridable with an https `TYPESAFE_API_URL`) using `TYPESAFE_API_KEY`, or
 `JEV_API_KEY` when that is unset. Its tests replay live responses captured on
-2026-10-08 (`test/fixtures/jev-live-2026-10-08.json`). Questions that declare
-the same inputs are asked in one call; questions with different inputs are asked
-separately, so each sees only its own fields. TypeSafe answers a `Noul` question
-with P(yes) = p, recorded as `yes` with probability p when p is at least 0.5 (a
-tie counts as `yes`) and otherwise as `no` with probability 1 - p. A `Score`
-question must have an integer domain of 2 to 10 levels. 429, 529, any other
-5xx and network failures are `unknown` after two retries; any other non-2xx
-status, such as a rejected key, is `error`.
+2026-10-08 (`test/fixtures/jev-live-2026-10-08.json`). One run is one call, so
+every question in the pack must declare the same inputs, and only `Choice` and
+`Noul` questions are supported (no live `Score` reply has been captured); any
+other pack is `error` before anything is sent. TypeSafe answers a `Noul`
+question with P(yes) = p, recorded as `yes` with probability p when p is at
+least 0.5 (a tie counts as `yes`) and otherwise as `no` with probability 1 - p.
+429, 529 and network failures are `unknown` after up to two retries; any other
+5xx is `unknown` without a retry; any other non-2xx status (a redirect, a
+rejected key) is `error`.

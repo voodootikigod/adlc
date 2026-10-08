@@ -9,7 +9,10 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { installNoNetwork } from './helpers/no-network.mjs';
-import { DEFAULT_API_URL, createJevProvider, typesafeRequests } from '../lib/adapters/jev.mjs';
+import { DEFAULT_API_URL, MAX_RESPONSE_BYTES, createJevProvider, typesafeRequest } from '../lib/adapters/jev.mjs';
+import { jevOptions } from '../lib/evaluate.mjs';
+import { validateConfig } from '../lib/config.mjs';
+import { scanText } from '../lib/sanitizer.mjs';
 import { MAX_RETRIES, evaluateDecision } from '../lib/provider.mjs';
 import { reduce } from '../lib/reducer.mjs';
 
@@ -56,6 +59,9 @@ test('the fixture is a live capture with the endpoint, model and date, and no ke
   assert.equal(OK_LATEST.body.model, 'jev-1.13.0');
   assert.equal(AUTH_INVALID.status, 401);
   assert.doesNotMatch(JSON.stringify(FIXTURE), /Bearer\s+(?!<)/);
+  const strings = (value) => (typeof value === 'string' ? [value]
+    : value && typeof value === 'object' ? Object.entries(value).flatMap(([key, item]) => [key, ...strings(item)]) : []);
+  for (const text of strings(FIXTURE)) assert.equal(scanText(text).redactions, 0, text);
 });
 
 test('the request matches the shape the live API accepted', async () => {
@@ -67,15 +73,8 @@ test('the request matches the shape the live API accepted', async () => {
   assert.equal(sent.url, DEFAULT_API_URL);
   assert.equal(sent.init.method, 'POST');
   assert.equal(sent.init.headers.Authorization, `Bearer ${KEY}`);
-  assert.equal(sent.init.redirect, 'error');
-  assert.equal(sent.body.model, accepted.model);
-  assert.deepEqual(sent.body.state, accepted.state);
-  assert.deepEqual(Object.keys(sent.body.questions).sort(), Object.keys(accepted.questions).sort());
-  for (const [id, question] of Object.entries(accepted.questions)) {
-    assert.equal(sent.body.questions[id].type, question.type, id);
-    assert.equal(sent.body.questions[id].instructions, question.instructions, id);
-    assert.deepEqual(Object.keys(sent.body.questions[id].criteria ?? {}).sort(), Object.keys(question.criteria ?? {}).sort(), id);
-  }
+  assert.equal(sent.init.redirect, 'manual');
+  assert.deepEqual(sent.body, accepted);
   assert.ok(!sent.init.body.includes(KEY), 'the key is never in the body');
 });
 
@@ -176,7 +175,6 @@ test('a 400 is error and is not retried', async () => {
 for (const [name, response, errorClass] of [
   ['429', { status: 429, body: {} }, 'rate-limit'],
   ['529', { status: 529, body: {} }, 'rate-limit'],
-  ['503', { status: 503, body: {} }, 'network'],
   ['a network failure', new TypeError('fetch failed'), 'network'],
 ]) {
   test(`${name} is unknown after ${MAX_RETRIES} retries`, async () => {
@@ -209,83 +207,114 @@ test('a call that does not answer in time is unknown, not retried, and its fetch
   assert.equal(signal.aborted, true);
 });
 
-const twoInputPack = {
-  ...PACK,
-  questions: [
-    { ...PACK.questions[0], inputs: ['linesAdded'] },
-    { ...PACK.questions[1], inputs: ['filesChanged'] },
-  ],
-};
-
-test('questions that declare different inputs are asked in separate calls, each seeing only its inputs', async () => {
-  const { risk } = OK_LATEST.body.answers;
-  const noul = OK_LATEST.body.answers['needs-deeper-interrogation'];
-  const { fetch, calls } = replay(
-    { status: 200, body: { model: 'jev-1.13.0', answers: { risk }, usage: { input_tokens: 10, output_tokens: 2 } } },
-    { status: 200, body: { model: 'jev-1.13.0', answers: { 'needs-deeper-interrogation': noul }, usage: { input_tokens: 5, output_tokens: 1 } } },
-  );
-  const result = await run({ fetch, pack: twoInputPack });
-  assert.equal(result.status, 'ok');
-  assert.deepEqual(calls.map((call) => call.body.state), [{ linesAdded: INPUT.linesAdded }, { filesChanged: INPUT.filesChanged }]);
-  assert.deepEqual(calls.map((call) => Object.keys(call.body.questions)), [['risk'], ['needs-deeper-interrogation']]);
-  assert.deepEqual(result.usage, { inputTokens: 15, outputTokens: 3 });
+test('a 5xx other than 529 is unknown (server-error) and is not retried', async () => {
+  const { fetch, calls } = replay({ status: 503, body: {} });
+  const result = await run({ fetch });
+  assert.deepEqual([result.status, result.errorClass, result.attemptCount, calls.length], ['unknown', 'server-error', 1, 1]);
 });
 
-test('separate calls resolved to different models are error', async () => {
-  const { risk } = OK_LATEST.body.answers;
-  const noul = OK_LATEST.body.answers['needs-deeper-interrogation'];
-  const { fetch } = replay(
-    { status: 200, body: { model: 'jev-1.13.0', answers: { risk } } },
-    { status: 200, body: { model: 'jev-1.14.0', answers: { 'needs-deeper-interrogation': noul } } },
-  );
-  const result = await run({ fetch, pack: twoInputPack });
-  assert.equal(result.status, 'error');
-  assert.equal(result.errorClass, 'malformed-response');
+test('a redirect is error and is not followed', async () => {
+  const calls = [];
+  const fetch = async (url, init) => {
+    calls.push(init);
+    return { type: 'opaqueredirect', status: 0, headers: new Headers(), body: null };
+  };
+  const result = await run({ fetch });
+  assert.deepEqual([result.status, result.errorClass, calls.length], ['error', 'http-redirect', 1]);
 });
 
-test('a failure in a later call fails the whole run without partial answers', async () => {
-  const { risk } = OK_LATEST.body.answers;
-  const { fetch } = replay(
-    { status: 200, body: { model: 'jev-1.13.0', answers: { risk } } },
-    { status: 401, body: AUTH_INVALID.body },
-  );
-  const result = await run({ fetch, pack: twoInputPack });
-  assert.deepEqual([result.status, result.errorClass, result.answers], ['error', 'http-401', []]);
-});
-
-const scorePack = (domain) => ({
-  ...PACK,
-  questions: [{ id: 'severity', kind: 'Score', prompt: 'How severe?', domain, phases: ['P0'], inputs: ['linesAdded'] }],
-  aggregation: { escalateIf: [], allowIf: [] },
-});
-
-test('a Score question is sent as its integer levels and answered as min plus the weighted position', async () => {
-  const { fetch, calls } = replay({ status: 200, body: { model: 'jev-1.13.0', answers: { severity: { type: 'score', score: 1.5, confidence: 0.8, probabilities: { 0: 0, 1: 0.5, 2: 0.5 } } } } });
-  const result = await run({ fetch, pack: scorePack({ min: 1, max: 3 }) });
-  assert.deepEqual(calls[0].body.questions.severity, { type: 'score', instructions: 'How severe?', criteria: ['1', '2', '3'] });
-  assert.equal(result.status, 'ok');
-  assert.deepEqual(result.answers, [{ id: 'severity', kind: 'Score', value: 2.5, confidence: 0.8 }]);
-});
-
-for (const domain of [{ min: 0, max: 0.5 }, { min: 0, max: 10 }]) {
-  test(`a Score domain Jev cannot express (${JSON.stringify(domain)}) is error before anything is sent`, async () => {
-    const { fetch, calls } = replay({ status: 200, body: OK_LATEST.body });
-    const result = await run({ fetch, pack: scorePack(domain) });
-    assert.deepEqual([result.status, result.errorClass, calls.length], ['error', 'unsupported-question', 0]);
+test('a body that never ends is cut off at the limit and is error', async () => {
+  let pulled = 0;
+  let cancelled = false;
+  const body = new ReadableStream({
+    pull(controller) {
+      pulled += 1;
+      controller.enqueue(new Uint8Array(8192));
+    },
+    cancel() { cancelled = true; },
   });
-}
+  const fetch = async () => new Response(body, { status: 200 });
+  const result = await run({ fetch });
+  assert.deepEqual([result.status, result.errorClass], ['error', 'response-too-large']);
+  assert.equal(cancelled, true);
+  assert.ok(pulled * 8192 <= MAX_RESPONSE_BYTES + 2 * 8192, `read ${pulled} chunks`);
+});
 
-test('typesafeRequests sends a Choice domain as criteria and a Noul without criteria', () => {
-  const [group] = typesafeRequests({
+test('a declared Content-Length over the limit is error without reading the body', async () => {
+  let pulled = 0;
+  const body = new ReadableStream({ pull(controller) { pulled += 1; controller.enqueue(new Uint8Array(1)); } });
+  const fetch = async () => new Response(body, { status: 200, headers: { 'content-length': String(MAX_RESPONSE_BYTES + 1) } });
+  const result = await run({ fetch });
+  assert.deepEqual([result.status, result.errorClass], ['error', 'response-too-large']);
+  assert.ok(pulled <= 1, `pulled ${pulled}`);
+});
+
+test('a body that fails mid-read is unknown (network)', async () => {
+  const body = new ReadableStream({ pull(controller) { controller.error(new Error('reset')); } });
+  const fetch = async () => new Response(body, { status: 200 });
+  const result = await run({ fetch });
+  assert.deepEqual([result.status, result.errorClass], ['unknown', 'network']);
+});
+
+test('a Choice reply without a probability for its choice keeps the choice without one', async () => {
+  const result = await run({ fetch: replay(okWith({ risk: { type: 'choice', choice: 'low', probabilities: {}, confidence: 0.4 } })).fetch });
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(result.answers[0], { id: 'risk', kind: 'Choice', value: 'low', confidence: 0.4 });
+});
+
+test('questions that declare different inputs are rejected before anything is sent: one run is one call', async () => {
+  const { fetch, calls } = replay({ status: 200, body: OK_LATEST.body });
+  const pack = { ...PACK, questions: [{ ...PACK.questions[0], inputs: ['linesAdded'] }, { ...PACK.questions[1], inputs: ['filesChanged'] }] };
+  const result = await run({ fetch, pack });
+  assert.deepEqual([result.status, result.errorClass, calls.length], ['error', 'unsupported-pack', 0]);
+});
+
+test('a Score question is rejected before anything is sent: no live Score reply has been captured', async () => {
+  const { fetch, calls } = replay({ status: 200, body: OK_LATEST.body });
+  const pack = {
+    ...PACK,
+    questions: [{ id: 'severity', kind: 'Score', prompt: 'How severe?', domain: { min: 1, max: 3 }, phases: ['P0'], inputs: ['linesAdded'] }],
+    aggregation: { escalateIf: [], allowIf: [] },
+  };
+  const result = await run({ fetch, pack });
+  assert.deepEqual([result.status, result.errorClass, calls.length], ['error', 'unsupported-question', 0]);
+});
+
+test('typesafeRequest sends a Choice domain as criteria and a Noul without criteria', () => {
+  assert.deepEqual(typesafeRequest({
     model: 'jev-latest',
     questions: [
       { id: 'risk', kind: 'Choice', prompt: 'p', domain: ['low', 'high'], input: { a: 1 } },
       { id: 'n', kind: 'Noul', prompt: 'q', domain: ['yes', 'no'], input: { a: 1 } },
     ],
-  });
-  assert.deepEqual(group, {
+  }), {
     model: 'jev-latest',
     state: { a: 1 },
     questions: { risk: { type: 'choice', instructions: 'p', criteria: { low: 'low', high: 'high' } }, n: { type: 'noul', instructions: 'q' } },
   });
+});
+
+for (const apiUrl of ['http://api.typesafe.ai/v1/systemone', 'https://u:p@api.typesafe.ai/v1/systemone']) {
+  test(`the provider itself refuses to send the key to ${apiUrl}`, () => {
+    assert.throws(() => createJevProvider({ apiKey: KEY, apiUrl, fetch: async () => assert.fail('sent') }), TypeError);
+  });
+}
+
+const SHADOW_JEV = { mode: 'shadow', provider: 'jev', model: 'jev-latest', pack: 'change-risk-v1' };
+
+test('TYPESAFE_API_KEY takes precedence over JEV_API_KEY, which is the fallback', () => {
+  const config = validateConfig(SHADOW_JEV, { TYPESAFE_API_KEY: 'primary', JEV_API_KEY: 'fallback' });
+  assert.equal(jevOptions(config, { TYPESAFE_API_KEY: 'primary', JEV_API_KEY: 'fallback' }).apiKey, 'primary');
+  assert.equal(jevOptions(config, { JEV_API_KEY: 'fallback' }).apiKey, 'fallback');
+});
+
+test('an https TYPESAFE_API_URL replaces the default endpoint, and the request goes there', async () => {
+  const env = { TYPESAFE_API_KEY: 'primary', TYPESAFE_API_URL: 'https://proxy.example.test/typesafe/v1/systemone' };
+  const options = jevOptions(validateConfig(SHADOW_JEV, env), env);
+  assert.deepEqual(options, { apiKey: 'primary', apiUrl: 'https://proxy.example.test/typesafe/v1/systemone' });
+  assert.equal(jevOptions(validateConfig(SHADOW_JEV, { TYPESAFE_API_KEY: 'k' }), { TYPESAFE_API_KEY: 'k' }).apiUrl, DEFAULT_API_URL);
+  const { fetch, calls } = replay({ status: 200, body: OK_LATEST.body });
+  await evaluateDecision({ provider: createJevProvider({ ...options, fetch }), model: 'jev-latest', pack: PACK, sanitizedInput: INPUT, retryDelayMs: 0 });
+  assert.equal(calls[0].url, options.apiUrl);
+  assert.equal(calls[0].init.headers.Authorization, 'Bearer primary');
 });

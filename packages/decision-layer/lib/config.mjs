@@ -3,7 +3,7 @@
 import { parseArgs } from 'node:util';
 import { ConfigError } from './errors.mjs';
 import { PACK_ID_PATTERN } from './pack.mjs';
-import { DEFAULT_API_URL } from './adapters/jev.mjs';
+import { DEFAULT_API_URL, assertSafeApiUrl } from './adapters/jev.mjs';
 
 export const MODES = Object.freeze(['off', 'shadow']);
 export const PROVIDERS = Object.freeze(['mock', 'jev']);
@@ -53,15 +53,12 @@ function prNumber(value) {
 /** TYPESAFE_API_URL, when set, must be an https URL without credentials in it. */
 function apiUrl(value) {
   if (value === undefined || value === '') return DEFAULT_API_URL;
-  let url;
   try {
-    url = new URL(value);
-  } catch {
-    throw new ConfigError('TYPESAFE_API_URL is not a URL');
+    return assertSafeApiUrl(value);
+  } catch (error) {
+    if (!(error instanceof TypeError) || error.code === 'ERR_INVALID_URL') throw new ConfigError('TYPESAFE_API_URL is not a URL');
+    throw new ConfigError(error.message.replace('the Jev API URL', 'TYPESAFE_API_URL'));
   }
-  if (url.protocol !== 'https:') throw new ConfigError('TYPESAFE_API_URL must use https');
-  if (url.username || url.password) throw new ConfigError('TYPESAFE_API_URL may not carry credentials');
-  return url.href;
 }
 
 /**
