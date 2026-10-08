@@ -75,6 +75,30 @@ for (const variable of ['TYPESAFE_API_KEY', 'JEV_API_KEY']) {
   });
 }
 
+test('jev with a key a header cannot carry is refused as configuration', (t) => {
+  refused(t, [...SHADOW.slice(0, 4), 'jev', ...SHADOW.slice(5)], /characters a header cannot carry/, { env: { TYPESAFE_API_KEY: 'abc\r' } });
+});
+
+for (const [name, question] of [
+  ['a Score question', { id: 'severity', kind: 'Score', prompt: 'How severe?', domain: { min: 1, max: 3 }, phases: ['P0'], inputs: ['linesAdded'] }],
+  ['questions with different inputs', null],
+]) {
+  test(`jev with a project pack holding ${name} is refused before anything is sent`, (t) => {
+    const shipped = JSON.parse(readFileSync(join(PACKS_DIR, 'change-risk-v1', 'pack.json'), 'utf8'));
+    const questions = question
+      ? [question]
+      : [{ ...shipped.questions[0], inputs: ['linesAdded'] }, { ...shipped.questions[1], inputs: ['filesChanged'] }];
+    const pack = { ...shipped, id: 'jev-unsupported', questions, aggregation: { escalateIf: [], allowIf: [] } };
+    refused(t, [...SHADOW.slice(0, 4), 'jev', '--model', 'jev-latest', '--pack', 'jev-unsupported'], /--provider jev cannot ask pack jev-unsupported/, {
+      env: { TYPESAFE_API_KEY: 'k' },
+      prepare: (dir) => {
+        mkdirSync(join(dir, '.adlc', 'decision-packs', 'jev-unsupported'), { recursive: true });
+        writeFileSync(join(dir, '.adlc', 'decision-packs', 'jev-unsupported', 'pack.json'), JSON.stringify(pack));
+      },
+    });
+  });
+}
+
 test('--mock-response without --provider mock is refused', (t) => {
   refused(t, ['evaluate', '--mode', 'shadow', '--provider', 'jev', '--model', 'm', '--pack', 'change-risk-v1', '--mock-response', 'x.json'],
     /--mock-response is valid only with --provider mock/, { env: { TYPESAFE_API_KEY: 'k' } });

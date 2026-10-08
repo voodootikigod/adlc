@@ -3,7 +3,8 @@
 // A provider's call() resolves to { body } (a reply arrived), { failure }
 // (none did: 'timeout', 'rate-limit', 'network', 'server-error' or
 // 'interrupted-response') or { rejected } (the provider answered but refused
-// the request, naming why). No reply is `unknown`; a reply that is unusable or
+// the request, naming why; with dispatched: false the adapter refused it before
+// sending anything, so no attempt is counted). No reply is `unknown`; a reply that is unusable or
 // a rejection is `error`. A call that times out is aborted through the signal
 // it was given. None ever carries a fabricated answer. Only rate-limit and
 // network failures are retried, at most MAX_RETRIES times; every other failure
@@ -213,6 +214,7 @@ export async function evaluateDecision({
     if (!(outcome.failure && RETRYABLE.has(outcome.failure) && attemptCount <= MAX_RETRIES)) break;
     await sleep(retryDelayMs);
   }
+  if (outcome.rejected && outcome.dispatched === false) attemptCount = 0;
   const base = { requestedModel: model, packHash: packHash(pack), attemptCount, latencyMs: Date.now() - started };
   if (outcome.failure) {
     return { status: 'unknown', answers: [], resolvedModel: null, errorClass: outcome.failure, usage: null, ...base };

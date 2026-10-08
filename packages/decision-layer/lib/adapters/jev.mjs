@@ -55,6 +55,17 @@ function typesafeQuestion({ kind, prompt, domain }) {
   throw new Unsupported('unsupported-question');
 }
 
+/**
+ * Why Jev cannot ask this pack's questions in one call, or null when it can:
+ * every question must be Choice or Noul and declare the same inputs.
+ * @param {{ questions: Array<{ kind: string, inputs: string[] }> }} pack
+ */
+export function jevUnsupported(pack) {
+  if (pack.questions.some((question) => question.kind !== 'Choice' && question.kind !== 'Noul')) return 'unsupported-question';
+  const inputs = new Set(pack.questions.map((question) => JSON.stringify([...question.inputs].sort())));
+  return inputs.size === 1 ? null : 'unsupported-pack';
+}
+
 /** The one TypeSafe request for a provider-neutral request; throws Unsupported when there is none. */
 export function typesafeRequest(request) {
   const inputs = new Set(request.questions.map((question) => JSON.stringify(question.input)));
@@ -69,7 +80,10 @@ export function typesafeRequest(request) {
 function neutralAnswer(id, answer) {
   if (answer === null || typeof answer !== 'object') return { id, value: answer };
   if (answer.type === 'choice') {
-    const probability = answer.probabilities?.[answer.choice];
+    const { probabilities } = answer;
+    const probability = probabilities !== null && typeof probabilities === 'object' && Object.hasOwn(probabilities, answer.choice)
+      ? probabilities[answer.choice]
+      : undefined;
     return {
       id,
       kind: 'Choice',
@@ -181,7 +195,7 @@ export function createJevProvider({ apiKey, apiUrl = DEFAULT_API_URL, fetch: fet
       try {
         body = typesafeRequest(request);
       } catch (error) {
-        if (error instanceof Unsupported) return { rejected: error.errorClass };
+        if (error instanceof Unsupported) return { rejected: error.errorClass, dispatched: false };
         throw error;
       }
       return post({ fetchImpl, apiUrl: url, apiKey, signal }, body);

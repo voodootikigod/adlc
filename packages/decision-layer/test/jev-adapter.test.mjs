@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { installNoNetwork } from './helpers/no-network.mjs';
-import { DEFAULT_API_URL, MAX_RESPONSE_BYTES, createJevProvider, typesafeRequest } from '../lib/adapters/jev.mjs';
+import { DEFAULT_API_URL, MAX_RESPONSE_BYTES, createJevProvider, jevUnsupported, typesafeRequest } from '../lib/adapters/jev.mjs';
 import { jevOptions, providerFor } from '../lib/evaluate.mjs';
 import { ConfigError } from '../lib/errors.mjs';
 import { validateConfig } from '../lib/config.mjs';
@@ -293,7 +293,7 @@ test('questions that declare different inputs are rejected before anything is se
   const { fetch, calls } = replay({ status: 200, body: OK_LATEST.body });
   const pack = { ...PACK, questions: [{ ...PACK.questions[0], inputs: ['linesAdded'] }, { ...PACK.questions[1], inputs: ['filesChanged'] }] };
   const result = await run({ fetch, pack });
-  assert.deepEqual([result.status, result.errorClass, calls.length], ['error', 'unsupported-pack', 0]);
+  assert.deepEqual([result.status, result.errorClass, result.attemptCount, calls.length], ['error', 'unsupported-pack', 0, 0]);
 });
 
 test('a Score question is rejected before anything is sent: no live Score reply has been captured', async () => {
@@ -304,7 +304,7 @@ test('a Score question is rejected before anything is sent: no live Score reply 
     aggregation: { escalateIf: [], allowIf: [] },
   };
   const result = await run({ fetch, pack });
-  assert.deepEqual([result.status, result.errorClass, calls.length], ['error', 'unsupported-question', 0]);
+  assert.deepEqual([result.status, result.errorClass, result.attemptCount, calls.length], ['error', 'unsupported-question', 0, 0]);
 });
 
 test('typesafeRequest sends a Choice domain as criteria and a Noul without criteria', () => {
@@ -380,7 +380,7 @@ for (const key of ['abc\r', 'ab c', 'ab\ncd']) {
   });
 }
 
-test('the CLI refuses a key with a trailing carriage return as configuration', () => {
+test('a key with a trailing carriage return is refused by config, the provider and providerFor', () => {
   assert.throws(() => validateConfig(SHADOW_JEV, { TYPESAFE_API_KEY: 'abc\r' }), /characters a header cannot carry/);
   assert.throws(() => createJevProvider({ apiKey: 'abc\r' }), TypeError);
   assert.throws(() => providerFor({ ...SHADOW_JEV, apiUrl: DEFAULT_API_URL }, {}), ConfigError);
@@ -400,4 +400,40 @@ test('providerFor hands the jev provider the precedence key and the configured U
   }
   assert.equal(calls[0].url, 'https://proxy.example.test/v1/systemone');
   assert.equal(calls[0].init.headers.Authorization, 'Bearer primary');
+});
+
+for (const status of [301, 302, 307]) {
+  test(`a real ${status} is error (http-${status}) and its Location is never fetched`, async () => {
+    const calls = [];
+    const fetch = async (url, init) => {
+      calls.push(url);
+      assert.equal(init.redirect, 'manual');
+      return new Response(null, { status, headers: { location: 'https://elsewhere.example.test/' } });
+    };
+    const result = await run({ fetch });
+    assert.deepEqual([result.status, result.errorClass, calls], ['error', `http-${status}`, [DEFAULT_API_URL]]);
+  });
+}
+
+for (const status of [200, 204]) {
+  test(`a ${status} with no body is error (malformed)`, async () => {
+    const result = await run({ fetch: async () => new Response(null, { status }) });
+    assert.deepEqual([result.status, result.errorClass], ['error', 'malformed-response']);
+  });
+}
+
+test('a Choice label that names an Object prototype member, absent from probabilities, keeps no probability', async () => {
+  const pack = { ...PACK, questions: [{ ...PACK.questions[0], domain: ['constructor', 'toString'] }, PACK.questions[1]] };
+  const body = { ...OK_LATEST.body, answers: { ...OK_LATEST.body.answers, risk: { type: 'choice', choice: 'constructor', probabilities: {}, confidence: 0.5 } } };
+  const result = await run({ fetch: replay({ status: 200, body }).fetch, pack });
+  assert.equal(result.status, 'ok');
+  assert.deepEqual(result.answers[0], { id: 'risk', kind: 'Choice', value: 'constructor', confidence: 0.5 });
+});
+
+test('jevUnsupported names why a pack cannot be asked in one call, ignoring input order', () => {
+  assert.equal(jevUnsupported(PACK), null);
+  const reordered = { questions: [{ kind: 'Choice', inputs: ['a', 'b'] }, { kind: 'Noul', inputs: ['b', 'a'] }] };
+  assert.equal(jevUnsupported(reordered), null);
+  assert.equal(jevUnsupported({ questions: [{ kind: 'Choice', inputs: ['a'] }, { kind: 'Noul', inputs: ['b'] }] }), 'unsupported-pack');
+  assert.equal(jevUnsupported({ questions: [{ kind: 'Score', inputs: ['a'] }] }), 'unsupported-question');
 });

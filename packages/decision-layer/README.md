@@ -105,7 +105,7 @@ overridable with an https `TYPESAFE_API_URL`) using `TYPESAFE_API_KEY`, or
 2026-10-08 (`test/fixtures/jev-live-2026-10-08.json`). One run is one call, so
 every question in the pack must declare the same inputs, and only `Choice` and
 `Noul` questions are supported (no live `Score` reply has been captured); any
-other pack is `error` before anything is sent. TypeSafe answers a `Noul`
+other pack is refused as a configuration error (exit 1, nothing sent or recorded). TypeSafe answers a `Noul`
 question with P(yes) = p, recorded as `yes` with probability p when p is at
 least 0.5 (a tie counts as `yes`) and otherwise as `no` with probability 1 - p.
 429, 529 and network failures are `unknown` after up to two retries; any other

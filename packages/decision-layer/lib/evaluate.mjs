@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ConfigError, GitOutputError, RecordError } from './errors.mjs';
 import { diffStats, mainCheckoutRoot, projectRoot, resolveRevision, ticketFacts } from './inputs.mjs';
-import { createJevProvider } from './adapters/jev.mjs';
+import { createJevProvider, jevUnsupported } from './adapters/jev.mjs';
 import { createMockProvider } from './mock-provider.mjs';
 import { PackError, loadPack } from './pack.mjs';
 import { evaluateDecision } from './provider.mjs';
@@ -47,6 +47,9 @@ async function shadowRun(config, { cwd, env, retryDelayMs, now }) {
   const ticket = ticketFacts(root, config.ticket);
   const responseText = readMockResponse(cwd, config.mockResponse);
   const pack = loadPack(config.pack, { projectRoot: root });
+  const unsupported = config.provider === 'jev' ? jevUnsupported(pack) : null;
+  if (unsupported === 'unsupported-question') throw new ConfigError(`--provider jev cannot ask pack ${pack.id}: it supports only Choice and Noul questions`);
+  if (unsupported === 'unsupported-pack') throw new ConfigError(`--provider jev cannot ask pack ${pack.id}: every question must declare the same inputs`);
   const revision = resolveRevision(root, config.revision);
   const { sanitizedInput, inputHash } = sanitize({ ...diffStats(root, revision), ...ticket }, pack);
 
