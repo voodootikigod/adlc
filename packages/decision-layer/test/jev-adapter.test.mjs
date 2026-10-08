@@ -226,13 +226,10 @@ test('a redirect is error and is not followed', async () => {
 test('a body that never ends is cut off at the limit and is error', async () => {
   let pulled = 0;
   let cancelled = false;
-  // "Never ends" from the reader's point of view, but the stream itself stops
-  // after 64 chunks (512 KiB, eight times the limit): the limit is what is under
-  // test, and a limit that stops working must FAIL the assertions below, not
-  // read an endless stream into memory. A literal, not derived from
-  // MAX_RESPONSE_BYTES — the 2026-10-08 mutant was `MAX_RESPONSE_BYTES = undefined`,
-  // which made the guard inside readBounded never trip; this test then grew one
-  // worker to 3 GB of off-heap Buffers and helped take the host down.
+  // Endless as far as the limit can tell, but finite: the stream closes after
+  // 64 chunks (eight times the limit), so a limit that stops working fails the
+  // assertions below instead of reading without bound. 64 is a literal so it
+  // does not move with MAX_RESPONSE_BYTES.
   const body = new ReadableStream({
     pull(controller) {
       pulled += 1;
