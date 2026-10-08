@@ -83,10 +83,10 @@ test('the captured jev-latest reply maps to the pack answers', async () => {
   assert.equal(result.status, 'ok');
   assert.equal(result.errorClass, null);
   assert.equal(result.resolvedModel, 'jev-1.13.0');
-  assert.deepEqual(result.usage, { inputTokens: 410, outputTokens: 61 });
+  assert.deepEqual(result.usage, { inputTokens: 407, outputTokens: 61 });
   assert.deepEqual(result.answers, [
-    { id: 'risk', kind: 'Choice', value: 'medium', probability: 0.53, confidence: 0.3 },
-    { id: 'needs-deeper-interrogation', kind: 'Noul', value: 'no', probability: 0.52 },
+    { id: 'risk', kind: 'Choice', value: 'low', probability: 0.6, confidence: 0.4 },
+    { id: 'needs-deeper-interrogation', kind: 'Noul', value: 'no', probability: 0.53 },
   ]);
   assert.equal(reduce({ status: result.status, answers: result.answers, pack: PACK }).outcome, 'unknown');
 });
