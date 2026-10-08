@@ -80,6 +80,7 @@ export function typesafeRequest(request) {
 function neutralAnswer(id, answer) {
   if (answer === null || typeof answer !== 'object' || Array.isArray(answer)) return { id, kind: 'not-an-answer', value: answer };
   if (answer.type === 'choice') {
+    if (typeof answer.choice !== 'string') return { id, kind: 'not-an-answer', value: answer.choice };
     const { probabilities } = answer;
     const probability = probabilities !== null && typeof probabilities === 'object' && Object.hasOwn(probabilities, answer.choice)
       ? probabilities[answer.choice]
@@ -114,7 +115,7 @@ export function neutralBody(reply) {
   const { answers, model, usage } = reply;
   const resolvedModel = { resolvedModel: typeof model === 'string' ? model : null };
   if (answers === null || typeof answers !== 'object' || Array.isArray(answers)) return { answers, ...resolvedModel };
-  const counters = usage !== null && typeof usage === 'object'
+  const counters = usage === null ? undefined : typeof usage === 'object'
     ? {
       ...(usage.input_tokens === undefined ? {} : { inputTokens: usage.input_tokens }),
       ...(usage.output_tokens === undefined ? {} : { outputTokens: usage.output_tokens }),
@@ -187,7 +188,7 @@ async function post({ fetchImpl, apiUrl, apiKey, signal }, body) {
 
 /**
  * @param {{ apiKey: string, apiUrl?: string, fetch?: typeof fetch }} options
- * @returns {{ name: 'jev', call: (request: object, options?: { signal?: AbortSignal }) => Promise<{ body: unknown } | { failure: string } | { rejected: string }> }}
+ * @returns {{ name: 'jev', call: (request: object, options?: { signal?: AbortSignal }) => Promise<{ body: unknown } | { failure: string } | { rejected: string, dispatched?: false }> }}
  */
 export function createJevProvider({ apiKey, apiUrl = DEFAULT_API_URL, fetch: fetchImpl = globalThis.fetch }) {
   if (typeof apiKey !== 'string' || !API_KEY_PATTERN.test(apiKey)) throw new TypeError('the Jev API key is missing or holds characters a header cannot carry');

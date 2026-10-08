@@ -454,3 +454,28 @@ for (const [name, answer] of [
     assert.deepEqual([result.status, result.errorClass, result.answers], ['error', 'malformed-response', []]);
   });
 }
+
+for (const [name, answer] of [
+  ['a Choice answer without a choice', { risk: { type: 'choice', probabilities: { low: 1 } } }],
+  ['a Choice answer whose choice is a number', { risk: { type: 'choice', choice: 1, probabilities: { 1: 1 } } }],
+]) {
+  test(`${name} is error (malformed)`, async () => {
+    const result = await run({ fetch: replay(okWith(answer)).fetch });
+    assert.deepEqual([result.status, result.errorClass], ['error', 'malformed-response']);
+  });
+}
+
+for (const [name, usage, expected] of [
+  ['no usage', undefined, null],
+  ['a null usage', null, null],
+  ['only input_tokens', { input_tokens: 9 }, { inputTokens: 9 }],
+  ['only output_tokens', { output_tokens: 3 }, { outputTokens: 3 }],
+]) {
+  test(`a reply with ${name} is still ok, with usage ${JSON.stringify(expected)}`, async () => {
+    const { usage: _dropped, ...rest } = OK_LATEST.body;
+    const body = usage === undefined ? rest : { ...rest, usage };
+    const result = await run({ fetch: replay({ status: 200, body }).fetch });
+    assert.equal(result.status, 'ok');
+    assert.deepEqual(result.usage, expected);
+  });
+}
