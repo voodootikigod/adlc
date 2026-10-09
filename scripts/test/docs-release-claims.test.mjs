@@ -110,9 +110,12 @@ test('actionlint workflow header claims only the files actionlint reads', () => 
   assert.match(header, /not linted/i);
 });
 
-test('CHANGELOG [Unreleased] records the breaking changes since the last release', () => {
-  const unreleased = section(read('CHANGELOG.md'), /^## \[Unreleased\]/);
-  assert.match(unreleased, /^### Breaking$/m);
-  assert.match(unreleased, /generation-descriptor\.mjs/);
-  assert.match(unreleased, /--record-verdict[^\n]*--ticket/);
+test('CHANGELOG records the breaking changes made since 1.11.1', () => {
+  // Everything above the 1.11.1 heading: [Unreleased] before a release, the new version's section after.
+  const log = read('CHANGELOG.md');
+  const since = log.slice(0, log.indexOf('\n## [1.11.1]'));
+  assert.ok(log.includes('\n## [1.11.1]'), 'the 1.11.1 section is missing');
+  assert.match(since, /^### Breaking$/m);
+  assert.match(since, /generation-descriptor\.mjs/);
+  assert.match(since, /--record-verdict[^\n]*--ticket/);
 });

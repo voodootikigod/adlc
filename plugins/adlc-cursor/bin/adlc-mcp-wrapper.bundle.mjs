@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // <define:__ADLC_MCP_BUILD_METADATA__>
-var define_ADLC_MCP_BUILD_METADATA_default = { pluginVersion: "1.11.1", bundledDependencies: { "@adlc/core": "1.11.1", "@adlc/tickets": "1.11.1" }, esbuildVersion: "0.28.1" };
+var define_ADLC_MCP_BUILD_METADATA_default = { pluginVersion: "1.12.0", bundledDependencies: { "@adlc/core": "1.12.0", "@adlc/tickets": "1.12.0" }, esbuildVersion: "0.28.1" };
 
 // plugins/adlc-cursor/bin/adlc-mcp-wrapper.mjs
 import { realpathSync } from "node:fs";
@@ -14,10 +14,10 @@ import { createInterface as createInterface2 } from "node:readline";
 
 // plugins/adlc-cursor/lib/mcp-build-metadata.mjs
 var SOURCE_MCP_BUILD_METADATA = Object.freeze({
-  pluginVersion: "1.11.1",
+  pluginVersion: "1.12.0",
   bundledDependencies: Object.freeze({
-    "@adlc/core": "1.11.1",
-    "@adlc/tickets": "1.11.1"
+    "@adlc/core": "1.12.0",
+    "@adlc/tickets": "1.12.0"
   }),
   esbuildVersion: "0.28.1"
 });

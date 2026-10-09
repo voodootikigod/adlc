@@ -11,14 +11,40 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
-### Fixed
-- **hollow-test:** a trial now ends everything it started — on timeout, on Ctrl-C, when hollow-test itself is killed, and when the suite crashes on its own. Trials run through a watchdog child that keeps the suite in the caller's process group and, on each of those, freezes then SIGKILLs the suite's whole descendant tree plus any earlier-detached helper still carrying its environment marker (a chain, so a nested hollow-test does not hide its subtree; parent links from /proc, no fork), and reports what it ended. Timed-out mutants used to leave `node --test` and its workers running as orphans, still executing the mutant; on 2026-10-08 the pile of them filled a host's RAM and swap with nothing ever killed, and the box had to be power-cycled twice.
-- **mutation-gate (scripts):** the baseline measurement launches through the same watchdog, so a timed-out measurement no longer strands `node --test` either, and a real timeout (which spawnSync reports as `ETIMEDOUT` plus `SIGTERM`) is classified as a timeout rather than a launch failure.
+## [1.12.0] - 2026-10-09
 
 ### Breaking
-- **hollow-test:** every node the test command starts now gets a per-process V8 heap cap, `--max-old-space-size=2048` via NODE_OPTIONS, so a mutant that makes JS-heap growth unbounded dies with "heap out of memory" instead of running for the whole timeout. Breaking for a suite whose baseline legitimately needs more than 2 GiB in one isolate: it goes red at the baseline on upgrade, with the cap and the knob named in the stderr it prints: `HOLLOW_TEST_MAX_OLD_SPACE_MB=<n>` raises it, `0` disables it, and when it is unset an existing `--max-old-space-size` (either spelling) in NODE_OPTIONS is kept. Off-heap Buffers and parallel workers are outside this bound; bound the host with a cgroup.
-- **tickets:** `@adlc/tickets` no longer exports the `./lib/generation-descriptor.mjs` subpath (it was published in 1.11.1). An `import '@adlc/tickets/lib/generation-descriptor.mjs'` now fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`; the remaining subpaths are `./lib/key-contract.mjs`, `./lib/durability.mjs` and `./lib/manifest-primitives.mjs`.
-- **parallax:** `parallax --prompt-only --record-verdict <file|->` now requires `--ticket <id>` and exits 1 without it, so a recorded verdict is always bound to the ticket it is evidence for.
+- **adlc-claude-code:** the Claude Code hooks now run only an `adlc` they can trust: one on an absolute `PATH` entry, outside any `node_modules`, owned by you, or owned by root with the file, its link and every directory above them writable by nobody else (#1176, #1189). A project-local `@adlc/cli` (installed only as a devDependency) is no longer used. With no trusted `adlc`, SessionStart preflight and the Stop manifest check are skipped with a notice that names the refused copy and why, and `ADLC_RAILS_BYPASS` / `ADLC_BUILD_GATE_BYPASS` are refused because they cannot be recorded. Install `@adlc/cli` globally (`npm i -g @adlc/cli`, with or without sudo) to keep them. A group-writable `/usr/local/bin` (some older Debian systems) does not qualify.
+- **hollow-test:** every node the test command starts now gets a per-process V8 heap cap, `--max-old-space-size=2048` via NODE_OPTIONS, so a mutant that makes JS-heap growth unbounded dies with "heap out of memory" instead of running for the whole timeout. A suite whose baseline legitimately needs more than 2 GiB in one isolate goes red at the baseline on upgrade, with the cap and the knob named in its stderr: `HOLLOW_TEST_MAX_OLD_SPACE_MB=<n>` raises it, `0` disables it, and when it is unset an existing `--max-old-space-size` in NODE_OPTIONS is kept. Off-heap Buffers and parallel workers are outside this bound; bound the host with a cgroup (#1186).
+- **tickets:** `@adlc/tickets` no longer exports the `./lib/generation-descriptor.mjs` subpath (published in 1.11.1). Importing it now fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`; the remaining subpaths are `./lib/key-contract.mjs`, `./lib/durability.mjs` and `./lib/manifest-primitives.mjs` (#1085).
+- **tickets:** a ticket whose rail matches no file in the repository is refused at write time (#1175).
+- **parallax:** `parallax --prompt-only --record-verdict <file|->` now requires `--ticket <id>` and exits 1 without it, so a recorded verdict is always bound to the ticket it is evidence for (#988, #1156).
+
+### Added
+- **decision-layer:** `adlc decision`, an opt-in shadow mode that records what a decision provider would have chosen without acting on it (mock provider, run log only) (#1178), and a Jev provider built against a live TypeSafe capture (#1185).
+- **backlog-groom:** `adlc backlog-groom`, code-grounded verification and clustering of open issues (#1012), and a write path behind an adversarial gate, an autonomy floor and idempotent execution (#1016).
+- **rails-guard:** a push to the default branch is judged as the protected-base ceremony (#1177).
+- **opencode:** each P5 lens can run on its own configured model (#1141).
+- **tickets:** `planCreateBatch`, an atomic multi-ticket write path (#1024).
+- **core:** a shared `@adlc/core/test-kit` with automatic `t.after` cleanup (#1098, #1151).
+
+### Fixed
+- **cli:** `adlc decision`, `adlc backlog-groom` and `adlc autopilot` failed on a real `npm i -g @adlc/cli` because the umbrella did not depend on their packages; it now does, and a test derived from the verb registry keeps every future verb covered (#1189).
+- **hollow-test:** a trial now ends everything it started — on timeout, on Ctrl-C, when hollow-test itself is killed, and when the suite crashes. Timed-out mutants used to leave `node --test` and its workers running as orphans; on 2026-10-08 the pile filled a host's RAM and swap and the box had to be power-cycled twice. The mutation gate's baseline measurement launches through the same watchdog, and a real timeout is classified as a timeout rather than a launch failure (#1186).
+- **Fail closed instead of passing silently** across the suite: gate-fuzzing on unknown or zero mutant counts (#1092, #1162), review-calibration on zero scoreable findings (#1077), lesson-foundry on missing gate ledgers and malformed scores (#1074, #1090), rejection-mining when every fetch or refinement fails (#1080, #1087), model-ratchet when nothing is selected (#1072), merge-forecast on empty scope or history (#1075, #1084), init on unparseable config and mis-ordered gitignore rules (#1079, #1093, #1161), the pi and opencode plugins on killed gates and unparseable lenses (#986, #1154), and hollow-test before skipping a diff as comment-only (#1166).
+- **Prompt fencing:** every prompt that embeds externally-authored content is fenced, and the fence tag is a per-call nonce so content cannot close its own fence (#1011, #1015, #1155, #1156, #1157).
+- **Hooks and spawns:** every plugin bounds its hook spawns so a blocked child cannot hang the harness, the Claude Code hook passes the signing key only to the calls that sign or verify, and the copilot bypass recorder runs with a scrubbed environment (#1045, #1158, #1176).
+- **core:** rail paths resolve symlinks in kernel order on the deepest existing ancestor (#1064, #1152).
+- **autopilot / fleet:** vanished run records, forged sentinels and racing lock reclaims no longer break a run, and the fault-injection seams cannot be switched on in a production process (#1071, #1165).
+- **backlog-groom:** writes are bound to what was reviewed, the gate ledger is signed, every spawn is bounded, and the apply lock and one-shot key are hardened (#1029, #1053, #1159).
+- **consensus-fix:** files are restored on SIGTERM/SIGHUP and writes are atomic (#1094, #1161).
+- **trust-root tiering** covers CI definitions and CODEOWNERS, and judges push runs by the pushed range (#1168).
+- Smaller fixes: skill-rot follows symlinks and no longer stamps zero-claim skills (#1073, #1083); model-ratchet resolves the repo root and normalises path separators (#1082, #1089); flail-detector reads timestamped and indented log lines (#1088); model-router reports skipped ledgers in `--json` (#1078); ticket-sync gains the `--limit` flag its error message names (#1027); ticket-prune gates scope staleness behind `--infer-scope` (#989); the codex lifecycle hook runs when the install path contains a space (#1066); the cursor MCP launcher is self-contained (#1014); merge-forecast reports first-wave and schedule width separately (#1028).
+
+### Changed
+- Test suites across every package and plugin adopted `@adlc/core/test-kit`, removing well over a thousand hand-written try/finally cleanup blocks and the temp-directory leaks they hid (#1100–#1147, #1163, #1172). No runtime behaviour change.
+- `@adlc/core` now provides `tokenizeCommand`, `activeTickets`, `isPlainObject` and `OpError`, previously duplicated across packages (#1091, #1102); manifest and lineage primitives are single-sourced between `@adlc/tickets` and `@adlc/gate-manifest` (#1111).
+- Docs and plugin text no longer claim the context-rot handoff gate is enforcing after 1.11.1 disconnected it (#1034), and release surfaces and operator docs match what the code does (#1167).
 
 ## [1.11.1] - 2026-09-05
 
