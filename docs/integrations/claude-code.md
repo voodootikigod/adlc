@@ -206,12 +206,13 @@ two bypass recorders run the first `adlc` on `PATH` that is:
 
 - outside any `node_modules` directory, since a repository could place one
   there, and
-- owned by you, or owned by root and not writable by its group or others (a
-  `sudo npm i -g @adlc/cli` install).
+- owned by you, or (a `sudo npm i -g @adlc/cli` install) a root-owned file
+  reached through a root-owned `PATH` entry in a root-owned directory, none of
+  them writable by group or others.
 
-A project-local install (`node_modules/.bin/adlc` only) is never run. If an
-`adlc` is on `PATH` but none qualifies, the session-start and Stop checks
-report which one was found and why it was refused, and a rails or build-gate
+A project-local install (`node_modules/.bin/adlc` only) is never run. If
+`adlc` is on `PATH` but no copy qualifies, the session-start and Stop checks
+name the first copy found and why it was refused, and a rails or build-gate
 bypass is refused with the same reason. Install `@adlc/cli` globally to fix it.
 
 ### MCP server

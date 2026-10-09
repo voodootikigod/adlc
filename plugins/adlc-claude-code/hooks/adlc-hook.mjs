@@ -1971,13 +1971,12 @@ function scrubHandoffSecrets(env = process.env) {
  * repository can ship that shim itself. Every PATH entry that resolves
  * inside a `node_modules` directory is skipped for that reason (a genuine
  * global install is never itself inside `node_modules`), and every
- * remaining candidate must pass `trustedOwner` (platforms where
+ * remaining candidate must pass `ownershipRejection` (platforms where
  * `process.getuid` exists) — a project-writable or shared directory earlier
  * on PATH can still contain a file owned by this same user, which this check
  * cannot distinguish from a genuine install, but it does rule out a candidate
- * owned by a different non-root account landing on PATH ahead of the real
- * binary. Given
- * that, this function still cannot verify a same-uid candidate's symlink
+ * owned by another non-root account, or a root-owned program reached through
+ * a link or directory root does not control. Given that, this function still cannot verify a same-uid candidate's symlink
  * target or content. `recordRecoveryUnderBand` does not hand this spawn the
  * manifest signing key or the admin key regardless of what runs here, and
  * `repoManifestChainIsSigned` refuses to spawn it at all once the manifest
@@ -1988,73 +1987,72 @@ function scrubHandoffSecrets(env = process.env) {
  * is then skipped, best-effort) rather than guess.
  */
 export function resolveTrustedBinary(name, pathEnv) {
-  if (typeof pathEnv !== 'string' || pathEnv.length === 0) return null;
-  const sep = process.platform === 'win32' ? ';' : ':';
-  const selfUid = typeof process.getuid === 'function' ? process.getuid() : null;
-  for (const dir of pathEnv.split(sep)) {
-    if (!dir) continue;
-    if (dir.includes('node_modules')) continue; // see the function comment
-    const candidate = join(dir, name);
-    try {
-      const st = statSync(candidate);
-      if (!st.isFile()) continue;
-      if (selfUid !== null && !trustedOwner(st, selfUid)) continue; // see the function comment
-      return candidate;
-    } catch {
-      /* try next PATH entry */
-    }
+  for (const { candidate, rejection } of binaryCandidates(name, pathEnv)) {
+    if (rejection === null) return candidate;
   }
   return null;
 }
 
 /**
- * Whether a candidate's ownership lets it run: owned by this user, or owned by
- * root (a `sudo npm i -g` install) with no group or world write bit. Only root
- * can create a root-owned file, so the write bits are the remaining way for
- * another account to change what it runs.
+ * Why a stat'ed candidate may not run, or null when it may. Accepted: a file this
+ * user owns, or a `sudo npm i -g` install, where the file, the PATH entry naming
+ * it (`link`, from lstat) and the directory holding that entry are all owned by
+ * root with no group or world write bit. Only root can create root-owned entries,
+ * so a symlink someone else planted, pointing at a root-owned program such as
+ * /bin/sh, is still refused: the link itself is not root's.
  */
-export function trustedOwner(st, selfUid) {
-  if (st.uid === selfUid) return true;
-  return st.uid === 0 && (st.mode & 0o022) === 0;
+export function ownershipRejection({ file, link, dir }, selfUid) {
+  if (file.uid === selfUid) return null;
+  const rootLocked = (st) => st.uid === 0 && (st.mode & 0o022) === 0;
+  if (rootLocked(file) && rootLocked(link) && rootLocked(dir)) return null;
+  return file.uid === 0
+    ? 'it is root-owned but reached through a link or directory that root does not exclusively control'
+    : `it is owned by uid ${file.uid}, not by you or by root`;
+}
+
+/** Every `name` file on PATH in order, each with its rejection reason (null when trusted). Never runs one. */
+function binaryCandidates(name, pathEnv) {
+  if (typeof pathEnv !== 'string' || pathEnv.length === 0) return [];
+  const sep = process.platform === 'win32' ? ';' : ':';
+  const selfUid = typeof process.getuid === 'function' ? process.getuid() : null;
+  const out = [];
+  for (const dir of pathEnv.split(sep)) {
+    if (!dir) continue;
+    const candidate = join(dir, name);
+    let stats;
+    try {
+      const file = statSync(candidate);
+      if (!file.isFile()) continue;
+      stats = { file, link: lstatSync(candidate), dir: statSync(dir) };
+    } catch {
+      continue; // try next PATH entry
+    }
+    const rejection = dir.includes('node_modules')
+      ? 'it is inside node_modules, where a repository could have placed it'
+      : selfUid === null ? null : ownershipRejection(stats, selfUid);
+    out.push({ candidate, rejection });
+  }
+  return out;
 }
 
 /**
- * Why no trusted `name` was resolved even though PATH holds one, as a sentence
- * naming the first rejected candidate; null when PATH holds none (an absent
- * toolkit stays silent). Only stats candidates, never runs them.
+ * Why no trusted `name` resolved although PATH holds one, as a sentence naming the
+ * first refused candidate. Null when a trusted one resolves (its failure is not a
+ * refusal) and when PATH holds none (an absent toolkit stays silent).
  */
 export function untrustedBinaryReason(name, pathEnv) {
-  if (typeof pathEnv !== 'string' || pathEnv.length === 0) return null;
-  const sep = process.platform === 'win32' ? ';' : ':';
-  const selfUid = typeof process.getuid === 'function' ? process.getuid() : null;
-  for (const dir of pathEnv.split(sep)) {
-    if (!dir) continue;
-    const candidate = join(dir, name);
-    let st;
-    try {
-      st = statSync(candidate);
-    } catch {
-      continue;
-    }
-    if (!st.isFile()) continue;
-    const why = dir.includes('node_modules')
-      ? 'it is inside node_modules, where a repository could have placed it'
-      : selfUid !== null && !trustedOwner(st, selfUid)
-        ? `it is owned by uid ${st.uid}, not by you or by root with no group/world write`
-        : null;
-    if (why) {
-      return `${candidate} was not run because ${why}. Install @adlc/cli globally (npm i -g @adlc/cli) as yourself or as root.`;
-    }
-  }
-  return null;
+  const all = binaryCandidates(name, pathEnv);
+  if (all.length === 0 || all.some((c) => c.rejection === null)) return null;
+  const { candidate, rejection } = all[0];
+  return `${candidate} was not run because ${rejection}. Install @adlc/cli globally (npm i -g @adlc/cli) as yourself or as root.`;
 }
 
-/** The rejected-adlc reason, or the generic cause when none applies. */
+/** The refused-adlc reason, or the generic cause when none applies. */
 function adlcUnavailableCause() {
   return untrustedBinaryReason('adlc', process.env.PATH) ?? 'is @adlc/cli installed and .adlc writable?';
 }
 
-/** Say why adlc-backed `check` did not run when an adlc exists on PATH but was rejected. */
+/** Say why adlc-backed `check` did not run when an adlc exists on PATH but every one was refused. */
 function emitUntrustedAdlc(check, eventName) {
   const reason = untrustedBinaryReason('adlc', process.env.PATH);
   if (!reason) return;

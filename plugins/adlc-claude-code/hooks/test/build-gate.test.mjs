@@ -335,6 +335,27 @@ test('bypass with the recorder UNAVAILABLE → deny (an unaudited override is re
   }
 });
 
+test('bypass refused because the only adlc is inside node_modules → deny naming it', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-nm-recorder-'));
+  try {
+    const bin = join(root, 'node_modules', '.bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'adlc'), '#!/bin/sh\necho {}\n');
+    chmodSync(join(bin, 'adlc'), 0o755);
+    const r = runBuildGate({
+      tickets: [{ id: 'T1', title: 'x', category: 'contract' }],
+      activeTicketEnv: 'T1',
+      transcriptToolCalls: 500,
+      env: { ADLC_BUILD_GATE_BYPASS: '1', PATH: `${bin}:/usr/bin:/bin` },
+    });
+    assert.equal(r.verdict, 'deny');
+    assert.ok(r.out.includes(join(bin, 'adlc')), r.out);
+    assert.match(r.out, /node_modules/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('bypass flag is ignored (no manifest write) when the session is NOT degraded', () => {
   const r = runBuildGate({
     tickets: [{ id: 'T1', title: 'x', category: 'contract' }],

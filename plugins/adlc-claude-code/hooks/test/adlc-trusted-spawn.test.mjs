@@ -11,7 +11,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmp } from '@adlc/core/test-kit';
 import { spawnHook } from './helpers/run-hook.mjs';
-import { trustedOwner } from '../adlc-hook.mjs';
+import { ownershipRejection, resolveTrustedBinary, untrustedBinaryReason } from '../adlc-hook.mjs';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-hook.mjs');
 const KEY = 'manifest-key-must-not-leak';
@@ -109,20 +109,46 @@ test('an extensionless node script runs under the hook\'s own node, not the inte
   assert.equal(existsSync(join(dumps, 'preflight.json')), true, 'the script was spawned through its unusable shebang');
 });
 
-// A `sudo npm i -g` install is owned by root. Only root can create a root-owned
-// file, so one that nobody else can write is as trustworthy as the user's own.
-test('a root-owned adlc nobody else can write is trusted', () => {
-  assert.equal(trustedOwner({ uid: 0, mode: 0o100755 }, 1000), true);
+// A `sudo npm i -g` install: the file, the PATH entry naming it and its directory
+// all belong to root and nobody else can write them.
+const ROOT = { uid: 0, mode: 0o100755 };
+const ROOT_DIR = { uid: 0, mode: 0o40755 };
+const SELF = 1000;
+
+test('a sudo npm -g install (root file, root link, root directory, none writable by others) is trusted', () => {
+  assert.equal(ownershipRejection({ file: ROOT, link: ROOT, dir: ROOT_DIR }, SELF), null);
 });
 
-test('a root-owned adlc that group or others can write is not trusted', () => {
-  assert.equal(trustedOwner({ uid: 0, mode: 0o100775 }, 1000), false);
-  assert.equal(trustedOwner({ uid: 0, mode: 0o100757 }, 1000), false);
+test('a root-owned file that group or others can write is refused', () => {
+  assert.match(ownershipRejection({ file: { uid: 0, mode: 0o100775 }, link: ROOT, dir: ROOT_DIR }, SELF), /root-owned/);
+  assert.match(ownershipRejection({ file: { uid: 0, mode: 0o100757 }, link: ROOT, dir: ROOT_DIR }, SELF), /root-owned/);
 });
 
-test('an adlc owned by another non-root account is not trusted; the user\'s own is', () => {
-  assert.equal(trustedOwner({ uid: 1001, mode: 0o100755 }, 1000), false);
-  assert.equal(trustedOwner({ uid: 1000, mode: 0o100755 }, 1000), true);
+test('a link someone else planted that points at a root-owned program is refused', () => {
+  assert.match(ownershipRejection({ file: ROOT, link: { uid: SELF, mode: 0o120777 }, dir: ROOT_DIR }, SELF), /link or directory/);
+});
+
+test('a root-owned file in a directory others can write is refused', () => {
+  assert.match(ownershipRejection({ file: ROOT, link: ROOT, dir: { uid: 0, mode: 0o41777 } }, SELF), /link or directory/);
+  assert.match(ownershipRejection({ file: ROOT, link: ROOT, dir: { uid: SELF, mode: 0o40755 } }, SELF), /link or directory/);
+});
+
+test('an adlc owned by another non-root account is refused with its uid; the user\'s own is trusted', () => {
+  assert.match(ownershipRejection({ file: { uid: 1001, mode: 0o100755 }, link: ROOT, dir: ROOT_DIR }, SELF), /uid 1001/);
+  assert.equal(ownershipRejection({ file: { uid: SELF, mode: 0o100755 }, link: ROOT, dir: ROOT_DIR }, SELF), null);
+});
+
+// The resolver and the diagnostic share one decision; these drive it through the real filesystem.
+test('a symlink named adlc pointing at a root-owned shell is neither run nor trusted', { skip: process.getuid?.() === 0 && 'running as root' }, (t) => {
+  const dir = tmp(t, 'adlc-cc-shlink-');
+  symlinkSync('/bin/sh', join(dir, 'adlc'));
+  assert.equal(resolveTrustedBinary('adlc', dir), null);
+  assert.match(untrustedBinaryReason('adlc', dir), /link or directory/);
+});
+
+test('a refused adlc is not blamed when a trusted one later on PATH resolves', (t) => {
+  const pathEnv = `${plantedAdlc(t, join(tmp(t, 'adlc-cc-marker-'), 'ran'))}:${recordingAdlc(t, tmp(t, 'adlc-cc-dumps-'))}`;
+  assert.equal(untrustedBinaryReason('adlc', pathEnv), null);
 });
 
 // The hook is spawned by absolute node path, so these PATHs leave out node's own
@@ -147,25 +173,50 @@ test('an adlc rejected for living in node_modules is named at session start, not
 
 test('an adlc rejected for living in node_modules is named when the Stop manifest check cannot run', (t) => {
   const marker = join(tmp(t, 'adlc-cc-marker-'), 'ran');
-  const r = runModeIsolated('manifest', adlcRepo(t), plantedAdlc(t, marker));
-  assert.match(systemMessages(r.stdout ?? '').join('\n'), /node_modules/);
+  const planted = plantedAdlc(t, marker);
+  const r = runModeIsolated('manifest', adlcRepo(t), planted);
+  const msg = systemMessages(r.stdout ?? '').join('\n');
+  assert.ok(msg.includes(join(planted, 'adlc')), msg);
+  assert.match(msg, /node_modules/);
   assert.equal(existsSync(marker), false);
 });
 
-test('with no adlc on PATH at all, session start stays silent', (t) => {
-  const r = runModeIsolated('preflight', adlcRepo(t), tmp(t, 'adlc-cc-empty-'));
-  assert.deepEqual(systemMessages(r.stdout ?? ''), []);
+test('with no adlc on PATH at all, session start and the Stop check stay silent', (t) => {
+  const empty = tmp(t, 'adlc-cc-empty-');
+  assert.deepEqual(systemMessages(runModeIsolated('preflight', adlcRepo(t), empty).stdout ?? ''), []);
+  assert.deepEqual(systemMessages(runModeIsolated('manifest', adlcRepo(t), empty).stdout ?? ''), []);
+});
+
+function railsBypass(t, pathEnv) {
+  const repo = adlcRepo(t);
+  writeFileSync(join(repo, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'fixture', rails: ['test/**'] }] }));
+  return spawnHook([HOOK, 'rails'], {
+    cwd: repo,
+    input: JSON.stringify({ cwd: repo, tool_input: { file_path: join(repo, 'test', 'x.mjs') } }),
+    env: { ...process.env, ADLC_RAILS_BYPASS: '1', PATH: `${pathEnv}:/usr/bin:/bin` },
+  });
+}
+
+/** A trusted adlc that runs and fails, as an unwritable .adlc would make it. */
+function failingAdlc(t) {
+  const dir = tmp(t, 'adlc-cc-failing-');
+  writeFileSync(join(dir, 'adlc'), '#!/bin/sh\nexit 1\n');
+  chmodSync(join(dir, 'adlc'), 0o755);
+  return dir;
+}
+
+test('a rails bypass whose trusted adlc failed keeps the generic cause instead of blaming a refused one', (t) => {
+  const marker = join(tmp(t, 'adlc-cc-marker-'), 'ran');
+  const r = railsBypass(t, `${plantedAdlc(t, marker)}:${failingAdlc(t)}`);
+  assert.match(r.stdout ?? '', /"permissionDecision":"deny"/);
+  assert.match(r.stdout ?? '', /is @adlc\/cli installed/);
+  assert.doesNotMatch(r.stdout ?? '', /was not run because/);
+  assert.equal(existsSync(marker), false);
 });
 
 test('a rails bypass refused for want of a trusted adlc names the rejected one', (t) => {
   const marker = join(tmp(t, 'adlc-cc-marker-'), 'ran');
-  const repo = adlcRepo(t);
-  writeFileSync(join(repo, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'fixture', rails: ['test/**'] }] }));
-  const r = spawnHook([HOOK, 'rails'], {
-    cwd: repo,
-    input: JSON.stringify({ cwd: repo, tool_input: { file_path: join(repo, 'test', 'x.mjs') } }),
-    env: { ...process.env, ADLC_RAILS_BYPASS: '1', PATH: `${plantedAdlc(t, marker)}:/usr/bin:/bin` },
-  });
+  const r = railsBypass(t, plantedAdlc(t, marker));
   assert.match(r.stdout ?? '', /"permissionDecision":"deny"/);
   assert.match(r.stdout ?? '', /node_modules/);
   assert.doesNotMatch(r.stdout ?? '', /is @adlc\/cli installed/);
