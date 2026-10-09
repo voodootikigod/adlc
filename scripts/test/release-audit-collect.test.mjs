@@ -265,6 +265,14 @@ test('tryRun gives its child room for a 500-issue fetch with full bodies', async
   assert.ok(RUN_MAX_BUFFER >= 64 * 1024 * 1024);
 });
 
+test('tryRun returns a real child output larger than the 1 MiB default', async () => {
+  const { tryRun } = await import('../release-audit-collect.mjs');
+  const size = 2 * 1024 * 1024;
+  const r = tryRun(process.execPath, ['-e', `process.stdout.write('x'.repeat(${size}))`]);
+  assert.equal(r.ok, true);
+  assert.equal(r.out.length, size);
+});
+
 test('fetchIssues names the cause when gh fails with empty stderr', async () => {
   const { fetchIssues } = await import('../release-audit-collect.mjs');
   const err = Object.assign(new Error('spawnSync gh ENOBUFS'), { stderr: '' });
