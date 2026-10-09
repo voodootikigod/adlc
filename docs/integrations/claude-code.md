@@ -199,6 +199,21 @@ scope, and, for the unscoped `=1` form, stating plainly that it is session-wide
 and not revoked by deleting a settings file. A stale bypass is therefore seen,
 not silently in effect.
 
+### Which `adlc` the hooks run
+
+Preflight, flail detection, the Stop manifest check, the review notice and the
+two bypass recorders run the first `adlc` on `PATH` that is:
+
+- outside any `node_modules` directory, since a repository could place one
+  there, and
+- owned by you, or owned by root and not writable by its group or others (a
+  `sudo npm i -g @adlc/cli` install).
+
+A project-local install (`node_modules/.bin/adlc` only) is never run. If an
+`adlc` is on `PATH` but none qualifies, the session-start and Stop checks
+report which one was found and why it was refused, and a rails or build-gate
+bypass is refused with the same reason. Install `@adlc/cli` globally to fix it.
+
 ### MCP server
 
 The plugin bundles an MCP server (`plugins/adlc-claude-code/.mcp.json`,

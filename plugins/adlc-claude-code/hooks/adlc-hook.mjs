@@ -419,7 +419,8 @@ function context(input) {
 function preflight() {
   if (!existsSync('.adlc')) return; // not an ADLC repo
   const r = runAdlc(['preflight', '--json']);
-  if (!r || !r.stdout) return; // toolkit absent / no output
+  if (!r) return emitUntrustedAdlc('preflight', 'SessionStart');
+  if (!r.stdout) return; // no output
   const res = parseJson(r.stdout);
   if (!res) return;
   const failed = res.failedNames ?? [];
@@ -610,7 +611,8 @@ function flail(input) {
 function manifest() {
   if (!existsSync(join('.adlc', 'manifest.jsonl'))) return; // nothing recorded yet
   const r = runAdlc(['gate-manifest', 'verify', '--json', '--allow-legacy-unsigned'], { keyed: true });
-  if (!r || !r.stdout) return;
+  if (!r) return emitUntrustedAdlc('gate-manifest verify');
+  if (!r.stdout) return;
   const res = parseJson(r.stdout);
   if (!res || res.valid) return; // intact → silent
   const msg =
@@ -1218,7 +1220,7 @@ function rails(input) {
       }
       return denyRail(
         `ADLC_RAILS_BYPASS is set but the override could not be recorded to the gate-manifest ` +
-          `(is @adlc/cli installed and .adlc writable?). An unaudited bypass is refused — the edit is blocked.`
+          `(${adlcUnavailableCause()}). An unaudited bypass is refused — the edit is blocked.`
       );
     }
     return denyRail(denyReason);
@@ -1397,7 +1399,7 @@ function rails(input) {
     if (!allRecorded) {
       return denyRail(
         `ADLC_RAILS_BYPASS is set but a rail override could not be recorded to the gate-manifest ` +
-          `(is @adlc/cli installed and .adlc writable?). An unaudited bypass is refused — the edit is blocked.`
+          `(${adlcUnavailableCause()}). An unaudited bypass is refused — the edit is blocked.`
       );
     }
     emitBypassNotice(hits.map((h) => h.rel)); // observable (#204 AC3)
@@ -1691,7 +1693,7 @@ function buildgate(input) {
     if (recordBuildGateBypass(active.id, signals, depth, sessionBytes)) return; // audited → allow
     return denyBuildGate(
       `ADLC_BUILD_GATE_BYPASS is set but the override could not be recorded to the gate-manifest ` +
-        `(is @adlc/cli installed and .adlc writable?). An unaudited bypass is refused — the build is blocked.`
+        `(${adlcUnavailableCause()}). An unaudited bypass is refused — the build is blocked.`
     );
   }
 
@@ -1969,12 +1971,12 @@ function scrubHandoffSecrets(env = process.env) {
  * repository can ship that shim itself. Every PATH entry that resolves
  * inside a `node_modules` directory is skipped for that reason (a genuine
  * global install is never itself inside `node_modules`), and every
- * remaining candidate must also be owned by the CURRENT process's uid
- * (skipped otherwise, platforms where `process.getuid` exists) — a
- * project-writable or shared directory earlier on PATH can still contain a
- * file owned by this same user, which this check cannot distinguish from a
- * genuine install, but it does rule out a candidate owned by a different
- * (or root/system) account landing on PATH ahead of the real binary. Given
+ * remaining candidate must pass `trustedOwner` (platforms where
+ * `process.getuid` exists) — a project-writable or shared directory earlier
+ * on PATH can still contain a file owned by this same user, which this check
+ * cannot distinguish from a genuine install, but it does rule out a candidate
+ * owned by a different non-root account landing on PATH ahead of the real
+ * binary. Given
  * that, this function still cannot verify a same-uid candidate's symlink
  * target or content. `recordRecoveryUnderBand` does not hand this spawn the
  * manifest signing key or the admin key regardless of what runs here, and
@@ -1996,13 +1998,70 @@ export function resolveTrustedBinary(name, pathEnv) {
     try {
       const st = statSync(candidate);
       if (!st.isFile()) continue;
-      if (selfUid !== null && st.uid !== selfUid) continue; // see the function comment
+      if (selfUid !== null && !trustedOwner(st, selfUid)) continue; // see the function comment
       return candidate;
     } catch {
       /* try next PATH entry */
     }
   }
   return null;
+}
+
+/**
+ * Whether a candidate's ownership lets it run: owned by this user, or owned by
+ * root (a `sudo npm i -g` install) with no group or world write bit. Only root
+ * can create a root-owned file, so the write bits are the remaining way for
+ * another account to change what it runs.
+ */
+export function trustedOwner(st, selfUid) {
+  if (st.uid === selfUid) return true;
+  return st.uid === 0 && (st.mode & 0o022) === 0;
+}
+
+/**
+ * Why no trusted `name` was resolved even though PATH holds one, as a sentence
+ * naming the first rejected candidate; null when PATH holds none (an absent
+ * toolkit stays silent). Only stats candidates, never runs them.
+ */
+export function untrustedBinaryReason(name, pathEnv) {
+  if (typeof pathEnv !== 'string' || pathEnv.length === 0) return null;
+  const sep = process.platform === 'win32' ? ';' : ':';
+  const selfUid = typeof process.getuid === 'function' ? process.getuid() : null;
+  for (const dir of pathEnv.split(sep)) {
+    if (!dir) continue;
+    const candidate = join(dir, name);
+    let st;
+    try {
+      st = statSync(candidate);
+    } catch {
+      continue;
+    }
+    if (!st.isFile()) continue;
+    const why = dir.includes('node_modules')
+      ? 'it is inside node_modules, where a repository could have placed it'
+      : selfUid !== null && !trustedOwner(st, selfUid)
+        ? `it is owned by uid ${st.uid}, not by you or by root with no group/world write`
+        : null;
+    if (why) {
+      return `${candidate} was not run because ${why}. Install @adlc/cli globally (npm i -g @adlc/cli) as yourself or as root.`;
+    }
+  }
+  return null;
+}
+
+/** The rejected-adlc reason, or the generic cause when none applies. */
+function adlcUnavailableCause() {
+  return untrustedBinaryReason('adlc', process.env.PATH) ?? 'is @adlc/cli installed and .adlc writable?';
+}
+
+/** Say why adlc-backed `check` did not run when an adlc exists on PATH but was rejected. */
+function emitUntrustedAdlc(check, eventName) {
+  const reason = untrustedBinaryReason('adlc', process.env.PATH);
+  if (!reason) return;
+  const msg = `ADLC ${check} did not run: ${reason}`;
+  emit(eventName
+    ? { hookSpecificOutput: { hookEventName: eventName, additionalContext: msg }, systemMessage: msg }
+    : { systemMessage: msg });
 }
 
 /** Bounds for `repoManifestChainIsSigned` — see that function's comment for why. */
