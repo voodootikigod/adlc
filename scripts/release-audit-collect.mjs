@@ -343,22 +343,20 @@ export function routeIssues(issues, units, ticketsByIssue = new Map()) {
 // ─── repository probes ───────────────────────────────────────────────────────
 
 /**
- * Output ceiling for a probe's child. The open-issue fetch carries full bodies
- * for up to ISSUE_FETCH_LIMIT issues and passes the 1 MiB default.
- */
-export const RUN_MAX_BUFFER = 64 * 1024 * 1024;
-
-/**
  * Run a command, returning `{ok, out}` rather than throwing. On failure `out` is
- * the child's stderr, or the error message when stderr is empty, so the reason
- * is never blank.
+ * never blank: it is the child's stderr, led by the cause when the child was cut
+ * off (output overflow, timeout or signal), and the error message when stderr is
+ * empty.
  */
 export function tryRun(cmd, args, { run = execFileSync, cwd = ROOT } = {}) {
   try {
     return { ok: true, out: String(run(cmd, args, { cwd, encoding: 'utf8', maxBuffer: RUN_MAX_BUFFER, stdio: ['ignore', 'pipe', 'pipe'] })).trim() };
   } catch (err) {
     const stderr = String(err?.stderr ?? '').trim();
-    return { ok: false, out: stderr || String(err?.message ?? err).trim() };
+    const message = String(err?.message ?? err).trim();
+    const cutOff = err?.code === 'ENOBUFS' || err?.code === 'ETIMEDOUT' ? message
+      : err?.signal ? `killed by ${err.signal}` : '';
+    return { ok: false, out: [cutOff, stderr].filter(Boolean).join(': ') || message };
   }
 }
 
@@ -386,6 +384,14 @@ export function churnFor(dir, since, { run = execFileSync } = {}) {
 
 /** How many open issues a single fetch will ask for. */
 export const ISSUE_FETCH_LIMIT = 500;
+
+/**
+ * Output ceiling for a probe's child, sized for the largest one: the issue fetch
+ * at ISSUE_FETCH_LIMIT issues whose bodies are all at GitHub's 65536-character
+ * cap, each character costing up to 6 bytes of JSON (\uXXXX), plus 8 MiB for
+ * titles, labels and the rest.
+ */
+export const RUN_MAX_BUFFER = ISSUE_FETCH_LIMIT * 65536 * 6 + 8 * 1024 * 1024;
 
 /**
  * Open GitHub issues, or an explicit unconsultable record when `gh` cannot answer.
