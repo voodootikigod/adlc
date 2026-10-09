@@ -173,10 +173,11 @@ const ADLC_CLI_TIMEOUT_MS = 5000;
 
 /**
  * Run the toolkit CLI. A repository can plant node_modules/.bin/adlc ahead of
- * the real install, so adlc is resolved with resolveTrustedBinary (node_modules
- * entries skipped, a regular file this user owns) and the signing keys reach it
- * only when `keyed` — the calls that sign or verify the manifest. Returns null
- * when no trusted adlc exists or it could not be started.
+ * the real install, so adlc is resolved with resolveTrustedBinary (relative and
+ * node_modules entries skipped; a file this user owns, or a root install that
+ * passes ownershipRejection) and the signing keys reach it only when `keyed` —
+ * the calls that sign or verify the manifest. Returns null when no trusted adlc
+ * exists or it could not be started; untrustedBinaryReason tells those apart.
  */
 function runAdlc(args, { keyed = false } = {}) {
   const candidate = resolveTrustedBinary('adlc', process.env.PATH);
@@ -2018,12 +2019,17 @@ export function ownershipRejection({ file, link, dir, ancestors = [] }, selfUid)
 }
 
 /** The directories above `file`, nearest first, up to and including the filesystem root. */
-function ancestorDirs(file) {
+export function ancestorDirs(file) {
   const out = [];
   for (let d = dirname(file); ; d = dirname(d)) {
     out.push(d);
     if (dirname(d) === d) return out;
   }
+}
+
+/** The directories whose writers could swap what `candidate` runs: those above its real file and above the real PATH entry. */
+export function candidateAncestors(candidate, dir, name) {
+  return [...ancestorDirs(realpathSync(candidate)), ...ancestorDirs(join(realpathSync(dir), name))];
 }
 
 /** Every `name` file on PATH in order, each with its rejection reason (null when trusted). Never runs one. */
@@ -2035,18 +2041,26 @@ function binaryCandidates(name, pathEnv) {
   for (const dir of pathEnv.split(sep)) {
     if (!dir) continue;
     const candidate = join(dir, name);
+    let file;
+    try {
+      file = statSync(candidate);
+    } catch {
+      continue; // no file here: try next PATH entry
+    }
+    if (!file.isFile()) continue;
     let stats;
     try {
-      const file = statSync(candidate);
-      if (!file.isFile()) continue;
       stats = { file, link: lstatSync(candidate), dir: statSync(dir) };
       if (file.uid === 0 && file.uid !== selfUid) {
-        stats.ancestors = [...ancestorDirs(realpathSync(candidate)), ...ancestorDirs(join(realpathSync(dir), name))].map((d) => statSync(d));
+        stats.ancestors = candidateAncestors(candidate, dir, name).map((d) => statSync(d));
       }
     } catch {
-      continue; // try next PATH entry
+      out.push({ candidate, rejection: 'its link or a directory above it could not be inspected' });
+      continue;
     }
-    const rejection = dir.includes('node_modules')
+    const rejection = !isAbsolute(dir)
+      ? 'it is reached through a relative PATH entry, which resolves inside the repository'
+      : dir.includes('node_modules')
       ? 'it is inside node_modules, where a repository could have placed it'
       : selfUid === null ? null : ownershipRejection(stats, selfUid);
     out.push({ candidate, rejection });

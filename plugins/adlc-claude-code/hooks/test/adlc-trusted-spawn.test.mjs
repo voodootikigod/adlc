@@ -6,12 +6,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { join, dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmp } from '@adlc/core/test-kit';
 import { spawnHook } from './helpers/run-hook.mjs';
-import { ownershipRejection, resolveTrustedBinary, untrustedBinaryReason } from '../adlc-hook.mjs';
+import { ancestorDirs, candidateAncestors, ownershipRejection, resolveTrustedBinary, untrustedBinaryReason } from '../adlc-hook.mjs';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-hook.mjs');
 const KEY = 'manifest-key-must-not-leak';
@@ -163,6 +163,40 @@ test('a symlink I own named adlc, pointing at a root-owned shell, is neither run
   symlinkSync('/bin/sh', join(dir, 'adlc'));
   assert.equal(resolveTrustedBinary('adlc', dir), null);
   assert.match(untrustedBinaryReason('adlc', dir), /link that root does not own/);
+});
+
+test('ancestorDirs lists every directory above a file, nearest first, ending at the root', () => {
+  assert.deepEqual(ancestorDirs('/usr/local/bin/adlc'), ['/usr/local/bin', '/usr/local', '/usr', '/']);
+});
+
+test('the ancestors checked cover the real file\'s directories and the PATH entry\'s', (t) => {
+  const root = realpathSync(tmp(t, 'adlc-cc-anc-'));
+  mkdirSync(join(root, 'lib', 'cli'), { recursive: true });
+  mkdirSync(join(root, 'bin'));
+  writeFileSync(join(root, 'lib', 'cli', 'adlc.mjs'), '');
+  symlinkSync(join(root, 'lib', 'cli', 'adlc.mjs'), join(root, 'bin', 'adlc'));
+  symlinkSync(join(root, 'bin'), join(root, 'pathdir'));
+  const dirs = candidateAncestors(join(root, 'pathdir', 'adlc'), join(root, 'pathdir'), 'adlc');
+  for (const d of [join(root, 'lib', 'cli'), join(root, 'lib'), join(root, 'bin'), root, '/']) assert.ok(dirs.includes(d), `${d} not checked`);
+});
+
+test('an adlc reached through a relative PATH entry is refused, naming why', (t) => {
+  const repo = tmp(t, 'adlc-cc-rel-');
+  const marker = join(repo, 'ran');
+  writeFileSync(join(repo, 'adlc'), `#!/bin/sh\ntouch '${marker}'\necho '{}'\n`);
+  chmodSync(join(repo, 'adlc'), 0o755);
+  mkdirSync(join(repo, '.adlc'));
+  writeFileSync(join(repo, '.adlc', 'manifest.jsonl'), '');
+  const r = runModeIsolated('preflight', repo, '.');
+  assert.equal(existsSync(marker), false, 'the repository\'s ./adlc ran');
+  assert.match(systemMessages(r.stdout ?? '').join('\n'), /relative PATH entry/);
+});
+
+test('with several refused copies on PATH, the first one is named', (t) => {
+  const first = plantedAdlc(t, join(tmp(t, 'adlc-cc-marker-'), 'a'));
+  const second = plantedAdlc(t, join(tmp(t, 'adlc-cc-marker-'), 'b'));
+  const reason = untrustedBinaryReason('adlc', `${first}:${second}`);
+  assert.ok(reason.startsWith(join(first, 'adlc')), reason);
 });
 
 test('a refused adlc is not blamed when a trusted one later on PATH resolves', (t) => {

@@ -204,8 +204,8 @@ not silently in effect.
 Preflight, flail detection, the Stop manifest check, the review notice and the
 two bypass recorders run the first `adlc` on `PATH` that is:
 
-- outside any `node_modules` directory, since a repository could place one
-  there, and
+- reached through an absolute `PATH` entry outside any `node_modules`
+  directory, since a repository could place one there, and
 - owned by you, or (a `sudo npm i -g @adlc/cli` install) a root-owned file
   reached through a root-owned `PATH` entry in a root-owned directory, with
   neither the file nor any directory above it or above the `PATH` entry
