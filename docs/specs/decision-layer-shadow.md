@@ -109,15 +109,13 @@ evaluateDecision({ provider, model, pack, sanitizedInput, timeoutMs, revision })
   fabricated answer.
 - At most 2 retries, on 429/529 and network failure only; the attempt count is
   recorded.
-- The Jev adapter is built only against a real response. Before it is written,
-  one live call is made against TypeSafe's documented API with a real key, and
-  the request shape and response are committed (key and account identifiers
-  removed) as `packages/decision-layer/test/fixtures/jev-live-<date>.json`
-  with the endpoint, model and capture date. The adapter's tests replay that
-  fixture. The endpoint the earlier branch assumed,
-  `https://api.typesafe.ai/v1/decisions`, is a starting point, not a fact.
-  Until the fixture exists, no Jev adapter code ships: `--provider jev` is a
-  configuration error naming the missing fixture, and only `mock` works.
+- The Jev adapter is built against a real response: one live call against
+  TypeSafe's API, with the request shape and response committed (key and
+  account identifiers removed) as
+  `packages/decision-layer/test/fixtures/jev-live-2026-10-08.json` with the
+  endpoint (`https://api.typesafe.ai/v1/systemone`), model and capture date.
+  The adapter's tests replay that fixture; a change to the request or response
+  shape needs a fresh capture.
 - Both the requested and the provider-resolved model identifiers are recorded;
   an alias is allowed in shadow mode.
 - The adapter cannot write tickets, branches, manifests or any file other than
@@ -244,7 +242,7 @@ class, attempt count, latency and usage. No sanitized input, prompt or raw state
    running another verb (`adlc ticket list`) never resolves the package. verify:
    `node --test packages/decision-layer/test/isolation.test.mjs`
 2. `--mode` other than `shadow`/`off`, a provider without a mode, `jev` without
-   a key, `jev` without the live fixture, `--mock-response` without
+   a key, `jev` with a pack it cannot express, `--mock-response` without
    `--provider mock`, an unknown `--ticket`, and a project pack shadowing a
    shipped one each exit 1 before reading or sending anything, and write no
    record. verify: `node --test packages/decision-layer/test/cli.test.mjs`
@@ -296,7 +294,8 @@ class, attempt count, latency and usage. No sanitized input, prompt or raw state
    worktree removal does not lose them. Who runs shadow evaluations, and when,
    is left for a later decision.
 9. The mock provider ships first. The Jev adapter is built only after one live
-   response is captured and committed as its contract fixture.
+   response is captured and committed as its contract fixture (done:
+   `jev-live-2026-10-08.json`, #1185).
 10. The input hash covers sanitized input only.
 
 ## Decisions (P2 coldstart, 2026-10-06)
@@ -304,7 +303,8 @@ class, attempt count, latency and usage. No sanitized input, prompt or raw state
 11. The Jev adapter and criterion 4 are split into a follow-up ticket, started
     once someone with a TypeSafe key captures the fixture. The first ticket
     ships the mock provider and criteria 1-3 and 5-12; `--provider jev` stays a
-    configuration error naming the missing fixture.
+    configuration error naming the missing fixture. (Superseded: the
+    follow-up shipped in #1185.)
 12. `change-risk-v1` asks two questions (`risk`, `needs-deeper-interrogation`)
     with the aggregation under "The first pack".
 13. The spec carries its own sanitizer contract and phase-action table rather
