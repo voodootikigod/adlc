@@ -257,30 +257,26 @@ test('fetchIssues records an unconsultable rather than an empty backlog when gh 
   assert.match(r.unconsultable, /gh issue list failed/);
 });
 
-test('tryRun gives its child room for a full issue fetch at GitHub\'s maximum body size', async () => {
-  const { tryRun, RUN_MAX_BUFFER, ISSUE_FETCH_LIMIT } = await import('../release-audit-collect.mjs');
+test('the issue fetch gives gh room for every issue at GitHub\'s maximum body size', async () => {
+  const { fetchIssues } = await import('../release-audit-collect.mjs');
   let seen;
-  tryRun('gh', [], { run: (_c, _a, opts) => { seen = opts.maxBuffer; return ''; } });
-  assert.equal(seen, RUN_MAX_BUFFER);
-  // GitHub caps a body at 65536 characters; JSON can spend 6 bytes on one (\uXXXX).
-  assert.ok(RUN_MAX_BUFFER >= ISSUE_FETCH_LIMIT * 65536 * 6);
+  fetchIssues({ run: (_c, _a, opts) => { seen = opts.maxBuffer; return '[]'; } });
+  // 500 issues x 65536-character bodies x 6 bytes of JSON per character (\uXXXX).
+  assert.ok(seen >= 196_608_000, `maxBuffer ${seen} is below the worst-case fetch`);
 });
 
 test('fetchIssues names a buffer overflow even when gh also wrote to stderr', async () => {
   const { fetchIssues } = await import('../release-audit-collect.mjs');
   const err = Object.assign(new Error('spawnSync gh ENOBUFS'), { code: 'ENOBUFS', stderr: 'A new release of gh is available\n' });
   const r = fetchIssues({ run: () => { throw err; } });
-  assert.match(r.unconsultable, /ENOBUFS/);
-  assert.match(r.unconsultable, /A new release of gh is available/);
+  assert.equal(r.unconsultable, 'gh issue list failed: spawnSync gh ENOBUFS: A new release of gh is available');
 });
 
 test('tryRun names a signal kill even when the child wrote to stderr', async () => {
   const { tryRun } = await import('../release-audit-collect.mjs');
   const err = Object.assign(new Error('Command failed: gh'), { signal: 'SIGTERM', stderr: 'partial\n' });
   const r = tryRun('gh', [], { run: () => { throw err; } });
-  assert.equal(r.ok, false);
-  assert.match(r.out, /SIGTERM/);
-  assert.match(r.out, /partial/);
+  assert.deepEqual(r, { ok: false, out: 'killed by SIGTERM: partial' });
 });
 
 test('tryRun returns a real child output larger than the 1 MiB default', async () => {
@@ -297,6 +293,12 @@ test('fetchIssues names the cause when gh fails with empty stderr', async () => 
   const r = fetchIssues({ run: () => { throw err; } });
   assert.deepEqual(r.issues, []);
   assert.match(r.unconsultable, /gh issue list failed: spawnSync gh ENOBUFS/);
+});
+
+test('tryRun reports an overflow with empty stderr as the bare cause', async () => {
+  const { tryRun } = await import('../release-audit-collect.mjs');
+  const err = Object.assign(new Error('spawnSync gh ENOBUFS'), { code: 'ENOBUFS', stderr: '' });
+  assert.deepEqual(tryRun('gh', [], { run: () => { throw err; } }), { ok: false, out: 'spawnSync gh ENOBUFS' });
 });
 
 test('tryRun still reports stderr when the child wrote some', async () => {

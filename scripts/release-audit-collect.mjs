@@ -345,7 +345,7 @@ export function routeIssues(issues, units, ticketsByIssue = new Map()) {
 /**
  * Run a command, returning `{ok, out}` rather than throwing. On failure `out` is
  * never blank: it is the child's stderr, led by the cause when the child was cut
- * off (output overflow, timeout or signal), and the error message when stderr is
+ * off (output overflow or signal), and the error message when stderr is
  * empty.
  */
 export function tryRun(cmd, args, { run = execFileSync, cwd = ROOT } = {}) {
@@ -354,7 +354,7 @@ export function tryRun(cmd, args, { run = execFileSync, cwd = ROOT } = {}) {
   } catch (err) {
     const stderr = String(err?.stderr ?? '').trim();
     const message = String(err?.message ?? err).trim();
-    const cutOff = err?.code === 'ENOBUFS' || err?.code === 'ETIMEDOUT' ? message
+    const cutOff = err?.code === 'ENOBUFS' ? message
       : err?.signal ? `killed by ${err.signal}` : '';
     return { ok: false, out: [cutOff, stderr].filter(Boolean).join(': ') || message };
   }
