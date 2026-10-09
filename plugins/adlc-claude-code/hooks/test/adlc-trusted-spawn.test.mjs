@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmp } from '@adlc/core/test-kit';
@@ -109,41 +109,53 @@ test('an extensionless node script runs under the hook\'s own node, not the inte
   assert.equal(existsSync(join(dumps, 'preflight.json')), true, 'the script was spawned through its unusable shebang');
 });
 
-// A `sudo npm i -g` install: the file, the PATH entry naming it and its directory
-// all belong to root and nobody else can write them.
-const ROOT = { uid: 0, mode: 0o100755 };
+// A `sudo npm i -g` install: a root-owned symlink (lstat always reports 0777 for a
+// link) in a root-owned directory, pointing at a root-owned file nobody else can write.
+const ROOT_FILE = { uid: 0, mode: 0o100755 };
+const ROOT_LINK = { uid: 0, mode: 0o120777 };
 const ROOT_DIR = { uid: 0, mode: 0o40755 };
 const SELF = 1000;
 
-test('a sudo npm -g install (root file, root link, root directory, none writable by others) is trusted', () => {
-  assert.equal(ownershipRejection({ file: ROOT, link: ROOT, dir: ROOT_DIR }, SELF), null);
+test('a sudo npm -g install (root symlink, root directory, root file) is trusted', () => {
+  assert.equal(ownershipRejection({ file: ROOT_FILE, link: ROOT_LINK, dir: ROOT_DIR }, SELF), null);
+  assert.equal(ownershipRejection({ file: ROOT_FILE, link: ROOT_FILE, dir: ROOT_DIR }, SELF), null, 'a root file placed directly in the directory');
 });
 
 test('a root-owned file that group or others can write is refused', () => {
-  assert.match(ownershipRejection({ file: { uid: 0, mode: 0o100775 }, link: ROOT, dir: ROOT_DIR }, SELF), /root-owned/);
-  assert.match(ownershipRejection({ file: { uid: 0, mode: 0o100757 }, link: ROOT, dir: ROOT_DIR }, SELF), /root-owned/);
+  for (const mode of [0o100775, 0o100757]) {
+    assert.match(ownershipRejection({ file: { uid: 0, mode }, link: ROOT_LINK, dir: ROOT_DIR }, SELF), /writable by group or others/);
+  }
 });
 
 test('a link someone else planted that points at a root-owned program is refused', () => {
-  assert.match(ownershipRejection({ file: ROOT, link: { uid: SELF, mode: 0o120777 }, dir: ROOT_DIR }, SELF), /link or directory/);
+  assert.match(ownershipRejection({ file: ROOT_FILE, link: { uid: SELF, mode: 0o120777 }, dir: ROOT_DIR }, SELF), /link that root does not own/);
 });
 
-test('a root-owned file in a directory others can write is refused', () => {
-  assert.match(ownershipRejection({ file: ROOT, link: ROOT, dir: { uid: 0, mode: 0o41777 } }, SELF), /link or directory/);
-  assert.match(ownershipRejection({ file: ROOT, link: ROOT, dir: { uid: SELF, mode: 0o40755 } }, SELF), /link or directory/);
+test('a root-owned file in a directory others can write, or that root does not own, is refused', () => {
+  assert.match(ownershipRejection({ file: ROOT_FILE, link: ROOT_LINK, dir: { uid: 0, mode: 0o41777 } }, SELF), /its directory/);
+  assert.match(ownershipRejection({ file: ROOT_FILE, link: ROOT_LINK, dir: { uid: SELF, mode: 0o40755 } }, SELF), /its directory/);
 });
 
 test('an adlc owned by another non-root account is refused with its uid; the user\'s own is trusted', () => {
-  assert.match(ownershipRejection({ file: { uid: 1001, mode: 0o100755 }, link: ROOT, dir: ROOT_DIR }, SELF), /uid 1001/);
-  assert.equal(ownershipRejection({ file: { uid: SELF, mode: 0o100755 }, link: ROOT, dir: ROOT_DIR }, SELF), null);
+  assert.match(ownershipRejection({ file: { uid: 1001, mode: 0o100755 }, link: ROOT_LINK, dir: ROOT_DIR }, SELF), /uid 1001/);
+  assert.equal(ownershipRejection({ file: { uid: SELF, mode: 0o100755 }, link: ROOT_LINK, dir: ROOT_DIR }, SELF), null);
 });
 
 // The resolver and the diagnostic share one decision; these drive it through the real filesystem.
-test('a symlink named adlc pointing at a root-owned shell is neither run nor trusted', { skip: process.getuid?.() === 0 && 'running as root' }, (t) => {
+const NOT_ROOT = process.getuid?.() === 0 && 'running as root';
+
+test('a root-owned system symlink, the shape sudo npm -g creates, is resolved', { skip: NOT_ROOT }, (t) => {
+  let st;
+  try { st = lstatSync('/usr/bin/sh'); } catch { /* absent */ }
+  if (!st?.isSymbolicLink() || st.uid !== 0) return t.skip('no root-owned /usr/bin/sh symlink on this host');
+  assert.equal(resolveTrustedBinary('sh', '/usr/bin'), '/usr/bin/sh');
+});
+
+test('a symlink I own named adlc, pointing at a root-owned shell, is neither run nor trusted', { skip: NOT_ROOT }, (t) => {
   const dir = tmp(t, 'adlc-cc-shlink-');
   symlinkSync('/bin/sh', join(dir, 'adlc'));
   assert.equal(resolveTrustedBinary('adlc', dir), null);
-  assert.match(untrustedBinaryReason('adlc', dir), /link or directory/);
+  assert.match(untrustedBinaryReason('adlc', dir), /link that root does not own/);
 });
 
 test('a refused adlc is not blamed when a trusted one later on PATH resolves', (t) => {
@@ -166,7 +178,10 @@ test('an adlc rejected for living in node_modules is named at session start, not
   const planted = plantedAdlc(t, marker);
   const r = runModeIsolated('preflight', adlcRepo(t), planted);
   const msg = systemMessages(r.stdout ?? '').join('\n');
-  assert.match(msg, new RegExp(join(planted, 'adlc').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.ok(msg.includes(join(planted, 'adlc')), msg);
+  const context = (r.stdout ?? '').split('\n').filter(Boolean).map((l) => JSON.parse(l).hookSpecificOutput).find(Boolean);
+  assert.equal(context?.hookEventName, 'SessionStart');
+  assert.ok(context.additionalContext.includes(join(planted, 'adlc')), 'the model is not told why preflight did not run');
   assert.match(msg, /node_modules/);
   assert.equal(existsSync(marker), false, 'the diagnostic ran the rejected binary');
 });

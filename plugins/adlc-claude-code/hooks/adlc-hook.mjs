@@ -1997,17 +1997,21 @@ export function resolveTrustedBinary(name, pathEnv) {
  * Why a stat'ed candidate may not run, or null when it may. Accepted: a file this
  * user owns, or a `sudo npm i -g` install, where the file, the PATH entry naming
  * it (`link`, from lstat) and the directory holding that entry are all owned by
- * root with no group or world write bit. Only root can create root-owned entries,
- * so a symlink someone else planted, pointing at a root-owned program such as
- * /bin/sh, is still refused: the link itself is not root's.
+ * root, and neither the file nor the directory is writable by group or others.
+ * Only root can create root-owned entries, so a symlink someone else planted,
+ * pointing at a root-owned program such as /bin/sh, is still refused: the link
+ * itself is not root's. A symlink's own mode bits are always 0777 and never
+ * consulted; the directory decides who can replace it.
  */
 export function ownershipRejection({ file, link, dir }, selfUid) {
   if (file.uid === selfUid) return null;
-  const rootLocked = (st) => st.uid === 0 && (st.mode & 0o022) === 0;
-  if (rootLocked(file) && rootLocked(link) && rootLocked(dir)) return null;
-  return file.uid === 0
-    ? 'it is root-owned but reached through a link or directory that root does not exclusively control'
-    : `it is owned by uid ${file.uid}, not by you or by root`;
+  if (file.uid !== 0) return `it is owned by uid ${file.uid}, not by you or by root`;
+  const locked = (st) => st.uid === 0 && (st.mode & 0o022) === 0;
+  if (!locked(file)) return 'it is root-owned but writable by group or others';
+  const isSymlink = (link.mode & 0o170000) === 0o120000;
+  if (link.uid !== 0 || (!isSymlink && !locked(link))) return 'it is reached through a link that root does not own';
+  if (!locked(dir)) return 'its directory is not root-owned or is writable by group or others';
+  return null;
 }
 
 /** Every `name` file on PATH in order, each with its rejection reason (null when trusted). Never runs one. */
