@@ -262,8 +262,8 @@ test('the issue fetch gives gh room for every issue at GitHub\'s maximum body si
   let seen;
   fetchIssues({ run: (_c, _a, opts) => { seen = opts.maxBuffer; return '[]'; } });
   // 500 issues x 65536-character bodies x 6 bytes of JSON per character (\uXXXX).
-  // Plus 8 MiB for titles, labels and the rest.
-  assert.ok(seen >= 196_608_000 + 8 * 1024 * 1024, `maxBuffer ${seen} is below the worst-case fetch`);
+  // Plus 8 MiB for titles, labels and the rest; pinned so a drift either way is a decision.
+  assert.equal(seen, 204_996_608, "500 issues x 65536 characters x 6 bytes, plus 8 MiB");
 });
 
 test('an ordinary probe keeps the 1 MiB ceiling, so a runaway git output still fails fast', async () => {

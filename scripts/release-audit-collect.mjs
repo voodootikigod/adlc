@@ -353,7 +353,7 @@ export const PROBE_MAX_BUFFER = 1024 * 1024;
  */
 export function tryRun(cmd, args, { run = execFileSync, cwd = ROOT, maxBuffer = PROBE_MAX_BUFFER } = {}) {
   try {
-    return { ok: true, out: String(run(cmd, args, { cwd, encoding: 'utf8', maxBuffer, stdio: ['ignore', 'pipe', 'pipe'] })).trim() };
+    return { ok: true, out: String(run(cmd, args, { cwd, encoding: 'utf8', maxBuffer })).trim() };
   } catch (err) {
     const stderr = String(err?.stderr ?? '').trim();
     const message = String(err?.message ?? err).trim();
