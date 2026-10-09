@@ -136,6 +136,13 @@ test('a root-owned file in a directory others can write, or that root does not o
   assert.match(ownershipRejection({ file: ROOT_FILE, link: ROOT_LINK, dir: { uid: SELF, mode: 0o40755 } }, SELF), /its directory/);
 });
 
+test('a root-owned file below a directory another account can write is refused', () => {
+  const ancestors = [ROOT_DIR, { uid: 1001, mode: 0o40755 }, ROOT_DIR];
+  assert.match(ownershipRejection({ file: ROOT_FILE, link: ROOT_LINK, dir: ROOT_DIR, ancestors }, SELF), /directory above it/);
+  assert.match(ownershipRejection({ file: ROOT_FILE, link: ROOT_LINK, dir: ROOT_DIR, ancestors: [{ uid: 0, mode: 0o40775 }] }, SELF), /directory above it/);
+  assert.equal(ownershipRejection({ file: ROOT_FILE, link: ROOT_LINK, dir: ROOT_DIR, ancestors: [ROOT_DIR, ROOT_DIR] }, SELF), null);
+});
+
 test('an adlc owned by another non-root account is refused with its uid; the user\'s own is trusted', () => {
   assert.match(ownershipRejection({ file: { uid: 1001, mode: 0o100755 }, link: ROOT_LINK, dir: ROOT_DIR }, SELF), /uid 1001/);
   assert.equal(ownershipRejection({ file: { uid: SELF, mode: 0o100755 }, link: ROOT_LINK, dir: ROOT_DIR }, SELF), null);

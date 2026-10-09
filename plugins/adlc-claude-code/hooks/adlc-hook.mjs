@@ -2001,9 +2001,11 @@ export function resolveTrustedBinary(name, pathEnv) {
  * Only root can create root-owned entries, so a symlink someone else planted,
  * pointing at a root-owned program such as /bin/sh, is still refused: the link
  * itself is not root's. A symlink's own mode bits are always 0777 and never
- * consulted; the directory decides who can replace it.
+ * consulted; the directory decides who can replace it. `ancestors` are the
+ * directories above the real file and above the PATH directory, up to `/`:
+ * another account able to write any of them could swap what runs.
  */
-export function ownershipRejection({ file, link, dir }, selfUid) {
+export function ownershipRejection({ file, link, dir, ancestors = [] }, selfUid) {
   if (file.uid === selfUid) return null;
   if (file.uid !== 0) return `it is owned by uid ${file.uid}, not by you or by root`;
   const locked = (st) => st.uid === 0 && (st.mode & 0o022) === 0;
@@ -2011,7 +2013,17 @@ export function ownershipRejection({ file, link, dir }, selfUid) {
   const isSymlink = (link.mode & 0o170000) === 0o120000;
   if (link.uid !== 0 || (!isSymlink && !locked(link))) return 'it is reached through a link that root does not own';
   if (!locked(dir)) return 'its directory is not root-owned or is writable by group or others';
+  if (!ancestors.every(locked)) return 'a directory above it is not root-owned or is writable by group or others';
   return null;
+}
+
+/** The directories above `file`, nearest first, up to and including the filesystem root. */
+function ancestorDirs(file) {
+  const out = [];
+  for (let d = dirname(file); ; d = dirname(d)) {
+    out.push(d);
+    if (dirname(d) === d) return out;
+  }
 }
 
 /** Every `name` file on PATH in order, each with its rejection reason (null when trusted). Never runs one. */
@@ -2028,6 +2040,9 @@ function binaryCandidates(name, pathEnv) {
       const file = statSync(candidate);
       if (!file.isFile()) continue;
       stats = { file, link: lstatSync(candidate), dir: statSync(dir) };
+      if (file.uid === 0 && file.uid !== selfUid) {
+        stats.ancestors = [...ancestorDirs(realpathSync(candidate)), ...ancestorDirs(join(realpathSync(dir), name))].map((d) => statSync(d));
+      }
     } catch {
       continue; // try next PATH entry
     }
