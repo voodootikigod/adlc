@@ -6,12 +6,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join, dirname, sep } from 'node:path';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmp } from '@adlc/core/test-kit';
 import { spawnHook } from './helpers/run-hook.mjs';
-import { ancestorDirs, candidateAncestors, ownershipRejection, resolveTrustedBinary, untrustedBinaryReason } from '../adlc-hook.mjs';
+import { ancestorDirs, candidateAncestors, candidateRejection, candidateStats, ownershipRejection, resolveTrustedBinary, untrustedBinaryReason } from '../adlc-hook.mjs';
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), '..', 'adlc-hook.mjs');
 const KEY = 'manifest-key-must-not-leak';
@@ -180,6 +180,21 @@ test('the ancestors checked cover the real file\'s directories and the PATH entr
   for (const d of [join(root, 'lib', 'cli'), join(root, 'lib'), join(root, 'bin'), root, '/']) assert.ok(dirs.includes(d), `${d} not checked`);
 });
 
+test('a root-owned candidate someone else could reach is judged with every directory above it', { skip: NOT_ROOT }, (t) => {
+  let file;
+  try { file = statSync('/usr/bin/sh'); } catch { return t.skip('no /usr/bin/sh on this host'); }
+  if (file.uid !== 0) return t.skip('/usr/bin/sh is not root-owned on this host');
+  const stats = candidateStats('/usr/bin/sh', '/usr/bin', 'sh', file, SELF);
+  assert.ok(stats.ancestors?.length >= 2, 'ancestors were not gathered for a root-owned candidate');
+  assert.equal(candidateStats('/usr/bin/sh', '/usr/bin', 'sh', file, 0).ancestors, undefined, 'root\'s own file needs no ancestor walk');
+});
+
+test('a candidate whose stats could not be gathered is refused, but a repository location is named first', () => {
+  assert.match(candidateRejection('/usr/local/bin', null, SELF), /could not be inspected/);
+  assert.match(candidateRejection('/repo/node_modules/.bin', null, SELF), /node_modules/);
+  assert.match(candidateRejection('bin', null, SELF), /relative PATH entry/);
+});
+
 test('an adlc reached through a relative PATH entry is refused, naming why', (t) => {
   const repo = tmp(t, 'adlc-cc-rel-');
   const marker = join(repo, 'ran');
@@ -196,7 +211,7 @@ test('with several refused copies on PATH, the first one is named', (t) => {
   const first = plantedAdlc(t, join(tmp(t, 'adlc-cc-marker-'), 'a'));
   const second = plantedAdlc(t, join(tmp(t, 'adlc-cc-marker-'), 'b'));
   const reason = untrustedBinaryReason('adlc', `${first}:${second}`);
-  assert.ok(reason.startsWith(join(first, 'adlc')), reason);
+  assert.ok(reason.startsWith(JSON.stringify(join(first, 'adlc'))), reason);
 });
 
 test('a refused adlc is not blamed when a trusted one later on PATH resolves', (t) => {

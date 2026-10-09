@@ -2048,24 +2048,42 @@ function binaryCandidates(name, pathEnv) {
       continue; // no file here: try next PATH entry
     }
     if (!file.isFile()) continue;
-    let stats;
+    let stats = null;
     try {
-      stats = { file, link: lstatSync(candidate), dir: statSync(dir) };
-      if (file.uid === 0 && file.uid !== selfUid) {
-        stats.ancestors = candidateAncestors(candidate, dir, name).map((d) => statSync(d));
-      }
+      stats = candidateStats(candidate, dir, name, file, selfUid);
     } catch {
-      out.push({ candidate, rejection: 'its link or a directory above it could not be inspected' });
-      continue;
+      /* refused below as uninspectable */
     }
-    const rejection = !isAbsolute(dir)
-      ? 'it is reached through a relative PATH entry, which resolves inside the repository'
-      : dir.includes('node_modules')
-      ? 'it is inside node_modules, where a repository could have placed it'
-      : selfUid === null ? null : ownershipRejection(stats, selfUid);
-    out.push({ candidate, rejection });
+    out.push({ candidate, rejection: candidateRejection(dir, stats, selfUid) });
   }
   return out;
+}
+
+/**
+ * What ownershipRejection judges for an existing `candidate`: the followed file,
+ * the PATH entry itself (lstat), its directory, and, for a root-owned file this
+ * user does not own, every directory above the real file and the real PATH entry.
+ * Throws when any of them cannot be stat'ed.
+ */
+export function candidateStats(candidate, dir, name, file, selfUid) {
+  const stats = { file, link: lstatSync(candidate), dir: statSync(dir) };
+  if (file.uid === 0 && file.uid !== selfUid) {
+    stats.ancestors = candidateAncestors(candidate, dir, name).map((d) => statSync(d));
+  }
+  return stats;
+}
+
+/**
+ * Why the candidate found in PATH entry `dir` may not run (null when it may).
+ * Where it was found is judged first, so a repository-controlled location is
+ * named even when its stats are missing; `stats` is null when they could not
+ * be gathered.
+ */
+export function candidateRejection(dir, stats, selfUid) {
+  if (!isAbsolute(dir)) return 'it is reached through a relative PATH entry, which resolves inside the repository';
+  if (dir.includes('node_modules')) return 'it is inside node_modules, where a repository could have placed it';
+  if (stats === null) return 'its link or a directory above it could not be inspected';
+  return selfUid === null ? null : ownershipRejection(stats, selfUid);
 }
 
 /**
@@ -2077,7 +2095,7 @@ export function untrustedBinaryReason(name, pathEnv) {
   const all = binaryCandidates(name, pathEnv);
   if (all.length === 0 || all.some((c) => c.rejection === null)) return null;
   const { candidate, rejection } = all[0];
-  return `${candidate} was not run because ${rejection}. Install @adlc/cli globally (npm i -g @adlc/cli) as yourself or as root.`;
+  return `${JSON.stringify(candidate)} was not run because ${rejection}. Install @adlc/cli globally (npm i -g @adlc/cli) as yourself or as root.`;
 }
 
 /** The refused-adlc reason, or the generic cause when none applies. */
