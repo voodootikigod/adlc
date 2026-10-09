@@ -295,6 +295,13 @@ test('tryRun returns a real child output larger than the 1 MiB default', async (
   assert.equal(r.out.length, size);
 });
 
+test('tryRun names a real overflow of the probe ceiling ahead of the child\'s stderr', async () => {
+  const { tryRun } = await import('../release-audit-collect.mjs');
+  const r = tryRun(process.execPath, ['-e', "process.stderr.write('warn\\n'); process.stdout.write('x'.repeat(2 * 1024 * 1024))"]);
+  assert.equal(r.ok, false);
+  assert.match(r.out, /ENOBUFS.*: warn$/s);
+});
+
 test('fetchIssues names an overflow when gh fails with empty stderr', async () => {
   const { fetchIssues } = await import('../release-audit-collect.mjs');
   const err = Object.assign(new Error('spawnSync gh ENOBUFS'), { code: 'ENOBUFS', signal: 'SIGTERM', stderr: '' });
