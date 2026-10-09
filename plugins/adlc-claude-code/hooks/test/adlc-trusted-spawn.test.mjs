@@ -151,10 +151,19 @@ test('an adlc owned by another non-root account is refused with its uid; the use
 // The resolver and the diagnostic share one decision; these drive it through the real filesystem.
 const NOT_ROOT = process.getuid?.() === 0 && 'running as root';
 
-test('a root-owned system symlink, the shape sudo npm -g creates, is resolved', { skip: NOT_ROOT }, (t) => {
-  let st;
-  try { st = lstatSync('/usr/bin/sh'); } catch { /* absent */ }
-  if (!st?.isSymbolicLink() || st.uid !== 0) return t.skip('no root-owned /usr/bin/sh symlink on this host');
+/** Why this host cannot show a root-owned /usr/bin/sh symlink (false when it can). */
+function rootShLinkUnavailable() {
+  if (NOT_ROOT) return NOT_ROOT;
+  try {
+    const st = lstatSync('/usr/bin/sh');
+    return st.isSymbolicLink() && st.uid === 0 && statSync('/usr/bin/sh').uid === 0 ? false : 'no root-owned /usr/bin/sh symlink on this host';
+  } catch {
+    return 'no /usr/bin/sh on this host';
+  }
+}
+const NO_ROOT_SH_LINK = rootShLinkUnavailable();
+
+test('a root-owned system symlink, the shape sudo npm -g creates, is resolved', { skip: NO_ROOT_SH_LINK }, () => {
   assert.equal(resolveTrustedBinary('sh', '/usr/bin'), '/usr/bin/sh');
 });
 
@@ -180,10 +189,8 @@ test('the ancestors checked cover the real file\'s directories and the PATH entr
   for (const d of [join(root, 'lib', 'cli'), join(root, 'lib'), join(root, 'bin'), root, '/']) assert.ok(dirs.includes(d), `${d} not checked`);
 });
 
-test('a root-owned candidate someone else could reach is judged with every directory above it', { skip: NOT_ROOT }, (t) => {
-  let file;
-  try { file = statSync('/usr/bin/sh'); } catch { return t.skip('no /usr/bin/sh on this host'); }
-  if (file.uid !== 0) return t.skip('/usr/bin/sh is not root-owned on this host');
+test('a root-owned candidate someone else could reach is judged with every directory above it', { skip: NO_ROOT_SH_LINK }, () => {
+  const file = statSync('/usr/bin/sh');
   const stats = candidateStats('/usr/bin/sh', '/usr/bin', 'sh', file, SELF);
   assert.ok(stats.ancestors?.length >= 2, 'ancestors were not gathered for a root-owned candidate');
   assert.equal(candidateStats('/usr/bin/sh', '/usr/bin', 'sh', file, 0).ancestors, undefined, 'root\'s own file needs no ancestor walk');
