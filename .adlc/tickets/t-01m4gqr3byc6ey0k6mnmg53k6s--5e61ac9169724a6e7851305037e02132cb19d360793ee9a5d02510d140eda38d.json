@@ -1,0 +1,17 @@
+{
+  "body": "Source: the 1.12.0 release audit (blocker, false-green), against #1176 (T-01M43MTJ1A49TAFE93ZXCTP7FF). resolveTrustedBinary accepts only an adlc owned by the hook's own uid outside node_modules. A `sudo npm i -g @adlc/cli` install is root-owned, so it is skipped; runAdlc returns null and every caller treats that as 'no adlc': the Stop-time gate-manifest verify (the tamper warning), preflight and flail go silent, and both bypass recorders fail with a message asking whether @adlc/cli is installed. All of these worked in v1.11.1.\n\nNORMATIVE BEHAVIOUR.\n1. resolveTrustedBinary also accepts a regular file owned by root (uid 0) that is neither group- nor world-writable. A root-owned file cannot be planted without root. A root-owned file that is group- or world-writable is skipped.\n2. node_modules PATH entries and files owned by any other account stay skipped (the #1176 protection is unchanged).\n3. When an adlc exists on PATH but none is trusted, the hook says so instead of going silent: the SessionStart preflight and the Stop manifest check each emit a systemMessage naming the rejected path and the reason, and the rails and build-gate bypass refusals name the same reason instead of asking whether @adlc/cli is installed. With no adlc on PATH at all, behaviour is unchanged (silent).\n4. The rejected-adlc diagnostic never runs the rejected binary.\n\nACCEPTANCE CRITERIA.\n- AC1 A root-owned, non-writable adlc is resolved; a root-owned group- or world-writable one is not; an adlc owned by another non-root account is not. verify: `node --test plugins/adlc-claude-code/hooks/test/adlc-trusted-spawn.test.mjs`\n- AC2 With only a node_modules adlc on PATH, preflight and the manifest check each emit a systemMessage naming the path and the node_modules reason, and the planted binary does not run. verify: `node --test plugins/adlc-claude-code/hooks/test/adlc-trusted-spawn.test.mjs`\n- AC3 With no adlc on PATH, preflight emits nothing. verify: `node --test plugins/adlc-claude-code/hooks/test/adlc-trusted-spawn.test.mjs`\n- AC4 A rails bypass with only an untrusted adlc is refused with a message naming the rejected adlc. verify: `node --test plugins/adlc-claude-code/hooks/test/adlc-trusted-spawn.test.mjs`\n- AC5 The hook suite stays green. verify: `node --test plugins/adlc-claude-code/hooks/test/*.test.mjs`\n\nOUT OF SCOPE: running a project-local node_modules adlc (deliberately refused by #1176); the Codex and Copilot hooks.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M4GQR3BYC6EY0K6MNMG53K6S",
+  "rails": [
+    "plugins/adlc-claude-code/hooks/adlc-hook-run.mjs",
+    "plugins/adlc-claude-code/hooks/handoff-resolve.mjs"
+  ],
+  "scope": [
+    "plugins/adlc-claude-code/hooks/adlc-hook.mjs",
+    "plugins/adlc-claude-code/hooks/test/adlc-trusted-spawn.test.mjs",
+    "docs/integrations/claude-code.md"
+  ],
+  "title": "adlc-claude-code: run a root-owned adlc and say why a found adlc was not run"
+}

@@ -1,0 +1,16 @@
+{
+  "body": "Source: the 1.12.0 release audit (blocker, install-first-run). packages/cli/lib/registry.mjs routes `adlc decision` to @adlc/decision-layer, `adlc backlog-groom` to @adlc/backlog-groom and `adlc autopilot` to @adlc/autopilot, but packages/cli/package.json declares none of the three as a dependency. In the workspace every package resolves through the hoisted node_modules, so every test passes; on `npm i -g @adlc/cli` the three verbs fail and the remedy printed (install @adlc/cli) does not help.\n\nNORMATIVE BEHAVIOUR.\n1. @adlc/cli declares a dependency, pinned to its own version, on the package of every non-external verb in the registry.\n2. A test derived from the registry fails when a routed verb's package is not a declared dependency, so a future verb cannot repeat this.\n\nACCEPTANCE CRITERIA.\n- AC1 Every non-external TOOLS entry's packageName is in @adlc/cli dependencies at the CLI's version; the test fails with the dependency removed. verify: `node --test packages/cli/test/dispatch.test.mjs`\n- AC2 The lockfile records the new workspace dependencies (npm ci succeeds). verify: `npm ci --ignore-scripts`\n- AC3 The CLI suite stays green. verify: `node --test packages/cli/test/*.test.mjs`\n\nOUT OF SCOPE: removing or renaming any verb (the registry is a rail); the release script's version bump.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M4GQR2XGN70FBTBKHB5MG5D7",
+  "rails": [
+    "packages/cli/lib/registry.mjs"
+  ],
+  "scope": [
+    "packages/cli/package.json",
+    "package-lock.json",
+    "packages/cli/test/dispatch.test.mjs"
+  ],
+  "title": "cli: depend on the package behind every routed verb"
+}
