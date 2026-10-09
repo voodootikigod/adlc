@@ -342,12 +342,23 @@ export function routeIssues(issues, units, ticketsByIssue = new Map()) {
 
 // ─── repository probes ───────────────────────────────────────────────────────
 
-/** Run a command, returning `{ok, out}` rather than throwing. */
+/**
+ * Output ceiling for a probe's child. The open-issue fetch carries full bodies
+ * for up to ISSUE_FETCH_LIMIT issues and passes the 1 MiB default.
+ */
+export const RUN_MAX_BUFFER = 64 * 1024 * 1024;
+
+/**
+ * Run a command, returning `{ok, out}` rather than throwing. On failure `out` is
+ * the child's stderr, or the error message when stderr is empty, so the reason
+ * is never blank.
+ */
 export function tryRun(cmd, args, { run = execFileSync, cwd = ROOT } = {}) {
   try {
-    return { ok: true, out: String(run(cmd, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })).trim() };
+    return { ok: true, out: String(run(cmd, args, { cwd, encoding: 'utf8', maxBuffer: RUN_MAX_BUFFER, stdio: ['ignore', 'pipe', 'pipe'] })).trim() };
   } catch (err) {
-    return { ok: false, out: String(err?.stderr ?? err?.message ?? err).trim() };
+    const stderr = String(err?.stderr ?? '').trim();
+    return { ok: false, out: stderr || String(err?.message ?? err).trim() };
   }
 }
 

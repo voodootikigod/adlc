@@ -1,0 +1,13 @@
+{
+  "body": "Source: the 1.12.0 release audits. `scripts/release-audit-collect.mjs` runs every subprocess through tryRun, which calls execFileSync with the default 1 MiB maxBuffer. The open-issue fetch (`gh issue list --limit 500 --json ...,body,...`) now returns about 1.1 MB, so execFileSync throws ENOBUFS and every audit records the backlog as unconsultable. The recorded reason is `gh issue list failed: ` with nothing after it, because tryRun prefers err.stderr through `??`, and an empty-string stderr wins over err.message. Both audits on 2026-10-09 ran with GitHub issues untriaged for this reason.\n\nNORMATIVE BEHAVIOUR.\n1. tryRun gives its child a maxBuffer large enough for the 500-issue fetch with full bodies (64 MiB, named as a constant).\n2. When a child fails with empty stderr, the recorded reason falls back to the error message (for example ENOBUFS), never an empty string.\n3. The fail-closed behaviour is unchanged: a failed fetch is still recorded as unconsultable, never as an empty backlog.\n\nACCEPTANCE CRITERIA.\n- AC1 tryRun passes a maxBuffer of at least 64 MiB to its runner; a test with an injected runner asserts it. verify: `node --test scripts/test/release-audit-collect.test.mjs`\n- AC2 A runner that throws with stderr '' and message 'spawnSync gh ENOBUFS' yields an unconsultable reason containing ENOBUFS. verify: `node --test scripts/test/release-audit-collect.test.mjs`\n- AC3 The existing collector tests stay green. verify: `node --test scripts/test/release-audit-*.test.mjs`\n\nOUT OF SCOPE: changing ISSUE_FETCH_LIMIT or the truncation rule; paging the issue fetch.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M4HDTDK546C44QFT5KVNVTFJ",
+  "rails": [],
+  "scope": [
+    "scripts/release-audit-collect.mjs",
+    "scripts/test/release-audit-collect.test.mjs"
+  ],
+  "title": "release-audit: collector fails on a large open-issue backlog and hides why"
+}

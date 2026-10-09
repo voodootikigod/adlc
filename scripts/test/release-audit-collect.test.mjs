@@ -257,6 +257,28 @@ test('fetchIssues records an unconsultable rather than an empty backlog when gh 
   assert.match(r.unconsultable, /gh issue list failed/);
 });
 
+test('tryRun gives its child room for a 500-issue fetch with full bodies', async () => {
+  const { tryRun, RUN_MAX_BUFFER } = await import('../release-audit-collect.mjs');
+  let seen;
+  tryRun('gh', [], { run: (_c, _a, opts) => { seen = opts.maxBuffer; return ''; } });
+  assert.equal(seen, RUN_MAX_BUFFER);
+  assert.ok(RUN_MAX_BUFFER >= 64 * 1024 * 1024);
+});
+
+test('fetchIssues names the cause when gh fails with empty stderr', async () => {
+  const { fetchIssues } = await import('../release-audit-collect.mjs');
+  const err = Object.assign(new Error('spawnSync gh ENOBUFS'), { stderr: '' });
+  const r = fetchIssues({ run: () => { throw err; } });
+  assert.deepEqual(r.issues, []);
+  assert.match(r.unconsultable, /gh issue list failed: spawnSync gh ENOBUFS/);
+});
+
+test('tryRun still reports stderr when the child wrote some', async () => {
+  const { tryRun } = await import('../release-audit-collect.mjs');
+  const err = Object.assign(new Error('Command failed'), { stderr: 'gh: not authenticated\n' });
+  assert.deepEqual(tryRun('gh', [], { run: () => { throw err; } }), { ok: false, out: 'gh: not authenticated' });
+});
+
 test('fetchIssues records an unconsultable when gh returns unparseable JSON', async () => {
   const { fetchIssues } = await import('../release-audit-collect.mjs');
   const r = fetchIssues({ run: () => 'not json at all' });
