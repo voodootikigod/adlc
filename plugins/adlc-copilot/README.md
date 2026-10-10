@@ -33,6 +33,11 @@ The `preToolUse` rails-guard hook denies a frozen-rail edit by emitting
 `{"reason":"…"}` on stdout — the deny shape verified end-to-end against Copilot
 CLI 1.0.73 (the #240 live deny-proof; see
 [`docs/integrations/copilot-probe-appendix.md`](../../docs/integrations/copilot-probe-appendix.md)).
+Both enforcing hooks (rails-guard and build-gate) resolve the repository from
+the payload's `cwd` — the directory Copilot says the tool call targets — and
+fall back to the hook process's own cwd only when the payload carries none, so
+a hook spawned outside the repository still reads that repository's ticket
+store instead of silently finding no active ticket and allowing.
 
 **The deny is a permission _ask_, not a hard block — and that ask enforces the
 rail unless you run with `--allow-all-tools`.** Verified live:

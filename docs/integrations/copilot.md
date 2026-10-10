@@ -170,7 +170,9 @@ not re-implemented here):
 - **Hook stdin** ([appendix §2.1](./copilot-probe-appendix.md)): `pre/postToolUse`
   receives **camelCase** JSON — `toolName` (string), `toolArgs` (a **JSON
   string** that must be parsed), `cwd`, and for post `toolResult`. Not the
-  Claude-Code `{tool_name, tool_input}` snake_case shape.
+  Claude-Code `{tool_name, tool_input}` snake_case shape. The enforcing hooks
+  (rails-guard, build-gate) resolve the repository from that payload `cwd` and
+  fall back to the hook process's cwd only when the payload carries none.
 - **Load paths** ([appendix §4](./copilot-probe-appendix.md)): hooks from
   `.github/hooks/*.json`, plugin-bundled, and `~/.copilot/hooks/`; skills read
   `.github/skills/`, `.agents/skills/`, and **`.claude/skills/`** (confirms the
