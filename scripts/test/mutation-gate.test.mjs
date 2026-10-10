@@ -949,14 +949,17 @@ test('GENERATED_VERSION_FILES are the files build-cursor-mcp writes, stamped onl
   const root = new URL('../../', import.meta.url);
   const { version } = JSON.parse(readFileSync(new URL('package.json', root), 'utf8'));
   const builder = readFileSync(new URL('scripts/build-cursor-mcp.mjs', root), 'utf8');
-  const quoted = new RegExp(`(['"])${version.replaceAll('.', '\\.')}\\1`);
+  const v = version.replaceAll('.', '\\.');
   for (const file of GENERATED_VERSION_FILES) {
     const [, dir, name] = /^plugins\/adlc-cursor\/(bin|lib)\/(.+)$/.exec(file) ?? [];
     assert.ok(name && builder.includes(`join(plugin, "${dir}", "${name}")`), `${file} is not written by build-cursor-mcp`);
-    // Every release-version stamp sits in a metadata line, never in code that could compare against it.
-    const stamped = readFileSync(new URL(file, root), 'utf8').split('\n').filter((l) => quoted.test(l));
-    assert.ok(stamped.length > 0, `${file} carries no ${version} stamp`);
-    for (const line of stamped) assert.match(line, /pluginVersion|"@adlc\/(core|tickets)"/, `${file}: ${line}`);
+    // Every release-version stamp must be the value of a metadata key, never an
+    // operand in code that could compare against it.
+    const source = readFileSync(new URL(file, root), 'utf8');
+    const stamps = source.match(new RegExp(`(['"])${v}\\1`, 'g')) ?? [];
+    const keyed = source.match(new RegExp(`(?:pluginVersion|"@adlc\\/(?:core|tickets)")\\s*:\\s*(['"])${v}\\1`, 'g')) ?? [];
+    assert.ok(stamps.length > 0, `${file} carries no ${version} stamp`);
+    assert.equal(keyed.length, stamps.length, `${file}: a ${version} stamp is not a metadata value`);
   }
 });
 
