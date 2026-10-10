@@ -942,3 +942,18 @@ test('measureRun: a real timeout (ETIMEDOUT + SIGTERM) is a timeout and not ok; 
   assert.match(run({ status: 3, stdout: '', stderr: '' }).reason, /exited 3/);
   assert.equal(run({ status: 0, stdout: 'ok', stderr: '' }).ok, true);
 });
+
+test('GENERATED_VERSION_FILES names real files that carry the release version as a quoted stamp', async () => {
+  const { GENERATED_VERSION_FILES } = await import('../mutation-gate.mjs');
+  const { readFileSync } = await import('node:fs');
+  const root = new URL('../../', import.meta.url);
+  const { version } = JSON.parse(readFileSync(new URL('package.json', root), 'utf8'));
+  assert.deepEqual(GENERATED_VERSION_FILES, [
+    'plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs',
+    'plugins/adlc-cursor/lib/mcp-build-metadata.mjs',
+  ]);
+  for (const file of GENERATED_VERSION_FILES) {
+    const source = readFileSync(new URL(file, root), 'utf8');
+    assert.match(source, new RegExp(`['"]${version.replaceAll('.', '\\.')}['"]`), file);
+  }
+});

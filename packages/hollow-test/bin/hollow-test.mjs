@@ -42,6 +42,9 @@ const { values } = parseArgs({
     //   --test-glob '**/*-test.js'
     'test-glob':  { type: 'string', multiple: true },
     'source-glob':{ type: 'string', multiple: true },
+    // Repo-relative paths of generated files a release bump rewrites. Only these
+    // can be reported as version-only; see fileChangeIsVersionOnly.
+    generated:    { type: 'string', multiple: true },
     json:         { type: 'boolean', default: false },
     help:         { type: 'boolean', default: false },
   },
@@ -86,6 +89,7 @@ const testGlobs = values['test-glob'] ?? [];
 // Rescues production files whose names match a test convention — `hollow-test.mjs`,
 // `spec-lint.mjs`. Convention alone cannot resolve that ambiguity; the project must.
 const sourceGlobs = values['source-glob'] ?? [];
+const generatedFiles = new Set(values.generated ?? []);
 const maxMutants = parseInt(values.max, 10);
 const timeoutMs  = parseInt(values['timeout-ms'], 10);
 const useJson    = values.json;
@@ -345,18 +349,19 @@ const commentOnlyFiles = diffEligibleFilesAll.filter((f) => {
 });
 const commentOnly = new Set(commentOnlyFiles);
 
-// A file whose only change is the release bump (every changed literal moves
-// from the project's version at the base to its version at HEAD, as when a
-// release rewrites a generated file) is not covered for the same reason: no
-// operator can exercise it. Judged on the whole file, so any other change,
-// including a version literal moving to any other value, keeps it eligible.
+// A generated file whose only change is the release bump (every changed quoted
+// literal moves from the project's version at the base to its version at HEAD)
+// is not covered for the same reason: no operator can exercise it. Only files
+// the caller names with --generated qualify, because the version transition
+// comes from the diff under review and so cannot by itself prove a release.
+// Judged on the whole file, so any other change keeps it eligible.
 const projectVersion = (source) => {
   try { return JSON.parse(source).version; } catch { return undefined; }
 };
 const fromVersion = projectVersion(readOldSource(readGit, base, 'package.json'));
 const toVersion = projectVersion(readFileSafe(resolve(root, 'package.json')));
 const versionOnlyFiles = diffEligibleFilesAll.filter((f) => {
-  if (commentOnly.has(f)) return false;
+  if (commentOnly.has(f) || !generatedFiles.has(f)) return false;
   const oldSide = deletedLines[f];
   if (oldSide === undefined) return false;
   const newSource = readFileSafe(resolve(root, f));

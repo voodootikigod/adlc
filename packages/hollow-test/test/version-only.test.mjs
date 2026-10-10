@@ -83,6 +83,12 @@ describe('fileChangeIsVersionOnly', () => {
     assert.equal(only(meta('1.11.1'), meta('1.12.0.1')), false);
   });
 
+  it('does not treat a range, a bare number or an unquoted literal as a version', () => {
+    assert.equal(only("const r = '^1.11.1';\n", "const r = '^1.12.0';\n"), false);
+    assert.equal(only("const r = '>=1.11.1';\n", "const r = '>=1.12.0';\n"), false);
+    assert.equal(only('// see 1.11.1\nlet a;\n', '// see 1.12.0\nlet a;\n'), false);
+  });
+
   it('does not treat a prerelease or a longer dotted token as a version', () => {
     assert.equal(only("const v = '1.11.1-rc';\n", "const v = '1.12.0-rc';\n"), false);
     assert.equal(only("const host = '1.11.1.4';\n", "const host = '1.12.0.4';\n"), false);
@@ -124,7 +130,8 @@ function fixture(prefix, nextSource, nextVersion = '1.12.0') {
   return dir;
 }
 
-const ARGS = ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1'];
+const BASE_ARGS = ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1'];
+const ARGS = [...BASE_ARGS, '--generated', 'src/meta.mjs'];
 
 describe('CLI: a release-bump-only diff is reported as not covered, not a failure', () => {
   let dir;
@@ -144,9 +151,10 @@ describe('CLI: a release-bump-only diff is reported as not covered, not a failur
   });
 });
 
-for (const [name, prefix, source, version] of [
-  ['a version bump mixed with a code change', 'hollow-versionmixed-', meta('1.12.0', " + '!'"), '1.12.0'],
-  ['a version literal moved without a release', 'hollow-versionnorelease-', meta('1.12.0'), '1.11.1'],
+for (const [name, prefix, source, version, args] of [
+  ['a version bump mixed with a code change', 'hollow-versionmixed-', meta('1.12.0', " + '!'"), '1.12.0', ARGS],
+  ['a version literal moved without a release', 'hollow-versionnorelease-', meta('1.12.0'), '1.11.1', ARGS],
+  ['a release bump in a file not named --generated', 'hollow-versionnotgenerated-', meta('1.12.0'), '1.12.0', BASE_ARGS],
 ]) {
   describe(`CLI: ${name} is still mutated`, () => {
     let dir;
@@ -154,7 +162,7 @@ for (const [name, prefix, source, version] of [
     after(() => rmSync(dir, { recursive: true, force: true }));
 
     it('runs mutants on the file and does not report it as version-only', () => {
-      const r = runCli([...ARGS, '--json'], dir);
+      const r = runCli([...args, '--json'], dir);
       const out = r.stdout + r.stderr;
       assert.doesNotMatch(out, /versionOnly|changed only version literals/, out);
       // 0 (all killed) or 2 (survivors) both mean the file was mutated; 1 is an operational refusal.

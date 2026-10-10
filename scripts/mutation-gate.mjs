@@ -214,6 +214,17 @@ export function testTargetFor(file, root = ROOT) {
 // --source-glob, so the wrapper and the tool agree.
 export const SOURCE_GLOBS = ['**/hollow-test.mjs', '**/spec-lint.mjs'];
 
+/**
+ * Generated files that scripts/release.mjs rewrites on every lockstep bump. A
+ * release changes only their version stamps, which no mutant can exercise, so
+ * hollow-test reports them as not covered instead of refusing the release. Only
+ * the files listed here qualify; adding one is a change to this gate.
+ */
+export const GENERATED_VERSION_FILES = [
+  'plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs',
+  'plugins/adlc-cursor/lib/mcp-build-metadata.mjs',
+];
+
 export function hollowTestWouldMutate(file) {
   return isMutableSource(file, { sourceGlobs: SOURCE_GLOBS });
 }
@@ -497,6 +508,7 @@ export function main() {
     // Mirror the wrapper's own source declaration into the tool, so the two
     // cannot disagree about the ambiguous product names (see SOURCE_GLOBS).
     ...SOURCE_GLOBS.flatMap((g) => ['--source-glob', g]),
+    ...GENERATED_VERSION_FILES.flatMap((f) => ['--generated', f]),
   ], { stdio: 'inherit', cwd: ROOT, timeout: HOLLOW_WINDOW_MS + 60_000 });
 
   if (result.error) fail(`could not run hollow-test: ${result.error.message}`);

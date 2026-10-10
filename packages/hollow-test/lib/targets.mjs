@@ -418,12 +418,12 @@ export function fileChangeIsCommentOnly({ oldSource, newSource, added, deleted }
 }
 
 /**
- * A dotted three-part version literal (`1.12.0`) that is not part of a longer
- * dotted, word or prerelease token, so `10.0.0.1`, `v1.2.3` and `1.2.3-rc` are
- * not versions here. The capture group makes split() keep the literals at the
- * odd indices.
+ * A dotted three-part version that is a whole quoted string (`'1.12.0'`), so a
+ * range (`'^1.12.0'`), a prerelease (`'1.12.0-rc'`), a longer dotted token and
+ * a bare number are not versions here. The capture group makes split() keep
+ * the literals at the odd indices.
  */
-const VERSION_LITERAL_RE = /(?<![\w.])(\d+\.\d+\.\d+)(?![\w.+-])/;
+const VERSION_LITERAL_RE = /(?<=['"`])(\d+\.\d+\.\d+)(?=['"`])/;
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
 
 /**
