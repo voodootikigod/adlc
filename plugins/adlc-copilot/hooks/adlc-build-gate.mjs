@@ -302,7 +302,7 @@ export function candidateAncestors(candidate, dir, name) {
 
 /** Every `name` file on PATH in order, each with its rejection reason (null when trusted). Never runs one. */
 function binaryCandidates(name, pathEnv) {
-  if (typeof pathEnv !== 'string' || pathEnv.length === 0) return [];
+  if (typeof pathEnv !== 'string') return []; // an empty PATH splits to one empty entry, skipped below
   const sep = process.platform === 'win32' ? ';' : ':';
   const selfUid = typeof process.getuid === 'function' ? process.getuid() : null;
   const out = [];

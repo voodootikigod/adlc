@@ -90,3 +90,19 @@ test('a symlink the user owns, pointing at a root-owned shell, is not trusted', 
   symlinkSync('/bin/sh', join(dir, 'adlc'));
   assert.equal(resolveTrustedBinary('adlc', dir), null);
 });
+
+test('ancestors are gathered only for a root-owned file this user does not own', (t) => {
+  const dir = tmp(t, 'adlc-anc-only-');
+  const file = join(dir, 'adlc');
+  writeFileSync(file, '');
+  const own = statSync(file);
+  assert.equal(candidateStats(file, dir, 'adlc', own, own.uid).ancestors, undefined, 'own file');
+  assert.equal(candidateStats(file, dir, 'adlc', { ...own, uid: 0 }, 0).ancestors, undefined, 'root\'s own file');
+  assert.equal(candidateStats(file, dir, 'adlc', { ...own, uid: 1001 }, own.uid).ancestors, undefined, 'foreign non-root file');
+  assert.ok(candidateStats(file, dir, 'adlc', { ...own, uid: 0 }, own.uid).ancestors.length >= 2, 'root file seen by another user');
+});
+
+test('a PATH that is not a string resolves nothing', () => {
+  assert.equal(resolveTrustedBinary('adlc', undefined), null);
+  assert.equal(resolveTrustedBinary('adlc', 42), null);
+});
