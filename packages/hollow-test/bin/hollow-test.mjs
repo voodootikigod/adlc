@@ -363,7 +363,8 @@ const toVersion = projectVersion(readFileSafe(resolve(root, 'package.json')));
 const versionOnlyFiles = diffEligibleFilesAll.filter((f) => {
   if (commentOnly.has(f) || !generatedFiles.has(f)) return false;
   const oldSide = deletedLines[f];
-  if (oldSide === undefined) return false;
+  // A rename onto a generated path compares another file's history: not exempt.
+  if (oldSide === undefined || oldSide.oldPath !== f) return false;
   const newSource = readFileSafe(resolve(root, f));
   if (newSource === null) return false;
   return fileChangeIsVersionOnly({

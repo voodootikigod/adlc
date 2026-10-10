@@ -418,12 +418,13 @@ export function fileChangeIsCommentOnly({ oldSource, newSource, added, deleted }
 }
 
 /**
- * A dotted three-part version that is a whole quoted string (`'1.12.0'`), so a
- * range (`'^1.12.0'`), a prerelease (`'1.12.0-rc'`), a longer dotted token and
- * a bare number are not versions here. The capture group makes split() keep
- * the literals at the odd indices.
+ * A dotted three-part version that is a whole string between matching quotes
+ * (`'1.12.0'`), so a range (`'^1.12.0'`), a prerelease (`'1.12.0-rc'`), a
+ * longer dotted token, a bare number and mismatched quotes are not versions
+ * here. split() keeps both capture groups, so every third part (index 2, 5, ...)
+ * is a version and the part before it is its quote.
  */
-const VERSION_LITERAL_RE = /(?<=['"`])(\d+\.\d+\.\d+)(?=['"`])/;
+const VERSION_LITERAL_RE = /(['"`])(\d+\.\d+\.\d+)\1/;
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
 
 /**
@@ -446,7 +447,7 @@ export function fileChangeIsVersionOnly({ oldSource, newSource, fromVersion, toV
   const after = newSource.split(VERSION_LITERAL_RE);
   if (before.length !== after.length) return false;
   return before.every((part, i) => part === after[i]
-    || (part === fromVersion && after[i] === toVersion));
+    || (i % 3 === 2 && part === fromVersion && after[i] === toVersion));
 }
 
 export function filterTargetFiles(changedLines, { testGlobs = [], sourceGlobs = [] } = {}) {

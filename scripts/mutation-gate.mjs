@@ -225,6 +225,19 @@ export const GENERATED_VERSION_FILES = [
   'plugins/adlc-cursor/lib/mcp-build-metadata.mjs',
 ];
 
+/**
+ * The wrapper's file declarations, mirrored into hollow-test so the two cannot
+ * disagree: the ambiguous product names (SOURCE_GLOBS) and the generated files
+ * a release rewrites (GENERATED_VERSION_FILES).
+ * @returns {string[]}
+ */
+export function declarationArgs() {
+  return [
+    ...SOURCE_GLOBS.flatMap((g) => ['--source-glob', g]),
+    ...GENERATED_VERSION_FILES.flatMap((f) => ['--generated', f]),
+  ];
+}
+
 export function hollowTestWouldMutate(file) {
   return isMutableSource(file, { sourceGlobs: SOURCE_GLOBS });
 }
@@ -505,10 +518,7 @@ export function main() {
     // the cap was printed above; the run is bounded either way.
     '--max', String(budget.draw),
     '--timeout-ms', String(decision.kind === 'fast' ? FAST_RUN_TIMEOUT_MS : SLOW_RUN_TIMEOUT_MS),
-    // Mirror the wrapper's own source declaration into the tool, so the two
-    // cannot disagree about the ambiguous product names (see SOURCE_GLOBS).
-    ...SOURCE_GLOBS.flatMap((g) => ['--source-glob', g]),
-    ...GENERATED_VERSION_FILES.flatMap((f) => ['--generated', f]),
+    ...declarationArgs(),
   ], { stdio: 'inherit', cwd: ROOT, timeout: HOLLOW_WINDOW_MS + 60_000 });
 
   if (result.error) fail(`could not run hollow-test: ${result.error.message}`);

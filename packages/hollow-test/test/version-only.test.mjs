@@ -89,6 +89,16 @@ describe('fileChangeIsVersionOnly', () => {
     assert.equal(only('// see 1.11.1\nlet a;\n', '// see 1.12.0\nlet a;\n'), false);
   });
 
+  it('does not exempt an unquoted version that follows a quoted one', () => {
+    // Between two quoted literals the bare version is a whole segment of its own.
+    assert.equal(only("'1.0.0'1.11.1'2.0.0'", "'1.0.0'1.12.0'2.0.0'"), false);
+  });
+
+  it('requires the closing quote to match the opening one', () => {
+    assert.equal(only(`const a = '1.11.1";\n`, `const a = '1.12.0";\n`), false);
+    assert.equal(only("const a = `x'1.11.1`;\n", "const a = `x'1.12.0`;\n"), false);
+  });
+
   it('does not treat a prerelease or a longer dotted token as a version', () => {
     assert.equal(only("const v = '1.11.1-rc';\n", "const v = '1.12.0-rc';\n"), false);
     assert.equal(only("const host = '1.11.1.4';\n", "const host = '1.12.0.4';\n"), false);
@@ -171,3 +181,41 @@ for (const [name, prefix, source, version, args] of [
     });
   });
 }
+
+// Enough unchanged lines that git pairs the two paths as a rename.
+const padded = (v) => meta(v) + Array.from({ length: 12 }, (_, i) => `export const k${i} = ${i};`).join('\n') + '\n';
+
+describe('CLI: a rename onto a --generated path is still mutated', () => {
+  let dir;
+  before(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hollow-versionrename-'));
+    initRepo(dir);
+    mkdirSync(join(dir, 'src'));
+    mkdirSync(join(dir, 'test'));
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'fixture', version: '1.11.1' }));
+    writeFileSync(join(dir, 'src', 'other.mjs'), padded('1.11.1'));
+    writeFileSync(join(dir, 'test', 'meta.test.mjs'), lines(
+      "import { it } from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import { label } from '../src/meta.mjs';",
+      "it('labels', () => { assert.match(label(), /^adlc /); });",
+      ''
+    ));
+    commitAll(dir, 'init');
+    // other.mjs moves onto the generated path with only its stamps bumped, so
+    // git reports a rename whose old side is a different file.
+    git(['mv', 'src/other.mjs', 'src/meta.mjs'], dir);
+    writeFileSync(join(dir, 'src', 'meta.mjs'), padded('1.12.0'));
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'fixture', version: '1.12.0' }));
+    commitAll(dir, 'rename');
+    assert.match(git(['diff', '--name-status', 'HEAD~1', 'HEAD'], dir), /^R\d+\tsrc\/other\.mjs\tsrc\/meta\.mjs$/m);
+  });
+  after(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('does not report the renamed file as version-only', () => {
+    const r = runCli([...ARGS, '--json'], dir);
+    const out = r.stdout + r.stderr;
+    assert.doesNotMatch(out, /versionOnly|changed only version literals/, out);
+    assert.ok(r.status === 0 || r.status === 2, out);
+  });
+});
