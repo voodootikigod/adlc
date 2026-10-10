@@ -419,24 +419,34 @@ export function fileChangeIsCommentOnly({ oldSource, newSource, added, deleted }
 
 /**
  * A dotted three-part version literal (`1.12.0`) that is not part of a longer
- * dotted or word token, so `10.0.0.1` and `v1.2.3-rc` are not versions here.
+ * dotted, word or prerelease token, so `10.0.0.1`, `v1.2.3` and `1.2.3-rc` are
+ * not versions here. The capture group makes split() keep the literals at the
+ * odd indices.
  */
-const VERSION_LITERAL_RE = /(?<![\w.])\d+\.\d+\.\d+(?![\w.])/g;
+const VERSION_LITERAL_RE = /(?<![\w.])(\d+\.\d+\.\d+)(?![\w.+-])/;
+const VERSION_RE = /^\d+\.\d+\.\d+$/;
 
 /**
- * True when the only difference between two sources is version literals, as in
- * a generated file a lockstep release bump rewrites. There is no behaviour a
- * mutant could exercise, so the caller reports the file as not covered. Every
- * doubt answers false: identical sources, a non-string side, and any change
- * outside a three-part version literal keep the file eligible.
+ * True when the only difference between two sources is the release bump: every
+ * version literal that changed went from `fromVersion` to `toVersion` (the
+ * project's version at the base and at HEAD), and nothing else changed. That
+ * is a lockstep release rewriting a generated file, with no behaviour a mutant
+ * could exercise, so the caller reports the file as not covered. Every doubt
+ * answers false: no release in the diff, identical sources, a non-string side,
+ * a literal moving to any other value, and any change outside a literal.
  *
- * @param {{ oldSource: unknown, newSource: unknown }} sides
+ * @param {{ oldSource: unknown, newSource: unknown, fromVersion: unknown, toVersion: unknown }} sides
  * @returns {boolean}
  */
-export function fileChangeIsVersionOnly({ oldSource, newSource }) {
+export function fileChangeIsVersionOnly({ oldSource, newSource, fromVersion, toVersion }) {
   if (typeof oldSource !== 'string' || typeof newSource !== 'string') return false;
-  if (oldSource === newSource) return false;
-  return oldSource.replace(VERSION_LITERAL_RE, '\0') === newSource.replace(VERSION_LITERAL_RE, '\0');
+  if (!VERSION_RE.test(String(fromVersion)) || !VERSION_RE.test(String(toVersion))) return false;
+  if (fromVersion === toVersion || oldSource === newSource) return false;
+  const before = oldSource.split(VERSION_LITERAL_RE);
+  const after = newSource.split(VERSION_LITERAL_RE);
+  if (before.length !== after.length) return false;
+  return before.every((part, i) => part === after[i]
+    || (part === fromVersion && after[i] === toVersion));
 }
 
 export function filterTargetFiles(changedLines, { testGlobs = [], sourceGlobs = [] } = {}) {

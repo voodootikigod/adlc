@@ -345,16 +345,27 @@ const commentOnlyFiles = diffEligibleFilesAll.filter((f) => {
 });
 const commentOnly = new Set(commentOnlyFiles);
 
-// A file whose only change is version literals (a release bump rewriting a
-// generated file) is not covered for the same reason: no operator can exercise
-// it. Judged on the whole file, so any other change keeps it eligible.
+// A file whose only change is the release bump (every changed literal moves
+// from the project's version at the base to its version at HEAD, as when a
+// release rewrites a generated file) is not covered for the same reason: no
+// operator can exercise it. Judged on the whole file, so any other change,
+// including a version literal moving to any other value, keeps it eligible.
+const projectVersion = (source) => {
+  try { return JSON.parse(source).version; } catch { return undefined; }
+};
+const fromVersion = projectVersion(readOldSource(readGit, base, 'package.json'));
+const toVersion = projectVersion(readFileSafe(resolve(root, 'package.json')));
 const versionOnlyFiles = diffEligibleFilesAll.filter((f) => {
   if (commentOnly.has(f)) return false;
   const oldSide = deletedLines[f];
   if (oldSide === undefined) return false;
+  const newSource = readFileSafe(resolve(root, f));
+  if (newSource === null) return false;
   return fileChangeIsVersionOnly({
     oldSource: readOldSource(readGit, base, oldSide.oldPath),
-    newSource: readFileSafe(resolve(root, f)),
+    newSource,
+    fromVersion,
+    toVersion,
   });
 });
 const notCovered = new Set([...commentOnlyFiles, ...versionOnlyFiles]);

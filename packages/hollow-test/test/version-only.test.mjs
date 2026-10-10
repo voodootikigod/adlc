@@ -42,45 +42,73 @@ const meta = (v, extra = '') => lines(
   ''
 );
 
+const bump = { fromVersion: '1.11.1', toVersion: '1.12.0' };
+const only = (oldSource, newSource, versions = bump) => fileChangeIsVersionOnly({ oldSource, newSource, ...versions });
+
 describe('fileChangeIsVersionOnly', () => {
-  it('is true when only version literals moved', () => {
-    assert.equal(fileChangeIsVersionOnly({ oldSource: meta('1.11.1'), newSource: meta('1.12.0') }), true);
+  it('is true when every changed literal is the release bump', () => {
+    assert.equal(only(meta('1.11.1'), meta('1.12.0')), true);
   });
 
   it('is false for identical sources: nothing changed, so nothing is exempt', () => {
-    assert.equal(fileChangeIsVersionOnly({ oldSource: meta('1.11.1'), newSource: meta('1.11.1') }), false);
+    assert.equal(only(meta('1.11.1'), meta('1.11.1')), false);
   });
 
   it('is false for a change with no version literal in it', () => {
-    assert.equal(fileChangeIsVersionOnly({ oldSource: meta('1.11.1'), newSource: meta('1.11.1', " + '!'") }), false);
+    assert.equal(only(meta('1.11.1'), meta('1.11.1', " + '!'")), false);
   });
 
   it('is false when a version moved AND something else changed', () => {
-    assert.equal(fileChangeIsVersionOnly({ oldSource: meta('1.11.1'), newSource: meta('1.12.0', " + '!'") }), false);
+    assert.equal(only(meta('1.11.1'), meta('1.12.0', " + '!'")), false);
+  });
+
+  it('is false for a behaviour-bearing threshold, even during a release', () => {
+    const gate = (v) => `if (semver.lt(process.version, '${v}')) throw new Error('too old');\n`;
+    assert.equal(only(gate('18.0.0'), gate('22.0.0')), false);
+  });
+
+  it('is false when a release-version literal moves to any value but the new release', () => {
+    assert.equal(only(meta('1.11.1'), meta('9.9.9')), false);
+    assert.equal(only(meta('1.11.1'), meta('1.12.0'), { fromVersion: '1.11.1', toVersion: '1.13.0' }), false);
+  });
+
+  it('is false when there is no release in the diff', () => {
+    assert.equal(only(meta('1.11.1'), meta('1.12.0'), { fromVersion: '1.12.0', toVersion: '1.12.0' }), false);
+    assert.equal(only(meta('1.11.1'), meta('1.12.0'), { fromVersion: undefined, toVersion: '1.12.0' }), false);
+    assert.equal(only(meta('1.11.1'), meta('1.12.0'), { fromVersion: '1.11.1', toVersion: 'next' }), false);
   });
 
   it('is false when a three-part version becomes a two-part or four-part literal', () => {
-    assert.equal(fileChangeIsVersionOnly({ oldSource: meta('1.11.1'), newSource: meta('1.12') }), false);
-    assert.equal(fileChangeIsVersionOnly({ oldSource: meta('1.11.1'), newSource: meta('1.12.0.1') }), false);
+    assert.equal(only(meta('1.11.1'), meta('1.12')), false);
+    assert.equal(only(meta('1.11.1'), meta('1.12.0.1')), false);
   });
 
-  it('is false when a number inside a longer dotted token changes', () => {
-    const oldSource = "const host = '10.0.0.1';\n";
-    const newSource = "const host = '10.0.0.2';\n";
-    assert.equal(fileChangeIsVersionOnly({ oldSource, newSource }), false);
+  it('does not treat a prerelease or a longer dotted token as a version', () => {
+    assert.equal(only("const v = '1.11.1-rc';\n", "const v = '1.12.0-rc';\n"), false);
+    assert.equal(only("const host = '1.11.1.4';\n", "const host = '1.12.0.4';\n"), false);
+  });
+
+  it('is false when a release-version literal is added or removed', () => {
+    assert.equal(only('let a\n', 'let a\n1.12.0'), false);
+    assert.equal(only('let a\n1.11.1', 'let a\n'), false);
+  });
+
+  it('is not fooled by a NUL byte where a literal used to be', () => {
+    assert.equal(only("const a = '1.11.1';\n", "const a = '\0';\n"), false);
   });
 
   it('is false when either side is not a string', () => {
-    assert.equal(fileChangeIsVersionOnly({ oldSource: null, newSource: meta('1.12.0') }), false);
-    assert.equal(fileChangeIsVersionOnly({ oldSource: meta('1.11.1'), newSource: undefined }), false);
+    assert.equal(only(null, meta('1.12.0')), false);
+    assert.equal(only(meta('1.11.1'), undefined), false);
   });
 });
 
-function fixture(prefix, nextSource) {
+function fixture(prefix, nextSource, nextVersion = '1.12.0') {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   initRepo(dir);
   mkdirSync(join(dir, 'src'));
   mkdirSync(join(dir, 'test'));
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'fixture', version: '1.11.1' }));
   writeFileSync(join(dir, 'src', 'meta.mjs'), meta('1.11.1'));
   writeFileSync(join(dir, 'test', 'meta.test.mjs'), lines(
     "import { it } from 'node:test';",
@@ -90,37 +118,48 @@ function fixture(prefix, nextSource) {
     ''
   ));
   commitAll(dir, 'init');
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'fixture', version: nextVersion }));
   writeFileSync(join(dir, 'src', 'meta.mjs'), nextSource);
   commitAll(dir, 'bump');
   return dir;
 }
 
-describe('CLI: a version-only diff is reported as not covered, not a failure', () => {
+const ARGS = ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1'];
+
+describe('CLI: a release-bump-only diff is reported as not covered, not a failure', () => {
   let dir;
   before(() => { dir = fixture('hollow-versiononly-', meta('1.12.0')); });
   after(() => rmSync(dir, { recursive: true, force: true }));
 
   it('exits 0 and names the file and the reason', () => {
-    const r = runCli(['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1'], dir);
+    const r = runCli(ARGS, dir);
     assert.equal(r.status, 0, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
     assert.match(r.stdout, /changed only version literals[\s\S]*src\/meta\.mjs/);
   });
 
   it('lists the file under skipped.versionOnly in the JSON report', () => {
-    const r = runCli(['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1', '--json'], dir);
+    const r = runCli([...ARGS, '--json'], dir);
     assert.equal(r.status, 0, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
     assert.deepEqual(JSON.parse(r.stdout).skipped, { versionOnly: ['src/meta.mjs'] });
   });
 });
 
-describe('CLI: a version bump mixed with a code change stays eligible', () => {
-  let dir;
-  before(() => { dir = fixture('hollow-versionmixed-', meta('1.12.0', " + '!'")); });
-  after(() => rmSync(dir, { recursive: true, force: true }));
+for (const [name, prefix, source, version] of [
+  ['a version bump mixed with a code change', 'hollow-versionmixed-', meta('1.12.0', " + '!'"), '1.12.0'],
+  ['a version literal moved without a release', 'hollow-versionnorelease-', meta('1.12.0'), '1.11.1'],
+]) {
+  describe(`CLI: ${name} is still mutated`, () => {
+    let dir;
+    before(() => { dir = fixture(prefix, source, version); });
+    after(() => rmSync(dir, { recursive: true, force: true }));
 
-  it('does not take the version-only path', () => {
-    const r = runCli(['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1'], dir);
-    assert.doesNotMatch(r.stdout + r.stderr, /changed only version literals/,
-      `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    it('runs mutants on the file and does not report it as version-only', () => {
+      const r = runCli([...ARGS, '--json'], dir);
+      const out = r.stdout + r.stderr;
+      assert.doesNotMatch(out, /versionOnly|changed only version literals/, out);
+      // 0 (all killed) or 2 (survivors) both mean the file was mutated; 1 is an operational refusal.
+      assert.ok(r.status === 0 || r.status === 2, out);
+      assert.ok(JSON.parse(r.stdout).summary.total > 0, out);
+    });
   });
-});
+}
