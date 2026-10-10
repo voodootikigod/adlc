@@ -100,23 +100,36 @@ describe('prompt construction', () => {
   });
 
   // issue #281: the ticket JSON is fenced before embedding, capped at exactly
-  // 8000 chars — pins the exact boundary, not just "some cap".
+  // 64000 chars (premortem's spec cap) — pins the exact boundary, not just
+  // "some cap".
   //
   // #1007: head-biased. ticketToText emits id and title FIRST, so tail
   // truncation left this gate auditing a ticket whose identity and opening
   // requirements had been cut away — and the surviving tail reads as coherent,
   // so it can audit clean. Either direction produces invalid JSON once the
   // payload is over cap; head at least keeps what the ticket IS.
-  test('buildPrompt fences the ticket content, caps it to exactly 8000 chars, and keeps its OPENING', () => {
-    const ticket = { id: 'T8', title: 'Big ticket', body: `OPENING_REQUIREMENT ${'x'.repeat(20_000)}` };
+  test('buildPrompt fences the ticket content, caps it to exactly 64000 chars, and keeps its OPENING', () => {
+    const ticket = { id: 'T8', title: 'Big ticket', body: `OPENING_REQUIREMENT ${'x'.repeat(100_000)}` };
     const prompt = buildPrompt(ticket);
     // The tag is a per-call nonce (#1005) — assert the shape, not the literal.
-    assert.match(prompt, /<<UNTRUSTED:TICKET \(truncated, showing first 8000 of \d+ chars\):[0-9a-f-]{36}>>/);
+    assert.match(prompt, /<<UNTRUSTED:TICKET \(truncated, showing first 64000 of \d+ chars\):[0-9a-f-]{36}>>/);
     const embedded = prompt.match(/<<UNTRUSTED:TICKET[^\n]*\n([\s\S]*?)\n<<END:TICKET/)[1];
-    assert.equal(embedded.length, 8000);
+    assert.equal(embedded.length, 64_000);
     assert.match(embedded, /"id": "T8"/, 'the gate must still know WHICH ticket it is auditing');
     assert.match(embedded, /"title": "Big ticket"/);
     assert.match(embedded, /OPENING_REQUIREMENT/, 'the opening requirement must survive');
+  });
+
+  // A real 14,296-char ticket was cut at 8000: the auditor never saw its later
+  // half. A realistic long ticket must reach the auditor whole, acceptance
+  // criteria included.
+  test('buildPrompt embeds a realistic long ticket whole, closing acceptance criteria included', () => {
+    const body = `OPENING_GOAL\n${'Design detail line.\n'.repeat(750)}ACCEPTANCE_CRITERIA_AT_END`;
+    assert.ok(body.length > 8000, 'the fixture must exceed the old 8000-char cap');
+    const prompt = buildPrompt({ id: 'T10', title: 'Long ticket', body });
+    assert.doesNotMatch(prompt, /\(truncated, showing/);
+    assert.match(prompt, /OPENING_GOAL/);
+    assert.match(prompt, /ACCEPTANCE_CRITERIA_AT_END/, 'the closing acceptance criteria must survive');
   });
 
   test('buildPrompt frames the ticket as data to audit, not instructions to the auditor', () => {

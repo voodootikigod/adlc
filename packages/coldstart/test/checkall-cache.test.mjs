@@ -37,6 +37,7 @@ function makeFixture({ model = MODEL } = {}) {
   const resolveModelFn = () => model;
 
   return {
+    ledger,
     get callCount() { return callCount; },
     callsFor,
     record,
@@ -157,4 +158,38 @@ test('when no provider is configured (resolveModelFn returns null), the cache is
   });
   assert.equal(fx.callCount, 1);
   assert.equal(result[0].cached, false);
+});
+
+// A ledger entry recorded before the cap was stored (no `cap` field) was an
+// audit under the legacy 8000-char cap. For a ticket longer than that, the
+// auditor saw a prefix, so the entry must not suppress a fresh audit now that
+// the whole ticket fits — and once re-audited under the current cap, the next
+// run is a hit again.
+test('a legacy cache entry for an over-8000-char ticket does not suppress a re-audit; the re-audit is then cached', async () => {
+  const fx = makeFixture();
+  const long = { id: 'T-LONG', title: 'Long ticket', body: 'x'.repeat(12_000) };
+  // Legacy shape: hash + model + gaps, no textChars/cap.
+  fx.record(long, []);
+
+  const opts = { checkTicketFn: fx.checkTicketFn, loadCacheEntriesFn: fx.loadCacheEntriesFn, resolveModelFn: fx.resolveModelFn };
+  const first = await checkAll([long], 'cheap', opts);
+  assert.equal(fx.callCount, 1, 'the legacy prefix-audit entry must not be served for a ticket it never saw whole');
+  assert.equal(first[0].cached, false);
+
+  // Record the way bin does after a real audit (buildRecordPlan shape), then re-run.
+  const { buildRecordPlan } = await import('../lib/cache.mjs');
+  const [plan] = buildRecordPlan(first, [long], { model: MODEL, tier: 'cheap' });
+  fx.ledger.push({ gate: 'coldstart', ticket: long.id, ts: new Date().toISOString(), data: JSON.parse(plan.rawData) });
+  const second = await checkAll([long], 'cheap', opts);
+  assert.equal(fx.callCount, 1, 'the whole-ticket audit recorded under the current cap is reusable');
+  assert.equal(second[0].cached, true);
+});
+
+test('a legacy cache entry for a ticket that fit under 8000 chars is still a hit', async () => {
+  const fx = makeFixture();
+  const short = { id: 'T-SHORT', title: 'Short ticket', body: 'fits.' };
+  fx.record(short, []);
+  const result = await checkAll([short], 'cheap', { checkTicketFn: fx.checkTicketFn, loadCacheEntriesFn: fx.loadCacheEntriesFn, resolveModelFn: fx.resolveModelFn });
+  assert.equal(fx.callCount, 0);
+  assert.equal(result[0].cached, true);
 });

@@ -28,7 +28,7 @@ adlc coldstart --all [options]
 | `--all` | Run the gate on every ticket in the file. |
 | `--tier cheap\|mid\|frontier` | Model tier (default `cheap`). |
 | `--json` | Machine-readable JSON output for orchestrators. |
-| `--prompt-only` | Print the exact prompt(s) and exit 0 without making an LLM call. |
+| `--prompt-only` | Print the exact prompt(s) and exit 0 without making an LLM call. A ticket whose serialization exceeds the 64,000-character auditable cap gets no prompt: the gap is printed on stderr, nothing is recorded, and the exit code is 2. |
 | `--record-verdict <file\|->` | With `--prompt-only`: record the operator's answer into `.adlc/manifest.jsonl` via gate-manifest. Requires `--prompt-only`. |
 
 ## Exit codes

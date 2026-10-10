@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
 import { checkAll } from '../lib/gate.mjs';
 import { buildCacheData } from '../lib/cache.mjs';
+import { TICKET_TEXT_MAX_CHARS, ticketToText } from '../lib/prompt.mjs';
 import { ticketHash } from '@adlc/tickets';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
 
@@ -36,7 +37,7 @@ test('real gate-manifest round-trip: a run over an unchanged ticket, against a R
     gate: 'coldstart',
     ticket: ticket.id,
     dir,
-    rawData: JSON.stringify({ tier: 'cheap', cache: buildCacheData({ ticketHash: ticketHash(ticket), model, gaps: [] }) }),
+    rawData: JSON.stringify({ tier: 'cheap', cache: buildCacheData({ ticketHash: ticketHash(ticket), model, gaps: [], textChars: ticketToText(ticket).length, cap: TICKET_TEXT_MAX_CHARS }) }),
   });
 
   const checkTicketFn = makeCallCountingCheckTicketFn();
@@ -67,7 +68,7 @@ test('real gate-manifest round-trip: a genuinely unrecorded ticket runs fresh, t
     gate: 'coldstart',
     ticket: ticket.id,
     dir,
-    rawData: JSON.stringify({ tier: 'cheap', cache: buildCacheData({ ticketHash: ticketHash(ticket), model, gaps: first[0].gaps }) }),
+    rawData: JSON.stringify({ tier: 'cheap', cache: buildCacheData({ ticketHash: ticketHash(ticket), model, gaps: first[0].gaps, textChars: ticketToText(ticket).length, cap: TICKET_TEXT_MAX_CHARS }) }),
   });
 
   const second = await checkAll([ticket], 'cheap', { dir, checkTicketFn, resolveModelFn: () => model });

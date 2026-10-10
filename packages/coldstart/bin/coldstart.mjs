@@ -13,7 +13,7 @@ import {
 } from '@adlc/core';
 
 import { buildPrompt, SYSTEM_PROMPT } from '../lib/prompt.mjs';
-import { checkAll, resolveExpectedModel, checkAllOffline } from '../lib/gate.mjs';
+import { checkAll, resolveExpectedModel, checkAllOffline, oversizeGap } from '../lib/gate.mjs';
 import { buildRecordPlan } from '../lib/cache.mjs';
 import { renderReport, buildJsonOutput, allPass } from '../lib/report.mjs';
 import { USAGE, OPTIONS, parseMaxAgeDays } from '../lib/cli-options.mjs';
@@ -87,6 +87,18 @@ if (runAll) {
 // ── --prompt-only: print prompts and exit 0 ──────────────────────────────────
 
 if (promptOnlyMode) {
+  // The printed prompt carries at most TICKET_TEXT_MAX_CHARS of the ticket,
+  // and --record-verdict stores the answer against the FULL ticket's hash. For
+  // an over-cap ticket that answer would certify acceptance criteria nobody
+  // read, so no prompt is emitted and nothing is recorded: fail closed, name
+  // the offender, and let the operator split it.
+  const oversized = targets.map((t) => [t.id, oversizeGap(t)]).filter(([, gap]) => gap);
+  if (oversized.length > 0) {
+    for (const [id, gap] of oversized) console.error(`coldstart: ${id}: ${gap.what} — ${gap.why_blocking}`);
+    console.error('coldstart: no prompt emitted and no verdict recorded for an over-cap ticket');
+    process.exit(2);
+  }
+
   const prompts = targets.map(
     (t) => `=== system ===\n${SYSTEM_PROMPT}\n\n=== user (${t.id}) ===\n${buildPrompt(t)}`
   );
@@ -131,8 +143,13 @@ if (offlineMode) {
 
 // ── Verify provider is available for real runs ───────────────────────────────
 
-const provider = detectProvider();
-if (!provider) {
+// An over-cap ticket's verdict needs no model (checkAll decides it without
+// one), so when every target is over cap the missing-key error would only
+// hide the real instruction: split the ticket. Any in-cap target still needs
+// a provider.
+const everyTargetOversize = targets.every((t) => oversizeGap(t));
+const provider = everyTargetOversize ? null : detectProvider();
+if (!provider && !everyTargetOversize) {
   opError(
     'no LLM provider configured — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY\n' +
     '(or use --offline / --prompt-only to run without calling an LLM)'

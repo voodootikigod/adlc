@@ -56,7 +56,12 @@ package.json template:
    from core. CI gating depends on this.
 5. **`--prompt-only` on every LLM-backed tool.** Print the exact prompt(s)
    and exit 0 — the tool must be usable with zero API keys (paste into any
-   harness). Use `promptOnly()` from core.
+   harness). Use `promptOnly()` from core. The one exception is an input the
+   tool can prove unauditable before any prompt exists (coldstart: a ticket
+   whose serialization exceeds the fenced cap, so the model could only see a
+   prefix): print the gap on stderr, emit no prompt, record nothing, exit 2.
+   A truncated prompt that exits 0 would let an operator certify text they
+   never saw.
 6. **`--json` flag** on every tool: machine-readable output for
    orchestrators (in addition to default human-readable output).
 7. **Tests run offline and leave no trace.** Test pure logic with fixtures;

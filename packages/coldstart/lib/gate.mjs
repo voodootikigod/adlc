@@ -4,9 +4,31 @@
 import { complete as coreComplete, extractJson as coreExtractJson, detectProvider, resolveModel } from '@adlc/core';
 import { ticketHash } from '@adlc/tickets';
 import { loadFiltered } from '@adlc/gate-manifest/lib/show.mjs';
-import { buildPrompt, SYSTEM_PROMPT } from './prompt.mjs';
+import { buildPrompt, SYSTEM_PROMPT, TICKET_TEXT_MAX_CHARS, ticketToText } from './prompt.mjs';
 import { findCachedVerdict } from './cache.mjs';
 import { normalizeGaps, UNREADABLE_VERDICT_PREFIX } from './normalize-gaps.mjs';
+
+/**
+ * The gap a ticket has when the auditor cannot see it whole. The fence hands
+ * the model at most TICKET_TEXT_MAX_CHARS of the serialization; a verdict on a
+ * longer ticket would be a verdict on a prefix — its later acceptance criteria
+ * never read — bound to the FULL ticket's hash. No model call can make that
+ * sound, so none is made: the overflow is the gap, and the operator splits the
+ * ticket.
+ *
+ * @param {object} ticket
+ * @returns {{what:string, why_blocking:string}|null} null when the ticket fits
+ */
+export function oversizeGap(ticket) {
+  const chars = ticketToText(ticket).length;
+  if (chars <= TICKET_TEXT_MAX_CHARS) return null;
+  return {
+    what: 'ticket exceeds the auditable size',
+    why_blocking:
+      `the serialized ticket is ${chars} chars but the auditor sees at most ${TICKET_TEXT_MAX_CHARS}; ` +
+      'content past the cut cannot be audited — split the ticket',
+  };
+}
 
 /**
  * Build a checkTicket function bound to specific complete/extractJson
@@ -17,6 +39,8 @@ import { normalizeGaps, UNREADABLE_VERDICT_PREFIX } from './normalize-gaps.mjs';
  */
 export function buildCheckTicket(completeFn, extractJsonFn, tier = 'cheap') {
   return async function checkTicketWith(ticket) {
+    const oversize = oversizeGap(ticket);
+    if (oversize) return { id: ticket.id, gaps: [oversize], usage: null };
     const prompt = buildPrompt(ticket);
     let usage = null;
     const raw = await completeFn({
@@ -111,6 +135,9 @@ export function resolveExpectedModel(tier, env = process.env) {
  * entry's gaps. Caching is keyed on the RESOLVED model id, not the abstract
  * tier — switching `ADLC_MODEL_CHEAP` changes what "cheap" resolves to, and
  * a cache entry from the old model must not silently cover the new one.
+ * An entry is also reused only if the ticket fit under the cap that audit ran
+ * with (see cache.mjs): the auditor sees at most TICKET_TEXT_MAX_CHARS, so an
+ * entry recorded under a smaller cap was an audit of a prefix.
  *
  * @param {object[]} tickets
  * @param {string} [tier]
@@ -145,10 +172,19 @@ export async function checkAll(tickets, tier = 'cheap', opts = {}) {
 
   const results = [];
   for (const ticket of tickets) {
+    // Decided before the cache and before any audit path (real, injected, or
+    // the mock seam): a ticket the auditor cannot see whole has no valid
+    // cached verdict and gets no model call. `oversize` tells buildRecordPlan
+    // this is a refusal to audit, not an audit — nothing to record.
+    const oversize = oversizeGap(ticket);
+    if (oversize) {
+      results.push({ id: ticket.id, gaps: [oversize], usage: null, cached: false, oversize: true });
+      continue;
+    }
     if (!force && model) {
       const hash = ticketHash(ticket);
       const entries = loadCacheEntriesFn(ticket.id);
-      const cached = findCachedVerdict(entries, { ticketHash: hash, model, maxAgeMs, now });
+      const cached = findCachedVerdict(entries, { ticketHash: hash, model, textChars: ticketToText(ticket).length, maxAgeMs, now });
       if (cached) {
         results.push({ id: ticket.id, gaps: cached.gaps, usage: null, cached: true });
         continue;
@@ -222,6 +258,11 @@ export function checkTicketOffline(ticket, allTickets = []) {
       offline: true,
     };
   }
+
+  // Part of the input contract: a ticket the auditor cannot see whole is not
+  // auditable, offline or on. Same gap as the live path, so the two agree.
+  const oversize = oversizeGap(ticket);
+  if (oversize) gaps.push(oversize);
 
   if (!ticket.body || typeof ticket.body !== 'string' || !ticket.body.trim()) {
     gaps.push({

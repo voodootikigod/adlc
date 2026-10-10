@@ -74,7 +74,9 @@ PRs that violate them will be asked to change:
    touch other packages, `ADLC.md`, or root files in the same PR unless that *is* the change.
 4. **Exit codes:** `0` = gate passes · `1` = operational error · `2` = gate fails. Use
    `pass`/`gateFail`/`opError` from core. CI gating depends on this.
-5. **`--prompt-only`** on every LLM-backed tool — prints the exact prompt and exits 0.
+5. **`--prompt-only`** on every LLM-backed tool — prints the exact prompt and exits 0. When the
+   input is provably unauditable before a prompt exists (coldstart: an over-cap ticket), it prints
+   the gap on stderr, emits no prompt, records nothing and exits 2 — see CONVENTIONS.md §5.
 6. **`--json`** on every tool — machine-readable output alongside human-readable.
 7. **Tests run offline and leave no trace.** Use fixtures and `mkdtempSync` temp dirs;
    clean up afterward. Never call an LLM provider in a test.

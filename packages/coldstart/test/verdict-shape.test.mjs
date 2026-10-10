@@ -311,24 +311,24 @@ describe('findCachedVerdict shape validation', () => {
   });
 
   test('gaps: "clean" (a string) is NOT a hit', () => {
-    assert.equal(findCachedVerdict([entry('clean')], { ticketHash, model }), null);
+    assert.equal(findCachedVerdict([entry('clean')], { ticketHash, model, textChars: 100 }), null);
   });
 
   test('gaps: null / missing / {} are NOT hits (was: coerced to [] → cached PASS)', () => {
-    assert.equal(findCachedVerdict([entry(null)], { ticketHash, model }), null);
-    assert.equal(findCachedVerdict([entry(undefined)], { ticketHash, model }), null);
-    assert.equal(findCachedVerdict([entry({})], { ticketHash, model }), null);
-    assert.equal(findCachedVerdict([entry([42])], { ticketHash, model }), null);
+    assert.equal(findCachedVerdict([entry(null)], { ticketHash, model, textChars: 100 }), null);
+    assert.equal(findCachedVerdict([entry(undefined)], { ticketHash, model, textChars: 100 }), null);
+    assert.equal(findCachedVerdict([entry({})], { ticketHash, model, textChars: 100 }), null);
+    assert.equal(findCachedVerdict([entry([42])], { ticketHash, model, textChars: 100 }), null);
   });
 
   test('gaps: [] is still a hit; gaps: [{what}] is returned as-is', () => {
-    assert.deepEqual(findCachedVerdict([entry([])], { ticketHash, model }), { gaps: [] });
+    assert.deepEqual(findCachedVerdict([entry([])], { ticketHash, model, textChars: 100 }), { gaps: [] });
     const gaps = [{ what: 'a', why_blocking: 'b' }];
-    assert.deepEqual(findCachedVerdict([entry(gaps)], { ticketHash, model }), { gaps });
+    assert.deepEqual(findCachedVerdict([entry(gaps)], { ticketHash, model, textChars: 100 }), { gaps });
   });
 
   test('an unreadable newest entry is skipped and an older readable one is still found', () => {
     const entries = [entry([{ what: 'a', why_blocking: 'b' }], '2026-08-01T00:00:00.000Z'), entry('clean', '2026-08-02T00:00:00.000Z')];
-    assert.deepEqual(findCachedVerdict(entries, { ticketHash, model }), { gaps: [{ what: 'a', why_blocking: 'b' }] });
+    assert.deepEqual(findCachedVerdict(entries, { ticketHash, model, textChars: 100 }), { gaps: [{ what: 'a', why_blocking: 'b' }] });
   });
 });

@@ -26,7 +26,7 @@ coldstart --all     [options]
 | `--offline` | off | Run deterministic offline schema and input contract validation without calling an LLM or requiring API keys |
 | `--force` | off | Bypass the cache entirely and re-audit every target ticket |
 | `--max-age <days>` | `30` | Treat a cached verdict older than this as stale; `0` treats every cache entry as stale |
-| `--prompt-only` | off | Print the exact prompt(s) and exit 0 — no LLM call made |
+| `--prompt-only` | off | Print the exact prompt(s) and exit 0 — no LLM call made. For a ticket over the 64,000-char auditable cap: no prompt, nothing recorded, exit 2 (see Caching) |
 | `--record-verdict <file\|->` | — | With `--prompt-only`: read the operator's answer from `<file>` (or stdin when `-`) and record it into `.adlc/manifest.jsonl` via `gate-manifest` — see below |
 | `--json` | off | Machine-readable JSON output for orchestrators |
 
@@ -77,14 +77,29 @@ coldstart T3 --tickets path/to/tickets.json
 
 ## Caching
 
-A real (non-`--prompt-only`) audit records `{ticketHash, model, gaps}` into
-`.adlc/manifest.jsonl` after it runs. The NEXT run, for the SAME ticket, skips
-the LLM call entirely when it finds a matching entry: same `ticketHash` (the
-ticket's content is unchanged — editing anything about it produces a
-different hash) and same *resolved* model id (not just the same `--tier` —
-switching `ADLC_MODEL_CHEAP` invalidates the cache even though `--tier cheap`
-stays the same flag). A cached run reports `"cached": true` in `--json`
-output and `(cached)` in the human-readable report.
+A real (non-`--prompt-only`) audit records `{ticketHash, model, gaps,
+textChars, cap}` into `.adlc/manifest.jsonl` after it runs. The NEXT run, for
+the SAME ticket, skips the LLM call entirely when it finds a matching entry:
+same `ticketHash` (the ticket's content is unchanged — editing anything about
+it produces a different hash), same *resolved* model id (not just the same
+`--tier` — switching `ADLC_MODEL_CHEAP` invalidates the cache even though
+`--tier cheap` stays the same flag), and a ticket that fit under the `cap`
+that audit ran with. The auditor sees at most the first 64,000 characters of
+the serialized ticket, so a verdict recorded under a smaller cap for a longer
+ticket was an audit of a prefix and is not reused; entries recorded before
+`cap` was stored are treated as audited under the earlier 8,000. A cached run
+reports `"cached": true` in `--json` output and `(cached)` in the
+human-readable report.
+
+A ticket whose serialization is itself over the cap is not sent to the model
+at all: the gate reports the overflow as its one gap (`ticket exceeds the
+auditable size`, naming the size and the cap) and exits `2`, because a verdict
+on the first 64,000 characters would be bound to the hash of a ticket whose
+later acceptance criteria were never read. Nothing is recorded for it, and
+`--prompt-only` (with or without `--record-verdict`) emits no prompt for a run
+that includes one, so an operator's answer cannot be stored against a ticket
+they never saw whole. `--offline` reports the same gap, and the live path
+reports it without needing a provider configured. Split the ticket.
 
 ```sh
 # First run audits for real and records the verdict
