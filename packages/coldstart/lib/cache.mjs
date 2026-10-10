@@ -7,6 +7,7 @@
 // ledger and to ticketHash().
 
 import { ticketHash as computeTicketHash } from '@adlc/tickets';
+import { verifyEntrySig } from '@adlc/gate-manifest/lib/sign.mjs';
 import { normalizeGaps } from './normalize-gaps.mjs';
 import { TICKET_TEXT_MAX_CHARS, ticketToText } from './prompt.mjs';
 
@@ -24,6 +25,25 @@ function nonNegativeInteger(value, name) {
     throw new Error(`coldstart cache: ${name} must be a non-negative integer, got: ${String(value)}`);
   }
   return value;
+}
+
+/**
+ * Keep only the manifest entries whose signature verifies under `key`
+ * (issue #595). This is the ONE filter between the ledger and
+ * findCachedVerdict: the ledger is committed repo content, so an entry
+ * anyone can write must not be able to serve a verdict. No key means the
+ * cache is UNAVAILABLE — `[]` — never "trusted by default".
+ *
+ * Always returns a new array and never mutates `entries`.
+ *
+ * @param {object[]} entries - manifest entries scoped to one ticket
+ * @param {object} [opts]
+ * @param {string|null} [opts.key] - the operator's ADLC_MANIFEST_KEY
+ * @returns {object[]}
+ */
+export function trustedCacheEntries(entries, { key = null } = {}) {
+  if (typeof key !== 'string' || key.length === 0) return [];
+  return (entries ?? []).filter((entry) => verifyEntrySig(key, entry));
 }
 
 /**
