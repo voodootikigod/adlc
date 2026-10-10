@@ -81,6 +81,21 @@ The `PostToolUse` hook only records repeated failure signatures in
 `systemMessage`; the hook exits zero so it cannot turn a successful Codex tool
 call into a failure.
 
+### Which `adlc` the hooks run
+
+The build-gate and rails bypass recorders and the handoff recovery audit run the first `adlc` on `PATH` that is:
+
+- reached through an absolute `PATH` entry outside any `node_modules`
+  directory, since a repository could place one there, and
+- owned by you, or (a `sudo npm i -g @adlc/cli` install) a root-owned file
+  reached through a root-owned `PATH` entry in a root-owned directory, with
+  neither the file nor any directory above it or above the `PATH` entry
+  writable by group or others.
+
+These are the same terms the Claude Code integration applies. A
+project-local install (`node_modules/.bin/adlc` only) is never run, and a
+bypass that needs an `adlc` to record it is refused when none qualifies.
+
 ## Update and remove
 
 ```sh

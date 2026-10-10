@@ -766,14 +766,16 @@ const REQUIRED_API = [
  * (never-mutated) PATH can already contain a project-local
  * `node_modules/.bin/adlc` shim ahead of a real global install — a
  * repository can ship that shim itself. Every PATH entry that resolves
- * inside a `node_modules` directory is skipped for that reason (a genuine
- * global install is never itself inside `node_modules`), and every
- * remaining candidate must also be owned by the CURRENT process's uid
- * (skipped otherwise, platforms where `process.getuid` exists) — a
+ * inside a `node_modules` directory, or that is relative, is skipped for
+ * that reason (a genuine global install is never itself inside
+ * `node_modules`), and every remaining candidate must pass
+ * `ownershipRejection` (platforms where `process.getuid` exists): owned by
+ * this user, or a `sudo npm i -g` install root fully controls. A
  * project-writable or shared directory earlier on PATH can still contain a
  * file owned by this same user, which this check cannot distinguish from a
- * genuine install, but it does rule out a candidate owned by a different
- * (or root/system) account landing on PATH ahead of the real binary. Given
+ * genuine install, but it does rule out a candidate owned by another
+ * non-root account, or a root-owned program reached through a link or
+ * directory root does not control. Given
  * that, this function still cannot verify a same-uid candidate's symlink
  * target or content. `recordRecoveryUnderBand` does not hand this spawn the
  * manifest signing key or the admin key regardless of what runs here, and
@@ -785,23 +787,102 @@ const REQUIRED_API = [
  * is then skipped, best-effort) rather than guess.
  */
 export function resolveTrustedBinary(name, pathEnv) {
-  if (typeof pathEnv !== 'string' || pathEnv.length === 0) return null;
-  const sep = process.platform === 'win32' ? ';' : ':';
-  const selfUid = typeof process.getuid === 'function' ? process.getuid() : null;
-  for (const dir of pathEnv.split(sep)) {
-    if (!dir) continue;
-    if (dir.includes('node_modules')) continue; // see the function comment
-    const candidate = join(dir, name);
-    try {
-      const st = statSync(candidate);
-      if (!st.isFile()) continue;
-      if (selfUid !== null && st.uid !== selfUid) continue; // see the function comment
-      return candidate;
-    } catch {
-      /* try next PATH entry */
-    }
+  for (const { candidate, rejection } of binaryCandidates(name, pathEnv)) {
+    if (rejection === null) return candidate;
   }
   return null;
+}
+
+/**
+ * Why a stat'ed candidate may not run, or null when it may. Accepted: a file this
+ * user owns, or a `sudo npm i -g` install, where the file, the PATH entry naming
+ * it (`link`, from lstat) and the directory holding that entry are all owned by
+ * root, and neither the file nor the directory is writable by group or others.
+ * Only root can create root-owned entries, so a symlink someone else planted,
+ * pointing at a root-owned program such as /bin/sh, is still refused: the link
+ * itself is not root's. A symlink's own mode bits are always 0777 and never
+ * consulted; the directory decides who can replace it. `ancestors` are the
+ * directories above the real file and above the PATH directory, up to `/`:
+ * another account able to write any of them could swap what runs.
+ */
+export function ownershipRejection({ file, link, dir, ancestors = [] }, selfUid) {
+  if (file.uid === selfUid) return null;
+  if (file.uid !== 0) return `it is owned by uid ${file.uid}, not by you or by root`;
+  const locked = (st) => st.uid === 0 && (st.mode & 0o022) === 0;
+  if (!locked(file)) return 'it is root-owned but writable by group or others';
+  const isSymlink = (link.mode & 0o170000) === 0o120000;
+  if (link.uid !== 0 || (!isSymlink && !locked(link))) return 'it is reached through a link that root does not own';
+  if (!locked(dir)) return 'its directory is not root-owned or is writable by group or others';
+  if (!ancestors.every(locked)) return 'a directory above it is not root-owned or is writable by group or others';
+  return null;
+}
+
+/** The directories above `file`, nearest first, up to and including the filesystem root. */
+export function ancestorDirs(file) {
+  const out = [];
+  for (let d = dirname(file); ; d = dirname(d)) {
+    out.push(d);
+    if (dirname(d) === d) return out;
+  }
+}
+
+/** The directories whose writers could swap what `candidate` runs: those above its real file and above the real PATH entry. */
+export function candidateAncestors(candidate, dir, name) {
+  return [...ancestorDirs(realpathSync(candidate)), ...ancestorDirs(join(realpathSync(dir), name))];
+}
+
+/** Every `name` file on PATH in order, each with its rejection reason (null when trusted). Never runs one. */
+function binaryCandidates(name, pathEnv) {
+  if (typeof pathEnv !== 'string' || pathEnv.length === 0) return [];
+  const sep = process.platform === 'win32' ? ';' : ':';
+  const selfUid = typeof process.getuid === 'function' ? process.getuid() : null;
+  const out = [];
+  for (const dir of pathEnv.split(sep)) {
+    if (!dir) continue;
+    const candidate = join(dir, name);
+    let file;
+    try {
+      file = statSync(candidate);
+    } catch {
+      continue; // no file here: try next PATH entry
+    }
+    if (!file.isFile()) continue;
+    let stats = null;
+    try {
+      stats = candidateStats(candidate, dir, name, file, selfUid);
+    } catch {
+      /* refused below as uninspectable */
+    }
+    out.push({ candidate, rejection: candidateRejection(dir, stats, selfUid) });
+  }
+  return out;
+}
+
+/**
+ * What ownershipRejection judges for an existing `candidate`: the followed file,
+ * the PATH entry itself (lstat), its directory, and, for a root-owned file this
+ * user does not own, every directory above the real file and the real PATH entry.
+ * Throws when any of them cannot be stat'ed.
+ */
+export function candidateStats(candidate, dir, name, file, selfUid) {
+  const stats = { file, link: lstatSync(candidate), dir: statSync(dir) };
+  if (file.uid === 0 && file.uid !== selfUid) {
+    stats.ancestors = candidateAncestors(candidate, dir, name).map((d) => statSync(d));
+  }
+  return stats;
+}
+
+/**
+ * Why the candidate found in PATH entry `dir` may not run (null when it may).
+ * Where it was found is judged first, so a repository-controlled location is
+ * named even when its stats are missing; `stats` is null when they could not
+ * be gathered.
+ */
+export function candidateRejection(dir, stats, selfUid) {
+  if (!isAbsolute(dir)) return 'it is reached through a relative PATH entry, which resolves inside the repository';
+  if (dir.includes('node_modules')) return 'it is inside node_modules, where a repository could have placed it';
+  if (stats === null) return 'its link or a directory above it could not be inspected';
+  return selfUid === null ? null : ownershipRejection(stats, selfUid);
 }
 
 /** Bounds for `repoManifestChainIsSigned` — see that function's comment for why. */
