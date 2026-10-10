@@ -79,8 +79,21 @@ const PACKAGES = [
   {
     name: 'rejection-mining',
     bin: 'packages/rejection-mining/bin/rejection-mining.mjs',
-    setup() {
-      return []; // must not shell out to gh at all in --prompt-only mode
+    // --prompt-only mines REAL PR rejections through the local `gh` CLI before
+    // printing a prompt (issue #743), so the contract here — no LLM/network
+    // provider call — is met with a fake gh on PATH that answers offline with
+    // one two-comment cluster. Nothing reaches a model or the network.
+    setup(dir) {
+      const body = 'do not expose raw errors to clients';
+      const view = JSON.stringify({ reviews: [{ body, author: { login: 'r' } }], comments: [] });
+      writeFileSync(join(dir, 'gh'), `#!/usr/bin/env node
+const a = process.argv.slice(2);
+if (a[0] === '--version') { console.log('gh version 2.40.0'); process.exit(0); }
+if (a[0] === 'pr' && a[1] === 'list') { console.log('[{"number":1,"title":"PR 1"},{"number":2,"title":"PR 2"}]'); process.exit(0); }
+if (a[0] === 'pr' && a[1] === 'view') { console.log(${JSON.stringify(view)}); process.exit(0); }
+process.exit(1);
+`, { mode: 0o755 });
+      return { args: [], env: { PATH: `${dir}:${process.env.PATH}` } };
     },
   },
   {
@@ -101,11 +114,17 @@ const PACKAGES = [
   },
 ];
 
-function run(bin, args, cwd) {
+// `setup(dir)` returns either the extra argv array or `{ args, env }` when the
+// package also needs an environment overlay (a fake CLI on PATH, for instance).
+function normalizeSetup(extra) {
+  return Array.isArray(extra) ? { args: extra, env: {} } : { args: extra.args ?? [], env: extra.env ?? {} };
+}
+
+function run(bin, args, cwd, envOverlay = {}) {
   const result = spawnSync(process.execPath, [join(ROOT, bin), ...args], {
     encoding: 'utf8',
     cwd,
-    env: { ...process.env, ANTHROPIC_API_KEY: '', OPENAI_API_KEY: '', GEMINI_API_KEY: '', ADLC_AGY: '', ADLC_PROVIDER: '' },
+    env: { ...process.env, ...envOverlay, ANTHROPIC_API_KEY: '', OPENAI_API_KEY: '', GEMINI_API_KEY: '', ADLC_AGY: '', ADLC_PROVIDER: '' },
     timeout: 15_000,
   });
   return { code: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
@@ -129,8 +148,8 @@ for (const pkg of PACKAGES) {
 
   test(`${pkg.name}: --prompt-only prints a prompt, exits 0, makes no network/LLM call`, () => {
     withScratchDir((dir) => {
-      const extra = pkg.setup(dir);
-      const { code, stdout, stderr } = run(pkg.bin, [...extra, '--prompt-only'], dir);
+      const { args: extra, env } = normalizeSetup(pkg.setup(dir));
+      const { code, stdout, stderr } = run(pkg.bin, [...extra, '--prompt-only'], dir, env);
       assert.equal(code, 0, `${pkg.name} --prompt-only should exit 0\nstdout:${stdout}\nstderr:${stderr}`);
       assert.ok(stdout.trim().length > 0, `${pkg.name} --prompt-only should print something to stdout`);
       // No LLM/network error strings should leak through.
@@ -140,8 +159,8 @@ for (const pkg of PACKAGES) {
 
   test(`${pkg.name}: an invalid --tier value errors clearly`, () => {
     withScratchDir((dir) => {
-      const extra = pkg.setup(dir);
-      const { code, stdout, stderr } = run(pkg.bin, [...extra, '--tier', 'not-a-real-tier'], dir);
+      const { args: extra, env } = normalizeSetup(pkg.setup(dir));
+      const { code, stdout, stderr } = run(pkg.bin, [...extra, '--tier', 'not-a-real-tier'], dir, env);
       assert.notEqual(code, 0, `${pkg.name} should reject an invalid --tier value`);
       assert.match(stdout + stderr, /tier/i, `${pkg.name} error message should mention "tier"`);
     });

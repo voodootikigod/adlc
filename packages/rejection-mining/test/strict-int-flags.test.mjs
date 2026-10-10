@@ -12,11 +12,27 @@ import { parsePositiveInt } from '../lib/int-flag.mjs';
 
 const BIN = fileURLToPath(new URL('../bin/rejection-mining.mjs', import.meta.url));
 
-function run(args) {
+function run(args, env = process.env) {
   return spawnSync(process.execPath, [BIN, ...args, '--prompt-only'], {
     encoding: 'utf8',
     timeout: 10000,
+    env,
   });
+}
+
+// `--prompt-only` mines REAL PRs through gh (issue #743), so the accept cases
+// need a gh on PATH that answers offline: one PR with no comments, which is
+// zero signals, zero clusters, and a clean exit 0 with nothing to prompt.
+function withFakeGh(t) {
+  const dir = tmp(t, 'rm-int-flags-gh-');
+  writeFileSync(join(dir, 'gh'), `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === '--version') { console.log('gh version 2.40.0'); process.exit(0); }
+if (args[0] === 'pr' && args[1] === 'list') { console.log('[{"number":1,"title":"PR 1"}]'); process.exit(0); }
+if (args[0] === 'pr' && args[1] === 'view') { console.log('{"reviews":[],"comments":[]}'); process.exit(0); }
+process.exit(1);
+`, { mode: 0o755 });
+  return { ...process.env, PATH: `${dir}:${process.env.PATH}` };
 }
 
 for (const flag of ['--limit', '--min']) {
@@ -28,8 +44,8 @@ for (const flag of ['--limit', '--min']) {
     });
   }
 
-  test(`${flag} with a plain positive integer is accepted`, () => {
-    const res = run([flag, '25']);
+  test(`${flag} with a plain positive integer is accepted`, (t) => {
+    const res = run([flag, '25'], withFakeGh(t));
     assert.equal(res.status, 0, `stdout=${res.stdout} stderr=${res.stderr}`);
   });
 }
