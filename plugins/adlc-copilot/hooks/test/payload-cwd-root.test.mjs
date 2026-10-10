@@ -14,7 +14,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,11 +28,16 @@ const BUILD_GATE = join(HOOKS, 'adlc-build-gate.mjs');
 const TICKET = { id: 'T1', title: 'Active', scope: ['src/**'], rails: ['test/**'], edges: [] };
 const NOTICE_RE = /resolving the repository from the payload cwd/g;
 
+// The workspace CLI, linked from a plain directory: recordBuildGateBypass resolves
+// `adlc` through resolveTrustedBinary, which skips every PATH entry inside a
+// node_modules directory, so node_modules/.bin would never be found.
+const REAL_ADLC_SCRIPT = join(HOOKS, '..', '..', '..', 'node_modules', '@adlc', 'cli', 'bin', 'adlc.mjs');
+
 /** A repo whose active ticket rails `test/**`; `pointer` overrides the pointed-at id. */
-function makeRepo({ pointer = TICKET.id } = {}) {
+function makeRepo({ pointer = TICKET.id, ticket = TICKET } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'adlc-copilot-payload-cwd-repo-'));
   mkdirSync(join(root, '.adlc'), { recursive: true });
-  writeFileSync(join(root, '.adlc/tickets.json'), `${JSON.stringify({ tickets: [TICKET] }, null, 2)}\n`);
+  writeFileSync(join(root, '.adlc/tickets.json'), `${JSON.stringify({ tickets: [ticket] }, null, 2)}\n`);
   writeFileSync(join(root, '.adlc/current-ticket.json'), `${JSON.stringify({ id: pointer })}\n`);
   return root;
 }
@@ -55,8 +60,8 @@ function cleanEnv() {
  * the stdin document. `payload.cwd` is passed through verbatim (or omitted when
  * the caller leaves it undefined) so each test states the shape it sends.
  */
-function run(hook, { cwd, payload }) {
-  return spawnHook([hook], { cwd, env: cleanEnv(), input: JSON.stringify(payload), encoding: 'utf8' });
+function run(hook, { cwd, payload, env = {} }) {
+  return spawnHook([hook], { cwd, env: { ...cleanEnv(), ...env }, input: JSON.stringify(payload), encoding: 'utf8' });
 }
 
 function editPayload(path, extra = {}) {
@@ -227,4 +232,62 @@ test('AC6 payloadRoot does not mutate its input', () => {
   const payload = Object.freeze({ cwd: '/x', toolName: 'edit' });
   payloadRoot(payload, '/y');
   assert.deepEqual(payload, { cwd: '/x', toolName: 'edit' });
+});
+
+// --- the allow exit codes and the shell workdir base, each anchored on the payload root
+
+test('build-gate allows with exit 0 and empty stdout when the payload cwd has .adlc but no ticket store', () => {
+  withDirs((track) => {
+    const bare = track(makeOutside());
+    mkdirSync(join(bare, '.adlc'));
+    const outside = track(makeOutside());
+    const r = run(BUILD_GATE, { cwd: outside, payload: { toolName: 'edit', toolArgs: '{}', cwd: bare } });
+    assert.equal(r.status, 0, `an allow must exit 0 (stderr: ${r.stderr})`);
+    assert.equal(r.stdout.trim(), '');
+  });
+});
+
+test('build-gate records an audited bypass in the payload-cwd repository, then allows with exit 0', () => {
+  withDirs((track) => {
+    const contractTicket = { id: 'T1', title: 'Contract change', category: 'contract', scope: ['src/**'], rails: [], edges: [] };
+    const repo = track(makeRepo({ ticket: contractTicket }));
+    const outside = track(makeOutside());
+    const trustedBin = track(mkdtempSync(join(tmpdir(), 'adlc-copilot-payload-cwd-bin-')));
+    symlinkSync(REAL_ADLC_SCRIPT, join(trustedBin, 'adlc'));
+    // A degraded session: more tool calls than the depth threshold allows.
+    const transcriptPath = join(repo, 'transcript.jsonl');
+    writeFileSync(transcriptPath, Array.from({ length: 50 }, () => '"type": "tool_use"').join('\n'));
+
+    const r = run(BUILD_GATE, {
+      cwd: outside,
+      payload: { toolName: 'edit', toolArgs: '{}', cwd: repo, transcriptPath },
+      env: { ADLC_BUILD_GATE_BYPASS: '1', PATH: `${trustedBin}:${process.env.PATH ?? ''}` },
+    });
+    assert.equal(r.status, 0, `an audited bypass must exit 0 (stderr: ${r.stderr}, stdout: ${r.stdout})`);
+    assert.equal(r.stdout.trim(), '', `an audited bypass is an allow, got: ${r.stdout}`);
+    // The override was recorded in the repository the payload named, not where the process started.
+    const manifest = join(repo, '.adlc', 'manifest.jsonl');
+    assert.ok(existsSync(manifest), `expected a manifest in the payload-cwd repo (stderr: ${r.stderr})`);
+    assert.match(readFileSync(manifest, 'utf8'), /build-gate-bypass/);
+    assert.ok(!existsSync(join(outside, '.adlc')), 'nothing may be written where the process started');
+    assert.equal((r.stderr.match(NOTICE_RE) ?? []).length, 1);
+  });
+});
+
+test('rails-guard resolves a shell workdir against the repository root', () => {
+  withDirs((track) => {
+    const repo = track(makeRepo());
+    // No top-level cwd here on purpose: the shell collector reads the FIRST
+    // workdir-like key it meets, and Copilot's own `cwd` would be that key.
+    const shell = (workdir) => run(RAILS_GUARD, {
+      cwd: repo,
+      payload: { toolName: 'bash', toolArgs: JSON.stringify({ command: 'rm x.mjs', workdir }) },
+    });
+    const denied = shell('test');
+    assert.equal(denied.status, 0);
+    assert.match(denyOf(denied), /test\/x\.mjs/);
+    const allowed = shell('src');
+    assert.equal(allowed.status, 0);
+    assert.equal(allowed.stdout.trim(), '', `src/x.mjs is not a rail, got: ${allowed.stdout}`);
+  });
 });
