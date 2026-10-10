@@ -1,0 +1,18 @@
+{
+  "body": "Source: v1.12.0 follow-up to #1189. Re-verified on main @ bddae808: plugins/adlc-claude-code/hooks/adlc-hook.mjs flail() (line ~529) calls runAdlc(['flail-detector', ...]) and on a null result does `if (!r || !r.stdout) return;`. The SessionStart preflight (line ~423) and the Stop manifest check (line ~615) instead call emitUntrustedAdlc(check, eventName) when runAdlc returns null, which says why an adlc found on PATH was refused (untrustedBinaryReason) and stays silent when none is on PATH. So with only a refused adlc on PATH (e.g. one inside node_modules, or owned by another non-root account), flail detection silently never runs.\n\nCONTEXT FOR THE BUILDER. flail runs on PostToolUse, i.e. after every tool call, so emitting the refusal on every call would flood the session. Dedupe state already exists for flail: privateStateDir() returns a private 0700 directory, and flail stores `flail-<sha1(transcript_path)[0:16]>.state` there. Tests: `node --test plugins/adlc-claude-code/hooks/test/*.test.mjs`. The Claude Code hook test plugins/adlc-claude-code/hooks/test/adlc-trusted-spawn.test.mjs shows how to put a refused adlc on PATH; it is a rail, so put new tests in the new file named below.\n\nNORMATIVE BEHAVIOUR.\n1. When flail's runAdlc returns null and untrustedBinaryReason('adlc', PATH) is non-null, flail emits the same message shape emitUntrustedAdlc produces for check name 'flail-detector' and event 'PostToolUse', at most ONCE per session (keyed on transcript_path, in a separate marker file in privateStateDir, never in the worktree). If no private state dir can be made, it does not emit (silence is preferred to a flood).\n2. No adlc on PATH at all stays silent, exactly as today. A trusted adlc that fails stays silent, exactly as today.\n3. Regression guard: the flail advisory, its payload-hash dedupe, and the bounded-window scan are unchanged; flail never blocks.\n4. Documentation: docs/integrations/claude-code.md lists flail among the checks that say why a found adlc was not run.\n\nACCEPTANCE CRITERIA.\n- AC1 With only a refused adlc on PATH, the first PostToolUse flail call emits a message naming the refused path and reason. verify: `node --test plugins/adlc-claude-code/hooks/test/flail-untrusted-adlc.test.mjs`\n- AC2 A second call in the same session emits nothing; a call with a different transcript_path emits again. verify: `node --test plugins/adlc-claude-code/hooks/test/flail-untrusted-adlc.test.mjs`\n- AC3 With no adlc on PATH, flail emits nothing. verify: `node --test plugins/adlc-claude-code/hooks/test/flail-untrusted-adlc.test.mjs`\n- AC4 Existing hook suite green. verify: `node --test plugins/adlc-claude-code/hooks/test/*.test.mjs`\n- AC5 Docs updated. verify: `grep -c \"flail\" docs/integrations/claude-code.md` (>= 1, in the refused-adlc paragraph)\n- AC6 Mutation gate green. verify: `node scripts/mutation-gate.mjs origin/main --max 12` exits 0\n\nOUT OF SCOPE: codex/copilot/other harness hooks; the resolver's accept/refuse rules; preflight and manifest messages.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M4JMRWRQJBGFK6A16PXKJ10N",
+  "rails": [
+    "plugins/adlc-claude-code/hooks/test/adlc-trusted-spawn.test.mjs",
+    "plugins/adlc-claude-code/hooks/adlc-hook-run.mjs",
+    "plugins/adlc-claude-code/hooks/handoff-resolve.mjs"
+  ],
+  "scope": [
+    "plugins/adlc-claude-code/hooks/adlc-hook.mjs",
+    "plugins/adlc-claude-code/hooks/test/flail-untrusted-adlc.test.mjs",
+    "docs/integrations/claude-code.md"
+  ],
+  "title": "adlc-claude-code: flail says once per session why a found adlc was not run"
+}

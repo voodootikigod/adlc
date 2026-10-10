@@ -564,7 +564,8 @@ function flail(input) {
       /* best-effort cleanup */
     }
   }
-  if (!r || !r.stdout) return;
+  if (!r) return emitUntrustedAdlcOncePerSession('flail-detector', 'PostToolUse', tp);
+  if (!r.stdout) return;
   const res = parseJson(r.stdout);
   if (!res || res.verdict !== 'flail') return;
 
@@ -2111,6 +2112,25 @@ function emitUntrustedAdlc(check, eventName) {
   emit(eventName
     ? { hookSpecificOutput: { hookEventName: eventName, additionalContext: msg }, systemMessage: msg }
     : { systemMessage: msg });
+}
+
+/**
+ * emitUntrustedAdlc for a check that runs after every tool call: at most once per
+ * session (`sessionKey`, the transcript path). The marker is created exclusively
+ * in privateStateDir, so of two concurrent calls only one reports; with no
+ * private state dir nothing is reported, since every call would repeat it.
+ */
+function emitUntrustedAdlcOncePerSession(check, eventName, sessionKey) {
+  if (!untrustedBinaryReason('adlc', process.env.PATH)) return;
+  const base = privateStateDir();
+  if (!base) return;
+  const key = createHash('sha1').update(sessionKey).digest('hex').slice(0, 16);
+  try {
+    writeFileSync(join(base, `untrusted-adlc-${key}.state`), '', { flag: 'wx' });
+  } catch {
+    return; // already reported this session, or the marker cannot be written
+  }
+  emitUntrustedAdlc(check, eventName);
 }
 
 /** Bounds for `repoManifestChainIsSigned` — see that function's comment for why. */

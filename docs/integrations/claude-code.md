@@ -214,8 +214,9 @@ two bypass recorders run the first `adlc` on `PATH` that is:
 
 A project-local install (`node_modules/.bin/adlc` only) is never run. If
 `adlc` is on `PATH` but no copy qualifies, the session-start and Stop checks
-name the first copy found and why it was refused, and a rails or build-gate
-bypass is refused with the same reason. Install `@adlc/cli` globally to fix it.
+name the first copy found and why it was refused, flail detection says the same
+once per session, and a rails or build-gate bypass is refused with the same
+reason. Install `@adlc/cli` globally to fix it.
 
 ### MCP server
 
