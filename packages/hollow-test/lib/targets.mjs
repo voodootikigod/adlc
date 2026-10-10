@@ -418,13 +418,14 @@ export function fileChangeIsCommentOnly({ oldSource, newSource, added, deleted }
 }
 
 /**
- * A dotted three-part version that is a whole string between matching quotes
- * (`'1.12.0'`), so a range (`'^1.12.0'`), a prerelease (`'1.12.0-rc'`), a
- * longer dotted token, a bare number and mismatched quotes are not versions
- * here. split() keeps both capture groups, so every third part (index 2, 5, ...)
- * is a version and the part before it is its quote.
+ * A dotted three-part version that is a whole string between matching single or
+ * double quotes (`'1.12.0'`). A range (`'^1.12.0'`), a prerelease
+ * (`'1.12.0-rc'`), a longer dotted token, a bare number, mismatched quotes and a
+ * template literal (which can interpolate) are not versions here. split() keeps
+ * both capture groups, so every third part (index 2, 5, ...) is a version and
+ * the part before it is its quote.
  */
-const VERSION_LITERAL_RE = /(['"`])(\d+\.\d+\.\d+)\1/;
+const VERSION_LITERAL_RE = /(['"])(\d+\.\d+\.\d+)\1/;
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
 
 /**

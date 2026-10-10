@@ -94,6 +94,10 @@ describe('fileChangeIsVersionOnly', () => {
     assert.equal(only("'1.0.0'1.11.1'2.0.0'", "'1.0.0'1.12.0'2.0.0'"), false);
   });
 
+  it('does not treat a template literal as a version stamp', () => {
+    assert.equal(only('const a = `1.11.1`;\n', 'const a = `1.12.0`;\n'), false);
+  });
+
   it('requires the closing quote to match the opening one', () => {
     assert.equal(only(`const a = '1.11.1";\n`, `const a = '1.12.0";\n`), false);
     assert.equal(only("const a = `x'1.11.1`;\n", "const a = `x'1.12.0`;\n"), false);
