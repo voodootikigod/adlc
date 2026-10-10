@@ -10,7 +10,7 @@ import { resolve, relative, isAbsolute, sep } from 'node:path';
 import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
 import { gitDiff, isDirty, isGitRepo, resolveBase, mutate, git, repoRoot } from '@adlc/core';
 import {
-  filterTargetFiles, buildFileTargets, readFileSafe, fileChangeIsCommentOnly,
+  filterTargetFiles, buildFileTargets, readFileSafe, fileChangeIsCommentOnly, fileChangeIsVersionOnly,
   readRailsFromTicketFile, expandRailsToFiles, isMutableSource, isSupportedSourceExtension,
 } from '../lib/targets.mjs';
 import { runMutant, runTest, formatDiagnosticOutput } from '../lib/runner.mjs';
@@ -344,13 +344,31 @@ const commentOnlyFiles = diffEligibleFilesAll.filter((f) => {
   });
 });
 const commentOnly = new Set(commentOnlyFiles);
-const diffEligibleFiles = diffEligibleFilesAll.filter((f) => !commentOnly.has(f));
+
+// A file whose only change is version literals (a release bump rewriting a
+// generated file) is not covered for the same reason: no operator can exercise
+// it. Judged on the whole file, so any other change keeps it eligible.
+const versionOnlyFiles = diffEligibleFilesAll.filter((f) => {
+  if (commentOnly.has(f)) return false;
+  const oldSide = deletedLines[f];
+  if (oldSide === undefined) return false;
+  return fileChangeIsVersionOnly({
+    oldSource: readOldSource(readGit, base, oldSide.oldPath),
+    newSource: readFileSafe(resolve(root, f)),
+  });
+});
+const notCovered = new Set([...commentOnlyFiles, ...versionOnlyFiles]);
+const diffEligibleFiles = diffEligibleFilesAll.filter((f) => !notCovered.has(f));
 
 // Never a SILENT skip. A coverage gate that goes green by not looking is worse
 // than no gate, so say exactly what was not covered and why — in the JSON
 // report as well as the text one.
 function skippedReport() {
-  return commentOnlyFiles.length > 0 ? { skipped: { commentOnly: [...commentOnlyFiles] } } : {};
+  const skipped = {
+    ...(commentOnlyFiles.length > 0 ? { commentOnly: [...commentOnlyFiles] } : {}),
+    ...(versionOnlyFiles.length > 0 ? { versionOnly: [...versionOnlyFiles] } : {}),
+  };
+  return Object.keys(skipped).length > 0 ? { skipped } : {};
 }
 if (commentOnlyFiles.length > 0 && !useJson) {
   console.log(
@@ -358,6 +376,13 @@ if (commentOnlyFiles.length > 0 && !useJson) {
     'lines, so there is no changed behaviour to mutate and this gate does not cover them:'
   );
   for (const f of commentOnlyFiles) console.log(`  ${f}`);
+}
+if (versionOnlyFiles.length > 0 && !useJson) {
+  console.log(
+    `hollow-test: ${versionOnlyFiles.length} changed file(s) changed only version literals, ` +
+    'so there is no changed behaviour to mutate and this gate does not cover them:'
+  );
+  for (const f of versionOnlyFiles) console.log(`  ${f}`);
 }
 
 // ── explicit --target / --rails resolution ──────────────────────────────────
@@ -512,12 +537,14 @@ for (const f of explicitFiles) {
 // unverified — there is simply no changed behaviour in it. Reported, then a
 // clean exit, rather than the "nothing to mutate" refusal below, which exists
 // for a diff whose source files were never eligible in the first place.
-if (diffEligibleFiles.length === 0 && explicitFiles.length === 0 && commentOnlyFiles.length > 0) {
+if (diffEligibleFiles.length === 0 && explicitFiles.length === 0 && notCovered.size > 0) {
   if (useJson) {
     printJson({ ...buildJsonReport([]), ...skippedReport() });
     process.exit(0);
   }
-  pass('comment-only diff — no changed behaviour to mutate');
+  pass(versionOnlyFiles.length > 0
+    ? 'comment- or version-only diff — no changed behaviour to mutate'
+    : 'comment-only diff — no changed behaviour to mutate');
 }
 
 if (diffEligibleFiles.length === 0 && explicitFiles.length === 0) {

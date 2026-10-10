@@ -1,0 +1,14 @@
+{
+  "body": "Source: the 1.12.0 release PR (#1191). Since #1014, scripts/release.mjs regenerates two checked-in Cursor files on every bump, plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs and plugins/adlc-cursor/lib/mcp-build-metadata.mjs. In a release the only change in either is version literals ('1.11.1' becomes '1.12.0'). hollow-test finds no mutable line in them and the #658 zero-mutant refusal fails mutation-gate with 'diff-derived file(s) produced zero mutants'. Every lockstep release will hit this.\n\nThis is the same class as #1032 (comment-only diffs): there is no behaviour a mutation could exercise, so the right outcome is NOT COVERED, reported by name, not a refusal and not a silent pass. Version consistency itself is already verified by release.mjs's drift gate and the build-cursor-mcp tests.\n\nNORMATIVE BEHAVIOUR.\n1. A pure exported predicate fileChangeIsVersionOnly({ oldSource, newSource }) in packages/hollow-test/lib/targets.mjs returns true only when both sides are strings, they differ, and they are identical once every dotted three-part version literal (digits.digits.digits, not part of a longer dotted or word token) is replaced by one placeholder. Anything else, including a missing old side, returns false.\n2. hollow-test removes such diff-derived files from the eligible set exactly as it removes comment-only files, prints them under their own heading in text mode, and lists them under skipped.versionOnly in JSON mode. A diff whose only eligible files are comment-only or version-only passes with a message naming why; it is never a silent pass.\n3. Every other zero-mutant case still fails closed (#658), and a file whose diff changes a version literal AND anything else stays eligible.\n\nACCEPTANCE CRITERIA.\n- AC1 The predicate is true for a version-only change and false for: identical sources, a non-version change, a mixed change, a version change to a two-part or four-part literal, and a non-string side. verify: `node --test packages/hollow-test/test/version-only.test.mjs`\n- AC2 Driving the real hollow-test CLI on a git fixture whose only change is a version literal in a .mjs file exits 0 and names the file as version-only; the same fixture with an added code change in that file does not take the version-only path. verify: `node --test packages/hollow-test/test/version-only.test.mjs`\n- AC3 The existing hollow-test suite stays green. verify: `node --test packages/hollow-test/test/*.test.mjs`\n\nOUT OF SCOPE: excluding generated files by path; changing mutation-gate's classify(); the comment-only predicate.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M4HKBBRE0JAJVHKETC193YS5",
+  "rails": [],
+  "scope": [
+    "packages/hollow-test/lib/targets.mjs",
+    "packages/hollow-test/bin/hollow-test.mjs",
+    "packages/hollow-test/test/version-only.test.mjs"
+  ],
+  "title": "hollow-test: a diff that only moves version literals is not covered, not a zero-mutant failure"
+}

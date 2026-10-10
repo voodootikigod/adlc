@@ -417,6 +417,28 @@ export function fileChangeIsCommentOnly({ oldSource, newSource, added, deleted }
   return JSON.stringify(before.projection) === JSON.stringify(after.projection);
 }
 
+/**
+ * A dotted three-part version literal (`1.12.0`) that is not part of a longer
+ * dotted or word token, so `10.0.0.1` and `v1.2.3-rc` are not versions here.
+ */
+const VERSION_LITERAL_RE = /(?<![\w.])\d+\.\d+\.\d+(?![\w.])/g;
+
+/**
+ * True when the only difference between two sources is version literals, as in
+ * a generated file a lockstep release bump rewrites. There is no behaviour a
+ * mutant could exercise, so the caller reports the file as not covered. Every
+ * doubt answers false: identical sources, a non-string side, and any change
+ * outside a three-part version literal keep the file eligible.
+ *
+ * @param {{ oldSource: unknown, newSource: unknown }} sides
+ * @returns {boolean}
+ */
+export function fileChangeIsVersionOnly({ oldSource, newSource }) {
+  if (typeof oldSource !== 'string' || typeof newSource !== 'string') return false;
+  if (oldSource === newSource) return false;
+  return oldSource.replace(VERSION_LITERAL_RE, '\0') === newSource.replace(VERSION_LITERAL_RE, '\0');
+}
+
 export function filterTargetFiles(changedLines, { testGlobs = [], sourceGlobs = [] } = {}) {
   return Object.keys(changedLines).filter((f) => isMutableSource(f, { testGlobs, sourceGlobs }));
 }
