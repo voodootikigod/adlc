@@ -71,6 +71,9 @@ The `PreToolUse` rail guard automatically activates when
 `ADLC_TICKET` is an explicit ticket override. `ADLC_P4_ENFORCEMENT=1` forces
 enforcement; `ADLC_P4_ENFORCEMENT=0` is a deliberate local opt-out. Conflicting
 ticket selectors and stale active state fail closed once enforcement is active.
+So does an internal error inside the rail guard: a payload nested more than
+64 levels deep, or any other uncaught failure while classifying a tool call,
+denies the call (exit 2) rather than falling through as a non-blocking error.
 
 Hooks provide immediate feedback but are not a complete security boundary.
 Keep `scripts/rails-guard-ci.mjs` as a required repository check; it validates

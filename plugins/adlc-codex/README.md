@@ -37,6 +37,15 @@ codex plugin add adlc-codex@adlc
 Start a new Codex thread after reinstalling so it picks up the refreshed MCP
 transport. Remove with `codex plugin remove adlc-codex@adlc`.
 
+## Rail guard
+
+The `PreToolUse` rail guard (`hooks/adlc-rails-guard.mjs`) denies a structured
+edit or a mutating shell command that touches the active ticket's frozen rails.
+Exit 2 denies; exit 0 allows. An internal error inside the guard, including a
+tool payload nested more than 64 levels deep, denies the tool call (exit 2)
+rather than falling through: Codex treats a hook that exits 1 as a non-blocking
+error and lets the call proceed, so the guard never exits 1 on its own account.
+
 ## Context-rot handoff gate
 
 > **Not wired since 1.11.1** ([#966](https://github.com/voodootikigod/adlc/issues/966)). The plugin's `hooks/hooks.json` has no entry for this gate, so nothing in this section runs in a current install, and no setting turns it on. The hook code still ships and is still tested. The rest of this section describes the gate as it behaves when wired.

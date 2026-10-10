@@ -8,6 +8,7 @@
 // (packages/core/test/shell.test.mjs) pins the two together.
 import { readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve, dirname, basename, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
 import {
   resolveActiveTicketId as resolveActiveTicketIdCanonical,
@@ -399,6 +400,45 @@ function collectShellInvocations(value, out = []) {
   return out;
 }
 
+/**
+ * Deepest nesting of arrays/objects the hook will classify. The payload is
+ * agent-controlled, and every collector below walks it recursively; a payload
+ * nested far beyond any real tool call blew the stack in that walk and the
+ * resulting uncaught RangeError exited 1 — a NON-blocking error in Codex's
+ * PreToolUse convention, so the edit went through. Anything deeper than this
+ * is denied before any collector sees it. 64 is two orders of magnitude above
+ * the deepest payload a real tool call produces (tool_input → paths → item).
+ */
+export const MAX_PAYLOAD_DEPTH = 64;
+
+/** An array or a non-null object — the only values that add a nesting level. */
+function isContainer(value) {
+  return value !== null && typeof value === 'object';
+}
+
+/**
+ * True when `value` nests arrays/objects deeper than `limit` levels. A container
+ * counts as one level, scalars as none, so `{}` is depth 1 and exceeds limit 0.
+ * ITERATIVE on purpose: this is the guard that keeps a hostile depth away from
+ * the recursive collectors, so it cannot itself be a recursive walk.
+ * Pure — reads `value`, never mutates it.
+ */
+export function exceedsDepth(value, limit) {
+  // Only containers ever enter the stack, so the pop side has nothing to
+  // re-check: one filter, applied at the root and at every push.
+  if (!isContainer(value)) return false;
+  const stack = [{ node: value, depth: 1 }];
+  while (stack.length > 0) {
+    const { node, depth } = stack.pop();
+    if (depth > limit) return true;
+    const children = Array.isArray(node) ? node : Object.values(node);
+    for (const child of children) {
+      if (isContainer(child)) stack.push({ node: child, depth: depth + 1 });
+    }
+  }
+  return false;
+}
+
 async function stdinText() {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
@@ -440,6 +480,12 @@ function normalizePath(path, baseCwd = process.cwd()) {
   return projectRelative.startsWith('..') ? normalized : projectRelative;
 }
 
+// Everything below runs inside main() so that an uncaught throw anywhere in it
+// DENIES (exit 2) instead of crashing with exit 1, which Codex treats as a
+// non-blocking error and lets the tool call proceed. The body keeps its
+// original column-0 layout: it was top-level code before being wrapped, and a
+// whole-body re-indent would bury the behavioural change under whitespace.
+async function main() {
 // Payload parsing happens FIRST, before ANY ticket/pointer/rails resolution
 // below — see the Recovery/Inspection Exception block immediately following
 // for why. It must not be moved back down past that block.
@@ -451,6 +497,9 @@ if (raw.trim()) {
   } catch (err) {
     fail(`malformed hook payload JSON: ${err.message}`);
   }
+}
+if (exceedsDepth(payload, MAX_PAYLOAD_DEPTH)) {
+  fail(`hook payload nesting exceeds ${MAX_PAYLOAD_DEPTH} levels — refusing to classify it`);
 }
 
 // Recovery Exception & Inspection Bash Exception (context-rot-threshold-
@@ -614,3 +663,16 @@ const blocked = paths.filter((path) => rails.some((rail) => railMatchesPath(rail
 if (blocked.length > 0) fail(`blocked rail edit for ${ticketId}: ${blocked.join(', ')}`);
 
 process.exit(0);
+}
+
+// pathToFileURL, never `file://${argv[1]}`: Node percent-encodes import.meta.url
+// (a space becomes %20) but a hand-built template string does not, so an install
+// path with a space would make this comparison always false and main() would
+// never run — exit 0, allow, unconditionally.
+const isMain = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) {
+  main().catch((err) => {
+    // Enforcing hook — a crash must fail closed, never fall through to allow.
+    fail(`rails guard errored (${err?.message ?? 'unknown'}) — denying to fail closed`);
+  });
+}
