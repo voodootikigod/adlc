@@ -2124,7 +2124,7 @@ function emitUntrustedAdlcOncePerSession(check, eventName, sessionKey) {
   if (!untrustedBinaryReason('adlc', process.env.PATH)) return;
   const base = privateStateDir();
   if (!base) return;
-  const key = createHash('sha1').update(sessionKey).digest('hex').slice(0, 16);
+  const key = createHash('sha1').update(sessionKey).digest('hex');
   try {
     writeFileSync(join(base, `untrusted-adlc-${key}.state`), '', { flag: 'wx' });
   } catch {
