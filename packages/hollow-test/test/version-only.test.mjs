@@ -123,8 +123,13 @@ describe('fileChangeIsVersionOnly', () => {
   });
 });
 
+// Every fixture the helper mints is removed when the file's tests finish.
+const FIXTURES = [];
+after(() => { for (const dir of FIXTURES.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+
 function fixture(prefix, nextSource, nextVersion = '1.12.0') {
   const dir = mkdtempSync(join(tmpdir(), prefix));
+  FIXTURES.push(dir);
   initRepo(dir);
   mkdirSync(join(dir, 'src'));
   mkdirSync(join(dir, 'test'));
