@@ -27,6 +27,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 - **opencode:** each P5 lens can run on its own configured model (#1141).
 - **tickets:** `planCreateBatch`, an atomic multi-ticket write path (#1024).
 - **core:** a shared `@adlc/core/test-kit` with automatic `t.after` cleanup (#1098, #1151).
+- **hollow-test:** `--generated <path>` names generated files a release rewrites. When such a file's only change is its quoted version stamps moving from the project's base version to its new one, it is reported as not covered instead of failing the zero-mutant check; any other change keeps it under test (#1192).
 
 ### Fixed
 - **cli:** `adlc decision`, `adlc backlog-groom` and `adlc autopilot` failed on a real `npm i -g @adlc/cli` because the umbrella did not depend on their packages; it now does, and a test derived from the verb registry keeps every future verb covered (#1189).
