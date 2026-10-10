@@ -40,7 +40,7 @@ adlc gate-fuzzing [--suite <path>] [--n <int>] [--tier cheap|mid] [--provider <n
 | `--unsafe-no-sandbox` | Skip the OS sandbox. Use only inside a disposable VM. |
 | `--strict-budget` | Any inconclusive stop becomes exit 1 (recommended for CI). |
 | `--fail-on-behavioral` | Behavioral defeats exit 2 (default: report only). |
-| `--record` | Write repro artifacts to `.adlc/gate-defeats/` and cluster findings. |
+| `--record` | Write repro artifacts to `.adlc/gate-defeats/<id>.json` and cluster findings. The id is derived from the defeat's content hash, never from model output; the RED scaffold is written to `packages/<target>/test/` only for a target name matching `^[A-Za-z0-9._-]{1,64}$`. |
 | `--json` | Machine-readable output. |
 | `--prompt-only` | Print adversary prompts and exit 0 (zero API keys). |
 
