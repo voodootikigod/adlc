@@ -489,10 +489,29 @@ async function stdinText() {
  * build-gate copies did not, so the same pointer enforced here and silently
  * disabled enforcement there. Any denial fails closed.
  */
-function resolveActiveTicketId() {
-  const resolved = resolveActiveTicketIdCanonical({ root: process.cwd(), env: process.env });
+function resolveActiveTicketId(root) {
+  const resolved = resolveActiveTicketIdCanonical({ root, env: process.env });
   if (!resolved.ok) fail(resolved.message);
   return { id: resolved.value?.id ?? undefined };
+}
+
+/**
+ * The repository a hook decision is about.
+ *
+ * Copilot's preToolUse stdin carries `cwd` — the directory the tool call targets.
+ * The hook PROCESS may start somewhere else (an older CLI, a `/cd`, a worktree
+ * switch), and a repository read anchored on process.cwd() then finds no
+ * pointer, prints "no current ticket selected" and ALLOWS — a silent fail-open
+ * of this plugin's one enforcing gate (#811). So the payload names the
+ * repository, and the process cwd is only the fallback for a payload that
+ * carries no usable `cwd`. Same derivation as adlc-build-gate.mjs; the hooks
+ * are self-contained, so each defines it.
+ *
+ * Pure on purpose: `fallback` is passed in by the caller, never read here.
+ */
+function payloadRoot(payload, fallback) {
+  const cwd = payload?.cwd;
+  return typeof cwd === 'string' && cwd.trim() !== '' ? resolve(cwd) : fallback;
 }
 
 function safeRealpath(fp) {
@@ -509,12 +528,32 @@ function safeRealpath(fp) {
   }
 }
 
-function normalizePath(path, baseCwd = process.cwd()) {
+function normalizePath(path, baseCwd = root) {
   const normalized = path.replaceAll('\\', '/');
   const absolute = safeRealpath(isAbsolute(normalized) ? normalized : resolve(baseCwd, normalized));
-  const projectRoot = safeRealpath(process.cwd());
+  const projectRoot = safeRealpath(root);
   const projectRelative = relative(projectRoot, absolute).replaceAll('\\', '/');
   return projectRelative.startsWith('..') ? normalized : projectRelative;
+}
+
+// Payload parsing happens FIRST: the payload names the repository (payloadRoot)
+// that every ticket/pointer/store read below is about, so nothing below may run
+// before it. A malformed payload is a deny, as before.
+let payload = {};
+const raw = await stdinText();
+if (raw.trim()) {
+  try {
+    payload = JSON.parse(raw);
+  } catch (err) {
+    fail(`malformed hook payload JSON: ${err.message}`);
+  }
+}
+payload = normalizeCopilotPayload(payload);
+
+const processCwd = process.cwd();
+const root = payloadRoot(payload, processCwd);
+if (safeRealpath(root) !== safeRealpath(processCwd)) {
+  notice(`resolving the repository from the payload cwd ${root} (process cwd ${processCwd})`);
 }
 
 const explicitEnforcement = process.env.ADLC_P4_ENFORCEMENT;
@@ -526,7 +565,7 @@ if (explicitEnforcement !== undefined && explicitEnforcement !== '1') {
   fail('ADLC_P4_ENFORCEMENT must be 0, 1, or unset');
 }
 
-const activeTicket = resolveActiveTicketId();
+const activeTicket = resolveActiveTicketId(root);
 const ticketId = activeTicket.id;
 if (!ticketId) {
   if (explicitEnforcement === '1') fail('ADLC_P4_ENFORCEMENT=1 but no active ticket source resolved');
@@ -535,7 +574,7 @@ if (!ticketId) {
 }
 
 let snapshot;
-try { snapshot = loadTicketStoreReadOnly({ root: process.cwd(), env: process.env }); }
+try { snapshot = loadTicketStoreReadOnly({ root, env: process.env }); }
 catch (error) { fail(`ticket store failed to load: ${error.message}`); }
 const tickets = snapshot.tickets;
 
@@ -545,7 +584,7 @@ if (!ticket) fail(`unknown active ticket: ${ticketId}`);
 // same contract every other reader uses. allowLegacyPointer keeps the documented
 // 1.x bridge: a pointer that pins no hash still resolves (this harness never
 // required one), but a hash that IS present is always verified.
-const activeAgainstStore = resolveActiveTicketAgainst(snapshot, { root: process.cwd(), env: process.env, allowLegacyPointer: true });
+const activeAgainstStore = resolveActiveTicketAgainst(snapshot, { root, env: process.env, allowLegacyPointer: true });
 if (!activeAgainstStore.ok) fail(activeAgainstStore.message);
 const ticketsPath = process.env.ADLC_TICKET_STORE ?? process.env.ADLC_TICKETS ?? (snapshot.backend === 'directory' ? '.adlc/tickets' : '.adlc/tickets.json');
 const declaredRails = ticket.rails ?? [];
@@ -559,17 +598,6 @@ if (declaredRails.length === 0) {
   process.exit(0);
 }
 const rails = [...declaredRails, snapshot.backend === 'directory' ? '.adlc/tickets/**' : normalizePath(ticketsPath), '.adlc/current-ticket.json'];
-
-let payload = {};
-const raw = await stdinText();
-if (raw.trim()) {
-  try {
-    payload = JSON.parse(raw);
-  } catch (err) {
-    fail(`malformed hook payload JSON: ${err.message}`);
-  }
-}
-payload = normalizeCopilotPayload(payload);
 
 const rawPaths = collectPaths(payload);
 const paths = Array.from(rawPaths).map((path) => normalizePath(path));
@@ -606,7 +634,7 @@ if (shellTool) {
     if (commandPaths.size === 0) {
       fail('mutating shell payload did not include literal editable paths');
     }
-    const shellBaseCwd = workdir ? resolve(process.cwd(), workdir) : process.cwd();
+    const shellBaseCwd = workdir ? resolve(root, workdir) : root;
     for (const path of commandPaths) paths.push(normalizePath(path, shellBaseCwd));
   }
 }

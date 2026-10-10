@@ -37,7 +37,7 @@
 
 import { existsSync, readFileSync, openSync, fstatSync, readSync, closeSync, writeSync, statSync, realpathSync, lstatSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { dirname, isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadTicketStoreReadOnly, ticketStoreExists } from './generated-ticket-reader.mjs';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
@@ -71,10 +71,32 @@ async function stdinJson() {
   return text ? JSON.parse(text) : {};
 }
 
+/**
+ * The repository a hook decision is about.
+ *
+ * Copilot's preToolUse stdin carries `cwd` — the directory the tool call targets.
+ * The hook PROCESS may start somewhere else (an older CLI, a `/cd`, a worktree
+ * switch), and a repository read anchored on process.cwd() then finds no
+ * `.adlc/`, no pointer and no store, and the gate allows: a silent fail-open of
+ * an enforcing hook (#811). So the payload names the repository, and the process
+ * cwd is only the fallback for a payload that carries no usable `cwd`.
+ *
+ * Pure on purpose: `fallback` is passed in by the caller, never read here, so
+ * the derivation can be tested without a process.
+ */
+export function payloadRoot(payload, fallback) {
+  const cwd = payload?.cwd;
+  return typeof cwd === 'string' && cwd.trim() !== '' ? resolve(cwd) : fallback;
+}
+
+function realpathOrSelf(path) {
+  try { return realpathSync(path); } catch { return path; }
+}
+
 // Enforcing gate: a malformed/conflicting pointer fails closed, matching
 // adlc-rails-guard.mjs's resolveActiveTicketId().
-function resolveActiveTicketId() {
-  const resolved = resolveActiveTicketIdCanonical({ root: process.cwd(), env: process.env });
+function resolveActiveTicketId(root) {
+  const resolved = resolveActiveTicketIdCanonical({ root, env: process.env });
   if (!resolved.ok) fail(resolved.message);
   return { id: resolved.value?.id ?? undefined };
 }
@@ -474,16 +496,25 @@ function readOptionalTranscript(path) {
 }
 
 async function main() {
-  if (!existsSync('.adlc')) process.exit(0); // not an ADLC repo → allow
-  if (!ticketStoreExists(process.cwd(), process.env)) process.exit(0); // no tickets → nothing to gate → allow
-
+  // The payload is read FIRST: it names the repository every check below is
+  // about (see payloadRoot). The existence checks that used to gate the stdin
+  // read were anchored on process.cwd(), which is not that repository.
   const payload = await stdinJson();
-  const active = resolveActiveTicketId();
+  const processCwd = process.cwd();
+  const root = payloadRoot(payload, processCwd);
+  if (realpathOrSelf(root) !== realpathOrSelf(processCwd)) {
+    console.error(`adlc-build-gate: resolving the repository from the payload cwd ${root} (process cwd ${processCwd})`);
+  }
+
+  if (!existsSync(join(root, '.adlc'))) process.exit(0); // not an ADLC repo → allow
+  if (!ticketStoreExists(root, process.env)) process.exit(0); // no tickets → nothing to gate → allow
+
+  const active = resolveActiveTicketId(root);
   if (!active.id) process.exit(0); // no active ticket declared → allow (opt-in gate)
 
   let ticket;
   try {
-    ticket = loadTicketStoreReadOnly({ root: process.cwd(), env: process.env }).tickets.find((t) => t.id === active.id);
+    ticket = loadTicketStoreReadOnly({ root, env: process.env }).tickets.find((t) => t.id === active.id);
   } catch (e) {
     fail(`cannot read the ticket store (${e.message}) — active ticket ${active.id}'s risk cannot be verified, failing closed`);
   }
@@ -504,7 +535,7 @@ async function main() {
 
   if (result.decision === 'allow') process.exit(0);
   if (result.decision === 'pending-bypass') {
-    if (recordBuildGateBypass(active.id, result.signals, result.depth, result.sessionBytes)) process.exit(0); // audited → allow
+    if (recordBuildGateBypass(active.id, result.signals, result.depth, result.sessionBytes, { cwd: root })) process.exit(0); // audited → allow
     fail('ADLC_BUILD_GATE_BYPASS is set but the override could not be recorded to the gate-manifest (is @adlc/cli installed and .adlc writable?). An unaudited bypass is refused — the build is blocked.');
   }
   fail(result.reason);
