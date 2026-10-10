@@ -2,43 +2,58 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveRailGlobs, checkRailEdits } from '../lib/rails.mjs';
+import { resolveRailSet, railOwners, checkRailEdits, NO_RAILS_ERROR } from '../lib/rails.mjs';
 
-describe('resolveRailGlobs', () => {
-  test('uses cliRails when provided (even if ticket also has rails)', () => {
+// The single-ticket shapes the old resolver pinned, restated against resolveRailSet
+// (#1050 — rails-union.test.mjs holds the multi-ticket union cases).
+describe('resolveRailSet — single-ticket shapes', () => {
+  test('uses cliRails when provided (even if ticket also has rails), with no owner', () => {
     const ticket = { id: 'T1', title: 't', rails: ['test/**'] };
-    const { globs, error } = resolveRailGlobs(['src/types/**'], ticket);
-    assert.deepEqual(globs, ['src/types/**']);
+    const { rails, error } = resolveRailSet({ cliRails: ['src/types/**'], ticket });
+    assert.deepEqual(rails, [{ glob: 'src/types/**', owner: null }]);
     assert.equal(error, null);
   });
 
-  test('falls back to ticket.rails when no cliRails', () => {
+  test('falls back to ticket.rails when no cliRails and no ticket list is supplied', () => {
     const ticket = { id: 'T1', title: 't', rails: ['test/**', 'schema/**'] };
-    const { globs, error } = resolveRailGlobs([], ticket);
-    assert.deepEqual(globs, ['test/**', 'schema/**']);
+    const { rails, error } = resolveRailSet({ cliRails: [], ticket });
+    assert.deepEqual(rails, [{ glob: 'test/**', owner: 'T1' }, { glob: 'schema/**', owner: 'T1' }]);
     assert.equal(error, null);
   });
 
   test('errors when no cliRails and no ticket', () => {
-    const { globs, error } = resolveRailGlobs([], null);
-    assert.equal(globs.length, 0);
-    assert.ok(error);
+    const { rails, error } = resolveRailSet({ cliRails: [], ticket: null });
+    assert.equal(rails.length, 0);
+    assert.equal(error, NO_RAILS_ERROR);
     assert.ok(error.includes('no --rails'));
   });
 
-  test('errors when no cliRails and ticket has no rails', () => {
+  test('errors when no cliRails and the only ticket has no rails', () => {
     const ticket = { id: 'T2', title: 't', rails: [] };
-    const { globs, error } = resolveRailGlobs([], ticket);
-    assert.equal(globs.length, 0);
-    assert.ok(error);
-    assert.ok(error.includes('no rails declared'));
+    const { rails, error } = resolveRailSet({ cliRails: [], ticket });
+    assert.equal(rails.length, 0);
+    assert.equal(error, NO_RAILS_ERROR);
   });
 
   test('ticket without rails field returns error', () => {
     const ticket = { id: 'T3', title: 't' };
-    const { globs, error } = resolveRailGlobs([], ticket);
-    assert.equal(globs.length, 0);
+    const { rails, error } = resolveRailSet({ cliRails: [], ticket });
+    assert.equal(rails.length, 0);
     assert.ok(error);
+  });
+});
+
+describe('railOwners', () => {
+  test('maps each glob to its first declaring ticket, preferring a real owner over null', () => {
+    const owners = railOwners([
+      { glob: 'a/**', owner: null },
+      { glob: 'a/**', owner: 'T1' },
+      { glob: 'b/**', owner: 'T2' },
+      { glob: 'b/**', owner: 'T3' },
+    ]);
+    assert.equal(owners.get('a/**'), 'T1');
+    assert.equal(owners.get('b/**'), 'T2');
+    assert.equal(owners.has('c/**'), false);
   });
 });
 
@@ -81,6 +96,19 @@ describe('checkRailEdits', () => {
   test('returns an empty sanctioned array when no sanctionedAdditions is passed', () => {
     const { sanctioned } = checkRailEdits(['test/auth.test.ts'], ['test/**']);
     assert.deepEqual(sanctioned, []);
+  });
+
+  // #1050 — a violation names the ticket that froze the matched glob.
+  test('ownerTicket is null when no owners map is supplied', () => {
+    const { violations } = checkRailEdits(['test/x.ts'], ['test/**']);
+    assert.equal(violations[0].ownerTicket, null);
+  });
+
+  test('ownerTicket is the first matched glob\'s owner, skipping cli-owned (null) globs', () => {
+    const owners = new Map([['test/**', null], ['test/x.ts', 'T-OTHER']]);
+    const { violations } = checkRailEdits(['test/x.ts', 'test/y.ts'], ['test/**', 'test/x.ts'], null, null, owners);
+    assert.equal(violations.find((v) => v.file === 'test/x.ts').ownerTicket, 'T-OTHER');
+    assert.equal(violations.find((v) => v.file === 'test/y.ts').ownerTicket, null);
   });
 });
 
