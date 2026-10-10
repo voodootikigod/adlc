@@ -14,7 +14,31 @@ import { dirname } from 'node:path';
 import { ADLC_DIR, ledgerPath, sha256, withLedgerLock } from '@adlc/core';
 import { signEntry, verifyEntrySig } from './sign.mjs';
 import { verify } from './verify.mjs';
+import { isSegmentedRepo } from './lineage.mjs';
 import { validateKeyParam } from '@adlc/tickets/lib/key-contract.mjs';
+
+/**
+ * Which ledger a repair may rewrite.
+ *
+ * In a segmented (forest) repository the root ledger is FROZEN: every segment's
+ * first entry carries `anchor: { segment: 'root', seq, lineHash }` bound to the
+ * exact raw bytes of one root line, so renumbering or re-serialising root makes
+ * every anchor mismatch and turns a one-line break into a forest-wide
+ * invalidation (#651). The same `isSegmentedRepo` guard every other write path
+ * in this package consults decides it here; a read of the activation state only,
+ * nothing is created or written.
+ *
+ * @param {string} [dir]  ledger directory (default ADLC_DIR)
+ * @returns {'root'|'forest-refused'}
+ */
+export function repairTarget(dir = ADLC_DIR) {
+  return isSegmentedRepo(dir) ? 'forest-refused' : 'root';
+}
+
+const FOREST_REFUSAL =
+  'repair-chain refuses to rewrite the frozen root of a segmented repository: every segment anchors to '
+  + "root's exact bytes, so rechaining root would invalidate every anchor in the forest; use migrate-branch "
+  + 'or adopt, the forest-mode tools, instead';
 
 const RESERVED = new Set(['seq', 'prev', 'sig', 'sigVersion']);
 
@@ -62,6 +86,9 @@ export function repairChain({
   attestUnsigned = false,
   key: keyParam,
 } = {}) {
+  // FIRST, before a key is validated, a reason is read, or a byte is touched:
+  // the forest refusal (#651). Dry-run and --write alike.
+  if (repairTarget(dir) === 'forest-refused') throw new Error(FOREST_REFUSAL);
   const providedKey = validateKeyParam(keyParam);
   if (typeof reason !== 'string' || reason.trim().length < 8) {
     throw new Error('repair reason must be at least 8 characters');
