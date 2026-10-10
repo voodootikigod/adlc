@@ -13,7 +13,7 @@ import {
 } from '@adlc/core';
 
 import { buildPrompt, SYSTEM_PROMPT } from '../lib/prompt.mjs';
-import { checkAll, resolveExpectedModel, checkAllOffline, oversizeGap } from '../lib/gate.mjs';
+import { checkAll, resolveExpectedModel, checkAllOffline, oversizeGap, cacheLookupState, isMockSeamActive } from '../lib/gate.mjs';
 import { buildRecordPlan } from '../lib/cache.mjs';
 import { renderReport, buildJsonOutput, allPass } from '../lib/report.mjs';
 import { USAGE, OPTIONS, parseMaxAgeDays } from '../lib/cli-options.mjs';
@@ -160,15 +160,35 @@ if (!provider && !everyTargetOversize) {
 // Content-addressed caching (issue #278): a ticket whose hash matches a
 // prior gate-manifest entry for the SAME resolved model, recorded within
 // --max-age days, is served from that entry — no LLM call. --force bypasses.
+// A cached verdict is honoured only from an entry whose signature verifies
+// under ADLC_MANIFEST_KEY (issue #595): the ledger is committed repo content,
+// so an unsigned or forged line must not be able to green the gate. With no
+// key the cache is not consulted and every target is re-audited — said once
+// on stderr so a slower run is not mistaken for a reviewer problem.
+
+const key = getKey();
+const expectedModel = resolveExpectedModel(tier);
+if (cacheLookupState({ force, model: expectedModel, key, mockSeamActive: isMockSeamActive() }) === 'no-key') {
+  console.error('coldstart: ADLC_MANIFEST_KEY is not set — cached verdicts are not trusted; re-auditing');
+}
 
 let results;
 try {
-  results = await checkAll(targets, tier, { force, maxAgeMs, dir: undefined });
+  results = await checkAll(targets, tier, { force, maxAgeMs, dir: undefined, key });
 } catch (err) {
   // Covers provider/network failures AND an unreadable verdict (issue #594 —
   // `coldstart: unreadable executability verdict — …`): both mean the audit
   // did not produce a verdict, so neither may read as a pass.
   opError(`could not obtain an executability verdict: ${err.message}`);
+}
+
+// The count is an operator notice on stderr only. stdout — the human report and
+// the `--json` document — keeps the field set lib/report.mjs defines (id, pass,
+// gaps, cached, offline); `cacheSkipped` is a property of checkAll's results for
+// library callers, not part of the CLI's structured output contract.
+const skippedLines = results.reduce((sum, r) => sum + r.cacheSkipped, 0);
+if (skippedLines > 0) {
+  console.error(`coldstart: ${skippedLines} unreadable manifest line(s) were skipped while reading the verdict cache`);
 }
 
 // ── Record usage + cache evidence (issues #272, #278) ───────────────────────
@@ -182,8 +202,8 @@ try {
 // anything to record?" branch here to leave untested.
 
 const { record } = await import('@adlc/gate-manifest/lib/record.mjs');
-const recordPlan = buildRecordPlan(results, targets, { model: resolveExpectedModel(tier), tier });
-for (const entry of recordPlan) record({ ...entry, key: getKey() });
+const recordPlan = buildRecordPlan(results, targets, { model: expectedModel, tier });
+for (const entry of recordPlan) record({ ...entry, key });
 
 // ── Output ───────────────────────────────────────────────────────────────────
 

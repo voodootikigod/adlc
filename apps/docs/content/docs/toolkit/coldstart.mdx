@@ -43,6 +43,8 @@ adlc coldstart --all [options]
 
 The auditor is asked to reply `{"gaps": [...]}`. A **bare array** (`[{"what": …, "why_blocking": …}]`, the most common model deviation) is accepted as the gaps list, and a string entry is wrapped as `{"what": "<text>", "why_blocking": "unspecified"}`. Anything else is **not a pass**: `{}`, `{"result": "ok"}`, `{"blockers": [...]}`, `{"gaps": null}`, `{"gaps": "two gaps found"}`, or an entry without a string `what` exits `1` with `coldstart: unreadable executability verdict — …` — the verdict could not be read, so nothing is recorded or cached, and a previously cached entry with an unreadable `gaps` is skipped rather than served (issue #594).
 
+A cached verdict is honoured only when its ledger entry carries a **valid signature** under `ADLC_MANIFEST_KEY` (issue #595): an entry whose signature is missing, wrong, or no longer matches its content is ignored and the ticket is re-audited, because the ledger is committed repo content and a hand-written line must never green the gate. Without the key the cache is bypassed entirely and one stderr line says so (`coldstart: ADLC_MANIFEST_KEY is not set — cached verdicts are not trusted; re-auditing`). Unreadable ledger lines skipped during the cache read are reported on stderr as `coldstart: <n> unreadable manifest line(s) were skipped while reading the verdict cache`. Neither notice changes the exit code or stdout.
+
 ## Example
 
 ```sh

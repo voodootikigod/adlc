@@ -5,7 +5,7 @@ import { complete as coreComplete, extractJson as coreExtractJson, detectProvide
 import { ticketHash } from '@adlc/tickets';
 import { loadFiltered } from '@adlc/gate-manifest/lib/show.mjs';
 import { buildPrompt, SYSTEM_PROMPT, TICKET_TEXT_MAX_CHARS, ticketToText } from './prompt.mjs';
-import { findCachedVerdict } from './cache.mjs';
+import { findCachedVerdict, trustedCacheEntries } from './cache.mjs';
 import { normalizeGaps, UNREADABLE_VERDICT_PREFIX } from './normalize-gaps.mjs';
 
 /**
@@ -147,8 +147,11 @@ export function resolveExpectedModel(tier, env = process.env) {
  * @param {number} [opts.now] - injectable clock (ms since epoch) for tests
  * @param {string} [opts.dir] - gate-manifest ledger directory, default ADLC_DIR
  * @param {Function} [opts.checkTicketFn] - injectable (ticket) => Promise<{id,gaps,usage}>, default checkTicket bound to `tier`
- * @param {Function} [opts.loadCacheEntriesFn] - injectable (ticketId) => manifest entries[], default reads the real gate-manifest ledger
+ * @param {string|null} [opts.key] - the operator's ADLC_MANIFEST_KEY; a cache entry is served only when its signature verifies under it, and with no key the cache is not consulted at all (issue #595)
+ * @param {Function} [opts.loadCacheEntriesFn] - injectable (ticketId) => { entries, skipped }, default reads the real gate-manifest ledger
  * @param {Function} [opts.resolveModelFn] - injectable () => string|null, default resolveExpectedModel(tier)
+ * @returns {Promise<Array<{id:string, gaps:object[], usage:object|null, cached:boolean, cacheSkipped:number}>>}
+ *   `cacheSkipped` is the number of unreadable ledger lines the cache read reported for that ticket (0 when the cache was not consulted)
  */
 export async function checkAll(tickets, tier = 'cheap', opts = {}) {
   const {
@@ -156,19 +159,15 @@ export async function checkAll(tickets, tier = 'cheap', opts = {}) {
     maxAgeMs = null,
     now = Date.now(),
     dir,
+    key = null,
     checkTicketFn = (ticket) => checkTicket(ticket, tier),
     loadCacheEntriesFn = (ticketId) => defaultLoadCacheEntries(ticketId, dir),
     resolveModelFn = () => resolveExpectedModel(tier),
   } = opts;
 
-  // The ADLC_GATE_MOCK_RESPONSE test seam (checkTicket, above) exists to make
-  // the CLI's output/exit-code paths deterministic and network-free — a
-  // cache hit silently overriding that would make mock-driven tests
-  // order-dependent on whatever a PRIOR real audit happened to cache for the
-  // same ticket content. Caching is a real-execution optimization; defer to
-  // the mock seam rather than compete with it.
-  const mockSeamActive = process.env.ADLC_GATE_MOCK_RESPONSE !== undefined && process.env.NODE_ENV === 'test';
+  const mockSeamActive = isMockSeamActive(process.env);
   const model = (force || mockSeamActive) ? null : resolveModelFn();
+  const lookup = cacheLookupState({ force, model, key, mockSeamActive }) === 'enabled';
 
   const results = [];
   for (const ticket of tickets) {
@@ -178,26 +177,79 @@ export async function checkAll(tickets, tier = 'cheap', opts = {}) {
     // this is a refusal to audit, not an audit — nothing to record.
     const oversize = oversizeGap(ticket);
     if (oversize) {
-      results.push({ id: ticket.id, gaps: [oversize], usage: null, cached: false, oversize: true });
+      results.push({ id: ticket.id, gaps: [oversize], usage: null, cached: false, oversize: true, cacheSkipped: 0 });
       continue;
     }
-    if (!force && model) {
+    if (lookup) {
       const hash = ticketHash(ticket);
-      const entries = loadCacheEntriesFn(ticket.id);
-      const cached = findCachedVerdict(entries, { ticketHash: hash, model, textChars: ticketToText(ticket).length, maxAgeMs, now });
+      const { entries, skipped } = loadedCacheShape(loadCacheEntriesFn(ticket.id));
+      const trusted = trustedCacheEntries(entries, { key });
+      const cached = findCachedVerdict(trusted, { ticketHash: hash, model, textChars: ticketToText(ticket).length, maxAgeMs, now });
       if (cached) {
-        results.push({ id: ticket.id, gaps: cached.gaps, usage: null, cached: true });
+        results.push({ id: ticket.id, gaps: cached.gaps, usage: null, cached: true, cacheSkipped: skipped.length });
         continue;
       }
+      const result = await checkTicketFn(ticket);
+      results.push({ ...result, cached: false, cacheSkipped: skipped.length });
+      continue;
     }
     const result = await checkTicketFn(ticket);
-    results.push({ ...result, cached: false });
+    results.push({ ...result, cached: false, cacheSkipped: 0 });
   }
   return results;
 }
 
+/**
+ * The ADLC_GATE_MOCK_RESPONSE test seam (checkTicket, above) exists to make
+ * the CLI's output/exit-code paths deterministic and network-free — a cache
+ * hit silently overriding that would make mock-driven tests order-dependent
+ * on whatever a PRIOR real audit happened to cache for the same ticket
+ * content. Caching is a real-execution optimization; defer to the mock seam
+ * rather than compete with it.
+ */
+export function isMockSeamActive(env = process.env) {
+  return env.ADLC_GATE_MOCK_RESPONSE !== undefined && env.NODE_ENV === 'test';
+}
+
+/**
+ * The ONE decision of whether the verdict cache is consulted at all, shared
+ * by checkAll and by bin/coldstart.mjs (which prints a notice when the cache
+ * is skipped for lack of a key).
+ *
+ *   'enabled'  — consult the ledger (force off, provider resolved, key present)
+ *   'no-key'   — the cache WOULD be consulted but there is no key, so it is
+ *                unavailable and every ticket is re-audited (#595)
+ *   'disabled' — --force, the mock seam, or no provider: the cache is simply
+ *                not part of this run
+ *
+ * @param {object} o
+ * @param {boolean} o.force
+ * @param {string|null} o.model - the resolved model id, null when no provider
+ * @param {string|null} o.key
+ * @param {boolean} o.mockSeamActive
+ * @returns {'enabled'|'no-key'|'disabled'}
+ */
+export function cacheLookupState({ force, model, key, mockSeamActive }) {
+  if (force || mockSeamActive || !model) return 'disabled';
+  if (typeof key !== 'string' || key.length === 0) return 'no-key';
+  return 'enabled';
+}
+
+/**
+ * A cache loader returns `{ entries, skipped }` — the lenient ledger read's
+ * entries plus the lines it could not parse. The pre-#595 contract returned a
+ * bare array, which would silently drop `skipped`; refuse it explicitly.
+ */
+function loadedCacheShape(loaded) {
+  if (!loaded || !Array.isArray(loaded.entries) || !Array.isArray(loaded.skipped)) {
+    throw new Error('coldstart: cache loader must return { entries, skipped } (gate-manifest loadFiltered shape)');
+  }
+  return loaded;
+}
+
 function defaultLoadCacheEntries(ticketId, dir) {
-  return loadFiltered({ ticket: ticketId, dir }).entries;
+  const { entries, skipped } = loadFiltered({ ticket: ticketId, dir });
+  return { entries, skipped };
 }
 
 /**

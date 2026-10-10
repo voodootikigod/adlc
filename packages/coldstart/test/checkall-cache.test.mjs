@@ -8,8 +8,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { checkAll } from '../lib/gate.mjs';
 import { ticketHash } from '@adlc/tickets';
+import { signEntry } from '@adlc/gate-manifest/lib/sign.mjs';
 
 const MODEL = 'claude-haiku-4-5';
+// Issue #595: the cache is consulted only under a key, and only entries whose
+// signature verifies under it are served — so the fixture signs what it records
+// and every checkAll call here passes the same key.
+const KEY = 'checkall-cache-test-key';
 
 /**
  * An in-memory stand-in for the gate-manifest ledger: a plain array the test
@@ -29,21 +34,29 @@ function makeFixture({ model = MODEL } = {}) {
     return { id: ticket.id, gaps, usage: null };
   };
 
+  // Sign any entry-shaped object under KEY and append it — the only way into the ledger,
+  // because an unsigned entry is exactly what the cache must refuse (#595).
+  const pushSigned = (partial) => {
+    const entry = { seq: ledger.length + 1, files: {}, prev: null, ...partial };
+    ledger.push({ ...entry, sig: signEntry(KEY, entry) });
+  };
   const record = (ticket, gaps, modelUsed = model) => {
-    ledger.push({ gate: 'coldstart', ticket: ticket.id, ts: new Date().toISOString(), data: { cache: { ticketHash: ticketHash(ticket), model: modelUsed, gaps } } });
+    pushSigned({ gate: 'coldstart', ts: new Date().toISOString(), ticket: ticket.id, data: { cache: { ticketHash: ticketHash(ticket), model: modelUsed, gaps } } });
   };
 
-  const loadCacheEntriesFn = (ticketId) => ledger.filter((e) => e.ticket === ticketId);
+  const loadCacheEntriesFn = (ticketId) => ({ entries: ledger.filter((e) => e.ticket === ticketId), skipped: [] });
   const resolveModelFn = () => model;
 
   return {
     ledger,
+    pushSigned,
     get callCount() { return callCount; },
     callsFor,
     record,
     checkTicketFn,
     loadCacheEntriesFn,
     resolveModelFn,
+    key: KEY,
   };
 }
 
@@ -52,7 +65,7 @@ test('two consecutive checkAll runs over an unchanged store call checkTicketFn o
   const tickets = [{ id: 'T1', title: 'Login form' }, { id: 'T2', title: 'Checkout flow' }];
 
   const first = await checkAll(tickets, 'cheap', {
-    checkTicketFn: fx.checkTicketFn,
+    key: fx.key, checkTicketFn: fx.checkTicketFn,
     loadCacheEntriesFn: fx.loadCacheEntriesFn,
     resolveModelFn: fx.resolveModelFn,
   });
@@ -60,7 +73,7 @@ test('two consecutive checkAll runs over an unchanged store call checkTicketFn o
   assert.equal(fx.callCount, 2, 'first run audits both tickets fresh');
 
   const second = await checkAll(tickets, 'cheap', {
-    checkTicketFn: fx.checkTicketFn,
+    key: fx.key, checkTicketFn: fx.checkTicketFn,
     loadCacheEntriesFn: fx.loadCacheEntriesFn,
     resolveModelFn: fx.resolveModelFn,
   });
@@ -74,7 +87,7 @@ test('editing one ticket re-audits only that ticket on the second run', async ()
   const tickets = [{ id: 'T1', title: 'Login form' }, { id: 'T2', title: 'Checkout flow' }];
 
   const first = await checkAll(tickets, 'cheap', {
-    checkTicketFn: fx.checkTicketFn, loadCacheEntriesFn: fx.loadCacheEntriesFn, resolveModelFn: fx.resolveModelFn,
+    key: fx.key, checkTicketFn: fx.checkTicketFn, loadCacheEntriesFn: fx.loadCacheEntriesFn, resolveModelFn: fx.resolveModelFn,
   });
   for (const [i, ticket] of tickets.entries()) fx.record(ticket, first[i].gaps);
   assert.equal(fx.callCount, 2);
@@ -82,7 +95,7 @@ test('editing one ticket re-audits only that ticket on the second run', async ()
   // T1's content changes (different hash); T2 stays identical.
   const editedTickets = [{ id: 'T1', title: 'Login form, now with 2FA' }, { id: 'T2', title: 'Checkout flow' }];
   const second = await checkAll(editedTickets, 'cheap', {
-    checkTicketFn: fx.checkTicketFn, loadCacheEntriesFn: fx.loadCacheEntriesFn, resolveModelFn: fx.resolveModelFn,
+    key: fx.key, checkTicketFn: fx.checkTicketFn, loadCacheEntriesFn: fx.loadCacheEntriesFn, resolveModelFn: fx.resolveModelFn,
   });
 
   assert.equal(fx.callCount, 3, 'only the edited ticket should trigger a fresh audit');
@@ -96,14 +109,14 @@ test('--force re-audits everything even when every ticket has a fresh cache hit 
   const tickets = [{ id: 'T1', title: 'Login form' }];
 
   const first = await checkAll(tickets, 'cheap', {
-    checkTicketFn: fx.checkTicketFn, loadCacheEntriesFn: fx.loadCacheEntriesFn, resolveModelFn: fx.resolveModelFn,
+    key: fx.key, checkTicketFn: fx.checkTicketFn, loadCacheEntriesFn: fx.loadCacheEntriesFn, resolveModelFn: fx.resolveModelFn,
   });
   fx.record(tickets[0], first[0].gaps);
   assert.equal(fx.callCount, 1);
 
   const forced = await checkAll(tickets, 'cheap', {
     force: true,
-    checkTicketFn: fx.checkTicketFn, loadCacheEntriesFn: fx.loadCacheEntriesFn, resolveModelFn: fx.resolveModelFn,
+    key: fx.key, checkTicketFn: fx.checkTicketFn, loadCacheEntriesFn: fx.loadCacheEntriesFn, resolveModelFn: fx.resolveModelFn,
   });
   assert.equal(fx.callCount, 2, '--force must bypass the cache entirely');
   assert.equal(forced[0].cached, false);
@@ -114,7 +127,7 @@ test('--max-age 0 treats every cache entry as stale — re-audits despite an unc
   const tickets = [{ id: 'T1', title: 'Login form' }];
 
   const first = await checkAll(tickets, 'cheap', {
-    checkTicketFn: fx.checkTicketFn, loadCacheEntriesFn: fx.loadCacheEntriesFn, resolveModelFn: fx.resolveModelFn,
+    key: fx.key, checkTicketFn: fx.checkTicketFn, loadCacheEntriesFn: fx.loadCacheEntriesFn, resolveModelFn: fx.resolveModelFn,
   });
   fx.record(tickets[0], first[0].gaps);
   assert.equal(fx.callCount, 1);
@@ -122,7 +135,7 @@ test('--max-age 0 treats every cache entry as stale — re-audits despite an unc
   const withMaxAgeZero = await checkAll(tickets, 'cheap', {
     maxAgeMs: 0,
     now: Date.now() + 1, // strictly after the recorded entry's timestamp
-    checkTicketFn: fx.checkTicketFn, loadCacheEntriesFn: fx.loadCacheEntriesFn, resolveModelFn: fx.resolveModelFn,
+    key: fx.key, checkTicketFn: fx.checkTicketFn, loadCacheEntriesFn: fx.loadCacheEntriesFn, resolveModelFn: fx.resolveModelFn,
   });
   assert.equal(fx.callCount, 2, '--max-age 0 must not honor even a just-written cache entry');
   assert.equal(withMaxAgeZero[0].cached, false);
@@ -133,14 +146,14 @@ test('a cache entry recorded under one model does not cover a run under a differ
   const tickets = [{ id: 'T1', title: 'Login form' }];
 
   const first = await checkAll(tickets, 'cheap', {
-    checkTicketFn: fx.checkTicketFn, loadCacheEntriesFn: fx.loadCacheEntriesFn, resolveModelFn: fx.resolveModelFn,
+    key: fx.key, checkTicketFn: fx.checkTicketFn, loadCacheEntriesFn: fx.loadCacheEntriesFn, resolveModelFn: fx.resolveModelFn,
   });
   fx.record(tickets[0], first[0].gaps, 'claude-haiku-4-5');
   assert.equal(fx.callCount, 1);
 
   // Simulate ADLC_MODEL_CHEAP now resolving to a different model id.
   const second = await checkAll(tickets, 'cheap', {
-    checkTicketFn: fx.checkTicketFn,
+    key: fx.key, checkTicketFn: fx.checkTicketFn,
     loadCacheEntriesFn: fx.loadCacheEntriesFn,
     resolveModelFn: () => 'gemini-2.5-flash',
   });
@@ -152,7 +165,7 @@ test('when no provider is configured (resolveModelFn returns null), the cache is
   const fx = makeFixture();
   const tickets = [{ id: 'T1', title: 'Login form' }];
   const result = await checkAll(tickets, 'cheap', {
-    checkTicketFn: fx.checkTicketFn,
+    key: fx.key, checkTicketFn: fx.checkTicketFn,
     loadCacheEntriesFn: fx.loadCacheEntriesFn,
     resolveModelFn: () => null,
   });
@@ -171,7 +184,7 @@ test('a legacy cache entry for an over-8000-char ticket does not suppress a re-a
   // Legacy shape: hash + model + gaps, no textChars/cap.
   fx.record(long, []);
 
-  const opts = { checkTicketFn: fx.checkTicketFn, loadCacheEntriesFn: fx.loadCacheEntriesFn, resolveModelFn: fx.resolveModelFn };
+  const opts = { key: fx.key, checkTicketFn: fx.checkTicketFn, loadCacheEntriesFn: fx.loadCacheEntriesFn, resolveModelFn: fx.resolveModelFn };
   const first = await checkAll([long], 'cheap', opts);
   assert.equal(fx.callCount, 1, 'the legacy prefix-audit entry must not be served for a ticket it never saw whole');
   assert.equal(first[0].cached, false);
@@ -179,7 +192,7 @@ test('a legacy cache entry for an over-8000-char ticket does not suppress a re-a
   // Record the way bin does after a real audit (buildRecordPlan shape), then re-run.
   const { buildRecordPlan } = await import('../lib/cache.mjs');
   const [plan] = buildRecordPlan(first, [long], { model: MODEL, tier: 'cheap' });
-  fx.ledger.push({ gate: 'coldstart', ticket: long.id, ts: new Date().toISOString(), data: JSON.parse(plan.rawData) });
+  fx.pushSigned({ gate: 'coldstart', ticket: long.id, ts: new Date().toISOString(), data: JSON.parse(plan.rawData) });
   const second = await checkAll([long], 'cheap', opts);
   assert.equal(fx.callCount, 1, 'the whole-ticket audit recorded under the current cap is reusable');
   assert.equal(second[0].cached, true);
@@ -189,7 +202,7 @@ test('a legacy cache entry for a ticket that fit under 8000 chars is still a hit
   const fx = makeFixture();
   const short = { id: 'T-SHORT', title: 'Short ticket', body: 'fits.' };
   fx.record(short, []);
-  const result = await checkAll([short], 'cheap', { checkTicketFn: fx.checkTicketFn, loadCacheEntriesFn: fx.loadCacheEntriesFn, resolveModelFn: fx.resolveModelFn });
+  const result = await checkAll([short], 'cheap', { key: fx.key, checkTicketFn: fx.checkTicketFn, loadCacheEntriesFn: fx.loadCacheEntriesFn, resolveModelFn: fx.resolveModelFn });
   assert.equal(fx.callCount, 0);
   assert.equal(result[0].cached, true);
 });

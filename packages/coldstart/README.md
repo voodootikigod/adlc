@@ -101,6 +101,18 @@ that includes one, so an operator's answer cannot be stored against a ticket
 they never saw whole. `--offline` reports the same gap, and the live path
 reports it without needing a provider configured. Split the ticket.
 
+A cached verdict is honoured only when its entry carries a valid signature
+under `ADLC_MANIFEST_KEY` (issue #595). The ledger is committed repo content,
+so an unsigned or hand-written line must never be able to green the gate: an
+entry whose signature is missing, wrong, or no longer matches its content is
+ignored and the ticket is re-audited. Without the key the cache is bypassed
+entirely — every target is re-audited and one stderr line says so
+(`coldstart: ADLC_MANIFEST_KEY is not set — cached verdicts are not trusted;
+re-auditing`). Unreadable ledger lines are never silently dropped: when the
+cache read skips any, coldstart reports the count on stderr
+(`coldstart: <n> unreadable manifest line(s) were skipped while reading the
+verdict cache`). Neither notice changes the exit code or stdout.
+
 ```sh
 # First run audits for real and records the verdict
 coldstart --all
