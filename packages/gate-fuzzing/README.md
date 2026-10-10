@@ -130,9 +130,14 @@ Source (c) suite-minus-G corroboration removed (Fix 3 — logically vacuous).
 ## A defeat → a committed gate-fix
 
 gate-fuzzing emits repro artifacts to `.adlc/gate-defeats/<id>.json` containing
-the diff, setup, witness, and a RED test scaffold. The real defense is committing
-that RED test into the defeated gate's `test/` directory and fixing the gate
-until the test passes. This is the compounding ratchet.
+the diff, setup, witness, and a RED test scaffold. The `<id>` is derived from the
+defeat's content hash (the same hash that dedups candidates), never from model
+output, so adversary text cannot choose where the harness writes. The scaffold is
+also written to `packages/<target>/test/bypass-<id>.test.mjs`, but only when the
+target name matches `^[A-Za-z0-9._-]{1,64}$`; any other target gets the repro
+artifact and a stderr refusal instead. The real defense is committing that RED
+test into the defeated gate's `test/` directory and fixing the gate until the
+test passes. This is the compounding ratchet.
 
 ## ADLC phase
 
