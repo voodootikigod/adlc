@@ -71,6 +71,22 @@ it is the authoritative proof over the committed diff.
 `PostToolUse` only tracks repeated failures. Its implementation catches internal
 errors and exits successfully, so telemetry cannot break a Codex tool call.
 
+## Which `adlc` the hooks run
+
+The build-gate and rails bypass recorders and the handoff recovery audit run
+the first `adlc` on `PATH` that is:
+
+- reached through an absolute `PATH` entry outside any `node_modules`
+  directory, since a repository could place one there, and
+- owned by you, or (a `sudo npm i -g @adlc/cli` install) a root-owned file
+  reached through a root-owned `PATH` entry in a root-owned directory, with
+  neither the file nor any directory above it or above the `PATH` entry
+  writable by group or others.
+
+These are the same terms the [Claude Code integration](/docs/integrations/claude-code)
+applies. A project-local install (`node_modules/.bin/adlc` only) is never run,
+and a bypass that needs an `adlc` to record it is refused when none qualifies.
+
 ## Context-rot handoff
 
 <Callout type="warn">
