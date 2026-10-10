@@ -313,6 +313,8 @@ Which tool to reach for:
 | One-off override needed for a bound deny | signed bypass grant (below) |
 | Stale plugin install still arming the gate | remove the old install; the current one does not wire it |
 
+**`incomplete_scan_lower_bound`** is a different deny from the band denies above. It fires when the hook's transcript scan did not reach start-of-file — the transcript exceeds the 8 MiB scan budget, the scan hit its wall-clock budget, or the file *shrank* while being read — while the observed tool-call depth is still below 30. A partial scan can only prove a lower bound on depth, and a lower bound below the handoff threshold cannot clear the call. It clears once depth reaches 30 or in a fresh session. A transcript that *grows* during a complete read (the normal case: the host appends on every turn) is a complete read and does not trigger it.
+
 **There is no environment kill switch, by design.** There is no `ADLC_HANDOFF_BYPASS` and no `ADLC_HANDOFF_ENFORCEMENT` — grepping for one will not find it. This deliberately differs from `ADLC_RAILS_BYPASS`: the only override is a **signed one-shot grant** at `.adlc/handoffs/<session>.bypass-grant.json` (HMAC-SHA256, requires `ADLC_MANIFEST_KEY`), so a bypass cannot be handed out by an agent that can only set environment variables.
 
 (The `pi` and `opencode` adapters are disconnected differently — they keep their call sites behind an **opt-in** `ADLC_CONTEXT_ROT_HANDOFF_ENABLED=1`, which defaults off. That flag decides whether the gate runs at all; it is not a bypass. With it set and a deny active, the recovery path above is still the only way out.)
