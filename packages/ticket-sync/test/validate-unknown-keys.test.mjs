@@ -11,6 +11,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { unknownKeys, validateConfig, validateTicket, validateBlock } from '../lib/validate.mjs';
 import { doctor } from '../lib/doctor.mjs';
+import { parseBlock } from '../lib/block.mjs';
 
 const fixtureDirs = new Set();
 after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
@@ -75,6 +76,18 @@ test('fail-closed direction: closing a definition can only ADD errors, never rem
 test('block and ticket definitions are open (additionalProperties: true) and keep tolerating extension keys', () => {
   assert.deepEqual(validateBlock({ scope: ['x'], note: 'kept' }), []);
   assert.deepEqual(validateTicket({ id: 'T1', title: 'x', completed: true, issue: 42 }), []);
+});
+
+test('edges[] is closed in the published schema, so an edge with an undeclared key is rejected in a block and a ticket', () => {
+  assert.deepEqual(validateBlock({ edges: [{ to: 'T1', type: 'before' }] }), ['edges[0].type: unknown key']);
+  assert.deepEqual(validateTicket({ id: 'T1', title: 'x', edges: [{ to: 'T2', contract: 'c' }] }), []);
+});
+
+test('a remote block carrying an undeclared edge key is an invalid block at parse time (fail closed, not adopted)', () => {
+  const body = '<!-- adlc:begin v=1 -->\n```json\n{"edges":[{"to":"T1","type":"before"}]}\n```\n<!-- adlc:end -->';
+  const parsed = parseBlock(body);
+  assert.equal(parsed.ok, false);
+  assert.ok(parsed.errors.some((e) => e.includes('edges[0].type: unknown key')), parsed.errors.join('; '));
 });
 
 // --- AC5: doctor ---
