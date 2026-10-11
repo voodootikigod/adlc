@@ -48,10 +48,40 @@
 // unlike `readOwnChains`: trust decisions belong to `verify()`, run separately.
 // The refusals here are about IDENTITY and ANCESTRY — which entries are ours —
 // never about whether their content verifies.
+//
+// EACH SEGMENT'S FIRST ENTRY IS READ FROM ITS RAW FIRST LINE (#652), via the
+// same `firstEntryOf` the lineage resolver uses — never from the first entry
+// that SURVIVED the lenient parse. A segment whose line 1 is corrupt would
+// otherwise hand the walk its second entry, which carries no anchor, so the walk
+// stopped short of root with `identityError: null` and root's evidence vanished
+// silently. An unreadable first line on the ancestry path is a refusal.
 
 import { ADLC_DIR } from '@adlc/core';
 import { discoverSegments, readManifestForest } from './forest.mjs';
-import { currentBranch, recoverOpenSegment } from './lineage.mjs';
+import {
+  currentBranch,
+  recoverOpenSegment,
+  firstEntryOf,
+  MALFORMED_FIRST_ENTRY,
+  OVERSIZED_FIRST_ENTRY,
+} from './lineage.mjs';
+
+/**
+ * A segment's first entry from its RAW first line, or why it could not be read.
+ *
+ * @param {string} dir
+ * @param {string} name  a grammar-valid segment filename
+ * @returns {{ok: true, entry: object}|{ok: false, reason: string}}
+ */
+function rawFirstEntry(dir, name) {
+  const first = firstEntryOf(dir, name);
+  if (first === OVERSIZED_FIRST_ENTRY) return { ok: false, reason: 'its first line exceeds the size cap' };
+  if (first === MALFORMED_FIRST_ENTRY) return { ok: false, reason: 'its first line is missing or malformed' };
+  if (!first || typeof first !== 'object' || Array.isArray(first)) {
+    return { ok: false, reason: 'its first line is not an entry object' };
+  }
+  return { ok: true, entry: first };
+}
 
 /**
  * This checkout's own causal chain: root's prior prefix, then each ancestor
@@ -112,7 +142,8 @@ export function readOwnManifestChain(dir = ADLC_DIR, { cwd = process.cwd() } = {
   // chain, and nothing was forked from, so there is no prefix to cut.
   if (own === null) return { entries: inSegment('root'), skipped, ownSegment: null, identityError: null };
 
-  const firstOf = new Map(segments.map((name) => [name, entries.find((entry) => entry.segment === name)]));
+  // Raw first line per VALID segment — not the first surviving parsed entry.
+  const firstOf = new Map(segments.map((name) => [name, rawFirstEntry(dir, name)]));
 
   // Walk own → parent → … → root, remembering the seq each hop's CHILD forked
   // at so the hop can be cut there on the way back down.
@@ -129,8 +160,9 @@ export function readOwnManifestChain(dir = ADLC_DIR, { cwd = process.cwd() } = {
 
     const first = firstOf.get(cursor);
     if (first === undefined) return refuse(`segment '${cursor}' has no readable first entry, so its anchor cannot be resolved`);
+    if (!first.ok) return refuse(`segment '${cursor}' has an unreadable first line (${first.reason}), so its anchor cannot be resolved`);
 
-    const anchor = first.anchor;
+    const anchor = first.entry.anchor;
     // `anchor: null` is a rootless segment (§4.4) — nothing in root precedes
     // it, so root is left out entirely rather than assumed prior. A first entry
     // carrying no `anchor` key at all is read the same way readManifestForest

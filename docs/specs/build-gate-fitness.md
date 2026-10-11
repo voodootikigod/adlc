@@ -83,7 +83,11 @@ npm test   # full suite, from the repo root
   the file is deleted/replaced between the two checks — the hook denies
   rather than treating the unreadable file as "zero bytes, not degraded". The
   context-fitness signal cannot be computed for a ticket already known to be
-  high-risk, so an unverifiable session must not be allowed through.
+  high-risk, so an unverifiable session must not be allowed through. The CLI
+  carries the same rule for the readable-but-empty case: a `--transcript` with
+  no recognizable tool calls is "could not measure" (reported as
+  `signalSource: transcript-empty`) — exit 1 for a high-risk ticket, an allow
+  whose reason says no signal could be derived otherwise (issue #588).
 - **The active-ticket pointer is a Bash-reachable escape hatch (partially
   mitigated).** Build-gate is an opt-in gate: "no active ticket declared →
   allow" is by design (it mirrors rails' "no rails declared → allow").

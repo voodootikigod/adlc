@@ -12,7 +12,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { parseArgs, opError, printJson, loadTickets, ADLC_DIR } from '@adlc/core';
 import { computeRiskTier } from '../lib/risk.mjs';
-import { computeDepthSignal, isDegraded, DEFAULT_DEPTH_THRESHOLD } from '../lib/depth-signal.mjs';
+import { computeDepthSignal, classifyTranscriptSignal, isDegraded, DEFAULT_DEPTH_THRESHOLD } from '../lib/depth-signal.mjs';
 import { decideBuildGate } from '../lib/decide.mjs';
 import { recordOverride } from '../lib/override.mjs';
 import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
@@ -114,8 +114,15 @@ if (values['session-bytes'] !== undefined && !/^\d+$/.test(values['session-bytes
   opError('--session-bytes must be a non-negative integer');
 }
 
+// Where the signal came from — reported on every result so a caller can tell
+// "measured, fresh" from "measured nothing" (issue #588):
+//   flags             --depth and/or --session-bytes were given (they win over a transcript)
+//   transcript        derived from a transcript with at least one recognizable tool call
+//   transcript-empty  a transcript was given but yielded zero tool calls
+//   none              no signal was supplied at all (defaults to not degraded)
 let depth = 0;
 let sessionBytes = 0;
+let signalSource = 'none';
 if (values.transcript !== undefined) {
   if (!existsSync(values.transcript)) {
     opError(`transcript file not found: ${values.transcript}`);
@@ -129,11 +136,28 @@ if (values.transcript !== undefined) {
   const sig = computeDepthSignal({ text });
   depth = sig.depth;
   sessionBytes = sig.bytes;
+  signalSource = classifyTranscriptSignal(sig) === 'measured' ? 'transcript' : 'transcript-empty';
 }
 if (values.depth !== undefined) depth = parseInt(values.depth, 10);
 if (values['session-bytes'] !== undefined) sessionBytes = parseInt(values['session-bytes'], 10);
+if (values.depth !== undefined || values['session-bytes'] !== undefined) signalSource = 'flags';
 
 const { tier, signals } = computeRiskTier(ticket);
+
+// A transcript that measured nothing is "could not measure", not "fresh". For a
+// high-risk ticket that is an operational error — the gate was asked to
+// measure the session and cannot — matching the hook path's rule that an
+// unverifiable session must not be allowed through (build-gate-fitness.md,
+// Known limitations). A ticket the gate does not guard is still allowed, but
+// the reason says so rather than claiming a measurement.
+if (signalSource === 'transcript-empty' && tier === 'high') {
+  opError(
+    `could not derive a context signal from ${values.transcript}: no recognizable tool calls ` +
+    '(empty, truncated, compacted, or an unrecognized transcript format) — ' +
+    'refusing to treat an unmeasured session as fresh'
+  );
+}
+
 const degraded = isDegraded({ depth, sessionBytes, depthThreshold, bytesThreshold });
 const bypass = process.env.ADLC_BUILD_GATE_BYPASS === '1';
 
@@ -152,6 +176,13 @@ const result = decideBuildGate({
     }),
 });
 
+// Only a non-high-risk ticket reaches here with an empty transcript; its allow
+// stands (the gate guards nothing for it) but the reason must not claim a
+// measurement that never happened.
+const reason = signalSource === 'transcript-empty'
+  ? 'no context signal could be derived from the transcript; the ticket is not high-risk so nothing is gated'
+  : result.reason;
+
 const output = {
   tool: 'build-gate',
   ticket: ticket.id,
@@ -162,17 +193,18 @@ const output = {
   depthThreshold,
   bytesThreshold,
   degraded,
+  signalSource,
   decision: result.decision,
-  reason: result.reason,
+  reason,
   overridden: result.overridden === true,
 };
 
 if (values.json) {
   printJson(output);
 } else if (result.decision === 'deny') {
-  console.error(`build-gate: DENY (${ticket.id}, risk=${tier}) — ${result.reason}`);
+  console.error(`build-gate: DENY (${ticket.id}, risk=${tier}) — ${reason} [signal: ${signalSource}]`);
 } else {
-  console.log(`build-gate: allow (${ticket.id}, risk=${tier}) — ${result.reason}`);
+  console.log(`build-gate: allow (${ticket.id}, risk=${tier}) — ${reason} [signal: ${signalSource}]`);
 }
 
 process.exit(result.decision === 'deny' ? 2 : 0);

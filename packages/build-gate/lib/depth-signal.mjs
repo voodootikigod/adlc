@@ -106,6 +106,24 @@ export function computeDepthSignal({ text, bytes } = {}) {
 }
 
 /**
+ * Did a transcript actually measure anything?
+ *
+ * A transcript signal with zero recognizable tool calls is `degenerate`: an
+ * empty, truncated, compacted, or unrecognized-format file reads as depth 0,
+ * which is indistinguishable from a genuinely fresh session unless the caller
+ * asks this question. Byte size does not rescue it — a megabyte of text the
+ * counter does not understand is still a measurement of nothing (issue #588).
+ * Pure: no I/O, the signal is not mutated.
+ *
+ * @param {{ depth?: number }} sig - a computeDepthSignal() result
+ * @returns {'measured'|'degenerate'}
+ */
+export function classifyTranscriptSignal(sig) {
+  const depth = sig?.depth;
+  return typeof depth === 'number' && depth > 0 ? 'measured' : 'degenerate';
+}
+
+/**
  * Is the session context-degraded? True when any available hard-band signal is
  * at or past its threshold (inclusive `>=`, matching context-handoff
  * `evaluateBands` / `isHardDegraded`).

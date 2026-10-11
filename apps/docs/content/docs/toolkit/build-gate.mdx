@@ -33,7 +33,7 @@ adlc build-gate <ticket-id> [--depth <n>] [--session-bytes <n>] [--transcript <p
 | `<ticket-id>` | — | Ticket to gate (required positional). |
 | `--depth <n>` | — | Precomputed tool-call-count depth signal. |
 | `--session-bytes <n>` | — | Precomputed transcript byte-size signal. |
-| `--transcript <path>` | — | Derive depth / session-bytes from this transcript file. |
+| `--transcript <path>` | — | Derive depth / session-bytes from this transcript file. A transcript with no recognizable tool calls is "could not measure": exit 1 for a high-risk ticket, an allow with `signalSource: "transcript-empty"` otherwise. |
 | `--depth-threshold <n>` | `40` | Tool-call count at or past which a session is degraded (inclusive; `HARD_DEPTH`). |
 | `--bytes-threshold <n>` | `8388608` | Transcript bytes (8 MiB) at or past which a session is degraded (inclusive). |
 | `--tickets <path>` | `.adlc/tickets.json` | Path to the tickets file. |
@@ -43,6 +43,15 @@ adlc build-gate <ticket-id> [--depth <n>] [--session-bytes <n>] [--transcript <p
 The library export `DEFAULT_BYTES_THRESHOLD` remains `HARD_BYTES` (256 KiB) by
 design, so the two numbers are not expected to agree: the flag default above is
 the recalibrated operating threshold.
+
+Every result carries a `signalSource` field: `flags` (`--depth` / `--session-bytes`,
+which win over a transcript), `transcript` (derived from a transcript with at least
+one recognizable tool call), `transcript-empty` (a transcript was given but yielded
+zero tool calls), or `none` (no signal supplied). A `transcript-empty` signal is
+**could not measure**, never "fresh": for a high-risk ticket the gate exits 1 with
+`could not derive a context signal from <path>` rather than allowing; for a ticket
+the gate does not guard it still allows, with a reason saying no signal could be
+derived. The human one-liner appends `[signal: <source>]`.
 
 Supplying no signal defaults to "not degraded", since a gate given no signal
 cannot deny. Set `ADLC_BUILD_GATE_BYPASS=1` to override a deny; the override is honored

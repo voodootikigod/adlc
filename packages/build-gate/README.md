@@ -29,7 +29,7 @@ build-gate <ticket-id> [--depth <n>] [--session-bytes <n>] [--transcript <path>]
 | `<ticket-id>` | — | Ticket to gate (required) |
 | `--depth <n>` | — | Precomputed tool-call-count depth signal |
 | `--session-bytes <n>` | — | Precomputed transcript byte-size signal |
-| `--transcript <path>` | — | Derive depth/session-bytes from this transcript file |
+| `--transcript <path>` | — | Derive depth/session-bytes from this transcript file. A transcript with **no recognizable tool calls** is "could not measure": exit 1 for a high-risk ticket, an allow with `signalSource: "transcript-empty"` otherwise |
 | `--depth-threshold <n>` | 40 | Tool-call count past which a session is "degraded" |
 | `--bytes-threshold <n>` | 8388608 (8 MiB) | Transcript bytes past which a session is "degraded" |
 | `--tickets <path>` | `.adlc/tickets.json` | Path to tickets file |
@@ -46,6 +46,18 @@ hook, CI wrapper, or any harness) must supply the signal via `--depth`/
 `--session-bytes`, or point `--transcript` at a transcript file to derive it
 from. Supplying **neither** defaults the signal to "not degraded" — a gate
 given no signal cannot deny.
+
+Every result carries a `signalSource` field saying where the signal came from:
+`flags` (`--depth`/`--session-bytes`, which win over a transcript), `transcript`
+(derived from a transcript with at least one recognizable tool call),
+`transcript-empty` (a transcript was given but yielded zero tool calls — empty,
+truncated, compacted, or an unrecognized format), or `none` (no signal
+supplied). A `transcript-empty` signal is **could not measure**, never "fresh":
+for a high-risk ticket the gate exits 1 (`could not derive a context signal from
+<path>`) instead of allowing, matching the hook path's rule that an unverifiable
+session must not be allowed through; for a ticket the gate does not guard it
+still allows, but the reason says no signal could be derived. The human
+one-liner appends `[signal: <source>]`.
 
 ### Exit codes
 
