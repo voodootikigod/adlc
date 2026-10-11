@@ -83,7 +83,7 @@ function runCi(root) {
   const r = spawnSync(process.execPath, [CI_BIN, '--base', 'main'], {
     cwd: root,
     encoding: 'utf8',
-    env: { ...process.env, RAILS_BASE: '', BASE_REF: '' },
+    env: { ...process.env, RAILS_BASE: '', BASE_REF: '', ADLC_MANIFEST_KEY: '' },
   });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
