@@ -28,6 +28,10 @@ export function railScopeGuard({ localRails, incomingRails, localScope, incoming
 /** Human-readable summary for the CLI / forensic record. */
 export function describeViolations(violations) {
   return violations
-    .map((v) => (v.kind === 'rail-removed' ? `rail removed/replaced: ${v.value}` : `scope widened: ${v.value}`))
+    .map((v) => {
+      if (v.kind === 'rail-removed') return `rail removed/replaced: ${v.value}`;
+      if (v.kind === 'scope-removed') return `scope removed: ${v.value}`;
+      return `scope widened: ${v.value}`;
+    })
     .join('; ');
 }

@@ -85,9 +85,16 @@ function railNarrowingError(id, localTicket, remoteBlock) {
     localRails: localTicket.rails, incomingRails: remoteBlock?.rails,
     localScope: localTicket.scope, incomingScope: remoteBlock?.scope,
   });
-  if (g.ok) return null;
+  // railScopeGuard flags scope WIDENING only, so a block-less issue would pass a
+  // scope-only ticket; with no block there is nothing to compare, every scope
+  // entry is removed, and that is refused just like a stripped rail.
+  const removed = remoteBlock || !Array.isArray(localTicket.scope)
+    ? []
+    : localTicket.scope.map((value) => ({ kind: 'scope-removed', value }));
+  const violations = [...g.violations, ...removed];
+  if (violations.length === 0) return null;
   const why = remoteBlock ? '' : 'remote issue carries no adlc block — ';
-  return `${id}: ${why}${describeViolations(g.violations)} — rerun with --allow-rail-narrowing`;
+  return `${id}: ${why}${describeViolations(violations)} — rerun with --allow-rail-narrowing`;
 }
 
 const normId = (id) => (typeof id === 'string' && id.startsWith('gh:') ? id.toLowerCase() : id);

@@ -75,6 +75,35 @@ test('AC1 (dry-run is blocked too): the guard does not depend on --write', async
   assert.equal(r.exitCode, 2);
 });
 
+// --- scope-only local ticket (no rails): an absent block still strips scope ---
+
+const SCOPED = { id: ID, title: 'issue 1', scope: ['src/auth/**'], duration: 1 };
+
+test('a remote issue with NO adlc block cannot strip a scope-only local ticket (no rails) — exit 2, the scope entry is named', async () => {
+  const dir = repo({ ticket: SCOPED, baseBlock: { scope: ['src/auth/**'], duration: 1 } });
+  const r = await pull({ dir, provider: fakeProvider([bare('desc only, sentinels deleted')]) });
+  assert.equal(r.exitCode, 2, `expected a blocked pull: ${JSON.stringify(r)}`);
+  assert.equal(r.errors.length, 1);
+  assert.match(r.errors[0], /^gh:acme\/app#1: remote issue carries no adlc block — scope removed: src\/auth\/\*\* — rerun with --allow-rail-narrowing$/);
+  assert.ok(!r.plan.some((p) => p.id === ID), 'a blocked ticket is not planned');
+});
+
+test('the same scope-only pull with --allow-rail-narrowing proceeds and the scope is gone (explicit, not accidental)', async () => {
+  const dir = repo({ ticket: SCOPED, baseBlock: { scope: ['src/auth/**'], duration: 1 } });
+  const r = await pull({
+    dir, provider: fakeProvider([bare('desc only, sentinels deleted')]),
+    allowRailNarrowing: true, write: true, allowUnsigned: true, now: 'T',
+  });
+  assert.equal(r.exitCode, 0, JSON.stringify(r.errors));
+  assert.equal(readTicket(dir).scope, undefined);
+});
+
+test('a PRESENT block that merely omits scope on a scope-only ticket is unchanged: scope narrowing is not flagged', async () => {
+  const dir = repo({ ticket: SCOPED, baseBlock: { scope: ['src/auth/**'], duration: 1 } });
+  const r = await pull({ dir, provider: fakeProvider([withBlock({ duration: 1 })]) });
+  assert.equal(r.exitCode, 0, JSON.stringify(r.errors));
+});
+
 // --- AC2: absent block is not a narrowing of nothing ---
 
 test('AC2: a local ticket with no rails and no scope is unaffected by an absent block — exit 0, no error', async () => {
