@@ -5,6 +5,7 @@
 // is a bare clone with no node_modules).
 import {
   readFileSync, existsSync, rmSync, mkdtempSync, openSync, readSync, fstatSync, closeSync, statSync, opendirSync,
+  lstatSync,
   constants as fsConstants,
 } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
@@ -109,6 +110,133 @@ function readTailText(path, maxBytes) {
       }
     }
   }
+}
+
+// Issue #830: a segmented repo freezes `.adlc/manifest.jsonl` and appends every
+// new record to `.adlc/manifest.d/<branch>-<ULID>.jsonl`. The readers below
+// therefore read the FOREST — the root plus every segment — or the board shows
+// a ledger frozen at the cutover date and the pane phase token silently
+// disappears. Bounded like every other untrusted-root scan in this file.
+const MAX_LEDGER_SEGMENTS = 256;
+export { MAX_LEDGER_SEGMENTS };
+
+const SEGMENT_FILE_RE = /\.jsonl$/;
+// `<anything>-<26-char ULID>.jsonl` — the ULID (Crockford base32) is what the
+// writers mint, and it sorts chronologically.
+const SEGMENT_ULID_RE = /-([0-9A-HJKMNP-TV-Z]{26})\.jsonl$/i;
+
+/** The ULID suffix of a segment file name, or null when it has none. */
+function segmentUlid(name) {
+  const match = SEGMENT_ULID_RE.exec(name);
+  return match ? match[1].toUpperCase() : null;
+}
+
+/**
+ * True for a REGULAR file at `path` (lstat: a symlink is never followed). An
+ * entry that cannot be stat'ed at all — the directory is listable but not
+ * searchable, or the entry vanished between readdir and lstat — is not a file
+ * this reader may open, so it is excluded rather than guessed at.
+ */
+function isRegularFile(path) {
+  let stat = null;
+  try {
+    stat = lstatSync(path);
+  } catch {
+    stat = null;
+  }
+  return stat !== null && stat.isFile();
+}
+
+// Separator for the composite sort key below. A file name can never contain
+// NUL, so splitting on it recovers the name exactly.
+const KEY_SEP = '\u0000';
+
+/**
+ * A string whose default (lexicographic) sort order IS the segment read order:
+ * files without a ULID suffix first, by name; then by ULID ascending (= mint
+ * order); ties by name. Sorting plain strings instead of running a numeric
+ * comparator keeps the ordering rule in one place with nothing to get wrong.
+ */
+function segmentSortKey(name) {
+  // An absent ULID becomes the empty string, which sorts before every real
+  // ULID (NUL is below every base32 character) — no extra marker needed.
+  return `${segmentUlid(name) ?? ''}${KEY_SEP}${name}`;
+}
+
+/** The segment file name a sort key was built from. */
+function nameFromSortKey(key) {
+  return key.split(KEY_SEP)[1];
+}
+
+/**
+ * The ledger files to read, in read order: the frozen root `.adlc/manifest.jsonl`
+ * when it exists, then every regular `*.jsonl` segment under `.adlc/manifest.d/`
+ * (symlinks and directories skipped; at most MAX_LEDGER_SEGMENTS, the bound
+ * `readdirBounded` enforces) sorted ascending by ULID suffix. Never throws; a
+ * missing directory contributes nothing.
+ */
+export function ledgerSources(repoRoot) {
+  const sources = [];
+  const root = join(repoRoot, '.adlc', 'manifest.jsonl');
+  if (existsSync(root)) sources.push(root);
+  const segmentDir = join(repoRoot, '.adlc', 'manifest.d');
+  const names = readdirBounded(segmentDir, MAX_LEDGER_SEGMENTS)
+    .filter((name) => SEGMENT_FILE_RE.test(name))
+    .filter((name) => isRegularFile(join(segmentDir, name)))
+    .map(segmentSortKey)
+    .sort()
+    .map(nameFromSortKey);
+  for (const name of names) sources.push(join(segmentDir, name));
+  return sources;
+}
+
+/** Parse the JSON records in a ledger tail, skipping torn/unparseable lines. */
+function parseLedgerLines(text) {
+  const records = [];
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      records.push(JSON.parse(line));
+    } catch {
+      continue;
+    }
+  }
+  return records;
+}
+
+/** Tail-read one ledger source into its parsed records ([] when unreadable). */
+function readSourceRecords(path) {
+  const text = readTailText(path, LEDGER_TAIL_BYTES);
+  return text === null ? [] : parseLedgerLines(text);
+}
+
+/**
+ * Merge per-source record lists into one chronological list. Order: records
+ * with no string `ts` first, in source then line order; then by `ts` (ISO
+ * string compare) ascending, ties by source order then line order. Pure —
+ * returns a new array and mutates neither the lists nor the records.
+ */
+export function mergeLedgerRecords(recordLists) {
+  const tagged = [];
+  recordLists.forEach((records, source) => {
+    records.forEach((record, line) => {
+      const ts = typeof record?.ts === 'string' ? record.ts : null;
+      tagged.push({ record, source, line, ts });
+    });
+  });
+  tagged.sort((a, b) => {
+    if (a.ts === null && b.ts !== null) return -1;
+    if (a.ts !== null && b.ts === null) return 1;
+    if (a.ts !== null && a.ts !== b.ts) return a.ts < b.ts ? -1 : 1;
+    if (a.source !== b.source) return a.source - b.source;
+    return a.line - b.line;
+  });
+  return tagged.map((t) => t.record);
+}
+
+/** Every parsed record across the forest, oldest first. */
+function readMergedLedger(repoRoot) {
+  return mergeLedgerRecords(ledgerSources(repoRoot).map(readSourceRecords));
 }
 
 /**
@@ -237,24 +365,13 @@ export function readActiveTicket(repoRoot) {
 }
 
 /**
- * Phase of the newest `.adlc/manifest.jsonl` record for `ticketId`
- * (uppercased), or null. Unparseable lines are skipped — the ledger is
- * append-only and its tail can be mid-write.
+ * Phase of the newest ledger record for `ticketId` (uppercased) across the
+ * root ledger and every manifest.d segment, or null. Unparseable lines are
+ * skipped — the ledger is append-only and its tail can be mid-write.
  */
 export function readLatestPhase(repoRoot, ticketId) {
-  const path = join(repoRoot, '.adlc', 'manifest.jsonl');
-  if (!existsSync(path)) return null;
-  const text = readTailText(path, LEDGER_TAIL_BYTES);
-  if (text === null) return null;
   let phase = null;
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue;
-    let record;
-    try {
-      record = JSON.parse(line);
-    } catch {
-      continue;
-    }
+  for (const record of readMergedLedger(repoRoot)) {
     if (record?.ticket === ticketId && typeof record?.data?.phase === 'string') {
       phase = record.data.phase.toUpperCase();
     }
@@ -310,23 +427,10 @@ export function groupBacklog(tickets, activeId) {
 /** Default ledger-tail depth for display surfaces (the board). */
 export const DEFAULT_LEDGER_ROWS = 8;
 
-/** Last `n` parsed records of `.adlc/manifest.jsonl` (torn lines skipped). */
+/** Last `n` parsed records across the ledger forest (torn lines skipped). */
 export function readLedgerTail(repoRoot, n = DEFAULT_LEDGER_ROWS) {
   if (!Number.isFinite(n) || n <= 0) return [];
-  const path = join(repoRoot, '.adlc', 'manifest.jsonl');
-  if (!existsSync(path)) return [];
-  const text = readTailText(path, LEDGER_TAIL_BYTES);
-  if (text === null) return [];
-  const records = [];
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue;
-    try {
-      records.push(JSON.parse(line));
-    } catch {
-      continue;
-    }
-  }
-  return records.slice(-n);
+  return readMergedLedger(repoRoot).slice(-n);
 }
 
 /**
@@ -338,19 +442,8 @@ export function readLedgerTail(repoRoot, n = DEFAULT_LEDGER_ROWS) {
  */
 export function readLedgerByTicket(repoRoot, n = DEFAULT_LEDGER_ROWS) {
   if (!Number.isFinite(n) || n <= 0) return [];
-  const path = join(repoRoot, '.adlc', 'manifest.jsonl');
-  if (!existsSync(path)) return [];
-  const text = readTailText(path, LEDGER_TAIL_BYTES);
-  if (text === null) return [];
   const latestByTicket = new Map(); // ticket -> record (last occurrence wins)
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue;
-    let record;
-    try {
-      record = JSON.parse(line);
-    } catch {
-      continue;
-    }
+  for (const record of readMergedLedger(repoRoot)) {
     if (typeof record?.ticket !== 'string') continue;
     latestByTicket.delete(record.ticket); // re-insert so iteration order = recency of latest activity
     latestByTicket.set(record.ticket, record);

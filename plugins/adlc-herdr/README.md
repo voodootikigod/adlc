@@ -36,6 +36,11 @@ herdr plugin install voodootikigod/adlc/plugins/adlc-herdr
 
 Requires herdr ≥ 0.7.4 (`min_herdr_version`). The plugin is zero-dependency
 Node and declares no `[[build]]` commands — installation executes nothing.
+At startup the watcher probes `herdr --version`; a probe that fails (herdr not
+yet on the plugin's PATH, a transient IPC hiccup) is logged to stderr and
+retried on the heartbeat rather than disabling the watcher for the session —
+only a probe that succeeds with a version newer than the tested ceiling takes
+the single-warning-token degrade path.
 
 ### About the npm package
 
@@ -57,7 +62,7 @@ guarantees as the palette.
 
 | Suggested key | Binding | What it does |
 | --- | --- | --- |
-| `<leader> a b` | `plugin pane open --plugin adlc --entrypoint board` | Open the **board** overlay (backlog · pane map · gate ledger) |
+| `<leader> a b` | `plugin pane open --plugin adlc --entrypoint board` | Open the **board** overlay (backlog · pane map · gate ledger). The gate-ledger section and the per-pane `phase` token read the frozen root `.adlc/manifest.jsonl` plus every segment under `.adlc/manifest.d/`, so a repo that has cut over to segmented manifest storage shows its current records, not the pre-cutover ledger. |
 | `<leader> a t` | `plugin action invoke --plugin adlc --action ticket-show` | **ticket-show** — split pane rendering the pane's active ticket |
 | `<leader> a g` | `plugin action invoke --plugin adlc --action gate` | **gate** — notify pass/FAIL of `gate-manifest verify` for the repo |
 | `<leader> a p` | `plugin action invoke --plugin adlc --action prosecute` | **prosecute** — spawn the P5 `adversarial-review` in a split |
