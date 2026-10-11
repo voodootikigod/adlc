@@ -21,6 +21,7 @@ import { appendManifestEntry } from '@adlc/gate-manifest';
 import { readFileSync, lstatSync } from 'node:fs';
 
 import { runChecks } from '../lib/check.mjs';
+import { resolveRailSet } from '../lib/rails.mjs';
 import { formatViolations, buildResult } from '../lib/output.mjs';
 import { computeFencedLines, isMdxFile } from '../lib/suppressions.mjs';
 import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
@@ -48,10 +49,15 @@ Rail-freeze enforcement + suppression-marker gate (ADLC C5).
                      origin/main/origin/master). If no trunk ref is found, the
                      gate fails closed — pass --base explicitly. NEVER defaults to
                      HEAD, which would hide already-committed rail edits.
-  --ticket <id>      Ticket ID to load rails and allow-suppression declarations from
+  --ticket <id>      The ticket being built: selects whose allow-suppression
+                     declarations apply and is echoed as the result's ticket. It
+                     does NOT narrow the rails — those are the union of every
+                     active (non-completed) ticket's declarations in the store, so
+                     an edit to another ticket's frozen rail fails here too, and the
+                     violation names the owning ticket.
   --tickets <path>   Path to tickets.json (default: .adlc/tickets.json)
   --rails <glob>     One or more glob patterns declaring frozen rail paths
-                     (repeatable; overrides ticket.rails)
+                     (repeatable; overrides the store's rails entirely)
   --sanctioned-add <path>
                      Exact file path whose rail match is a sanctioned AUTHORING
                      addition (repeatable). Plumbing for the CI wrapper, which
@@ -75,13 +81,17 @@ if (!isGitRepo()) {
   opError('not inside a git repository');
 }
 
-// --- load ticket if requested ---
+// --- load the ticket store (#1050: rails are the UNION of every active ticket's) ---
+// The store is read whether or not --ticket was given, because the rail set no longer
+// depends on which ticket the caller names. A store that cannot be read is only fatal
+// when the caller named a ticket in it; with --rails the store is not consulted.
+const cliRails = values.rails ?? [];
+const ticketsPath = values.tickets ?? `${ADLC_DIR}/tickets.json`;
+const { tickets, errors: ticketErrors } = loadTickets(ticketsPath);
 let ticket = null;
 if (values.ticket) {
-  const ticketsPath = values.tickets ?? `${ADLC_DIR}/tickets.json`;
-  const { tickets, errors } = loadTickets(ticketsPath);
-  if (errors.length > 0 && tickets.length === 0) {
-    opError(`could not load tickets from ${ticketsPath}: ${errors[0]}`);
+  if (ticketErrors.length > 0 && tickets.length === 0) {
+    opError(`could not load tickets from ${ticketsPath}: ${ticketErrors[0]}`);
   }
   ticket = tickets.find((t) => t.id === values.ticket) ?? null;
   if (!ticket) {
@@ -89,14 +99,10 @@ if (values.ticket) {
   }
 }
 
-// --- resolve rail globs early to catch missing-rails before doing git work ---
-const cliRails = values.rails ?? [];
-if (cliRails.length === 0 && !ticket) {
-  opError('no --rails supplied and no --ticket given — cannot determine rail globs');
-}
-
-if (cliRails.length === 0 && ticket && (ticket.rails ?? []).length === 0) {
-  opError(`ticket ${ticket.id} has no rails declared and no --rails flag supplied`);
+// --- resolve the rail set early to catch an empty set before doing git work ---
+{
+  const { error } = resolveRailSet({ cliRails, ticket, tickets });
+  if (error) opError(error);
 }
 
 // --- resolve freeze baseline ---
@@ -239,15 +245,16 @@ function resolveContents(file) {
 }
 
 // --- run checks ---
-const { railGlobs, railGlobError, violations, railsDiffEmpty, suppressionsClean, sanctionedAdditions } =
+const { railGlobs, railSources, railGlobError, violations, railsDiffEmpty, suppressionsClean, sanctionedAdditions } =
   runChecks({
-    changedFiles: files, diffText: diff, cliRails, ticket, isFenced, resolveContents,
+    changedFiles: files, diffText: diff, cliRails, ticket, tickets, isFenced, resolveContents,
     sanctionedAdditions: new Set(values['sanctioned-add'] ?? []),
   });
 
 const result = buildResult({
   violations,
   railGlobs,
+  railSources,
   railGlobError,
   railsDiffEmpty,
   suppressionsClean,
@@ -275,7 +282,7 @@ if (values.json) {
         sanctionedAdditions.join(', '));
     }
   } else {
-    console.error(formatViolations(violations));
+    console.error(formatViolations(violations, { ticketId: ticket?.id ?? null }));
   }
 }
 

@@ -34,18 +34,29 @@ rails-guard [--base <ref>] [--ticket <id>] [--tickets <path>] \
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--base <ref>` | `HEAD` | Git ref to diff against |
-| `--ticket <id>` | — | Load rails and `allow-suppression` declarations from this ticket |
-| `--tickets <path>` | `.adlc/tickets.json` | Path to tickets file |
-| `--rails <glob>` | — | One or more frozen-path globs (repeatable; overrides `ticket.rails`) |
+| `--ticket <id>` | — | The ticket being built: selects whose `allow-suppression` declarations apply and is echoed as the result's `ticket`. It does not narrow which rails are checked |
+| `--tickets <path>` | `.adlc/tickets.json` | Path to tickets file (the whole store is read, with or without `--ticket`) |
+| `--rails <glob>` | — | One or more frozen-path globs (repeatable; overrides the store's rails entirely) |
 | `--record` | off | On a clean pass, append a manifest entry to `.adlc/manifest.jsonl` |
 | `--json` | off | Emit machine-readable JSON result |
 | `--help` | — | Print this help and exit 0 |
 
 ### Rail source resolution
 
-1. If `--rails` globs are supplied they are used directly.
-2. Otherwise `--ticket` must be provided; rails come from `ticket.rails`.
-3. If neither is available the tool exits 1 (operational error).
+1. If `--rails` globs are supplied they are used directly (no owning ticket).
+2. Otherwise the rails are the **union of every active ticket's declarations** in the
+   store — every ticket whose `completed` is not the strict boolean `true` — the same
+   rule the CI gate (`rails-guard-ci`) and `tier-check` apply. Rails are frozen for
+   everyone, so an edit to another ticket's frozen rail fails here too, and the
+   violation names the owning ticket: `(rail of ticket <id>)`. `--ticket` is optional
+   and does not narrow the set; a run with neither flag checks the union with no
+   suppression allowances.
+3. If no active ticket declares a rail and no `--rails` was given, the tool exits 1
+   (operational error: nothing to guard).
+
+In `--json` output `railSources` lists each glob with its `owner` (null for `--rails`
+globs) and every `rail-edit` violation carries `ownerTicket`; `railGlobs` remains the
+de-duplicated glob list.
 
 ### allow-suppression declarations
 
