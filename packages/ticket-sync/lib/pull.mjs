@@ -4,7 +4,8 @@
 // Flow: load config → resolve repo → provider.listIssues → per-issue parse + 3-way
 // reconcile + rail/scope guard → union with local → Validity Gate → dry-run plan or
 // atomic write (tickets.json + sidecar). Fails closed (exit 2) on any invalid
-// block, unresolved conflict, rail-narrowing, or Validity-Gate violation.
+// block, unresolved conflict, rail-narrowing (a deleted block included), or
+// Validity-Gate violation.
 
 import { join } from 'node:path';
 import { topoSort } from '@adlc/core';
@@ -65,6 +66,28 @@ function buildTicket(id, title, prose, block, localTicket) {
   if (prose) t.body = prose;
   if (block) for (const k of BLOCK_KEYS) if (block[k] !== undefined) t[k] = block[k];
   return t;
+}
+
+/**
+ * The rail/scope guard for ONE adopted ticket: the error line to report, or
+ * null when the incoming block narrows nothing.
+ *
+ * It runs whenever a local ticket exists, block or no block. `buildTicket`
+ * deletes every block-owned field the remote does not carry, so an issue whose
+ * adlc block was removed tracker-side is the MAXIMAL narrowing — every local
+ * rail gone, every scope entry gone — and has to be refused exactly like a block
+ * that merely omits `rails`. A ticket with no rails and no scope has nothing to
+ * narrow, so an absent block is not a violation for it.
+ */
+function railNarrowingError(id, localTicket, remoteBlock) {
+  if (!localTicket) return null;
+  const g = railScopeGuard({
+    localRails: localTicket.rails, incomingRails: remoteBlock?.rails,
+    localScope: localTicket.scope, incomingScope: remoteBlock?.scope,
+  });
+  if (g.ok) return null;
+  const why = remoteBlock ? '' : 'remote issue carries no adlc block — ';
+  return `${id}: ${why}${describeViolations(g.violations)} — rerun with --allow-rail-narrowing`;
 }
 
 const normId = (id) => (typeof id === 'string' && id.startsWith('gh:') ? id.toLowerCase() : id);
@@ -148,13 +171,8 @@ export async function pull({
     if (decision.action === 'keep-local') { plan.push({ id, action: 'keep-local' }); continue; }
 
     // adopt remote (take-remote | converged | conflict+force)
-    if (localTicket && remoteBlock) {
-      const g = railScopeGuard({ localRails: localTicket.rails, incomingRails: remoteBlock.rails, localScope: localTicket.scope, incomingScope: remoteBlock.scope });
-      if (!g.ok && !allowRailNarrowing) {
-        errors.push(`${id}: ${describeViolations(g.violations)} — rerun with --allow-rail-narrowing`);
-        continue;
-      }
-    }
+    const narrowing = railNarrowingError(id, localTicket, remoteBlock);
+    if (narrowing && !allowRailNarrowing) { errors.push(narrowing); continue; }
     proposed.set(id, buildTicket(id, issue.title, prose, remoteBlock, localTicket));
     sidecarUpdates[id] = {
       provider: 'github', repo, number: issue.number, nodeId: issue.nodeId, url: issue.url,

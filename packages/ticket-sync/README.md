@@ -15,10 +15,10 @@ adlc-ticket-sync --help
 
 | Command | What it does |
 |---|---|
-| `adlc-ticket-sync pull` | Import issues → the active ticket store (3-way reconcile; unions; fails closed on conflict). |
+| `adlc-ticket-sync pull` | Import issues → the active ticket store (3-way reconcile; unions; fails closed on conflict). An absent remote adlc block counts as removing every local rail and scope entry, and is blocked without `--allow-rail-narrowing`. |
 | `adlc-ticket-sync push` | Write tickets back: update synced issues + **idempotent create** for local-only tickets + display-only status labels/comment. |
 | `adlc-ticket-sync sync` | `pull` then `push` (a non-clean pull aborts before push). |
-| `adlc-ticket-sync doctor` | Read-only, offline health checks (config / tickets / schema drift / sidecar / stale lock). |
+| `adlc-ticket-sync doctor` | Read-only, offline health checks (config / tickets / schema drift / sidecar / stale lock). `config-valid` rejects a key the schema forbids and names it (`ticketSync.selct: unknown key`). |
 
 Dry-run by default — pass `--write` to apply. `--json` on all commands.
 `--limit <n>` caps how many issues `pull`/`push`/`sync` list from the tracker
