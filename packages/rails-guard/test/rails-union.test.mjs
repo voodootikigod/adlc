@@ -256,6 +256,30 @@ describe('rails-guard bin — the union of active rails', () => {
     assert.match(r.stderr, /T-NOPE.*not found/);
   });
 
+  test('--tickets <path> is the store the union is read from, not the default location', () => {
+    const repo = scratchRepo();
+    // The default store declares no rails at all; only the alternate one carries the union.
+    writeStore(repo.root, [{ id: 'T-RAILLESS', title: 'declares nothing' }]);
+    mkdirSync(join(repo.root, 'stores'), { recursive: true });
+    writeFileSync(join(repo.root, 'stores', 'tickets.json'), JSON.stringify({ schema: 1, tickets: TICKETS }, null, 2) + '\n');
+    editAndCommit(repo, 'other/rail.txt');
+
+    const alternate = runBin(repo.root, ['--tickets', 'stores/tickets.json', '--ticket', MINE, '--json']);
+    assert.equal(alternate.status, 2, alternate.stderr);
+    assert.equal(json(alternate).violations[0].ownerTicket, OTHER);
+
+    const byDefault = runBin(repo.root, []);
+    assert.equal(byDefault.status, 1, 'the default store has nothing to guard');
+    assert.match(byDefault.stderr, /no active ticket declares rails/);
+  });
+
+  test('--help documents that --ticket selects allowances and does not narrow the rails', () => {
+    const stdout = execFileSync(process.execPath, [BIN, '--help'], { encoding: 'utf8' });
+    assert.match(stdout, /--ticket <id>\s+The ticket being built/);
+    assert.match(stdout, /does NOT narrow the rails/);
+    assert.match(stdout, /--rails <glob>[\s\S]*overrides the store's rails entirely/);
+  });
+
   test('explicit --rails still wins over the store and reports no owner', () => {
     const repo = scratchRepo();
     editAndCommit(repo, 'other/rail.txt');
