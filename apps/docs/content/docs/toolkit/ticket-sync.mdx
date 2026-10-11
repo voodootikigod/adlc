@@ -23,13 +23,13 @@ The standalone binary is `adlc-ticket-sync`; the same command dispatches through
 
 | Command / Flag | Description |
 | --- | --- |
-| `pull` | Import issues into the active ticket store (3-way reconcile; unions; fails closed on conflict). |
+| `pull` | Import issues into the active ticket store (3-way reconcile; unions; fails closed on conflict). An absent remote adlc block counts as removing every local rail and scope entry, and is blocked without `--allow-rail-narrowing`. |
 | `push` | Write tickets back: update synced issues, idempotent create for local-only tickets, display-only status. |
 | `sync` | `pull` then `push`; a non-clean pull aborts before push. |
-| `doctor` | Read-only, offline health checks (config / tickets / schema drift / sidecar / stale lock). |
+| `doctor` | Read-only, offline health checks (config / tickets / schema drift / sidecar / stale lock). `config-valid` rejects a key the schema forbids and names it (`ticketSync.selct: unknown key`). |
 | `--write` | Apply changes (dry-run without it). |
 | `--force` | Override a blocked pull. |
-| `--allow-rail-narrowing` | Permit a pull that narrows declared rails. |
+| `--allow-rail-narrowing` | Permit a pull that narrows declared rails, including one whose remote adlc block was deleted. |
 | `--limit <n>` | Cap on issues listed from the tracker (default 500; a positive integer). A listing that reaches the cap is refused as possibly truncated, so raise it or narrow `select`. With `select.query` set, the search API returns at most 1000 results, so 1000 rows is refused at any limit. |
 | `--json` | Machine-readable output on all commands. |
 
