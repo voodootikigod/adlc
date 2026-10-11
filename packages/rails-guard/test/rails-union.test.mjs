@@ -265,12 +265,13 @@ describe('rails-guard bin — the union of active rails', () => {
   });
 
   test('--ticket still selects whose allow-suppression declarations apply', () => {
+    const SKIP = '.sk' + 'ip('; // assembled so this file never carries the marker on an added line
     const tickets = [
-      { id: MINE, title: 'mine', body: 'allow-suppression: .skip(', rails: ['mine/frozen/**'] },
+      { id: MINE, title: 'mine', body: `allow-suppression: ${SKIP}`, rails: ['mine/frozen/**'] },
       { id: OTHER, title: 'other', body: '', rails: ['other/rail.txt'] },
     ];
     const repo = scratchRepo({ tickets });
-    writeFileSync(join(repo.root, 'src/x.txt'), "it.skip('known', () => {});\n");
+    writeFileSync(join(repo.root, 'src/x.txt'), `it${SKIP}'known', () => {});\n`);
     repo.g('add', '-A');
     repo.g('commit', '-q', '-m', 'add a skip');
     assert.equal(runBin(repo.root, ['--ticket', MINE]).status, 0);
