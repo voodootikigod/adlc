@@ -35,6 +35,12 @@ test('AC3: the result is sorted, covers every extra key, and the input is not mu
   assert.deepEqual(unknownKeys({ a: 1 }, { additionalProperties: false, fields: { a: {} } }), []);
 });
 
+test('AC3: a key set to undefined is absent — not unknown, and it does not satisfy a required field', () => {
+  assert.deepEqual(unknownKeys({ a: 1, extra: undefined }, { additionalProperties: false, fields: { a: {} } }), []);
+  assert.deepEqual(validateConfig({ ticketSync: { provider: 'github', selct: undefined } }), []);
+  assert.deepEqual(validateTicket({ id: 'T1', title: undefined }), ['title: required']);
+});
+
 test('AC3: a spec with no fields map declares nothing, so every key is unknown when closed', () => {
   assert.deepEqual(unknownKeys({ x: 1 }, { additionalProperties: false }), ['x']);
 });
