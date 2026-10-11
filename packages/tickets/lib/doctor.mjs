@@ -8,7 +8,7 @@ import { pendingTransactions } from './store.mjs';
 import { DirectoryTicketStore } from './stores/directory.mjs';
 import {
   isSegmentedRepo, recoverOpenSegment, segmentPath, entrySigValid,
-  discoverSegments, readLineageToken, ulidOf,
+  discoverSegments, readLineageToken, ulidOf, currentBranch,
 } from './manifest-segments.mjs';
 import { validateKeyParam } from './key-contract.mjs';
 
@@ -321,12 +321,53 @@ function readChain(path) {
  * `storehash-manifest-bind`, `transactions` and `writer-lock` are read by
  * operators and by ticket-store tooling.
  */
+/**
+ * Decide what a `.lineage` token means for THIS checkout, from its arguments
+ * alone (never the filesystem):
+ *
+ *  - `none`    — no token.
+ *  - `foreign` — the token belongs to another branch, or this checkout is on a
+ *                detached HEAD (`branch === null`). `peekOpenSegment` only
+ *                considers a token when `branch !== null && token.branch ===
+ *                branch`, so a writer here would mint a fresh segment and never
+ *                read this token. `.lineage` is gitignored and survives a
+ *                `git checkout` that removes the committed segment file it
+ *                names, so a foreign token on a healthy checkout is routine
+ *                (#795) — informational, never a failure.
+ *  - `stale`   — the token is this branch's and names a segment that is gone,
+ *                or caches a ULID the segment file does not carry.
+ *  - `ok`      — this branch's token, present segment, matching ULID.
+ */
+export function classifyLineageToken(token, branch, validSegments) {
+  if (!token) return { kind: 'none' };
+  const { segment, ulid } = token;
+  // `token.branch` is always a string (readLineageToken rejects any other shape),
+  // so a detached HEAD (`branch === null`) falls out of this one comparison —
+  // no separate null guard, which would be an unobservable second branch.
+  if (token.branch !== branch) {
+    return { kind: 'foreign', segment, ulid, branch: token.branch };
+  }
+  if (!validSegments.includes(segment)) {
+    return { kind: 'stale', segment, ulid, reason: `.lineage names segment '${segment}', which no longer exists` };
+  }
+  const actual = ulidOf(segment);
+  if (actual !== ulid) {
+    return { kind: 'stale', segment, ulid, reason: `.lineage caches ULID '${ulid}' for segment '${segment}', whose own ULID is '${actual}'` };
+  }
+  return { kind: 'ok', segment, ulid };
+}
+
 function manifestForestCheck(root) {
   const check = { name: 'manifest-forest', ok: true };
   const dir = join(root, '.adlc');
   if (!isSegmentedRepo(dir)) return { ...check, segmented: false };
 
-  const { valid } = discoverSegments(dir);
+  // `invalid` is every non-conforming object under manifest.d/ — a symlink, a
+  // nested directory, a non-regular file, a bad-grammar name, a fake lock.
+  // `forestChainsIntact` fails closed on any of them and every evidence-
+  // required writer refuses with INVALID_MANIFEST, so a doctor that dropped
+  // them reported ok on a forest the next write would reject (#794).
+  const { valid, invalid } = discoverSegments(dir);
   const chains = new Map([['root', readChain(join(dir, 'manifest.jsonl'))]]);
   for (const name of valid) chains.set(name, readChain(segmentPath(dir, name)));
 
@@ -346,23 +387,23 @@ function manifestForestCheck(root) {
     }
   }
 
-  let staleLineage = null;
-  const token = readLineageToken(dir);
-  if (token) {
-    if (!valid.includes(token.segment)) {
-      staleLineage = { segment: token.segment, ulid: token.ulid, reason: `.lineage names segment '${token.segment}', which no longer exists` };
-    } else if (ulidOf(token.segment) !== token.ulid) {
-      staleLineage = { segment: token.segment, ulid: token.ulid, reason: `.lineage caches ULID '${token.ulid}' for segment '${token.segment}', whose own ULID is '${ulidOf(token.segment)}'` };
-    }
-  }
+  const lineage = classifyLineageToken(readLineageToken(dir), currentBranch(root), valid);
+  const staleLineage = lineage.kind === 'stale'
+    ? { segment: lineage.segment, ulid: lineage.ulid, reason: lineage.reason }
+    : null;
+  const foreignLineage = lineage.kind === 'foreign'
+    ? { segment: lineage.segment, ulid: lineage.ulid, branch: lineage.branch }
+    : null;
 
   return {
     ...check,
-    ok: orphanedAnchors.length === 0 && staleLineage === null,
+    ok: orphanedAnchors.length === 0 && staleLineage === null && invalid.length === 0,
     segmented: true,
     segments: valid.length,
+    invalidSegments: invalid,
     orphanedAnchors,
     staleLineage,
+    foreignLineage,
   };
 }
 
