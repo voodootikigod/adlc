@@ -13,8 +13,9 @@ import { resolveRepoRoot } from '../lib/repo-root.mjs';
 import { readActiveTicket, readLatestPhase, backlogCounts, readTicketsViaExport, readFleetStatus } from '../lib/adlc-state.mjs';
 import {
   buildReportArgs, buildWorkspaceReportArgs, diffPublishes, droppedKeys,
-  buildPaneClearArgs, buildWorkspaceClearArgs, versionGate,
+  buildPaneClearArgs, buildWorkspaceClearArgs,
 } from '../lib/tokens.mjs';
+import { probeOutcome } from '../lib/probe.mjs';
 import { planTokens, pendingWatchDirs, staleWatchDirs, deadWatchDirs, mapLimit, once } from '../lib/watch-plan.mjs';
 import { runFleetBridgeBeat, fleetTabArgs, fleetPaneCloseArgs, tabIdFromResponse, paneIdFromResponse } from '../lib/fleet-bridge.mjs';
 import { notifyArgs } from '../lib/actions.mjs';
@@ -250,14 +251,31 @@ function subscribeSocket() {
   client.on('close', retry);
 }
 
+// How long to wait before re-probing `herdr --version` after a FAILED probe
+// (issue #832). Defaults to the heartbeat; the env override exists so a test
+// can exercise the retry without a 45 s wait.
+const PROBE_RETRY_MS = (() => {
+  const override = Number(process.env.ADLC_HERDR_PROBE_RETRY_MS);
+  return Number.isFinite(override) && override > 0 ? override : HEARTBEAT_MS;
+})();
+
 async function main() {
-  const version = await runHerdr(['--version']);
-  const gate = versionGate(version.ok ? version.stdout : '', TESTED_CEILING);
-  if (!gate.supported) {
+  const outcome = probeOutcome(await runHerdr(['--version']), TESTED_CEILING);
+  if (outcome.kind === 'probe-failed') {
+    // The probe itself failed (binary not on PATH yet, transient IPC hiccup):
+    // say so where the host captures it, publish NOTHING through the shim that
+    // just failed, and try again. The timer is deliberately ref'd — before the
+    // socket and heartbeat are set up nothing else keeps the process alive, so
+    // an unref'd timer would exit the daemon before the retry ever fired.
+    console.error(`[adlc watcher] herdr --version probe failed: ${outcome.detail}; retrying in ${PROBE_RETRY_MS} ms`);
+    setTimeout(() => main().catch(() => {}), PROBE_RETRY_MS);
+    return;
+  }
+  if (outcome.kind === 'unsupported') {
     const workspaceId = process.env.HERDR_WORKSPACE_ID;
     if (workspaceId) {
       // persistent (no TTL) — the next supported run clears it
-      await runHerdr(['workspace', 'report-metadata', workspaceId, '--source', 'adlc', '--token', `adlc=${gate.token}`]);
+      await runHerdr(['workspace', 'report-metadata', workspaceId, '--source', 'adlc', '--token', `adlc=${outcome.token}`]);
     }
     return; // degrade: single warning token, nothing else (plan §6.5)
   }

@@ -21,7 +21,7 @@ becomes a seconds-long pre-flight check instead of a days-long round trip.
 ## Usage
 
 ```sh
-adlc rejection-mining [--limit <n>] [--min <n>] [--out-dir <path>] [--write] [--llm] [--prompt-only] [--json]
+adlc rejection-mining [--limit <n>] [--min <n>] [--out-dir <path>] [--write] [--force] [--llm] [--prompt-only] [--json]
 ```
 
 | Flag | Description |
@@ -29,10 +29,11 @@ adlc rejection-mining [--limit <n>] [--min <n>] [--out-dir <path>] [--write] [--
 | `--limit <n>` | Maximum number of PRs to fetch (default `50`). A plain positive integer; `1e3` or `50x` exits 1. |
 | `--min <n>` | Minimum cluster size to author a lens (default `2`). A plain positive integer. |
 | `--out-dir <path>` | Directory to write lens files into (default `.adlc/lenses`). |
-| `--write` | Emit lens files (default is dry-run). |
+| `--write` | Emit lens files (default is dry-run). An existing lens file is left untouched and reported as `skipped (exists)`; writes are temp-file + rename, never in place. |
+| `--force` | With `--write`: replace an existing lens file instead of skipping it. |
 | `--llm` | Sharpen each lens title and charter via one mid-tier LLM call per cluster. |
 | `--tier cheap\|mid\|frontier` | Model tier for the `--llm` pass (default `mid`). |
-| `--prompt-only` | Print the LLM prompts and exit 0 (zero API keys). |
+| `--prompt-only` | Mine the real PR rejections via `gh` and print one refinement prompt per cluster, then exit 0 (zero API keys; `gh` is still required). With no clusters it prints nothing and says so on stderr. |
 | `--json` | Machine-readable output. |
 
 Requires the `gh` CLI installed and authenticated (`gh auth login`).

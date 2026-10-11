@@ -17,7 +17,7 @@ Result: "would security reject this?" is answered in seconds pre-submit instead 
 ## Usage
 
 ```
-rejection-mining [--limit N] [--min N] [--out-dir PATH] [--write] [--llm] [--prompt-only] [--json]
+rejection-mining [--limit N] [--min N] [--out-dir PATH] [--write] [--force] [--llm] [--prompt-only] [--json]
 ```
 
 ## Flags
@@ -27,9 +27,10 @@ rejection-mining [--limit N] [--min N] [--out-dir PATH] [--write] [--llm] [--pro
 | `--limit N` | `50` | Maximum number of PRs to fetch (a plain positive integer; `1e3` or `50x` exits 1) |
 | `--min N` | `2` | Minimum cluster size to author a lens (a plain positive integer) |
 | `--out-dir PATH` | `.adlc/lenses` | Directory to write lens files into |
-| `--write` | false | Emit lens files (default: dry-run) |
+| `--write` | false | Emit lens files (default: dry-run). A lens file that already exists is left untouched and reported as `skipped (exists)` — lens files are curated after the first write. Each write goes through an exclusively created temp file and an atomic publish; a lens whose write failed is reported with an `error` field in `--json` and the run exits 1 after the report |
+| `--force` | false | With `--write`: replace an existing lens file instead of skipping it |
 | `--llm` | false | Use LLM to sharpen lens title and charter (one `mid` call per cluster) |
-| `--prompt-only` | false | Print LLM prompts and exit 0 (no API key required) |
+| `--prompt-only` | false | Mine the real PR rejections via `gh`, print one refinement prompt per cluster, and exit 0 (no API key required; `gh` is). With no clusters it prints nothing and says so on stderr |
 | `--json` | false | Machine-readable JSON output |
 
 ## Examples
@@ -47,8 +48,11 @@ rejection-mining --write
 # Write to custom directory with LLM-sharpened titles
 rejection-mining --out-dir .adlc/prosecution-lenses --write --llm
 
-# Get the LLM prompts without calling any API
+# Mine real PR rejections and print the LLM prompts without calling any API
 rejection-mining --prompt-only
+
+# Re-run after curating lens files: existing ones are skipped unless --force
+rejection-mining --write --force
 
 # JSON output for orchestrators
 rejection-mining --json
