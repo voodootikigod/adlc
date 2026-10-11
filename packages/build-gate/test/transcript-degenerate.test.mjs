@@ -211,3 +211,16 @@ test('a missing --transcript path is still the existing operational error', () =
   assert.equal(r.code, 1);
   assert.match(r.stderr, /transcript file not found/);
 });
+
+// ---- direction guard: the bypass env overrides a DENY, never an unmeasured session
+
+test('ADLC_BUILD_GATE_BYPASS=1 does not rescue a high-risk ticket with a degenerate transcript (fails closed)', () => {
+  const dir = ticketRepo(HIGH);
+  const r = run(['T1', '--transcript', emptyTranscript(dir), '--json'], {
+    cwd: dir,
+    env: { ADLC_BUILD_GATE_BYPASS: '1', ADLC_MANIFEST_KEY: 'k'.repeat(64) },
+  });
+  assert.equal(r.code, 1, 'an operational error is not a deny, so there is nothing to override');
+  assert.match(r.stderr, /could not derive a context signal/);
+  assert.equal(r.stdout.trim(), '');
+});
