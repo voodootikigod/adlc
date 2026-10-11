@@ -273,6 +273,21 @@ describe('rails-guard bin — the union of active rails', () => {
     assert.match(byDefault.stderr, /no active ticket declares rails/);
   });
 
+  test('with --ticket, an unreadable store is the load error and an empty store is the not-found error', () => {
+    const repo = scratchRepo();
+    editAndCommit(repo, 'src/x.txt');
+
+    const missing = runBin(repo.root, ['--tickets', 'stores/none.json', '--ticket', MINE]);
+    assert.equal(missing.status, 1);
+    assert.match(missing.stderr, /could not load tickets from stores\/none\.json: tickets file not found: stores\/none\.json/);
+
+    writeStore(repo.root, []);
+    const empty = runBin(repo.root, ['--ticket', MINE]);
+    assert.equal(empty.status, 1);
+    assert.match(empty.stderr, new RegExp(`${MINE}.*not found`));
+    assert.doesNotMatch(empty.stderr, /could not load/);
+  });
+
   test('--help documents that --ticket selects allowances and does not narrow the rails', () => {
     const stdout = execFileSync(process.execPath, [BIN, '--help'], { encoding: 'utf8' });
     assert.match(stdout, /--ticket <id>\s+The ticket being built/);
