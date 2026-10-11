@@ -24,7 +24,10 @@ Prosecution, runner acceptance, rails evidence, and manual gate records use the
 same atomic chain writer. `repair-chain` recovers ledgers made
 by older raw appenders: it refuses valid ledgers, preserves the original bytes
 in a hash-named backup, rechains entries in order, and records the repair as the
-final entry. Signed ledgers require the original matching `ADLC_MANIFEST_KEY`;
+final entry. In a segmented repository it refuses outright (exit 1) before
+touching anything: the root ledger is frozen because every segment anchors to
+root's exact bytes, so rechaining it would invalidate every anchor in the
+forest — use `migrate-branch` or `adopt` there instead. Signed ledgers require the original matching `ADLC_MANIFEST_KEY`;
 repair verifies every existing signature before it rewrites anything. If keyed
 repair would sign previously unsigned entries, it refuses unless the operator
 passes `--attest-unsigned`; the repair plan and audit entry disclose their count
@@ -458,7 +461,7 @@ The consequence is not local to one entry. Consumers that gate on the ledger che
 - `adlc-prosecute tier-check` — every trust-root PR fails, regardless of whether that PR has its own valid attestation.
 - `record-cross-model` — refuses to append onto an unverifiable chain, so you cannot record your way out.
 
-Before rotating, confirm the ledger has no signed entries (`grep -c '"sig"' .adlc/manifest.jsonl`). If it has any, treat rotation as a migration: re-sign the existing history onto the new key with `repair-chain` (which requires the **original** key and verifies every signature before rewriting), or keep the original key.
+Before rotating, confirm the ledger has no signed entries (`grep -c '"sig"' .adlc/manifest.jsonl`). If it has any, treat rotation as a migration: re-sign the existing history onto the new key with `repair-chain` (which requires the **original** key and verifies every signature before rewriting), or keep the original key. `repair-chain` refuses in a segmented repository — rewriting the frozen root would break every segment's anchor — so a forest's signed history can only be re-keyed segment by segment, never by rechaining root.
 
 If a gate is already failing this way, `tier-check` names it explicitly — a message about the chain not verifying, rather than a missing attestation. Do not respond by running a review and recording a new attestation; that cannot clear it.
 
