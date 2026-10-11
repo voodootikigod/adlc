@@ -45,6 +45,10 @@
           "contract": {
             "type": "string",
             "description": "Optional path to the contract this edge guarantees."
+          },
+          "type": {
+            "type": "string",
+            "description": "Optional ordering hint (stored tickets carry \"before\"); declared so the closed edge accepts it."
           }
         },
         "required": [

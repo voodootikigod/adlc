@@ -85,15 +85,21 @@ test('block and ticket definitions are open (additionalProperties: true) and kee
 });
 
 test('edges[] is closed in the published schema, so an edge with an undeclared key is rejected in a block and a ticket', () => {
-  assert.deepEqual(validateBlock({ edges: [{ to: 'T1', type: 'before' }] }), ['edges[0].type: unknown key']);
+  assert.deepEqual(validateBlock({ edges: [{ to: 'T1', kind: 'before' }] }), ['edges[0].kind: unknown key']);
   assert.deepEqual(validateTicket({ id: 'T1', title: 'x', edges: [{ to: 'T2', contract: 'c' }] }), []);
 });
 
+test('edges[].type is a declared optional string: the ordering hint stored tickets carry is valid, a non-string is not', () => {
+  assert.deepEqual(validateBlock({ edges: [{ to: 'T1', type: 'before' }] }), []);
+  assert.deepEqual(validateTicket({ id: 'T1', title: 'x', edges: [{ to: 'T2', type: 'before' }] }), []);
+  assert.ok(validateBlock({ edges: [{ to: 'T1', type: 7 }] }).some((e) => e.startsWith('edges[0].type')));
+});
+
 test('a remote block carrying an undeclared edge key is an invalid block at parse time (fail closed, not adopted)', () => {
-  const body = '<!-- adlc:begin v=1 -->\n```json\n{"edges":[{"to":"T1","type":"before"}]}\n```\n<!-- adlc:end -->';
+  const body = '<!-- adlc:begin v=1 -->\n```json\n{"edges":[{"to":"T1","kind":"before"}]}\n```\n<!-- adlc:end -->';
   const parsed = parseBlock(body);
   assert.equal(parsed.ok, false);
-  assert.ok(parsed.errors.some((e) => e.includes('edges[0].type: unknown key')), parsed.errors.join('; '));
+  assert.ok(parsed.errors.some((e) => e.includes('edges[0].kind: unknown key')), parsed.errors.join('; '));
 });
 
 // --- AC5: doctor ---
@@ -127,13 +133,6 @@ test('AC5: doctor config-valid passes on the corrected config', () => {
 
 const STORE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '.adlc', 'tickets');
 
-// The published ticket schema closes `edges[]` (additionalProperties: false) and
-// these shards carry an `edges[].type` key, so they violate the schema the repo
-// ships. The store is a frozen trust root (a PR may add a ticket, never rewrite
-// one) and opening the edge definition is a schema decision, so the debt is
-// pinned here instead: it can shrink, it cannot grow.
-const KNOWN_EDGE_TYPE_SHARDS = new Set(['T64', 'T67', 'T68']);
-
 function sweepStore() {
   assert.ok(existsSync(STORE), `store dir missing: ${STORE}`);
   const rows = [];
@@ -146,15 +145,11 @@ function sweepStore() {
   return rows;
 }
 
-test('AC6: closing the validator adds no unknown-key failure to this repository\'s store beyond the pinned edges[].type shards', () => {
+test('AC6: no shard in this repository\'s store fails validateTicket for an unknown key (other store debt, e.g. budget types, is out of scope)', () => {
   const unknown = sweepStore()
     .map(({ id, errors }) => ({ id, errors: errors.filter((e) => e.endsWith(': unknown key')) }))
     .filter(({ errors }) => errors.length > 0);
-  const unexpected = unknown.filter(({ id }) => !KNOWN_EDGE_TYPE_SHARDS.has(id));
-  assert.deepEqual(unexpected, [], 'a shard the schema forbids that is not in the pinned set');
-  for (const { id, errors } of unknown) {
-    assert.ok(errors.every((e) => /^edges\[\d+\]\.type: unknown key$/.test(e)), `${id}: ${errors.join('; ')}`);
-  }
+  assert.deepEqual(unknown, []);
 });
 
 test('AC6: no shard fails validateTicket for an unknown key at the ticket root (TICKET_DEF is open)', () => {

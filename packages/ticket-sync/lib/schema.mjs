@@ -32,6 +32,7 @@ const EDGE = {
   fields: {
     to: { type: 'string', required: true, description: 'Id of the dependent ticket.' },
     contract: { ...STR, description: 'Optional path to the contract this edge guarantees.' },
+    type: { ...STR, description: 'Optional ordering hint (stored tickets carry "before"); declared so the closed edge accepts it.' },
   },
 };
 
