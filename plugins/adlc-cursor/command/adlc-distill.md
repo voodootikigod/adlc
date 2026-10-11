@@ -30,10 +30,10 @@ Run `adlc lesson-foundry --prompt-only`.
 Run `adlc rejection-mining --json` first (deterministic, keyless: it fetches
 recent PR review rejections via the `gh` CLI and clusters them). If it errors
 with a `gh`/auth/repo message, note that this gate was skipped and why, then
-continue. CAUTION: do not use `--prompt-only` for the fetch — it exits BEFORE
-any `gh` call with a placeholder built from fake sample data, so answering it
-looks like a completed gate while mining nothing real. Use `--prompt-only`
-only as the lens-writing template AFTER the real clusters are in hand.
+continue. `--prompt-only` mines the same real rejections through `gh` and prints one
+refinement prompt per cluster (nothing on stdout, plus a stderr note, when there
+are no clusters), so either flag is safe for the fetch: prefer `--json` for the
+deterministic record and `--prompt-only` for the lens-writing prompts.
 - Turn each repeated human objection into a reusable **review lens** (a
   question a future prosecutor should ask). Materialize with `--write` only
   after approval.

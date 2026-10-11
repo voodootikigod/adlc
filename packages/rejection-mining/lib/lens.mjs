@@ -102,6 +102,10 @@ ${quotesSection}
  * @returns {Array<{slug: string, title: string, path: string, content: string, prNumbers: Set, count: number}>}
  */
 export function planLensEmissions(clusters, signals, outDir, llmRefinements = new Map()) {
+  // Two clusters whose representative comments open with the same words derive
+  // the same slug (issue #746); the paths are made unique here so a later plan
+  // can never silently overwrite an earlier one.
+  const slugs = dedupeSlugs(clusters.map((c) => c.slug));
   return clusters.map((cluster, idx) => {
     const clusterSignals = cluster.indices.map((i) => signals[i]);
     const llm = llmRefinements.get(idx) ?? null;
@@ -109,7 +113,7 @@ export function planLensEmissions(clusters, signals, outDir, llmRefinements = ne
     const title = deriveTitle(clusterSignals, llm);
     const charter = llm?.charter ?? buildDefaultCharter(clusterSignals);
     const prNumbers = new Set(clusterSignals.map((s) => s.prNumber));
-    const slug = cluster.slug;
+    const slug = slugs[idx];
 
     const content = renderLensFile({ slug, title, charter, signals: clusterSignals, prNumbers });
     const path = `${outDir}/lens-${slug}.md`;
@@ -123,6 +127,35 @@ export function planLensEmissions(clusters, signals, outDir, llmRefinements = ne
       count: clusterSignals.length,
     };
   });
+}
+
+/**
+ * Make a list of slugs unique, in input order: the second and later occurrence
+ * of a slug become `<slug>-2`, `<slug>-3`, … Returns a new array; the input is
+ * never mutated.
+ *
+ * @param {string[]} slugs
+ * @returns {string[]}
+ */
+export function dedupeSlugs(slugs) {
+  const seen = new Map();
+  return slugs.map((slug) => {
+    const n = (seen.get(slug) ?? 0) + 1;
+    seen.set(slug, n);
+    return n === 1 ? slug : `${slug}-${n}`;
+  });
+}
+
+/**
+ * Decide whether a lens file may be written (issue #746). Lens files are
+ * curated after `--write`, so an existing one is never replaced unless the
+ * operator passes `--force`.
+ *
+ * @param {{exists: boolean, force: boolean}} o
+ * @returns {'write'|'skip-exists'}
+ */
+export function writeDecision({ exists, force }) {
+  return exists && !force ? 'skip-exists' : 'write';
 }
 
 /**
