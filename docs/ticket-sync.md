@@ -67,7 +67,10 @@ never push on top of an unreconciled pull). Pull flags compose.
 A flat list of offline checks; **read-only always** (no `--fix`, no network).
 Exit 2 if any check fails, else 0. Checks:
 
-- `.adlc/config.json` present + valid against `adlc-config.schema.json`.
+- `.adlc/config.json` present + valid against `adlc-config.schema.json`. A key the
+  schema forbids (`additionalProperties: false` on `ticketSync` and `select`) fails
+  this check and is named in the detail — `ticketSync.selct: unknown key` — so a
+  typo cannot silently widen the sync selection.
 - `tickets.json` loads with no errors (dup id / dangling edge / cycle / schema).
 - Committed JSON Schemas == regenerated (bedrock drift / tampered install).
 - Sidecar valid; no two ticket ids map to one `nodeId`; every entry has a
@@ -79,7 +82,7 @@ Exit 2 if any check fails, else 0. Checks:
 
 | Command | Default | `--write` | `--force` | other |
 |---|---|---|---|---|
-| `pull` | dry-run (print plan/diff) | apply local write | resolve a block conflict by taking **remote** (logged forensically) | `--allow-rail-narrowing` (logged) |
+| `pull` | dry-run (print plan/diff) | apply local write | resolve a block conflict by taking **remote** (logged forensically) | `--allow-rail-narrowing` (logged). A remote issue whose adlc block is **absent** counts as removing every local rail and scope entry, and is blocked the same way. |
 | `push` | dry-run (print remote ops) | perform remote edits/creates/labels/comment | — | — |
 | `sync` | dry-run | pull then push | as `pull` | composes pull flags |
 | `doctor` | read-only (always) | — | — | — |
@@ -87,7 +90,8 @@ Exit 2 if any check fails, else 0. Checks:
 `--json` is accepted on **all** commands for machine-readable output.
 
 **Exit codes:** `0` ok · `1` operational (gh missing/auth/network/lock/truncation) ·
-`2` blocked (validity failure, conflict, rail-narrowing without the flag).
+`2` blocked (validity failure, conflict, rail-narrowing without the flag — including a
+remote issue that carries no adlc block while the local ticket has rails or scope).
 
 ## Configuration — `.adlc/config.json`
 

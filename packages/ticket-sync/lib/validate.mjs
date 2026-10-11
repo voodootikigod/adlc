@@ -30,34 +30,52 @@ function validateField(value, spec, path) {
     if (t !== 'array') return [`${path}: expected array`];
     value.forEach((item, i) => errors.push(...validateField(item, spec.items, `${path}[${i}]`)));
   } else if (spec.type === 'object') {
-    if (spec.fields) errors.push(...validateObject(value, spec.fields, path));
+    if (spec.fields) errors.push(...validateObject(value, spec, path));
     else if (t !== 'object') errors.push(`${path}: expected object`);
   }
   return errors;
 }
 
-function validateObject(obj, fields, path) {
+const isPresent = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key) && obj[key] !== undefined;
+
+/**
+ * Own keys of `obj` that `spec.fields` does not declare, sorted — but ONLY when
+ * the spec closes the object with `additionalProperties: false`. An open spec
+ * (`true`, or the flag absent) returns [] so extension fields keep flowing
+ * through. A key set to `undefined` is absent, the same rule `required` uses.
+ */
+export function unknownKeys(obj, spec) {
+  if (spec?.additionalProperties !== false) return [];
+  const declared = new Set(Object.keys(spec.fields ?? {}));
+  return Object.keys(obj).filter((key) => !declared.has(key) && isPresent(obj, key)).sort();
+}
+
+/**
+ * `spec` is the enclosing definition or field spec: its `fields` drive the
+ * per-field checks and its `additionalProperties` decides whether a key the
+ * spec does not declare is an error. The published JSON Schemas are generated
+ * from the same specs, so what they forbid this rejects too.
+ */
+function validateObject(obj, spec, path) {
   if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
     return [`${path || 'value'}: expected object`];
   }
+  const at = (name) => (path ? `${path}.${name}` : name);
   const errors = [];
-  for (const [name, spec] of Object.entries(fields)) {
-    const present = Object.prototype.hasOwnProperty.call(obj, name) && obj[name] !== undefined;
-    const p = path ? `${path}.${name}` : name;
-    if (!present) {
-      if (spec.required) errors.push(`${p}: required`);
+  for (const [name, fieldSpec] of Object.entries(spec.fields)) {
+    if (!isPresent(obj, name)) {
+      if (fieldSpec.required) errors.push(`${at(name)}: required`);
       continue;
     }
-    errors.push(...validateField(obj[name], spec, p));
+    errors.push(...validateField(obj[name], fieldSpec, at(name)));
   }
-  // Unknown keys are tolerated (forward-compat); they are surfaced/handled by the
-  // block codec, not rejected here.
+  for (const key of unknownKeys(obj, spec)) errors.push(`${at(key)}: unknown key`);
   return errors;
 }
 
 /** Validate a value against a top-level definition. Returns string[] (empty = valid). */
 export function validate(value, def) {
-  return validateObject(value, def.fields, '');
+  return validateObject(value, def, '');
 }
 
 export const validateTicket = (t) => validate(t, TICKET_DEF);
