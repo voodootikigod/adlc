@@ -218,6 +218,21 @@ export function recoverMigration(root: string, id: string, options: { direction:
 /** Refuses (UNSAFE_EXPORT_TARGET) when `outputPath` resolves onto any ticket store, the source store included. */
 export function exportLegacyStore(store: LegacyTicketStore | DirectoryTicketStore, outputPath: string, options?: { root?: string }): TicketSnapshot;
 export function doctorTicketStore(store: LegacyTicketStore | DirectoryTicketStore, options?: { root?: string; archive?: boolean; key?: string | null }): Record<string, unknown>;
+/** How a `.lineage` token relates to THIS checkout, decided from the arguments
+ *  alone. `foreign` is another branch's token (or any token on a detached HEAD,
+ *  `branch === null`) — informational, never a doctor failure. `stale` is this
+ *  branch's token naming a segment that is gone or caching a ULID the segment
+ *  does not carry. */
+export type LineageTokenClassification =
+  | { kind: 'none' }
+  | { kind: 'foreign'; segment: string; ulid: string; branch: string }
+  | { kind: 'stale'; segment: string; ulid: string; reason: string }
+  | { kind: 'ok'; segment: string; ulid: string };
+export function classifyLineageToken(
+  token: { segment: string; ulid: string; branch: string } | null | undefined,
+  branch: string | null,
+  validSegments: readonly string[],
+): LineageTokenClassification;
 export function recordTicketEvidence(root: string, options: Record<string, unknown>): Record<string, unknown>;
 export function withManifestLock<T>(path: string, fn: () => T, options?: { retries?: number; delayMs?: number }): T;
 export function isSegmentedRepo(dir: string): boolean;

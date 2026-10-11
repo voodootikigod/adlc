@@ -1875,16 +1875,53 @@ export function boundedHandoffRead(path, { maxBytes, deadlineMs }) {
   }
   const bytes = result.stdout.subarray(newlineIdx + 1);
   if (bytes.length !== readSoFar) return null; // truncated/garbled transport — do not trust a mismatched frame
-  const length = Math.min(size, maxBytes);
-  const truncatedByBytes = length < size;
-  // Same three incompleteness signals as before, now sourced from the
-  // worker's report instead of computed in-process.
-  const shortRead = readSoFar < length;
-  const grewOrShrank = postSize !== size;
+  const { truncated, grew } = readOutcomeFromHeader({ size, postSize, readSoFar }, maxBytes);
   return {
     size,
     text: bytes.toString('utf8'),
-    truncated: truncatedByBytes || shortRead || grewOrShrank,
+    truncated,
+    grew,
+  };
+}
+
+/**
+ * Map the worker's header frame to the three incompleteness signals, their
+ * disjunction, and the separate growth signal. Pure: no I/O, no mutation of
+ * `header`.
+ *
+ * `shrank` is `postSize < size`, a SHRINK only. A file that GREW after the
+ * read was taken is still a complete read of everything that existed when
+ * the read began: the worker read `length = min(size, maxBytes)` bytes from
+ * `size - length`, so when `length === size` it read from byte 0 and a later
+ * append cannot have hidden an earlier record. Treating growth as truncation
+ * (issue #797) produced a spurious `incomplete_scan_lower_bound` deny in the
+ * first tool calls of a session — exactly when the transcript is appended to
+ * on every turn and depth is still below HANDOFF_DEPTH.
+ *
+ * `grew` (`postSize > size`) is reported on its own because the two callers
+ * need opposite things from it. For the handoff DEPTH count growth is
+ * harmless: unseen later records can only raise a count that is already a
+ * valid lower bound. For `repoManifestChainIsSigned` growth is NOT harmless:
+ * it asks whether the manifest holds ANY signed entry right now, and an entry
+ * appended between the worker's two fstats is exactly what the returned text
+ * omits — so that caller must keep treating growth as inconclusive.
+ * @param {{ size: number, postSize: number, readSoFar: number }} header
+ * @param {number} maxBytes
+ * @returns {{ length: number, truncatedByBytes: boolean, shortRead: boolean, shrank: boolean, grew: boolean, truncated: boolean }}
+ */
+export function readOutcomeFromHeader({ size, postSize, readSoFar }, maxBytes) {
+  const length = Math.min(size, maxBytes);
+  const truncatedByBytes = length < size;
+  const shortRead = readSoFar < length;
+  const shrank = postSize < size;
+  const grew = postSize > size;
+  return {
+    length,
+    truncatedByBytes,
+    shortRead,
+    shrank,
+    grew,
+    truncated: truncatedByBytes || shortRead || shrank,
   };
 }
 
@@ -2251,7 +2288,11 @@ export function repoManifestChainIsSigned(repoRoot) {
       maxBytes: MANIFEST_SCAN_MAX_BYTES_PER_FILE,
       deadlineMs: Math.max(1, MANIFEST_SCAN_DEADLINE_MS - (Date.now() - startMs)),
     });
-    if (result == null || result.truncated) return true; // unreadable or incomplete -> can't prove unsigned -> treat as signed
+    // Unreadable, incomplete, OR GROWN -> can't prove unsigned -> treat as signed.
+    // Growth is complete enough for the transcript depth count, but not here:
+    // an entry appended between the worker's two fstats is exactly what this
+    // text omits, and it may be the signed one. Fail closed, as before #797.
+    if (result == null || result.truncated || result.grew) return true;
     for (const line of result.text.split('\n')) {
       if (!line.trim()) continue;
       let entry;

@@ -30,6 +30,16 @@ adlc ticket create --input - < ticket.json
 Both `--help` and `schema` work before a store exists. **Omit `id` on create**:
 the service mints a ULID (`T-01K…`) — there is no "next free `T<n>`" to derive.
 
+`adlc ticket doctor --json` is read-only and exits 2 on any failing check. Its
+`manifest-forest` check reports every non-conforming object under
+`.adlc/manifest.d/` (a symlink, a nested directory, a non-regular file, a
+bad-grammar name) as `invalidSegments` and fails on them, because every
+evidence-required write refuses that forest with `INVALID_MANIFEST`. A `.lineage`
+token left behind by another branch — `.lineage` is gitignored and survives a
+`git checkout` that removes the committed segment it names — is reported as
+`foreignLineage` without failing the check; only this branch's own token can be
+`staleLineage`.
+
 `lib/help.mjs` holds the one field table the help text and the published
 `schemas/ticket.schema.json` are both generated from, and `test/help.test.mjs`
 fails if the committed schema drifts from it or if a field the validator polices

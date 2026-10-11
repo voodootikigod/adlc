@@ -87,12 +87,21 @@ export function buildJsonResult({ clusters, lensPlans, totalSignals, totalPRs, s
     lenses: clusters.map((cluster, idx) => {
       const plan = lensPlans[idx] ?? null;
       return {
+        // The cluster's own slug — a de-duplicated plan slug shows up only in
+        // `path`, so this identifier is stable across the dry-run and write shapes.
         slug: cluster.slug,
         title: cluster.title ?? cluster.slug,
         refined: Boolean(cluster.refined),
         count: cluster.count,
         prCount: cluster.prNumbers.size,
         path: plan ? plan.path : null,
+        // Set by the write loop (issue #746): reported AFTER the writes, so a
+        // path is only ever claimed as written once it is on disk.
+        written: plan?.written === true,
+        skipped: plan?.skipped ?? null,
+        // Present only when this lens's write failed — the dry-run and success
+        // shapes gain exactly `written` and `skipped`, nothing else.
+        ...(typeof plan?.error === 'string' ? { error: plan.error } : {}),
       };
     }),
   };

@@ -29,6 +29,14 @@ Writers use a per-worktree lock, expected-hash compare-and-swap, a durable
 journal, final hash verification, and dual ticket/store-hash evidence. Interrupted
 transactions fail closed until explicitly completed or rolled back.
 
+`adlc ticket doctor` is read-only and exits 2 on any failing check. Its
+`manifest-forest` check reports non-conforming objects under `.adlc/manifest.d/`
+(a symlink, a nested directory, a non-regular file, a bad-grammar name) as
+`invalidSegments` and fails on them — every evidence-required write refuses such a
+forest with `INVALID_MANIFEST`. A `.lineage` token left behind by another branch
+is reported as `foreignLineage` without failing the check; only the current
+branch's own token can be `staleLineage`.
+
 ## Writing to a frozen trust root
 
 Once any ticket declares `rails`, the store is the configuration that decides what
