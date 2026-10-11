@@ -136,6 +136,14 @@ test('--prompt-only with a partial gh failure still prompts but says on stderr h
   assert.match(res.stderr, /rejection-mining: 2 of 4 PR\(s\) could not be fetched \(first error: HTTP 403: rate limit exceeded\); the prompts below cover only the 2 that were/);
 });
 
+test('--prompt-only with exactly one unfetchable PR still warns on stderr', () => {
+  const dir = fixtureDir('rm-prompt-one-skipped-');
+  installFakeGh(dir, { 1: review(CLUSTERING_BODY, 'a'), 2: review(CLUSTERING_BODY, 'b'), 3: 'FAIL' });
+  const res = runBin(['--prompt-only', '--min', '2'], { ghDir: dir, cwd: dir });
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stderr, /rejection-mining: 1 of 3 PR\(s\) could not be fetched \(first error: HTTP 403: rate limit exceeded\); the prompts below cover only the 2 that were/);
+});
+
 test('--prompt-only with every detail fetch succeeding prints no partial-fetch warning', () => {
   const dir = fixtureDir('rm-prompt-complete-');
   installFakeGh(dir, ONE_CLUSTER_VIEWS);
