@@ -74,7 +74,40 @@ export default function EnterprisePage() {
         </ol>
       </MarketingSection>
 
-      <MarketingSection n="4" kicker="Talk to us" title="Doing agentic development right?">
+      <MarketingSection n="4" kicker="Kickoff resource" title="Align engineering on the rollout">
+        <div
+          className="grid gap-6 px-5 py-5 md:grid-cols-[minmax(0,1fr)_auto] md:items-center md:px-6"
+          style={{
+            background: 'var(--rec-paper-raised)',
+            borderTop: '1px solid var(--rec-rule-strong)',
+            borderBottom: '1px solid var(--rec-rule-strong)',
+          }}
+        >
+          <div>
+            <p className="text-[15px] font-semibold" style={{ color: 'var(--rec-ink)' }}>
+              ADLC for Engineering - Kickoff
+            </p>
+            <p className="mt-2 max-w-[72ch] text-[14px] leading-[1.55]" style={{ color: 'var(--rec-ink-2)' }}>
+              A nine-page kickoff deck for aligning an engineering organization on one lifecycle,
+              one harness, centralized model access, six initial deliverables, ownership, and rollout.
+            </p>
+          </div>
+          <a
+            href="/ADLC-for-Engineering-Kickoff.pdf"
+            download
+            className="rec-mono inline-flex min-h-11 items-center justify-center px-4 py-3 text-[12px] font-semibold"
+            style={{
+              color: 'var(--rec-link)',
+              border: '1px solid var(--rec-link-edge)',
+              background: 'var(--rec-paper)',
+            }}
+          >
+            Download PDF - 9 pages
+          </a>
+        </div>
+      </MarketingSection>
+
+      <MarketingSection n="5" kicker="Talk to us" title="Doing agentic development right?">
         <p className="max-w-[72ch]" style={{ color: 'var(--rec-ink-2)' }}>
           If you&apos;re rolling agentic development out across an organization and want it
           gated, auditable, and defensible, get in touch. Tell us what you&apos;re rolling out
