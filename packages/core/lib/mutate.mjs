@@ -525,34 +525,32 @@ export function classifyDiffBodyLine(line) {
   }
 }
 
-const HUNK_RE = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+const HUNK_RE = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
 
 /**
  * Parse a unified diff into { file: Set(added/modified 1-based line numbers) }
  * for the *new* side. Used to diff-scope mutation.
  *
- * The `@@` header's line counts say how many body lines follow, so header-like
- * lines (`--- a/…`, `+++ b/…`) are only recognised outside a hunk body.
+ * The `@@` header's new-side count says how many added/context lines the body
+ * still holds, so header-like lines (`--- a/…`, `+++ b/…`) are only recognised
+ * once it is exhausted. Trailing deletions after that point start with `-` and
+ * can never match a header, so the old-side count is not needed.
  */
 export function changedLinesFromDiff(diffText) {
   const result = {};
   let currentFile = null;
   let newLine = 0;
-  let oldLeft = 0;
   let newLeft = 0;
   for (const line of diffText.split('\n')) {
-    if (oldLeft > 0 || newLeft > 0) {
+    if (newLeft > 0) {
       const kind = classifyDiffBodyLine(line);
       if (kind === 'marker') continue;
       if (kind === 'add') {
         if (currentFile) result[currentFile].add(newLine);
         newLine++;
         newLeft--;
-      } else if (kind === 'delete') {
-        oldLeft--;
-      } else {
+      } else if (kind === 'context') {
         newLine++;
-        oldLeft--;
         newLeft--;
       }
       continue;
@@ -565,9 +563,8 @@ export function changedLinesFromDiff(diffText) {
     }
     const hunk = line.match(HUNK_RE);
     if (hunk) {
-      newLine = parseInt(hunk[2], 10);
-      oldLeft = hunk[1] === undefined ? 1 : parseInt(hunk[1], 10);
-      newLeft = hunk[3] === undefined ? 1 : parseInt(hunk[3], 10);
+      newLine = parseInt(hunk[1], 10);
+      newLeft = hunk[2] === undefined ? 1 : parseInt(hunk[2], 10);
     }
   }
   return result;
