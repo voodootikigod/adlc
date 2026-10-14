@@ -47,7 +47,7 @@ const PACKAGES = [
     bin: 'packages/gate-fuzzing/bin/gate-fuzzing.mjs',
     setup(dir) {
       const suitePath = join(dir, 'gate-suite.json');
-      writeFileSync(suitePath, JSON.stringify({ gates: [{ name: 'example-gate', claims: ['x'], surface: ['src/**'] }] }));
+      writeFileSync(suitePath, JSON.stringify({ gates: [{ name: 'example-gate', run: ['true'], claims: ['x'], surface: ['src/**'] }] }));
       return ['--suite', suitePath];
     },
     // gate-fuzzing rejects the 'frontier' tier by design (adversary cost

@@ -5,6 +5,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { isPlainObject } from '@adlc/core';
 
 const DEFAULT_SUITE_PATH = '.adlc/gate-suite.json';
 
@@ -54,10 +55,6 @@ export function loadSuite(suitePath, cwd = '.') {
   }
 
   return suite;
-}
-
-function isPlainObject(v) {
-  return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
 
 function isNonEmptyString(v) {
