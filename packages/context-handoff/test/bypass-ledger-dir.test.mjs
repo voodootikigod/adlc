@@ -147,3 +147,12 @@ test('a BOUND bypass against sentinel-only D0 state is refused: it could not cle
     assert.equal(isEstablishedLedger(root, { sentinelCounts: true }), true);
   });
 });
+
+test('an unbound bypass with neither handoffs/ nor a sentinel is still refused', () => {
+  withRepo({ handoffs: false }, ({ root }) => {
+    assert.strictEqual(isEstablishedLedger(root, { sentinelCounts: true }), false);
+    const r = bypass(root, ['--write', '--unbound-reason', 'no ledger here']);
+    assert.equal(r.status, 1, r.stderr);
+    assert.equal(existsSync(join(root, '.adlc', 'handoffs')), false);
+  });
+});
