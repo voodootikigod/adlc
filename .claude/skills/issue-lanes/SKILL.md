@@ -31,6 +31,45 @@ adlc ticket store status --json   # backend: directory, pendingTransactions: []
 gh auth status
 ```
 
+**The `WIP` claim label — runs on other machines may be live.** This skill can run on
+several machines at once against the same repo. The only coordination between them is the
+`WIP` label plus a claim comment on each issue a run picks (§1 "Claim"). Make sure the
+label exists:
+
+```bash
+gh label list --limit 500 --json name --jq '.[].name' | grep -qx WIP \
+  || gh label create WIP --description "claimed by an issue-lanes run" --color FBCA04
+```
+
+(List the labels; don't use `--search`. The search index lags, so it returned nothing
+right after the label was created.)
+
+Then sweep for **stale claims**: open `WIP` issues with no OPEN PR that closes them, and
+whose latest claim comment is older than 48 hours (or that have no claim comment at all).
+`closedByPullRequestsReferences` carries no PR state, so the sweep cross-checks it against
+the open PR numbers:
+
+```bash
+cat > $SP/wip-sweep.jq <<'EOF'
+.[]
+| select(any(.closedByPullRequestsReferences[]; .number as $n | $open | index($n)) | not)
+| ([.comments[] | select(.body | startswith("issue-lanes claim — package:")) | .createdAt] | last) as $claimed
+| select($claimed == null or $claimed < $cutoff)
+| "#\(.number)\tclaimed \($claimed // "with no claim comment")\t\(.title)"
+EOF
+OPEN_PRS=$(gh pr list --state open --limit 200 --json number --jq '[.[].number]')
+CUTOFF=$(date -u -v-48H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '48 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+gh issue list --state open --label WIP --limit 100 \
+  --json number,title,closedByPullRequestsReferences,comments \
+  | jq -r --argjson open "$OPEN_PRS" --arg cutoff "$CUTOFF" -f $SP/wip-sweep.jq
+```
+
+Print anything it lists to the user as a WARNING — most likely a run that crashed or was
+abandoned — and leave it alone. The operator clears stale labels by hand
+(`gh issue edit <n> --remove-label WIP`). A run never removes a `WIP` label it did not add
+itself, because a label older than 48 hours can still belong to a slow lane on another
+machine.
+
 **Rail-freeze pre-check — do this before choosing anything.** As of 2026-09-10 the
 ceremony below HAS ALREADY MERGED: `origin/main`'s `.adlc/config.json` carries
 `"version": 1, "securityMode": "unsigned-fallback", "acknowledgedNewRailBypass": true`,
@@ -66,13 +105,32 @@ their failed `rails-guard` jobs after the ceremony merges (no new commit needed)
 
 ```bash
 gh issue list --state open --limit 400 --json number,title,labels \
-  --jq '.[] | "\(.number)\t\(.labels|map(.name)|join(","))\t\(.title)"' > $SP/issues.tsv
+  --jq '.[] | select(.labels|map(.name)|index("WIP")|not)
+        | "\(.number)\t\(.labels|map(.name)|join(","))\t\(.title)"' > $SP/issues.tsv
+```
+
+Issues labelled `WIP` are claimed by another run (on this machine or another one) and are
+never candidates.
+
+Next, build **TAKEN-PACKAGES**: the packages another run, or an open PR, is already
+changing. It has two sources: the files of every open PR, and the claim comments on `WIP`
+issues whose PR does not exist yet:
+
+```bash
+{ gh pr list --state open --json number,files --limit 200 --jq '.[].files[].path' \
+    | grep -o -E '^(packages|plugins)/[^/]+'
+  gh issue list --state open --label WIP --limit 100 --json comments --jq '.[].comments[].body' \
+    | grep -o -E '^issue-lanes claim — package: [^,]+' | sed 's/.*package: //'
+} | sort -u > $SP/taken-packages.txt
 ```
 
 Selection rules, in order:
 1. `bug` + `P1-high` (or the user's `--label`), class **false-green** first — that is the
    product's signature risk.
-2. **One lane per package.** Two issues in the same package go in ONE lane or wait.
+2. **One lane per package, across every run.** Two issues in the same package go in ONE
+   lane or wait. A candidate whose package is in TAKEN-PACKAGES is skipped: another
+   machine, or an open PR, is working there, and two branches in one package are a rebase
+   conflict at best and a mutation-gate collision at worst.
 3. **Check tiering per candidate.** `packages/prosecute/lib/tier.mjs` tiers a change on
    three things, and nothing else: its package-prefix lists (`ENFORCEMENT_PREFIXES`,
    `PRODUCER_PREFIXES`), its `TRUST_ROOT_FILES` list (all three summarised in §4b), and the
@@ -95,6 +153,28 @@ Selection rules, in order:
 
 Read the full body of each finalist (`gh issue view N --json body`). The audit-filed issues
 carry a `Recommendation` paragraph — that is the design seed for the ticket.
+
+### Claim the finalists — before any worktree, ticket, or close
+
+Claim every finalist, including one you are about to close as premise-stale (rule 5), so
+that no other run picks it up while you work. Selection can take many minutes, so re-read
+the label first; if `WIP` has appeared since `issues.tsv` was written, another run got
+there first, so drop the issue and do not claim it:
+
+```bash
+gh issue view <n> --json labels --jq '.labels[].name' | grep -qx WIP && echo "TAKEN — drop #<n>"
+gh issue edit <n> --add-label WIP
+gh issue comment <n> --body "issue-lanes claim — package: packages/<pkg>, host: $(hostname -s), $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+gh issue view <n> --json labels --jq '.labels[].name' | grep -qx WIP   # must succeed before §2
+```
+
+The comment's exact form matters: the TAKEN-PACKAGES list and the §0 stale sweep both parse it.
+Use the candidate's real unit for `package:` (`packages/<pkg>` or `plugins/<plugin>`).
+From this point on, every way a lane can end must leave the label in a known state:
+- **A PR opens**: keep `WIP`. The PR's `Closes #<n>` closes the issue on merge, so nothing
+  needs removing.
+- **No PR** (blocker, review loop not converged, premise stale): remove it (§4 lane prompt,
+  §5 close-out).
 
 ## 2. Worktrees (explicit commands — the tool shell is zsh)
 
@@ -327,6 +407,12 @@ final word — verify.
   counts, mutation-gate numbers, review rounds folded/refuted, commit SHAs, PR URL,
   AND the polled CI status — not just the lane's own local claim of it.
 - If push/PR was denied by permissions, give the user the exact commands per lane.
+- **Release the claim of every lane that ended without a PR.** The lane prompt tells the
+  lane to do it, but check rather than trust it. For each such issue:
+  `gh issue view <n> --json labels --jq '.labels[].name' | grep -qx WIP && gh issue edit <n> --remove-label WIP`,
+  plus a one-line comment giving the reason. A label left behind blocks the issue AND its
+  package for every other run until someone notices it in the 48-hour sweep. Lanes that
+  opened a PR keep `WIP`; merging closes the issue.
 - Save a `project` memory: lanes, ticket ids, blockers, anything non-obvious.
 - After the human merges: `adlc ticket complete <id>` is a base-branch admin act — rails-guard's
   contract-preservation check refuses `completed: true` on an existing ticket inside ANY PR, so
@@ -364,6 +450,13 @@ final word — verify.
     narrow case only, never as a general policy.
 
 ## Gotchas that are not in the ticket bodies
+
+- **What the `WIP` label guarantees, and what it does not.** It keeps runs that start
+  minutes apart, on any machines, off each other's issues and packages. It is a
+  check-then-act, so it is NOT safe for two runs that select within seconds of each other:
+  both can read "unlabelled" before either writes. Every run uses the same GitHub account,
+  so the label's history cannot tell you which machine owns an issue; the claim comment's
+  `host:` field can. The skill flags stale claims and never reclaims them.
 
 - **A GREEN PR IS NOT EVIDENCE `main` WILL BE GREEN AFTER IT MERGES.**
   `strict_required_status_checks_policy` evaluates up-to-dateness at MERGE TIME against
