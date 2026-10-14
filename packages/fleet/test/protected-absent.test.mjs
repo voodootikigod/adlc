@@ -176,6 +176,9 @@ test('parseStatusPaths parses untrimmed records, both rename forms, and empty in
   assert.deepEqual(parseStatusPaths('R  new.json\0old.json\0 M z\0'), ['new.json', 'old.json', 'z']);
   assert.deepEqual(parseStatusPaths('C  copy.json\0src.json\0'), ['copy.json', 'src.json']);
   assert.deepEqual(parseStatusPaths(' R .adlc/n\0.adlc/o\0'), ['.adlc/n', '.adlc/o']);
+  // The same worktree rename as the first record after the adapter's trim: its
+  // XY code is the single letter `R`, and the original path still follows.
+  assert.deepEqual(parseStatusPaths('R .adlc/n\0.adlc/o\0?? .claude/z\0'), ['.adlc/n', '.adlc/o', '.claude/z']);
   assert.deepEqual(parseStatusPaths('?? a b.txt\0'), ['a b.txt'], 'spaces inside a path are kept');
   assert.deepEqual(parseStatusPaths(''), []);
   assert.deepEqual(parseStatusPaths(undefined), []);
