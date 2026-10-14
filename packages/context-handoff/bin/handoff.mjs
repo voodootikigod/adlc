@@ -870,7 +870,7 @@ authorization.
   // recorded while unblocking nothing.
   if (!ledgerHasHandoffsDir(root)) {
     opError(
-      `no handoffs directory at ${handoffsDir(root)} — the grant would not reach the enforcing hook; run from the repo root or pass --dir <repo>/.adlc`,
+      `no handoffs directory at ${handoffsDir(root)} — the grant would not reach the enforcing hook; run from the repo root (an operator outside the hook may instead pass --dir <repo>/.adlc)`,
     );
   }
 

@@ -41,7 +41,7 @@ test('AC1: --write from a subdirectory with no handoffs dir there exits 1 and wr
     const r = bypass(sub, ['--write']);
     assert.equal(r.status, 1, r.stderr);
     assert.ok(r.stderr.includes(join(sub, '.adlc', 'handoffs')), `names the resolved path: ${r.stderr}`);
-    assert.ok(r.stderr.includes('run from the repo root or pass --dir <repo>/.adlc'), `states the remedy: ${r.stderr}`);
+    assert.ok(r.stderr.includes('run from the repo root (an operator outside the hook may instead pass --dir <repo>/.adlc)'), `states the remedy: ${r.stderr}`);
     assert.ok(!`${r.stdout}${r.stderr}`.includes('recorded'), 'no success line');
     assert.equal(existsSync(join(sub, '.adlc')), false, 'nothing created under the subdirectory');
     assert.equal(existsSync(join(root, '.adlc', 'handoffs', 'sess-a.bypass-grant.json')), false);
@@ -75,7 +75,7 @@ test('AC2: --dir pointing at a ledger with no handoffs dir is refused the same w
   });
 });
 
-test('AC3: the recovery grammar still rejects a bypass carrying --dir (the plugin twins mirror it exactly)', () => {
+test('AC3 (not widened): the recovery grammar still rejects a bypass carrying --dir, exactly as the plugin twins do', () => {
   withRepo({}, ({ root }) => {
     const interpreterPath = join(root, 'node');
     const scriptPath = join(root, 'handoff.mjs');

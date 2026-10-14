@@ -85,7 +85,7 @@ proof is the `context-handoff-bypass` manifest entry. An explicitly empty
 `--unbound-reason` exits 1 rather than handing back the bound grant that cannot
 clear what the operator asked to override.
 
-`bypass --write` exits 1 when the resolved ledger has no `.adlc/handoffs` directory — run from the repo root or pass `--dir <repo>/.adlc` — so a grant is never reported as recorded under a tree the enforcing hook does not read; a dry run prints the resolved ledger path.
+`bypass --write` exits 1 when the resolved ledger has no `.adlc/handoffs` directory — run from the repo root (an operator outside the hook may instead pass `--dir <repo>/.adlc`; the hook's recovery grammar does not accept `--dir`) — so a grant is never reported as recorded under a tree the enforcing hook does not read; a dry run prints the resolved ledger path.
 
 `write` is the refresh path, so it rebinds an open marker onto the final it
 writes; a refresh that would *unbind* one (dropping `--ticket`) or refresh a
