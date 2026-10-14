@@ -5,6 +5,7 @@
 // file; nothing here runs a command authored by the reviewer under test.
 
 import { readFileSync } from 'node:fs';
+import { extname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { tail } from '@adlc/core';
 import { writeFileAtomic, NO_JOURNAL } from './inflight.mjs';
@@ -38,6 +39,72 @@ function defaultRun(cmd, args, cwd) {
   const spawnError = r.error && !timedOut ? `${r.error.code ?? 'error'}: ${r.error.message}` : null;
   const output = tail(`${r.stdout ?? ''}${r.stderr ?? ''}`.trim(), OUTPUT_TAIL);
   return { status: r.status, timedOut, output, spawnError };
+}
+
+// Exit statuses a shell reports when it could not launch the command at all
+// (126 found but not executable, 127 not found). Nothing was tested.
+const LAUNCH_FAILURE_STATUSES = new Set([126, 127]);
+
+/**
+ * Classify one witness run. A run that never launched is not a failing test,
+ * so it must not be read as the mutant being caught.
+ *
+ * @param {{status:number|null, timedOut?:boolean, spawnError?:string|null}} run
+ * @returns {'completed'|'timeout'|'spawn-failed'}
+ */
+export function classifyWitnessRun(run) {
+  if (run.spawnError || LAUNCH_FAILURE_STATUSES.has(run.status)) return 'spawn-failed';
+  if (run.timedOut) return 'timeout';
+  return 'completed';
+}
+
+const SYNTAX_CHECKED_EXTENSIONS = new Set(['.mjs', '.cjs', '.js']);
+
+/**
+ * Tri-state syntax check of a file as it is on disk: `node --check` for
+ * JavaScript, 'unknown' when the checker could not run.
+ *
+ * @returns {'valid'|'invalid'|'unknown'}
+ */
+function defaultSyntaxCheck(absolutePath, cwd) {
+  const r = spawnSync(process.execPath, ['--check', absolutePath], { cwd, encoding: 'utf8', timeout: 30_000 });
+  if (r.error || r.signal || typeof r.status !== 'number') return 'unknown';
+  return r.status === 0 ? 'valid' : 'invalid';
+}
+
+/** The plant's file contents with only its line replaced, or null if it drifted. */
+function mutatedSource(plant, original) {
+  const lines = original.split('\n');
+  if (lines[plant.line - 1] !== plant.original) return null;
+  return lines.map((l, i) => (i === plant.line - 1 ? plant.mutated : l)).join('\n');
+}
+
+/**
+ * Does the mutated file parse? Applied inside the in-flight journal like any
+ * other write, restored before returning. Anything that prevents a verdict
+ * (non-JavaScript file, unreadable or drifted file, checker failure) is
+ * 'unknown' — the plant keeps today's treatment and records that it was never
+ * syntax-checked.
+ *
+ * @returns {'valid'|'invalid'|'unknown'}
+ */
+function checkPlantSyntax(plant, cwd, { journal = NO_JOURNAL, syntaxFn = defaultSyntaxCheck } = {}) {
+  if (!SYNTAX_CHECKED_EXTENSIONS.has(extname(plant.absolutePath))) return 'unknown';
+  let original;
+  try {
+    original = readFileSync(plant.absolutePath, 'utf8');
+  } catch {
+    return 'unknown';
+  }
+  const mutated = mutatedSource(plant, original);
+  if (mutated === null) return 'unknown';
+  journal.begin([{ absolutePath: plant.absolutePath, original, mutated }]);
+  try {
+    writeFileAtomic(plant.absolutePath, mutated);
+    return syntaxFn(plant.absolutePath, cwd);
+  } finally {
+    if (restoreOriginal(plant.absolutePath, original)) journal.end();
+  }
 }
 
 /** Why a witness failed to discriminate, with the output that explains it. */
@@ -74,11 +141,10 @@ export function verifyWitness(plant, cwd, runFn = defaultRun, { journal = NO_JOU
   } catch (err) {
     return { discriminates: false, reason: `cannot read ${plant.absolutePath}: ${err.message}` };
   }
-  const lines = original.split('\n');
-  if (lines[plant.line - 1] !== plant.original) {
+  const mutated = mutatedSource(plant, original);
+  if (mutated === null) {
     return { discriminates: false, reason: 'original drifted — refusing to verify' };
   }
-  const mutated = lines.map((l, i) => (i === plant.line - 1 ? plant.mutated : l)).join('\n');
   journal.begin([{ absolutePath: plant.absolutePath, original, mutated }]);
   try {
     const { onMutant, onOriginal } = runBothSides(plant, cwd, runFn, { original, mutated });
@@ -107,9 +173,10 @@ function restoreOriginal(absolutePath, original) {
 }
 
 function judgeWitnessRuns(onOriginal, onMutant) {
-  const spawnError = onOriginal.spawnError ?? onMutant.spawnError;
-  if (spawnError) {
-    return { discriminates: false, reason: `witness could not start (${spawnError})` };
+  const failed = [onOriginal, onMutant].find((run) => classifyWitnessRun(run) === 'spawn-failed');
+  if (failed) {
+    const why = failed.spawnError ?? `shell launch failure, exit ${failed.status}`;
+    return { discriminates: false, kind: 'spawn-failed', reason: `witness could not start (${why})` };
   }
   if (onOriginal.timedOut || onMutant.timedOut) {
     return { discriminates: false, reason: 'witness timed out' };
@@ -121,31 +188,41 @@ function judgeWitnessRuns(onOriginal, onMutant) {
 }
 
 /**
- * Partition plants into { valid, equivalent } by witness discrimination.
- * Plants WITHOUT a witness pass through as `valid` but flagged
- * `witnessed:false` (they fall to semantic judging, not behavioral) — they are
- * NOT dropped, because absence of a witness is unknown-ness, not equivalence.
- * Plants WITH a witness that fails to discriminate are `equivalent` and
- * excluded from the recall denominator (scoring an unfindable bug as "missed"
- * dishonestly deflates recall).
+ * Partition plants into { valid, equivalent, discarded }.
+ * - `discarded`: never valid test cases — the mutant does not parse
+ *   (kind 'unparseable') or the witness never launched (kind 'spawn-failed').
+ *   Neither says anything about whether a reviewer could catch the plant.
+ * - `equivalent`: a witnessed plant whose witness ran but did not discriminate.
+ * - `valid`: everything else. Plants WITHOUT a witness pass through flagged
+ *   `witnessed:false` (they fall to semantic judging, not behavioral) — absence
+ *   of a witness is unknown-ness, not equivalence. Every valid plant carries
+ *   `syntax` ('valid' | 'unknown').
+ * Only `valid` plants enter the recall denominator.
  *
  * @param {Array<object>} plants
  * @param {string} cwd
  * @param {Function} [runFn]
- * @param {object} [options]  passed to verifyWitness (journal)
- * @returns {{valid:Array, equivalent:Array}}
+ * @param {object} [options]  journal, and syntaxFn for tests
+ * @returns {{valid:Array, equivalent:Array, discarded:Array}}
  */
 export function filterEquivalentMutants(plants, cwd, runFn = defaultRun, options = {}) {
   const valid = [];
   const equivalent = [];
+  const discarded = [];
   for (const plant of plants) {
+    const syntax = checkPlantSyntax(plant, cwd, options);
+    if (syntax === 'invalid') {
+      discarded.push({ ...plant, kind: 'unparseable', reason: 'mutant does not parse' });
+      continue;
+    }
     if (!plant.witness) {
-      valid.push({ ...plant, witnessed: false });
+      valid.push({ ...plant, witnessed: false, syntax });
       continue;
     }
     const v = verifyWitness(plant, cwd, runFn, options);
-    if (v.discriminates) valid.push({ ...plant, witnessed: true });
+    if (v.discriminates) valid.push({ ...plant, witnessed: true, syntax });
+    else if (v.kind === 'spawn-failed') discarded.push({ ...plant, kind: v.kind, reason: v.reason });
     else equivalent.push({ ...plant, reason: v.reason });
   }
-  return { valid, equivalent };
+  return { valid, equivalent, discarded };
 }

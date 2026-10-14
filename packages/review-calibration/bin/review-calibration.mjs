@@ -286,11 +286,12 @@ if (values['plants-file']) {
 
 // ── equivalent-mutant filter (plants WITH a witness must discriminate) ────────
 
-const { valid: validPlants, equivalent } = filterEquivalentMutants(plants, cwd, undefined, { journal });
-const exclusionLines = equivalent.map((p) => `${p.file}:${p.line} — ${p.reason}`);
+const { valid: validPlants, equivalent, discarded } = filterEquivalentMutants(plants, cwd, undefined, { journal });
+const exclusionLines = [...discarded, ...equivalent].map((p) => `${p.file}:${p.line} — ${p.reason}`);
 if (validPlants.length === 0) {
   opError(
-    `all ${plants.length} plant(s) were excluded — no witness discriminated mutant from original ` +
+    `all ${plants.length} plant(s) were excluded — each was discarded (unparseable mutant or a witness that ` +
+    `could not start) or no witness discriminated mutant from original ` +
     `(an equivalent mutant, or a broken witness) — cannot calibrate:\n  ${exclusionLines.join('\n  ')}`
   );
 }
@@ -303,6 +304,11 @@ if (validPlants.length < minPlants) {
   );
 }
 const equivalentExcluded = equivalent.length;
+const plantsDiscarded = {
+  total: discarded.length,
+  unparseable: discarded.filter((p) => p.kind === 'unparseable').length,
+  spawnFailed: discarded.filter((p) => p.kind === 'spawn-failed').length,
+};
 
 // ── control self-test (deterministic, no network) — bounds the scorer ─────────
 // echoer must score ~0; oracle must score 1.0. A failure means the SCORER is
@@ -410,6 +416,7 @@ const scorecard = {
   scorer: scorerMode,
   reviewExitCode: exitCode,
   equivalentExcluded,
+  plantsDiscarded,
   configuredJudgeEchoRecall: configuredJudgeControl.echoRecall,
   configuredJudgeBounded: configuredJudgeControl.bounded,
 };

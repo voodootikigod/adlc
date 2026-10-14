@@ -13,6 +13,7 @@
  *   reviewExitCode:number|null, commit:string, minRecall:number,
  *   minPrecision?:number, scorer:string, judgeAgreement?:number,
  *   equivalentExcluded?:number,
+ *   plantsDiscarded?:{total:number, unparseable:number, spawnFailed:number},
  *   configuredJudgeEchoRecall?:number, configuredJudgeBounded?:boolean
  * }} scorecard
  * @returns {object}
@@ -37,6 +38,9 @@ export function buildJsonReport(scorecard) {
     scorer: scorecard.scorer,
     judgeAgreement: scorecard.judgeAgreement ?? null,
     equivalentExcluded: scorecard.equivalentExcluded ?? 0,
+    // Plants that were never valid test cases (unparseable mutant, witness that
+    // never launched); they are outside `total` and the recall denominator.
+    plantsDiscarded: scorecard.plantsDiscarded ?? { total: 0, unparseable: 0, spawnFailed: 0 },
     // Whether the judge that produced `recall` was itself bounded by the echo
     // control (#753). false = the number is uncertified, not that it is wrong
     // (`--scorer string` can never satisfy this by construction). null = the
@@ -65,7 +69,7 @@ export function buildJsonReport(scorecard) {
 export function printScorecard(scorecard) {
   const {
     recall, caught, total, precision, falsePositives, perCategory, results,
-    commit, minRecall, minPrecision, scorer, judgeAgreement, equivalentExcluded,
+    commit, minRecall, minPrecision, scorer, judgeAgreement, equivalentExcluded, plantsDiscarded,
     configuredJudgeEchoRecall, configuredJudgeBounded,
   } = scorecard;
   const pct = (n) => `${(n * 100).toFixed(1)}%`;
@@ -99,6 +103,12 @@ export function printScorecard(scorecard) {
   }
   if (equivalentExcluded) {
     console.log(`Excluded:        ${equivalentExcluded} equivalent mutant(s) (no behavioral discriminator)`);
+  }
+  if (plantsDiscarded?.total) {
+    console.log(
+      `Discarded:       ${plantsDiscarded.total} plant(s) (${plantsDiscarded.unparseable} unparseable mutant, ` +
+      `${plantsDiscarded.spawnFailed} witness could not start) — outside the recall denominator`,
+    );
   }
   console.log('');
 
