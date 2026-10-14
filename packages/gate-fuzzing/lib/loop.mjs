@@ -5,6 +5,23 @@
 
 import { extractJson } from '@adlc/core';
 import { parseCandidates, normalizeAndHash } from './candidate.mjs';
+import { fuzzableGates } from './gate-adapter.mjs';
+
+/**
+ * Keep only candidates aimed at a fuzzable gate. The target is model-chosen:
+ * a candidate naming a validity gate or an unknown gate would be dismissed by
+ * classify yet still count as evaluated, so a run could reach "dry" without
+ * any candidate ever reaching a fuzzable gate. Such candidates are treated as
+ * unusable output instead.
+ *
+ * @param {object[]} candidates
+ * @param {Set<string>} fuzzableNames
+ * @returns {{targeted: object[], offTarget: number}}
+ */
+export function splitByFuzzableTarget(candidates, fuzzableNames) {
+  const targeted = candidates.filter((c) => fuzzableNames.has(c.target));
+  return { targeted, offTarget: candidates.length - targeted.length };
+}
 
 /**
  * Estimate tokens used from fan results (§3.2 option A).
@@ -74,6 +91,7 @@ export async function runLoop(suite, baseline, opts) {
     allowedCmds,
   } = opts;
 
+  const fuzzableNames = new Set(fuzzableGates({ gates: suite }).map((g) => g.name));
   const defeats = [];
   const seenHashes = new Set();
   let round = 0;
@@ -135,10 +153,13 @@ export async function runLoop(suite, baseline, opts) {
         recordRejection(key);
       }
 
-      if (candidates.length === 0) {
+      const { targeted, offTarget } = splitByFuzzableTarget(candidates, fuzzableNames);
+      for (let i = 0; i < offTarget; i++) recordRejection('invalid:target-not-fuzzable');
+
+      if (targeted.length === 0) {
         invalidFanQueries++;
       } else {
-        validCandidatesThisRound.push(...candidates);
+        validCandidatesThisRound.push(...targeted);
       }
     }
 

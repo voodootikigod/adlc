@@ -120,6 +120,9 @@ exit 1 before any model call. Without them, every candidate against that gate
 would be dismissed as out-of-scope or wrong-claim, and the run would report clean
 having tested nothing. Validity gates are never fan targets: they run as checks
 on every candidate, but the adversary never spends a fan instance on them.
+Gate names must be unique. A candidate whose target is not a fuzzable gate (a
+validity gate, or a name not in the suite) is rejected as unusable output
+(`invalid:target-not-fuzzable`), so it never counts toward the dry streak.
 
 ## What is a "defeat"?
 

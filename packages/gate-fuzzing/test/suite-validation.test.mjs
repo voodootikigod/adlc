@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 
 import { loadSuite, validateSuiteGates, fuzzableGates } from '../lib/gate-adapter.mjs';
+import { runLoop, splitByFuzzableTarget } from '../lib/loop.mjs';
 
 const BIN = resolve(new URL('../bin/gate-fuzzing.mjs', import.meta.url).pathname);
 const README = resolve(new URL('../README.md', import.meta.url).pathname);
@@ -184,4 +185,89 @@ test('AC5 the README example suite loads unchanged', () => {
   const p = writeSuite(example);
   assert.deepEqual(loadSuite(p), example);
   assert.deepEqual(validateSuiteGates(example.gates), []);
+});
+
+// ── duplicate gate names ────────────────────────────────────────────────────
+
+test('duplicate fuzzable gate names are rejected', () => {
+  const problems = validateSuiteGates([FUZZ, { ...FUZZ, surface: ['other/**'] }]);
+  assert.deepEqual(problems, ['gate "rails-guard": duplicate name (gate names must be unique)']);
+});
+
+test('a validity gate sharing a fuzzable gate\'s name is rejected, once per name', () => {
+  const problems = validateSuiteGates([FUZZ, { ...BUILD, name: 'rails-guard' }, { ...BUILD, name: 'rails-guard' }]);
+  assert.deepEqual(problems, ['gate "rails-guard": duplicate name (gate names must be unique)']);
+});
+
+test('distinct names are not flagged as duplicates', () => {
+  assert.deepEqual(validateSuiteGates([FUZZ, BUILD, { ...FUZZ, name: 'rails-guard-2' }]), []);
+});
+
+test('CLI with a duplicate-name suite exits 1 before printing prompts', () => {
+  const p = writeSuite({ gates: [FUZZ, { ...FUZZ }] });
+  const r = spawnSync(process.execPath, [BIN, '--suite', p, '--prompt-only'], {
+    cwd: tmp(),
+    encoding: 'utf8',
+    timeout: 15000,
+  });
+  assert.equal(r.status, 1, `stderr: ${r.stderr}`);
+  assert.equal(r.stdout, '');
+  assert.match(r.stderr, /gate "rails-guard": duplicate name/);
+});
+
+// ── a model-chosen target outside the fuzzable gates never earns a dry round ─
+
+function fanTargeting(target) {
+  return async () => [{
+    ok: true,
+    value: JSON.stringify({
+      id: `cand-${target}`,
+      strategy: 'base-ref-window',
+      target,
+      claimKind: 'freeze-integrity',
+      rationale: 'off target',
+      diff: 'diff --git a/unrelated b/unrelated\n+// noop',
+      witnessProposal: { cmd: 'node', args: ['--test'] },
+      setup: [],
+    }),
+  }];
+}
+
+for (const target of ['build', 'no-such-gate']) {
+  test(`runLoop: candidates targeting "${target}" are rejected, never classified, never dry`, async () => {
+    let classified = 0;
+    const result = await runLoop([FUZZ, BUILD], { dir: '/fake' }, {
+      fanFn: fanTargeting(target),
+      classifyFn: () => { classified++; return { result: 'out-of-scope', reason: 'off surface' }; },
+      maxRounds: 4,
+      dryRounds: 2,
+      tokenBudget: 1_000_000,
+      cloneDir: '/fake/clone',
+      n: 1,
+    });
+    assert.equal(classified, 0);
+    assert.notEqual(result.stoppedBy, 'dry');
+    assert.equal(result.inconclusiveRounds, 4);
+    assert.equal(result.candidatesRejected['invalid:target-not-fuzzable'], 4);
+  });
+}
+
+test('runLoop: a candidate targeting the fuzzable gate is still classified', async () => {
+  let classified = 0;
+  const result = await runLoop([FUZZ, BUILD], { dir: '/fake' }, {
+    fanFn: fanTargeting('rails-guard'),
+    classifyFn: () => { classified++; return { result: 'out-of-scope', reason: 'off surface' }; },
+    maxRounds: 4,
+    dryRounds: 2,
+    tokenBudget: 1_000_000,
+    cloneDir: '/fake/clone',
+    n: 1,
+  });
+  assert.equal(classified, 2);
+  assert.equal(result.stoppedBy, 'dry');
+});
+
+test('splitByFuzzableTarget keeps order and counts the rest', () => {
+  const cs = [{ target: 'a' }, { target: 'b' }, { target: 'a' }];
+  assert.deepEqual(splitByFuzzableTarget(cs, new Set(['a'])), { targeted: [cs[0], cs[2]], offTarget: 1 });
 });

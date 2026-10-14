@@ -80,6 +80,18 @@ function arrayFieldProblems(label, gate, field) {
   return [];
 }
 
+/**
+ * Gates are looked up by name, so a second gate with the same name is never
+ * selected: its surface, claims and command would silently go unused.
+ */
+function duplicateNameProblems(gates) {
+  const names = gates
+    .filter((g) => isPlainObject(g) && isNonEmptyString(g.name))
+    .map((g) => g.name);
+  const dupes = [...new Set(names.filter((n, i) => names.indexOf(n) !== i))];
+  return dupes.map((n) => `gate "${n}": duplicate name (gate names must be unique)`);
+}
+
 function gateProblems(gate, index) {
   if (!isPlainObject(gate)) return [`gate #${index}: must be an object`];
   const named = isNonEmptyString(gate.name);
@@ -107,7 +119,7 @@ function gateProblems(gate, index) {
  * @returns {string[]} problems; empty when the gates are valid
  */
 export function validateSuiteGates(gates) {
-  const problems = gates.flatMap((gate, i) => gateProblems(gate, i));
+  const problems = [...gates.flatMap((gate, i) => gateProblems(gate, i)), ...duplicateNameProblems(gates)];
   const anyFuzzable = gates.some((g) => isPlainObject(g) && !isValidityGate(g));
   if (!anyFuzzable) {
     problems.push(
