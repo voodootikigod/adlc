@@ -453,12 +453,19 @@ final word — verify.
   counts, mutation-gate numbers, review rounds folded/refuted, commit SHAs, PR URL,
   AND the polled CI status — not just the lane's own local claim of it.
 - If push/PR was denied by permissions, give the user the exact commands per lane.
-- **Release the claim of every lane that ended without a PR.** The lane prompt tells the
-  lane to do it, but check rather than trust it. For each such issue:
-  `gh issue view <n> --json labels --jq '.labels[].name' | grep -qx WIP && gh issue edit <n> --remove-label WIP`,
-  plus a one-line comment giving the reason. A label left behind blocks the issue AND its
-  package for every other run until someone notices it in the 48-hour sweep. Lanes that
-  opened a PR keep `WIP`; merging closes the issue.
+- **Release the claim of every lane that ended without a PR, but only if the lane did not
+  release it.** Read the lane's report:
+  - If the lane says it removed `WIP`, do nothing. A `WIP` present now belongs to ANOTHER
+    run that claimed the freed issue since, and removing it would delete that run's live
+    claim.
+  - If the lane says the removal failed or was denied, or says nothing about it, check that
+    the latest `issue-lanes claim` comment on the issue is still this run's (same `host:`
+    and timestamp). Only then run `gh issue edit <n> --remove-label WIP` and post a
+    one-line reason.
+
+  A label left behind blocks the issue AND its package for every other run until someone
+  notices it in the 48-hour sweep. Lanes that opened a PR keep `WIP`; merging closes the
+  issue.
 - Save a `project` memory: lanes, ticket ids, blockers, anything non-obvious.
 - After the human merges: `adlc ticket complete <id>` is a base-branch admin act — rails-guard's
   contract-preservation check refuses `completed: true` on an existing ticket inside ANY PR, so
@@ -504,6 +511,13 @@ final word — verify.
   within seconds of each other can both read "free" before either writes. Every run uses the same GitHub account,
   so the label's history cannot tell you which machine owns an issue; the claim comment's
   `host:` field can. The skill flags stale claims and never reclaims them.
+  Two more known limits:
+  - `gh` returns at most 100 `files` per PR and 100 `comments` per issue. A package
+    touched only past a PR's 100th file, or a claim posted after an issue's 100th comment,
+    is invisible to TAKEN-PACKAGES.
+  - Claim comments are trusted by their text, not their author. Anyone who can comment on
+    a `WIP` issue can mark a package as taken. That only makes runs skip work, never
+    collide, but if a package is skipped unexpectedly, read the comment's author.
 
 - **A GREEN PR IS NOT EVIDENCE `main` WILL BE GREEN AFTER IT MERGES.**
   `strict_required_status_checks_policy` evaluates up-to-dateness at MERGE TIME against
