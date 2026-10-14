@@ -18,6 +18,13 @@ fallback transports, a closed transport taxonomy, concrete model IDs for reviewe
 seats, and a complete `(adapter, model) → provider` table. Every failure is fail
 closed; there are no default channels.
 
+A reviewer group's quorum counts independent model **families**, not seats, and a
+group that cannot reach its quorum is rejected at load. Every seat behind one
+`gateway:` transport is one family, and any seats declaring the same provider are
+one family whatever their transport: a gateway seat counts as the same family as
+any other seat declaring the same provider, including a direct seat. This matches
+the cross-model gate, which compares approvals by normalized provider.
+
 **2. The lifecycle-job routing contract (§5).** `routeJob` is a total function
 over a closed job enum that does not trust its caller: for `build.*` jobs the
 class is *derived* from `ticket.category` and `assignment.float`, and a

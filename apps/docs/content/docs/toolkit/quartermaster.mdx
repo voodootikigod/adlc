@@ -90,6 +90,13 @@ reviewer seats, and a `(adapter, model) → provider` table that must carry ever
 **concrete** model and agree with the seat's declared provider. A missing,
 disabled, or invalid registry aborts before dispatch. There are no defaults.
 
+A reviewer group's quorum counts independent model **families**, not seats, and a
+group that cannot reach its quorum is rejected at load. Every seat behind one
+`gateway:` transport is one family, and any seats declaring the same provider are
+one family whatever their transport: a gateway seat counts as the same family as
+any other seat declaring the same provider, including a direct seat. This matches
+the cross-model gate, which compares approvals by normalized provider.
+
 Channels must name **concrete model IDs**, not aliases like `default`. An alias is
 resolved by the harness from state the candidate can influence — Claude Code reads
 a project-committed `.claude/settings.json` model when no `--model` is passed — so

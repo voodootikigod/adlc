@@ -291,26 +291,41 @@ function checkChannels(channels, { catalog, violations }) {
   }
 }
 
+/** The family keys one seat belongs to; seats sharing any key are one family. */
+function familyKeys(member) {
+  const provider = normalizeProviderName(member.provider);
+  if (isDirectTransport(member.transport)) return [`provider:${provider}`];
+  return provider ? [`gateway:${member.transport}`, `provider:${provider}`] : [`gateway:${member.transport}`];
+}
+
 /**
- * The most independent families a member list could ever supply (§6).
+ * The most independent families a member list could ever supply (§6): the
+ * number of connected components under "same family".
  *
- * Gateway seats are keyed by their transport — an unauthenticated gateway can
- * alias or misroute model IDs, so everything behind one gateway proves only one
- * family however many providers it declares. Direct seats are keyed by
- * normalized provider, since two seats on the same provider are the same family
- * no matter how they are spelled.
+ * Every seat behind one gateway transport is one family — an unauthenticated
+ * gateway can alias or misroute model IDs, so it proves only one family however
+ * many providers it declares. Any two seats declaring the same normalized
+ * provider are one family whatever their transport, because the cross-model
+ * gate compares approvals by normalized provider: a gateway seat on a provider
+ * is not independent of a direct seat on that provider. Both relations are
+ * transitive, so the count is over components, not distinct keys.
  */
-function effectiveFamilyCapacity(members) {
-  const families = new Set();
+export function familyCapacity(members) {
+  const parent = new Map();
+  const find = (key) => {
+    let root = key;
+    while (parent.get(root) !== root) root = parent.get(root);
+    return root;
+  };
   for (const member of members) {
     if (!isPlainObject(member) || typeof member.transport !== 'string') continue;
-    families.add(
-      isDirectTransport(member.transport)
-        ? `direct:${normalizeProviderName(member.provider)}`
-        : `gateway:${member.transport}`
-    );
+    const roots = familyKeys(member).map((key) => {
+      if (!parent.has(key)) parent.set(key, key);
+      return find(key);
+    });
+    for (const root of roots.slice(1)) parent.set(root, roots[0]);
   }
-  return families.size;
+  return [...parent.keys()].filter((key) => parent.get(key) === key).length;
 }
 
 function checkReviewerGroups(groups, { catalog, violations }) {
@@ -382,14 +397,15 @@ function checkReviewerGroups(groups, { catalog, violations }) {
     // catches for the fallback edge — and every trust-root review would spend
     // its calls before failing under-satisfied.
     if (Number.isInteger(quorum) && Array.isArray(members) && members.length > 0) {
-      const capacity = effectiveFamilyCapacity(members);
+      const capacity = familyCapacity(members);
       if (capacity < quorum) {
         violations.push({
           rule: RULE.SCHEMA,
           message:
             `${label} has quorum ${quorum} but only ${capacity} independent famil${capacity === 1 ? 'y' : 'ies'} ` +
             `across its ${members.length} member(s): members sharing one gateway:* transport count as a single ` +
-            'family (§6), as do direct members on the same provider. This quorum can never be satisfied.',
+            'family (§6), as do direct members on the same provider, and a gateway seat and a direct seat on ' +
+            'the same provider are one family too. This quorum can never be satisfied.',
         });
       }
     }
