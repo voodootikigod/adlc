@@ -24,6 +24,7 @@ composes them for a batch.
 ## 0. Preconditions (5 minutes, all mechanical)
 
 ```bash
+SP=<your scratchpad directory>  # every $SP/… path below writes here; never leave it unset
 git status --short            # main checkout must be clean
 git fetch -q origin main:refs/remotes/origin/main
 adlc --version                # toolkit installed (>= scripts/toolkit-floor.json)
@@ -162,11 +163,18 @@ the label first; if `WIP` has appeared since `issues.tsv` was written, another r
 there first, so drop the issue and do not claim it:
 
 ```bash
-gh issue view <n> --json labels --jq '.labels[].name' | grep -qx WIP && echo "TAKEN — drop #<n>"
-gh issue edit <n> --add-label WIP
-gh issue comment <n> --body "issue-lanes claim — package: packages/<pkg>, host: $(hostname -s), $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-gh issue view <n> --json labels --jq '.labels[].name' | grep -qx WIP   # must succeed before §2
+if gh issue view <n> --json labels --jq '.labels[].name' | grep -qx WIP; then
+  echo "TAKEN — drop #<n>; do not claim, do not build"
+else
+  gh issue edit <n> --add-label WIP \
+  && gh issue comment <n> --body "issue-lanes claim — package: packages/<pkg>, host: $(hostname -s), $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  && gh issue view <n> --json labels --jq '.labels[].name' | grep -qx WIP \
+  && echo "CLAIMED #<n>"
+fi
 ```
+
+Only an issue that printed `CLAIMED` goes on to §2. One that printed `TAKEN`, or printed
+nothing because a `gh` step failed, is out of this batch.
 
 The comment's exact form matters: the TAKEN-PACKAGES list and the §0 stale sweep both parse it.
 Use the candidate's real unit for `package:` (`packages/<pkg>` or `plugins/<plugin>`).
