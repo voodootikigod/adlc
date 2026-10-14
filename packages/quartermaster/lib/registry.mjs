@@ -404,7 +404,7 @@ function checkReviewerGroups(groups, { catalog, violations }) {
           message:
             `${label} has quorum ${quorum} but only ${capacity} independent famil${capacity === 1 ? 'y' : 'ies'} ` +
             `across its ${members.length} member(s): members sharing one gateway:* transport count as a single ` +
-            'family (§6), as do direct members on the same provider, and a gateway seat and a direct seat on ' +
+            'family, as do direct members on the same provider, and a gateway seat and a direct seat on ' +
             'the same provider are one family too. This quorum can never be satisfied.',
         });
       }
