@@ -30,14 +30,21 @@ adlc accept --ticket <id> --packet .adlc/packet.json [--before .adlc/before.json
 | Flag | Description |
 | --- | --- |
 | `--dir <path>` | ADLC control directory (default `.adlc`). |
-| `--ticket <id>` | Ticket to scope evidence to. Required for phases p3, p4, p5, p6. |
+| `--ticket <id>` | Ticket to scope evidence to. Required for phases p0, p1, p2, p3, p4, p5, p6. |
 | `--revision <rev>` | Offline selector for recorded manifest/artifact evidence; verifies recorded hashes without comparing against the live worktree. Omit for normal worktree use. |
 | `--packet <path>` | (`accept`) Path to the P6 acceptance packet to record. Must live under `.adlc/` or `.omo/evidence/`. |
 | `--before <path>` / `--after <path>` | (`accept`) Behavior snapshot paths recorded and re-verified at P6. |
 | `--json` | Machine-readable result. |
 | `--help` | Print help and exit 0. |
 
-Phases run p1 through p7; p3–p6 require `--ticket`.
+Phases run p0 through p7; p0–p6 require `--ticket`.
+
+`adlc run p2` is ticket-scoped and validates the ticket's `coldstart` record exactly as
+`adlc run p0` does (no unresolved gaps, ticket definition unchanged since the audit), and its
+`merge-forecast` must belong to the same ticket. `adlc run p4` binds `p4-build` to the files it
+covers: record it with `--files <changed files>`, and the run is rejected (exit 2, naming the
+file) when any of those files has changed since. `flail-check` is still presence-only: the
+flail detector records no tree identity, so the runner cannot tell which build it analysed.
 
 ## Exit codes
 

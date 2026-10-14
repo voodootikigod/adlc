@@ -10,9 +10,16 @@ adlc run p6 --ticket T1 --dir .adlc
 ```
 
 The runner does not treat "a command ran" as a gate. It checks `.adlc/manifest.jsonl`
-for the evidence each phase requires. P0, P1, P3, P4, P5, and P6 evidence must be scoped
-to a ticket; `adlc run p0`, `adlc run p1`, `adlc run p3`, `adlc run p4`, `adlc run p5`,
-and `adlc run p6` fail operationally without `--ticket`.
+for the evidence each phase requires. P0, P1, P2, P3, P4, P5, and P6 evidence must be scoped
+to a ticket; `adlc run p0`, `adlc run p1`, `adlc run p2`, `adlc run p3`, `adlc run p4`,
+`adlc run p5`, and `adlc run p6` fail operationally without `--ticket`.
+
+`adlc run p2` is ticket-scoped and validates the ticket's `coldstart` record exactly as
+`adlc run p0` does (no unresolved gaps, ticket definition unchanged since the audit), and its
+`merge-forecast` must belong to the same ticket. `adlc run p4` binds `p4-build` to the files it
+covers: record it with `--files <changed files>`, and the run is rejected (exit 2, naming the
+file) when any of those files has changed since. `flail-check` is still presence-only: the
+flail detector records no tree identity, so the runner cannot tell which build it analysed.
 
 For normal git worktree use, omit `--revision`. P5 and P6 use the current content
 fingerprint and fail closed if reviewed content changes. Committing the exact content

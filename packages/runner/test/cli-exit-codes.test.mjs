@@ -88,10 +88,10 @@ test('CLI: --help lists every phase and every ticket-required phase, matching th
   for (const phase of ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7']) {
     assert.match(r.stdout, new RegExp(`Phases:.*\\b${phase}\\b`), `--help must list ${phase}`);
   }
-  for (const phase of ['p0', 'p1', 'p3', 'p4', 'p5', 'p6']) {
+  for (const phase of ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6']) {
     assert.match(r.stdout, new RegExp(`Ticket required:.*\\b${phase}\\b`), `--help must list ${phase} as ticket-required`);
   }
-  for (const phase of ['p2', 'p7']) {
+  for (const phase of ['p7']) {
     assert.doesNotMatch(r.stdout, new RegExp(`Ticket required:.*\\b${phase}\\b`), `--help must NOT list ${phase} as ticket-required`);
   }
 });
