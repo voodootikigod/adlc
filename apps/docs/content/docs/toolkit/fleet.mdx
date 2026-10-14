@@ -25,6 +25,12 @@ while the `claude -p` worker runs on a separate model plane so it can still reac
 its provider. Finished tickets merge sequentially into a per-run
 `fleet/run-<runId>` integration branch, never into `base`. The fleet never pushes.
 
+The protected-control-file integrity scan covers the `.adlc/tickets.json` trust
+root. A protected control file that git lists as changed but that is absent or
+unreadable (deleted, or made unreadable) fails the integrity stage with
+`protected control file is absent or unreadable`; it is never skipped as
+"nothing to compare".
+
 ## Usage
 
 ```sh

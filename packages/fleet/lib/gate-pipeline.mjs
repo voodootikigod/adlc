@@ -21,17 +21,44 @@ import { scanProtectedPaths, isUnderProtectedPrefix, isInert } from './protected
  * byte-identical file that a worker did not touch produces no git-status entry
  * and needs no check. Returns [{ path, bytes }]; injectable read so it is
  * unit-testable.
+ *
+ * A listed path that cannot be read (deleted, chmod 000, a read error) is kept
+ * as `{ path, bytes: null, unreadable: true }`, never dropped: git listed it, so
+ * a worker changed it, and "could not read it" is not evidence that it is fine.
  */
 export function collectProtectedCandidates({ listProtected, readBytes }) {
   const candidates = [];
   for (const path of new Set(listProtected())) {
     if (!isUnderProtectedPrefix(path) || isInert(path)) continue;
-    let bytes;
-    try { bytes = readBytes(path); } catch { continue; } // absent → nothing to compare
-    if (bytes === undefined || bytes === null) continue;
-    candidates.push({ path, bytes });
+    const bytes = readOrNull(readBytes, path);
+    candidates.push(bytes === null ? { path, bytes: null, unreadable: true } : { path, bytes });
   }
   return candidates;
+}
+
+function readOrNull(readBytes, path) {
+  try {
+    const bytes = readBytes(path);
+    return bytes === undefined ? null : bytes;
+  } catch {
+    return null;
+  }
+}
+
+/** The integrity-stage violation for a listed protected file that could not be read. */
+export const UNREADABLE_REASON = 'protected control file is absent or unreadable';
+
+/**
+ * The integrity scan over collected candidates: unreadable candidates are
+ * violations in their own right (reported before the byte comparison), and the
+ * readable ones go through scanProtectedPaths.
+ */
+function integrityViolations(candidates, templates) {
+  const unreadable = candidates
+    .filter((c) => c.unreadable === true)
+    .map((c) => ({ path: c.path, reason: UNREADABLE_REASON }));
+  const scan = scanProtectedPaths(candidates.filter((c) => c.unreadable !== true), templates);
+  return [...unreadable, ...scan.violations];
 }
 
 /**
@@ -65,9 +92,9 @@ export async function runGatePipeline(ticket, deps) {
     listProtected: deps.listProtected ?? (() => []),
     readBytes: deps.readBytes ?? (() => undefined),
   });
-  const scan = scanProtectedPaths(candidates, deps.templates ?? new Map());
-  if (!scan.ok) {
-    return { ok: false, stage: 'protected-paths', output: scan.violations.map((v) => `${v.path}: ${v.reason}`).join('; ') };
+  const violations = integrityViolations(candidates, deps.templates ?? new Map());
+  if (violations.length > 0) {
+    return { ok: false, stage: 'protected-paths', output: violations.map((v) => `${v.path}: ${v.reason}`).join('; ') };
   }
 
   // 4. rails-guard (delegated to the adlc CLI in the live builder).

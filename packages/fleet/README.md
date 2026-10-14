@@ -27,7 +27,10 @@ Design contract: [`docs/specs/fleet-orchestration.md`](../../docs/specs/fleet-or
   residual, see the security section.
 - **Deterministic pre-merge gates** — build/test, `rails-guard`, a ticket-local
   scope check, and a closed protected-control-file integrity scan (covering the
-  `.adlc/tickets.json` trust root).
+  `.adlc/tickets.json` trust root). A protected control file that git lists as
+  changed but that is absent or unreadable (deleted, or made unreadable) fails
+  the integrity stage with `protected control file is absent or unreadable`;
+  it is never skipped as "nothing to compare".
 - **Blocking cross-model prosecution** — every ticket must clear an
   `adversarial-review` pass before merge; it fails closed if no provider is
   reachable.

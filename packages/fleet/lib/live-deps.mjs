@@ -150,13 +150,40 @@ export const PRE_STRIKE_MAX_MS = 120_000;
 /** The pre-strike helper's output budget per stream (its result is a status line, not a transcript). */
 export const PRE_STRIKE_MAX_OUTPUT_BYTES = 1024 * 1024;
 
-/** Parse `git status --porcelain --ignored -uall` output to worktree paths. */
-function parseStatusPaths(out) {
-  return String(out || '')
-    .split('\n')
-    .filter(Boolean)
-    .map((l) => l.slice(3).trim())
-    .filter(Boolean);
+/**
+ * The protected-path listing: NUL-delimited, so a path git would C-quote (a tab,
+ * a double quote, non-ASCII) arrives literally, and a rename's two paths arrive
+ * as separate fields instead of one `old -> new` string.
+ */
+export const STATUS_ARGS = ['status', '--porcelain=v1', '-z', '--ignored', '--untracked-files=all'];
+
+/**
+ * Parse `git status --porcelain=v1 -z` output (STATUS_ARGS) to worktree paths.
+ * Each record is `XY path`; a rename or copy record is followed by one more
+ * field holding the original path, and both paths are returned.
+ */
+export function parseStatusPaths(out) {
+  const fields = String(out || '').split('\0');
+  const paths = [];
+  for (let i = 0; i < fields.length; i += 1) {
+    if (fields[i] === '') continue;
+    const { xy, path } = splitStatusRecord(fields[i]);
+    paths.push(path);
+    if (/[RC]/.test(xy)) {
+      i += 1;
+      paths.push(fields[i]);
+    }
+  }
+  return paths.filter(Boolean);
+}
+
+// The io.git adapter trims its output, so the first record can arrive without
+// the leading space of its XY code (` D p` as `D p`). An intact record always
+// has a space at index 2.
+function splitStatusRecord(record) {
+  return record[2] === ' '
+    ? { xy: record.slice(0, 2), path: record.slice(3) }
+    : { xy: record.slice(0, 1), path: record.slice(2) };
 }
 
 /**
@@ -585,7 +612,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
         try { templates.set(p, wtGit('show', `${startSha}:${p}`)); } catch { /* absent at startSha */ }
       }
       const listProtected = () => {
-        const paths = parseStatusPaths(wtGit('status', '--porcelain', '--ignored', '--untracked-files=all'));
+        const paths = parseStatusPaths(wtGit(...STATUS_ARGS));
         return paths.filter((p) => isUnderProtectedPrefix(p));
       };
       const readBytes = (p) => (io.exists(join(worktree, p)) ? io.readFile(join(worktree, p)) : undefined);
