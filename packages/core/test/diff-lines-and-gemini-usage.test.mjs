@@ -68,3 +68,19 @@ test('AC4: responses without thinking tokens map exactly as before', () => {
   );
   assert.equal(usageFromGemini(null), null);
 });
+
+test('a header-less diff starting at "+++ b/…" still registers its file', () => {
+  const r = changedLinesFromDiff('+++ b/h.js\n@@ -1 +1 @@\n-x\n+y\n');
+  assert.deepEqual([...r['h.js']], [1]);
+});
+
+test('a hunk ending in a deletion does not swallow the next file header', () => {
+  const diff = '+++ b/a.js\n@@ -1,2 +1,1 @@\n a\n-b\n+++ b/b.js\n@@ -1 +1 @@\n-x\n+y\n';
+  const r = changedLinesFromDiff(diff);
+  assert.deepEqual([...r['b.js']], [1]);
+  assert.equal(r['a.js'].size, 0);
+});
+
+test('thinking tokens alone count as output when candidates are absent', () => {
+  assert.equal(usageFromGemini({ promptTokenCount: 1, thoughtsTokenCount: 4 }).outputTokens, 4);
+});
