@@ -58,6 +58,14 @@ describe('--record --files', () => {
     assert.equal(recorded(dir).length, before);
   });
 
+  test('a --files list naming no paths is an operational error and records nothing', () => {
+    const before = recorded(dir).length;
+    const result = runBin([logFile, '--record', '--ticket', 'T1', '--files', ' , '], dir);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /named no paths/);
+    assert.equal(recorded(dir).length, before);
+  });
+
   test('--record without --files still records, binding no files', () => {
     const result = runBin([logFile, '--record', '--ticket', 'T2'], dir);
     assert.equal(result.status, 0, result.stderr);
