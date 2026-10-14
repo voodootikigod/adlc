@@ -1,0 +1,6 @@
+{
+  "session_id": "sess-pretool-no-root",
+  "tool_name": "Write",
+  "tool_use_id": "tu-no-root",
+  "tool_input": { "file_path": "__FILE__" }
+}

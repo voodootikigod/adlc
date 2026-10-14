@@ -8,8 +8,8 @@
 //
 // The rail DECISION is delegated entirely to checkRail() in ../rails-checker.mjs
 // (which delegates glob/ticket primitives to @adlc/core). This file only maps the
-// Cursor wire format onto that decision. It imports ONLY Node builtins + the
-// sibling checker (no third-party deps).
+// Cursor wire format onto that decision. It imports ONLY Node builtins, the
+// sibling checker, and the plugin's own root normalizer (no third-party deps).
 //
 // Honesty about enforcement (ADR 0006): Cursor's `permission: "deny"` has open
 // reliability reports, so this hook is BEST-EFFORT/ADVISORY. The unbypassable
@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { isAbsolute, resolve, relative, dirname, basename } from 'node:path';
 import { realpathSync, existsSync } from 'node:fs';
 import { checkRail, classifyTool, isShellTool, railPreconditions } from '../rails-checker.mjs';
+import { normalizeRootPath } from '../lib/workspace-resolve.mjs';
 
 /** Best-effort realpath; falls back to the lexical path (a write may create it). */
 function realOr(p) {
@@ -159,7 +160,11 @@ export function candidateRoots(payload) {
  * them — picking the first one blindly can check an absolute rail path against the
  * wrong repo and miss a frozen-rail edit. So when the edited path is absolute, pick
  * the workspace root that actually CONTAINS it (longest match wins); otherwise fall
- * back to the first declared root, then the process cwd.
+ * back to the first declared root, then an explicit fallback, then the host's
+ * CURSOR_PROJECT_DIR. Never the process cwd: Cursor runs the hook from the PLUGIN
+ * directory, so a cwd fallback evaluated a repo with no ticket store and allowed
+ * every edit. When nothing resolves, `root` is null and callers must treat the
+ * workspace as unverifiable (see unresolvedRootVerdict).
  *
  * Ownership is decided on NORMALIZED, symlink-resolved paths with a boundary-aware
  * containment check (`relative()` not starting with `..`) — never raw string
@@ -167,9 +172,9 @@ export function candidateRoots(payload) {
  * (or a symlinked root alias) must be attributed to the repo it actually resolves
  * into, not the one whose name lexically prefixes it.
  */
-export function resolveOwning(payload, filePath, fallback = process.cwd()) {
+export function resolveOwning(payload, filePath, fallback, env = process.env) {
   const roots = candidateRoots(payload);
-  const base = roots[0] ?? fallback;
+  const base = roots[0] ?? fallback ?? hostProjectRoot(env);
   // Resolve the edited path to an ABSOLUTE path. A relative path with `..`
   // traversal (e.g. `../backend/src/auth.js`) is resolved against the primary root
   // the way the agent's cwd would, so it's attributed to the root it actually
@@ -177,9 +182,10 @@ export function resolveOwning(payload, filePath, fallback = process.cwd()) {
   // for the rail check: passing the ORIGINAL relative path plus the owning root to
   // checkRail would make it `join(owningRoot, relativeToPrimary)` and mangle the
   // path whenever the roots differ in depth/name (caught by Gemini round-19).
-  const absFile = filePath
-    ? (isAbsolute(filePath) ? resolve(filePath) : resolve(base, filePath))
-    : undefined;
+  // With no base, a relative path has nothing to resolve against.
+  const absFile = !filePath
+    ? undefined
+    : isAbsolute(filePath) ? resolve(filePath) : (base != null ? resolve(base, filePath) : undefined);
   if (absFile) {
     const owning = roots
       .map((raw) => ({ raw, real: realpathDeepest(resolve(raw)) }))
@@ -190,12 +196,39 @@ export function resolveOwning(payload, filePath, fallback = process.cwd()) {
       .sort((a, b) => b.real.length - a.real.length)[0];
     if (owning) return { root: owning.raw, absFile };
   }
-  return { root: roots[0] ?? fallback, absFile };
+  return { root: base ?? null, absFile };
 }
 
 /** The owning workspace root for an edited path (back-compat wrapper). */
-export function resolveRoot(payload, filePath, fallback = process.cwd()) {
-  return resolveOwning(payload, filePath, fallback).root;
+export function resolveRoot(payload, filePath, fallback, env = process.env) {
+  return resolveOwning(payload, filePath, fallback, env).root;
+}
+
+/** The host-supplied project dir (CURSOR_PROJECT_DIR), normalized; null when unset or relative. */
+export function hostProjectRoot(env = process.env) {
+  return normalizeRootPath(env?.CURSOR_PROJECT_DIR);
+}
+
+const UNRESOLVED_CAUSE =
+  'the workspace root could not be resolved from the hook payload (workspace_roots/cwd/root) or CURSOR_PROJECT_DIR';
+
+/**
+ * The verdict when no workspace root resolves. Under ADLC_P4_ENFORCEMENT=1 the
+ * edit cannot be checked against any ticket's rails, so it is denied; otherwise
+ * the guard is a no-op and allows, with one stderr notice naming the cause.
+ */
+export function unresolvedRootVerdict(tool, env = process.env) {
+  if (env?.ADLC_P4_ENFORCEMENT === '1') {
+    return {
+      permission: 'deny',
+      user_message: `ADLC rails-guard: blocked "${tool || 'unknown'}" — ${UNRESOLVED_CAUSE}`,
+      agent_message:
+        `Rail enforcement is active but ${UNRESOLVED_CAUSE}, so the edit cannot be verified against the ` +
+        'frozen rails and is denied. The host must supply workspace_roots or set CURSOR_PROJECT_DIR.',
+    };
+  }
+  process.stderr.write(`adlc-rails-guard: ${UNRESOLVED_CAUSE}; rails not checked (enforcement inactive)\n`);
+  return { permission: 'allow' };
 }
 
 /**
@@ -229,7 +262,10 @@ export function decide(payload, { root, env = process.env } = {}) {
       // candidate root via the shared railPreconditions and take the strictest
       // outcome — any 'deny' (conflict/corrupt) → deny; else any 'active' root → deny
       // (can't verify it against that root's frozen rails); else (all inactive) allow.
-      const roots = root != null ? [root] : (candidateRoots(payload).length ? candidateRoots(payload) : [process.cwd()]);
+      const declared = candidateRoots(payload);
+      const host = hostProjectRoot(env);
+      const roots = root != null ? [root] : declared.length ? declared : host != null ? [host] : [];
+      if (!roots.length) return unresolvedRootVerdict(tool, env);
       const states = roots.map((r) => railPreconditions({ root: r, env }));
       const denied = states.find((s) => s.state === 'deny');
       if (denied) {
@@ -257,8 +293,14 @@ export function decide(payload, { root, env = process.env } = {}) {
     // if ANY is a frozen rail. Resolve the owning root AND the absolute path per
     // path (multi-root safe) — pass the ABSOLUTE path to checkRail so it never
     // re-joins a primary-root-relative path against a different owning root.
-    for (const filePath of filePaths) {
-      const owned = root != null ? { root, absFile: undefined } : resolveOwning(payload, filePath);
+    // A read-only tool is never rail-gated, so it needs no root.
+    if (classifyTool(tool) === 'readonly') return { permission: 'allow' };
+    const owners = filePaths.map((filePath) => ({
+      filePath,
+      owned: root != null ? { root, absFile: undefined } : resolveOwning(payload, filePath, undefined, env),
+    }));
+    if (owners.some(({ owned }) => owned.root == null)) return unresolvedRootVerdict(tool, env);
+    for (const { filePath, owned } of owners) {
       const verdict = checkRail({ filePath: owned.absFile ?? filePath, tool, root: owned.root, env });
       if (verdict.decision === 'deny') {
         return {

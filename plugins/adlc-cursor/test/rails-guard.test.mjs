@@ -422,7 +422,9 @@ test('(multi-root ..) a non-normalized path is attributed to the repo it RESOLVE
 test('wire format: the real script reads stdin JSON and writes a {permission} verdict', (t) => {
   const root = fixture(t, { tickets: RAILED });
   const out = execFileSync(process.execPath, [GUARD_SCRIPT], {
-    input: JSON.stringify(payload('Write', 'src/frozen.js')),
+    // The root comes from the payload, as Cursor supplies it — never from the
+    // hook's cwd (see rails-guard-no-root.test.mjs).
+    input: JSON.stringify({ ...payload('Write', 'src/frozen.js'), workspace_roots: [root] }),
     cwd: root,
     env: { ...process.env, ...env() },
   }).toString();

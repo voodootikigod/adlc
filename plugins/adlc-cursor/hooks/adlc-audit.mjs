@@ -37,7 +37,8 @@ export function audit(payload, { root, env = process.env } = {}) {
     }
     if (!paths.length) return { rail: false };
     for (const filePath of paths) {
-      const owned = root != null ? { root, absFile: undefined } : resolveOwning(payload, filePath);
+      const owned = root != null ? { root, absFile: undefined } : resolveOwning(payload, filePath, undefined, env);
+      if (owned.root == null) return { rail: false }; // no workspace to check against
       const verdict = checkRail({ filePath: owned.absFile ?? filePath, tool: 'edit', root: owned.root, env });
       if (verdict.decision === 'deny') {
         process.stderr.write(
@@ -80,6 +81,7 @@ function firstAfterEditPath(payload) {
  */
 export async function flailCheck(payload, {
   root,
+  env = process.env,
   now = Date.now(),
   ttlMs = SESSION_TTL_MS,
   importModule = (spec) => import(spec),
@@ -92,7 +94,8 @@ export async function flailCheck(payload, {
     }
     if (!paths.length) return { flagged: false };
 
-    const owningRoot = root ?? resolveOwning(payload, paths[0]).root;
+    const owningRoot = root ?? resolveOwning(payload, paths[0], undefined, env).root;
+    if (owningRoot == null) return { flagged: false, skipped: true }; // no workspace resolved
     const adlcDir = join(owningRoot, '.adlc');
     if (!existsSync(adlcDir)) return { flagged: false, skipped: true }; // not an ADLC repo
 
@@ -152,7 +155,7 @@ async function main() {
   // audit() resolves the owning workspace root from the payload + edited path.
   audit(payload, { env: process.env });
   // T18: flail piggyback AFTER the rail audit — advisory stderr only.
-  await flailCheck(payload);
+  await flailCheck(payload, { env: process.env });
   // afterFileEdit has no deny channel; emit an empty no-op object.
   process.stdout.write('{}');
 }

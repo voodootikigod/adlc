@@ -66,6 +66,16 @@ exits 1 instead of counting it as present.
   `/adlc-prosecute`, `/adlc-distill`, `/adlc-maintain`.
 - **`.cursor/rules/adlc.mdc`** — phase-router rule (also delivered via plugin).
 
+### Workspace root resolution
+
+The `preToolUse` dispatcher checks an edit against the workspace root it resolves
+in this order: the root keys in the hook payload (`workspace_roots`, `cwd`, `root`,
+and their variants), then the host's `CURSOR_PROJECT_DIR`. It never falls back to
+the plugin cwd, because Cursor runs the hook from the plugin directory. When
+neither source names a root, the dispatcher denies the edit under
+`ADLC_P4_ENFORCEMENT=1` (it cannot be checked against any rails), and otherwise
+allows it with one stderr notice. Read-only and shell tools are not affected.
+
 ## Docs
 
 Full guide: [docs/integrations/cursor.md](https://github.com/voodootikigod/adlc/blob/main/docs/integrations/cursor.md).
