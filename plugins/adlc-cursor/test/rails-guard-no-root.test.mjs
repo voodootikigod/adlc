@@ -19,6 +19,8 @@ import { dispatch } from '../hooks/adlc-pretool.mjs';
 import { audit, flailCheck } from '../hooks/adlc-audit.mjs';
 import { spawnHook } from './helpers/run-hook.mjs';
 import { RECENT_EDITS_FILE } from '../constants.mjs';
+import { sessionSafeId } from '../lib/session-identity.mjs';
+import { DEFAULT_DEPTH_THRESHOLD } from '@adlc/build-gate/lib/depth-signal.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_DIR = join(HERE, '..');
@@ -210,4 +212,36 @@ test('audit: CURSOR_PROJECT_DIR resolves the root and reports a rail touch', (t)
   const v = audit({ file_path: join(repo, 'src', 'frozen.js') },
     { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1', CURSOR_PROJECT_DIR: repo } });
   assert.equal(v.rail, true);
+});
+
+test('unresolved deny names the tool, and "unknown" when the payload names none', () => {
+  const env = { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' };
+  const named = decide({ tool_name: 'Write', tool_input: { file_path: '/nowhere/x.js' } }, { env });
+  assert.match(named.user_message, /blocked "Write"/);
+  const anon = decide({ tool_input: { file_path: '/nowhere/x.js' } }, { env });
+  assert.equal(anon.permission, 'deny');
+  assert.match(anon.user_message, /blocked "unknown"/);
+});
+
+test('dispatch: buildgate consults the root that OWNS the edited path in a multi-root workspace', async (t) => {
+  const plain = realpathSync(tmp(t, 'adlc-cursor-noroot-plain-'));
+  const owner = realpathSync(tmp(t, 'adlc-cursor-noroot-bg-'));
+  const stateDir = realpathSync(tmp(t, 'adlc-cursor-noroot-bgstate-'));
+  mkdirSync(join(owner, '.adlc'), { recursive: true });
+  writeFileSync(join(owner, '.adlc', 'tickets.json'), JSON.stringify({
+    tickets: [{ id: 'T9', title: 'hot', risk: 'high', rails: ['src/frozen.js'] }],
+  }));
+  writeFileSync(join(stateDir, `cursor-buildgate-depth-${sessionSafeId('bg-sess')}.json`),
+    JSON.stringify({ count: DEFAULT_DEPTH_THRESHOLD + 5, updatedAt: Date.now(), sessionId: 'bg-sess' }));
+  const payload = {
+    tool_name: 'Write',
+    tool_input: { file_path: join(owner, 'src', 'free.js') },
+    workspace_roots: [plain, owner],
+    session_id: 'bg-sess',
+  };
+  const v = await dispatch(payload, {
+    env: { ADLC_TICKET: 'T9', ADLC_BUILD_GATE_ENFORCEMENT: '1', ADLC_CURSOR_STATE_DIR: stateDir },
+  });
+  assert.equal(v.permission, 'deny', 'the owning root (second declared) is the one gated');
+  assert.match(v.user_message, /build-gate/);
 });
