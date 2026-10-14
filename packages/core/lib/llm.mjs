@@ -93,11 +93,12 @@ function usageFromOpenAI(raw) {
   };
 }
 
-function usageFromGemini(raw) {
+/** Gemini reports thinking tokens separately from candidates; both are billed output. */
+export function usageFromGemini(raw) {
   if (!raw || typeof raw !== 'object') return null;
   return {
     inputTokens: raw.promptTokenCount ?? 0,
-    outputTokens: raw.candidatesTokenCount ?? 0,
+    outputTokens: (raw.candidatesTokenCount ?? 0) + (raw.thoughtsTokenCount ?? 0),
     cachedTokens: raw.cachedContentTokenCount ?? 0,
   };
 }

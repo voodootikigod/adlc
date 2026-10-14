@@ -85,6 +85,8 @@ export type FanProvidersResult =
 export const PROVIDER_NAMES: readonly string[];
 
 export function isAgyTimeout(output: string): boolean;
+/** Map Gemini `usageMetadata` to usage; thinking tokens count as output. */
+export function usageFromGemini(raw: unknown): { inputTokens: number; outputTokens: number; cachedTokens: number } | null;
 export function complete(options: CompletionOptions, env?: Record<string, string | undefined>): Promise<string>;
 export function fan(options: CompletionOptions, count: number, env?: Record<string, string | undefined>): Promise<FanResult[]>;
 export function fanProviders(
@@ -301,6 +303,8 @@ export namespace mutate {
   export function generateMutants(...args: unknown[]): unknown;
   export function applyMutant(...args: unknown[]): unknown;
   export function changedLinesFromDiff(...args: unknown[]): unknown;
+  /** Classify a unified-diff hunk body line by its first character only. */
+  export function classifyDiffBodyLine(line: string): "add" | "delete" | "marker" | "context";
   /** Split an identifier into lowercase segments (snake_case and camelCase alike). */
   export function identifierSegments(name: string): string[];
   /** True when the identifier names a TUNING knob (mask it) rather than a BOUNDARY (mutate it). */

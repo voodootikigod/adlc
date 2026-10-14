@@ -83,6 +83,11 @@ The rest of core is the deterministic machinery the gates share:
 - **Mutation**: `mutate.OPERATORS` (invert-comparison, bool-flip, null-return,
   off-by-one, logic-swap) and `generateMutants` / `applyMutant` power
   `hollow-test`, `review-calibration`, and `gate-fuzzing`.
+  `mutate.changedLinesFromDiff` classifies hunk body lines by their first
+  character only, so a source line that itself begins with `--` or `++` is still
+  a deletion or addition.
+- **Usage**: `onUsage` for Gemini reports `outputTokens` including thinking
+  tokens (`thoughtsTokenCount`), as Anthropic and OpenAI already do.
 
 ## test-kit (`@adlc/core/test-kit`)
 
