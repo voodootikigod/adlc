@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,6 +43,7 @@ function withTempRepo(fn) {
 
 test('bypass bound authorizes its own session\'s null-ticket record, never a foreign one; unbound with reason authorizes any', () => {
   withTempRepo((cwd) => {
+    mkdirSync(join(cwd, '.adlc', 'handoffs'), { recursive: true });
     const bound = run(
       ['bypass', '--session', 'sess-b', '--write', '--json'],
       { cwd, env: { ADLC_MANIFEST_KEY: TEST_KEY } },

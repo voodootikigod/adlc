@@ -27,6 +27,7 @@ host, so a dead-looking PID from another machine cannot evict a live session.
 A `bypass` grant on stdout is scoped to the calling adapter invocation; the
 durable proof is the `context-handoff-bypass` manifest entry; an explicitly
 empty `--unbound-reason` is refused rather than degraded to a bound grant.
+`bypass --write` exits 1 when the resolved ledger has no `.adlc/handoffs` directory — run from the repo root or pass `--dir <repo>/.adlc` — so a grant is never reported as recorded under a tree the enforcing hook does not read; a dry run prints the resolved ledger path.
 
 `write`, `resume`, and `repair` all read-modify-write a deny marker, so each
 holds that session's `.adlc/handoffs/<id>.lock` (O_EXCL, released on exit) and

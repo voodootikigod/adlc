@@ -38,7 +38,7 @@ import {
 } from '../lib/transcript-extract.mjs';
 import { evidenceTail, gitState, readTranscriptTail, ticketTitle } from '../lib/continue-inputs.mjs';
 import { recordHandoffEvidence } from '../lib/evidence.mjs';
-import { contentPath, resumeAuthPath } from '../lib/paths.mjs';
+import { contentPath, resumeAuthPath, handoffsDir, ledgerHasHandoffsDir } from '../lib/paths.mjs';
 import {
   commonOrExit,
   exitFrom,
@@ -857,12 +857,22 @@ authorization.
         bound: !unbound,
         allowsUnboundRecord: allowsUnbound,
         normalized,
+        ledger: adlcDir,
       },
-      human: `handoff bypass: dry-run session=${sessionId} bound=${!unbound} allowsUnbound=${allowsUnbound} (pass --write to record)`,
+      human: `handoff bypass: dry-run session=${sessionId} bound=${!unbound} allowsUnbound=${allowsUnbound} ledger=${adlcDir} (pass --write to record)`,
     });
   }
 
   const key = requireKeyOrExit();
+
+  // The hook reads the grant under ITS repo root. A ledger with no handoffs
+  // directory is not that tree, so a grant written here would be reported as
+  // recorded while unblocking nothing.
+  if (!ledgerHasHandoffsDir(root)) {
+    opError(
+      `no handoffs directory at ${handoffsDir(root)} — the grant would not reach the enforcing hook; run from the repo root or pass --dir <repo>/.adlc`,
+    );
+  }
 
   // The functional grant the adapter actually reads back and consumes — see
   // lib/bypass-grant.mjs. Written BEFORE the audit record: if this fails, the

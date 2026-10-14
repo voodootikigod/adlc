@@ -3,6 +3,7 @@
  * `--dir` names the `.adlc` ledger directory; repo root is its parent.
  */
 
+import { statSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { assertSafeSessionId } from './deny-marker.mjs';
 
@@ -33,6 +34,22 @@ export function resolveHandoffDirs(dirFlag = '.adlc', cwd = process.cwd()) {
 
 export function handoffsDir(root) {
   return join(root, LEDGER_DIRNAME, 'handoffs');
+}
+
+/**
+ * True only when `<root>/.adlc/handoffs` exists and is a directory. A deny
+ * always creates it, so its absence means the resolved ledger is not the one
+ * the enforcing hook reads (typically a cwd that is not the repo root).
+ *
+ * @param {string} root
+ * @returns {boolean}
+ */
+export function ledgerHasHandoffsDir(root) {
+  try {
+    return statSync(handoffsDir(root)).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 export function finalPath(root, sessionId) {

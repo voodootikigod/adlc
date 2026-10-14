@@ -412,6 +412,7 @@ test('a grant claimed by evaluateHandoffPreToolUse cannot also be claimed by a r
 test('the real bypass CLI\'s own JSON output: a bound grant authorizes its own session\'s null-ticket record, never a foreign one', () => {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-bypass-cli-ported-'));
   try {
+    mkdirSync(join(dir, '.adlc', 'handoffs'), { recursive: true });
     const stdout = execFileSync(process.execPath, [HANDOFF_CLI, 'bypass', '--session', 'sess-b', '--write', '--json'], {
       cwd: dir,
       env: { ...process.env, ADLC_MANIFEST_KEY: KEY },
