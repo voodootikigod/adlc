@@ -31,6 +31,9 @@ adlc flail-detector <log-file> [--scope <glob>...] [--max-repeat <n>] [--max-byt
 | `--scope <glob>` | Declared-scope glob, repeatable. When given, written paths outside all globs are scope violations. |
 | `--max-repeat <n>` | Trigger the repeated-error signal at n identical normalized signatures (default 2). |
 | `--max-bytes <n>` | Trigger the size signal when the log exceeds n bytes (default: no limit). |
+| `--record` | On a clean verdict, append a `flail-check` entry to `.adlc/manifest.jsonl` (ADLC P4 evidence — see `@adlc/runner`). Never writes on a `flail` verdict or a `could-not-analyze` outcome. |
+| `--ticket <id>` | Ticket to scope the recorded manifest entry to (recorded as `null` when omitted). |
+| `--files <a,b,c>` | With `--record`: hash these changed files (path → sha256) into the `flail-check` entry, so `adlc run p4` can tell the check still describes the current tree. Without it the entry binds no files and `adlc run p4` rejects it. An unreadable path exits `1` and records nothing. Use the same list you pass to `gate-manifest record p4-build --files`. |
 | `--json` | Machine-readable JSON output for orchestrators. |
 | `--help` | Print help and exit 0. |
 

@@ -9,7 +9,7 @@ deterministic; no LLM calls.
 ## Usage
 
 ```
-flail-detector <log-file> [--scope <glob>...] [--max-repeat <n>] [--max-bytes <n>] [--spent-tokens <n>] [--budget <n>] [--record] [--ticket <id>] [--json]
+flail-detector <log-file> [--scope <glob>...] [--max-repeat <n>] [--max-bytes <n>] [--spent-tokens <n>] [--budget <n>] [--record] [--ticket <id>] [--files <a,b,c>] [--json]
 ```
 
 ### Arguments
@@ -29,6 +29,7 @@ flail-detector <log-file> [--scope <glob>...] [--max-repeat <n>] [--max-bytes <n
 | `--budget <n>` | _(none)_ | The ticket's declared token budget (`ticket.budget`, or `model-router`'s emitted per-ticket `budget`). Triggers the **budget** signal when `--spent-tokens` exceeds it. Must be given with `--spent-tokens` — either alone is a usage error. |
 | `--record` | off | On a clean verdict, append a `flail-check` entry to `.adlc/manifest.jsonl` (ADLC P4 evidence — see `@adlc/runner`). Never writes on a `flail` verdict, and never on a `could-not-analyze` outcome (issue #622). |
 | `--ticket <id>` | _(none)_ | Ticket to scope the recorded manifest entry to. Optional — recorded as `null` when omitted, same as `rails-guard --record`. |
+| `--files <a,b,c>` | _(none)_ | With `--record`: hash these changed files (path → sha256) into the `flail-check` entry, so `adlc run p4` can tell the check still describes the current tree. Without it the entry binds no files and `adlc run p4` rejects it. An unreadable path exits `1` and records nothing. Use the same list you pass to `gate-manifest record p4-build --files`. |
 | `--json` | off | Machine-readable JSON output for orchestrators. |
 | `--help` | — | Print help and exit 0. |
 
@@ -172,7 +173,7 @@ flail-detector session.log --spent-tokens 85000 --budget 50000
 flail-detector session.log --json
 
 # Record P4 evidence on a clean pass (adlc run p4 requires this)
-flail-detector session.log --scope 'src/**' --record --ticket T42
+flail-detector session.log --scope 'src/**' --record --ticket T42 --files src/a.mjs,src/b.mjs
 ```
 
 ## ADLC Phase

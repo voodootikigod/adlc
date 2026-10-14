@@ -10,6 +10,7 @@ import { parseLog } from '../lib/parse-log.mjs';
 import { analyze } from '../lib/analyze.mjs';
 import { assessAnalyzability } from '../lib/analyzability.mjs';
 import { formatResult } from '../lib/format.mjs';
+import { bindFiles } from '../lib/bind-files.mjs';
 
 // ---------------------------------------------------------------------------
 // Parse arguments
@@ -24,13 +25,14 @@ const { values, positionals } = parseArgs({
     budget:       { type: 'string' },
     record:       { type: 'boolean', default: false },
     ticket:       { type: 'string' },
+    files:        { type: 'string' },
     json:         { type: 'boolean', default: false },
     help:         { type: 'boolean', default: false },
   },
 });
 
 if (values.help) {
-  console.log(`flail-detector <log-file> [--scope <glob>...] [--max-repeat <n>] [--max-bytes <n>] [--spent-tokens <n>] [--budget <n>] [--record] [--ticket <id>] [--json]
+  console.log(`flail-detector <log-file> [--scope <glob>...] [--max-repeat <n>] [--max-bytes <n>] [--spent-tokens <n>] [--budget <n>] [--record] [--ticket <id>] [--files <a,b,c>] [--json]
 
 Session-log flail analysis (ADLC C6) — mechanical two-strike rule.
 
@@ -55,6 +57,10 @@ Options:
                     to .adlc/manifest.jsonl (ADLC P4 evidence).
   --ticket <id>     Ticket to scope the recorded manifest entry to (optional;
                     recorded as null when omitted).
+  --files <a,b,c>   With --record: hash these changed files into the entry so
+                    'adlc run p4' can tell the flail-check still describes
+                    the current tree. Without it the entry binds no tree and
+                    p4 rejects it. An unreadable path exits 1, records nothing.
   --json            Machine-readable JSON output.
   --help            Show this help.
 
@@ -133,6 +139,15 @@ if (hasSpentTokens) {
   }
 }
 
+// An unreadable --files path is an operational error before any analysis, so a
+// flail-check can never be minted over files it did not hash.
+let boundFiles = null;
+if (values.record) {
+  const bound = bindFiles(values.files);
+  if (!bound.ok) opError(bound.error);
+  boundFiles = bound.files;
+}
+
 // ---------------------------------------------------------------------------
 // Read and analyze
 // ---------------------------------------------------------------------------
@@ -187,6 +202,7 @@ if (values.record && result.verdict !== 'flail') {
     verdict: result.verdict,
     logFile,
     logHash: sha256(raw),
+    ...(boundFiles === null ? {} : { files: boundFiles }),
   }, undefined, { key: getKey() });
 }
 
