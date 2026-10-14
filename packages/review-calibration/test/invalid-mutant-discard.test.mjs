@@ -9,7 +9,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { gitRepo, tmp } from '@adlc/core/test-kit';
 import {
-  classifyWitnessRun, filterEquivalentMutants, verifyWitness,
+  classifySyntaxResult, classifyWitnessRun, filterEquivalentMutants, verifyWitness,
 } from '../lib/verify.mjs';
 import { buildJsonReport } from '../lib/report.mjs';
 import { BOUNDARY_PLANT, createMathRepo, writePlantsFile, runCli } from './cli-fixtures.mjs';
@@ -92,6 +92,37 @@ describe('unparseable mutants are discarded (AC1)', () => {
     );
     assert.equal(discarded.length, 0);
     assert.equal(valid[0].syntax, 'unknown');
+  });
+
+  it('.js and .cjs targets are syntax-checked as well as .mjs', (t) => {
+    // CommonJS source: `node --check` on a .js file that uses ESM syntax
+    // exits 0 even when it does not parse, so only CJS pins the extension.
+    const dir = objRepo(t);
+    const cjs = 'const o = {\n  a: 1,\n};\n';
+    const plant = { file: '', line: 1, original: 'const o = {', mutated: 'const o = null;', category: 'x', defect: 'd' };
+    for (const ext of ['js', 'cjs']) {
+      writeFileSync(join(dir, 'src', `o.${ext}`), cjs);
+      const { valid, discarded } = filterEquivalentMutants([abs(dir, { ...plant, file: `src/o.${ext}` })], dir);
+      assert.equal(valid.length, 0, ext);
+      assert.equal(discarded[0].kind, 'unparseable', ext);
+    }
+  });
+
+  it('an unreadable target is not syntax-checked and does not throw', (t) => {
+    const dir = objRepo(t);
+    const plant = { ...MULTILINE_PLANT, file: 'src/missing.mjs' };
+    const { valid, discarded } = filterEquivalentMutants([abs(dir, plant)], dir);
+    assert.equal(discarded.length, 0);
+    assert.equal(valid[0].syntax, 'unknown');
+  });
+
+  it('classifySyntaxResult trusts only a real exit status', () => {
+    assert.equal(classifySyntaxResult({ status: 0 }), 'valid');
+    assert.equal(classifySyntaxResult({ status: 1 }), 'invalid');
+    assert.equal(classifySyntaxResult({ status: 1, error: new Error('x') }), 'unknown');
+    assert.equal(classifySyntaxResult({ status: 1, signal: 'SIGTERM' }), 'unknown');
+    assert.equal(classifySyntaxResult({ status: null }), 'unknown');
+    assert.equal(classifySyntaxResult({ status: 0, error: undefined, signal: null }), 'valid');
   });
 
   it('a non-JavaScript target is not syntax-checked and records syntax unknown', (t) => {

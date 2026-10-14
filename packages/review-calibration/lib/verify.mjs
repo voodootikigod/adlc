@@ -68,6 +68,17 @@ const SYNTAX_CHECKED_EXTENSIONS = new Set(['.mjs', '.cjs', '.js']);
  */
 function defaultSyntaxCheck(absolutePath, cwd) {
   const r = spawnSync(process.execPath, ['--check', absolutePath], { cwd, encoding: 'utf8', timeout: 30_000 });
+  return classifySyntaxResult(r);
+}
+
+/**
+ * A checker that did not run to a normal exit (spawn error, signal, no status)
+ * proves nothing about the file, so only a real exit status decides.
+ *
+ * @param {{error?:unknown, signal?:string|null, status:number|null}} r
+ * @returns {'valid'|'invalid'|'unknown'}
+ */
+export function classifySyntaxResult(r) {
   if (r.error || r.signal || typeof r.status !== 'number') return 'unknown';
   return r.status === 0 ? 'valid' : 'invalid';
 }
