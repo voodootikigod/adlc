@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
-import { handoffsDir, ledgerHasHandoffsDir, matchRecoveryCommand } from '../lib/index.mjs';
+import { handoffsDir, isEstablishedLedger, matchRecoveryCommand } from '../lib/index.mjs';
 
 const HANDOFF_CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'handoff.mjs');
 const KEY = 'a'.repeat(64);
@@ -107,13 +107,31 @@ test('dry-run prints the resolved ledger path, without requiring it to exist', (
   });
 });
 
-test('ledgerHasHandoffsDir is true only for an existing directory', () => {
+test('isEstablishedLedger is true for a handoffs directory or a surviving sentinel, nothing else', () => {
   withRepo({}, ({ root, sub }) => {
-    assert.equal(ledgerHasHandoffsDir(root), true);
-    assert.equal(ledgerHasHandoffsDir(sub), false);
+    assert.equal(isEstablishedLedger(root), true);
+    assert.equal(isEstablishedLedger(sub), false);
     writeFileSync(join(sub, '.adlc'), 'x');
-    assert.equal(ledgerHasHandoffsDir(sub), false);
-    assert.equal(ledgerHasHandoffsDir(join(root, 'missing')), false);
+    assert.equal(isEstablishedLedger(sub), false);
+    assert.equal(isEstablishedLedger(join(root, 'missing')), false);
     assert.equal(handoffsDir(root), join(root, '.adlc', 'handoffs'));
+  });
+});
+
+test('D0 recovery: a surviving .deny-store with handoffs/ deleted still accepts the unbound bypass from the repo root', () => {
+  withRepo({ handoffs: false }, ({ root }) => {
+    writeFileSync(join(root, '.adlc', '.deny-store'), '');
+    const r = bypass(root, ['--write', '--unbound-reason', 'handoffs dir lost']);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /recorded unbound grant/);
+    assert.equal(existsSync(join(root, '.adlc', 'handoffs', 'sess-a.bypass-grant.json')), true);
+    assert.equal(isEstablishedLedger(root), true);
+  });
+});
+
+test('a sentinel that is a directory, not a file, does not establish the ledger', () => {
+  withRepo({ handoffs: false }, ({ root }) => {
+    mkdirSync(join(root, '.adlc', '.deny-store'));
+    assert.equal(isEstablishedLedger(root), false);
   });
 });

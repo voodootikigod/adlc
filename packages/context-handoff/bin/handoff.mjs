@@ -38,7 +38,7 @@ import {
 } from '../lib/transcript-extract.mjs';
 import { evidenceTail, gitState, readTranscriptTail, ticketTitle } from '../lib/continue-inputs.mjs';
 import { recordHandoffEvidence } from '../lib/evidence.mjs';
-import { contentPath, resumeAuthPath, handoffsDir, ledgerHasHandoffsDir } from '../lib/paths.mjs';
+import { contentPath, resumeAuthPath, handoffsDir, isEstablishedLedger } from '../lib/paths.mjs';
 import {
   commonOrExit,
   exitFrom,
@@ -868,9 +868,9 @@ authorization.
   // The hook reads the grant under ITS repo root. A ledger with no handoffs
   // directory is not that tree, so a grant written here would be reported as
   // recorded while unblocking nothing.
-  if (!ledgerHasHandoffsDir(root)) {
+  if (!isEstablishedLedger(root)) {
     opError(
-      `no handoffs directory at ${handoffsDir(root)} — the grant would not reach the enforcing hook; run from the repo root (an operator outside the hook may instead pass --dir <repo>/.adlc)`,
+      `no handoffs directory or .deny-store at ${handoffsDir(root)} — the grant would not reach the enforcing hook; run from the repo root (an operator outside the hook may instead pass --dir <repo>/.adlc)`,
     );
   }
 

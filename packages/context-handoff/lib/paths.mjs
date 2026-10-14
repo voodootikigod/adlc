@@ -37,16 +37,22 @@ export function handoffsDir(root) {
 }
 
 /**
- * True only when `<root>/.adlc/handoffs` exists and is a directory. A deny
- * always creates it, so its absence means the resolved ledger is not the one
- * the enforcing hook reads (typically a cwd that is not the repo root).
+ * True when `<root>/.adlc` is a ledger the enforcing hook reads: either
+ * `handoffs/` exists as a directory (a deny always creates it) or the
+ * `.deny-store` sentinel survives it — the D0 state an unbound bypass exists to
+ * repair. Anything else is a cwd that is not the repo root.
  *
  * @param {string} root
  * @returns {boolean}
  */
-export function ledgerHasHandoffsDir(root) {
+export function isEstablishedLedger(root) {
   try {
-    return statSync(handoffsDir(root)).isDirectory();
+    if (statSync(handoffsDir(root)).isDirectory()) return true;
+  } catch {
+    // fall through to the sentinel
+  }
+  try {
+    return statSync(join(root, LEDGER_DIRNAME, '.deny-store')).isFile();
   } catch {
     return false;
   }
