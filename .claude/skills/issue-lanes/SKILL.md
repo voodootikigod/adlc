@@ -122,27 +122,33 @@ parsed. Define these two functions once per shell; the claim step reuses both:
 ```bash
 taken_packages() {
   local prs wips
-  prs=$(gh pr list --state open --json number,files --limit 200 --jq '.[].files[].path') || return 1
-  wips=$(gh issue list --state open --label WIP --limit 100 --json comments --jq '.[].comments[].body') || return 1
-  { printf '%s\n' "$prs" | grep -o -E '^(packages|plugins)/[^/]+'
-    printf '%s\n' "$wips" | grep -o -E '^issue-lanes claim — package: [^,]+' | sed 's/.*package: //'
+  prs=$(gh pr list --state open --json number,files --limit 500) || return 1
+  wips=$(gh issue list --state open --label WIP --limit 500 --json comments) || return 1
+  # A read that hits its limit is a partial view, not a complete one.
+  [ "$(printf '%s' "$prs" | jq length)" -lt 500 ] && [ "$(printf '%s' "$wips" | jq length)" -lt 500 ] || return 1
+  { printf '%s' "$prs" | jq -r '.[].files[].path' | grep -o -E '^(packages|plugins)/[^/]+'
+    printf '%s' "$wips" | jq -r '.[].comments[].body' \
+      | grep -o -E '^issue-lanes claim — package: [^,]+' | sed 's/.*package: //'
   } | sort -u
 }
 
-claim() {   # claim <issue> <packages/pkg | plugins/plugin>
+claim() {   # claim <issue> <packages/pkg | plugins/plugin> [lane-sibling]
   local labels taken
   labels=$(gh issue view "$1" --json labels --jq '.labels[].name') \
     || { echo "READ FAILED — drop #$1"; return 1; }
   if printf '%s\n' "$labels" | grep -qx WIP; then echo "TAKEN — drop #$1"; return 1; fi
-  taken=$(taken_packages) || { echo "READ FAILED — drop #$1"; return 1; }
-  if printf '%s\n' "$taken" | grep -qxF "$2"; then echo "PACKAGE TAKEN ($2) — drop #$1"; return 1; fi
+  if [ "$3" != lane-sibling ]; then
+    taken=$(taken_packages) || { echo "READ FAILED — drop #$1"; return 1; }
+    if printf '%s\n' "$taken" | grep -qxF "$2"; then echo "PACKAGE TAKEN ($2) — drop #$1"; return 1; fi
+  fi
   gh issue edit "$1" --add-label WIP || { echo "LABEL FAILED — drop #$1"; return 1; }
   if gh issue comment "$1" --body "issue-lanes claim — package: $2, host: $(hostname -s), $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
      && gh issue view "$1" --json labels --jq '.labels[].name' | grep -qx WIP; then
     echo "CLAIMED #$1"
-  else
-    gh issue edit "$1" --remove-label WIP
+  elif gh issue edit "$1" --remove-label WIP; then
     echo "CLAIM INCOMPLETE — label removed, drop #$1"; return 1
+  else
+    echo "CLAIM INCOMPLETE, CLEANUP FAILED — run by hand: gh issue edit $1 --remove-label WIP"; return 1
   fi
 }
 
@@ -201,9 +207,13 @@ from this batch, and each leaves GitHub in a known state:
 - `CLAIM INCOMPLETE`: the label went on, but the comment or the verification failed, so
   `claim` took the label off again.
 
-When finalists share a package, rule 2 already put them in one lane, so claim that lane's
-issues one after another. The second issue sees its package taken by the first, so claim
-the extra issues with a direct `gh issue edit <n> --add-label WIP` plus the same comment.
+- `CLAIM INCOMPLETE, CLEANUP FAILED`: the label could not be taken off. Run the printed
+  command, or the issue and its package stay blocked for every run.
+
+When finalists share a package, rule 2 already put them in one lane. Claim the first issue
+normally and the rest with `claim <n> packages/<pkg> lane-sibling`, which skips only the
+package check (the package is taken by this lane's own first claim). The live `WIP`
+re-read on the issue itself still runs.
 
 The comment's exact form matters: TAKEN-PACKAGES and the §0 stale sweep both parse it.
 From this point on, every way a lane can end must leave the label in a known state:
