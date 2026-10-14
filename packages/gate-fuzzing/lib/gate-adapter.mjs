@@ -48,7 +48,84 @@ export function loadSuite(suitePath, cwd = '.') {
     );
   }
 
+  const problems = validateSuiteGates(suite.gates);
+  if (problems.length > 0) {
+    throw new Error(`Suite ${resolved} is invalid:\n  ${problems.join('\n  ')}`);
+  }
+
   return suite;
+}
+
+function isPlainObject(v) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+function isNonEmptyString(v) {
+  return typeof v === 'string' && v.length > 0;
+}
+
+function isValidityGate(gate) {
+  return gate.validity === true;
+}
+
+/** Problems with one required string-array field (surface / claims) of a fuzzable gate. */
+function arrayFieldProblems(label, gate, field) {
+  const value = gate[field];
+  if (!Array.isArray(value) || value.length === 0) {
+    return [`${label}: missing or empty "${field}" (required unless "validity": true)`];
+  }
+  if (!value.every(isNonEmptyString)) {
+    return [`${label}: "${field}" must contain only non-empty strings`];
+  }
+  return [];
+}
+
+function gateProblems(gate, index) {
+  if (!isPlainObject(gate)) return [`gate #${index}: must be an object`];
+  const named = isNonEmptyString(gate.name);
+  const label = named ? `gate "${gate.name}"` : `gate #${index}`;
+  const problems = named ? [] : [`${label}: missing or empty "name"`];
+  if (!Array.isArray(gate.run) || gate.run.length === 0) {
+    problems.push(`${label}: missing or empty "run" (argv array)`);
+  }
+  if (isValidityGate(gate)) return problems;
+  return [
+    ...problems,
+    ...arrayFieldProblems(label, gate, 'surface'),
+    ...arrayFieldProblems(label, gate, 'claims'),
+  ];
+}
+
+/**
+ * Validate a suite's gates. A gate that is not a validity gate must declare a
+ * non-empty `surface` and `claims`: without them classify dismisses every
+ * candidate as out-of-scope / wrong-claim, so the gate is never prosecuted
+ * while the run still reports clean. A suite of only validity gates has
+ * nothing to fuzz.
+ *
+ * @param {unknown[]} gates
+ * @returns {string[]} problems; empty when the gates are valid
+ */
+export function validateSuiteGates(gates) {
+  const problems = gates.flatMap((gate, i) => gateProblems(gate, i));
+  const anyFuzzable = gates.some((g) => isPlainObject(g) && !isValidityGate(g));
+  if (!anyFuzzable) {
+    problems.push(
+      'suite has no fuzzable gate: every gate is a validity gate (at least one gate must omit "validity": true)'
+    );
+  }
+  return problems;
+}
+
+/**
+ * The gates the adversary fan may target: every gate except validity gates,
+ * which only check that a candidate builds and can never be defeated.
+ *
+ * @param {{gates: object[]}} suite
+ * @returns {object[]}
+ */
+export function fuzzableGates(suite) {
+  return suite.gates.filter((g) => !isValidityGate(g));
 }
 
 /**

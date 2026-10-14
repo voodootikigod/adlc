@@ -112,6 +112,15 @@ Create `.adlc/gate-suite.json`:
 - `validity: true`: marks build/lint/typecheck gates (anti-gaming)
 - `{{clone}}`, `{{baseline}}`: substituted by harness at runtime
 
+Every gate needs a non-empty `name` and a non-empty `run` argv array.
+`surface` and `claims` are required on every gate without `validity: true`, each a
+non-empty array of non-empty strings, and a suite must contain at least one gate
+without `validity: true`. A suite that breaks any of these rules is refused with
+exit 1 before any model call. Without them, every candidate against that gate
+would be dismissed as out-of-scope or wrong-claim, and the run would report clean
+having tested nothing. Validity gates are never fan targets: they run as checks
+on every candidate, but the adversary never spends a fan instance on them.
+
 ## What is a "defeat"?
 
 A candidate diff defeats a gate G iff ALL of:

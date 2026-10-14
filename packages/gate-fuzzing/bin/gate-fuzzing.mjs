@@ -198,19 +198,23 @@ if (!values['prompt-only']) {
 // ── load suite ──────────────────────────────────────────────────────────────
 
 let suite;
+let targets;
 try {
-  const { loadSuite } = await import('../lib/gate-adapter.mjs');
+  const { loadSuite, fuzzableGates } = await import('../lib/gate-adapter.mjs');
   suite = loadSuite(values.suite ?? null, process.cwd());
+  targets = fuzzableGates(suite);
 } catch (e) {
   opError(e.message);
 }
 
+// Every gate runs as a check on each candidate; only fuzzable gates (not
+// validity gates) are adversary targets.
 const gates = suite.gates;
 
 // ── prompt-only (§8) ────────────────────────────────────────────────────────
 
 if (values['prompt-only']) {
-  const prompts = buildPromptOnlyOutput(gates, fanWidth);
+  const prompts = buildPromptOnlyOutput(targets, fanWidth);
   for (const p of prompts) console.log(p + '\n');
   process.exit(0);
 }
@@ -257,7 +261,7 @@ try {
 const { fanAdversary } = await import('../lib/fan.mjs');
 const fanFn = async (opts, nFan) => {
   return fanAdversary({
-    gates,
+    gates: targets,
     n: nFan,
     tier,
     provider: providerOverride,

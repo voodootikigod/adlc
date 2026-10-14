@@ -224,7 +224,7 @@ test('CLI without --allow-empty warns on stderr and exits 2 when 0 candidates ge
     execFileSync('git', ['config', 'user.name', 'tester'], { cwd: dir });
     execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: dir });
     writeFileSync(join(dir, 'suite.json'), JSON.stringify({
-      gates: [{ name: 'test-gate', claims: ['freeze-integrity'], surface: ['src/**'] }],
+      gates: [{ name: 'test-gate', run: ['true'], claims: ['freeze-integrity'], surface: ['src/**'] }],
     }));
     writeFileSync(join(dir, 'a.txt'), 'hello\n');
 
@@ -268,7 +268,7 @@ test('CLI with --json surfaces candidatesGenerated and candidatesRejected', () =
     execFileSync('git', ['config', 'user.name', 'tester'], { cwd: dir });
     execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: dir });
     writeFileSync(join(dir, 'suite.json'), JSON.stringify({
-      gates: [{ name: 'test-gate', claims: ['freeze-integrity'], surface: ['src/**'] }],
+      gates: [{ name: 'test-gate', run: ['true'], claims: ['freeze-integrity'], surface: ['src/**'] }],
     }));
     writeFileSync(join(dir, 'a.txt'), 'hello\n');
 
@@ -314,7 +314,7 @@ test('CLI with --allow-empty warns on stderr and exits 0 when 0 candidates gener
     execFileSync('git', ['config', 'user.name', 'tester'], { cwd: dir });
     execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: dir });
     writeFileSync(join(dir, 'suite.json'), JSON.stringify({
-      gates: [{ name: 'test-gate', claims: ['freeze-integrity'], surface: ['src/**'] }],
+      gates: [{ name: 'test-gate', run: ['true'], claims: ['freeze-integrity'], surface: ['src/**'] }],
     }));
     writeFileSync(join(dir, 'a.txt'), 'hello\n');
 

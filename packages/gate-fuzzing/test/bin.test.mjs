@@ -28,7 +28,7 @@ function makeRepoWithSuite() {
   mkdirSync(join(dir, '.adlc'), { recursive: true });
   writeFileSync(
     join(dir, '.adlc/gate-suite.json'),
-    JSON.stringify({ gates: [{ name: 'test-gate', claims: ['no regressions'], surface: ['src/**'] }] })
+    JSON.stringify({ gates: [{ name: 'test-gate', run: ['true'], claims: ['no regressions'], surface: ['src/**'] }] })
   );
   writeFileSync(join(dir, 'a.txt'), 'x\n');
   execFileSync('git', ['add', '-A'], { cwd: dir });
