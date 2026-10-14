@@ -36,6 +36,10 @@ function build(ticket, cwdFiles) {
   return { gate: 'p4-build', ticket, files: cwdFiles };
 }
 
+function flailCheck(ticket, cwdFiles = { [SRC]: sha256('export const x = 1;\n') }) {
+  return { type: 'flail-check', ticket, files: cwdFiles };
+}
+
 function railCheck(ticket) {
   return {
     type: 'rails-check',
@@ -49,7 +53,7 @@ function railCheck(ticket) {
 function freshP4(dir, ticket = 'T1') {
   write([
     build(ticket, { [SRC]: sha256('export const x = 1;\n') }),
-    { type: 'flail-check', ticket },
+    flailCheck(ticket),
     railCheck(ticket),
   ], dir);
 }
@@ -74,7 +78,7 @@ describe('p4 evidence is bound to the current tree (#759)', () => {
 
   it('rejects when a hashed file no longer exists', (t) => {
     const { cwd, dir } = p4Fixture(t);
-    write([build('T1', { 'gone.mjs': sha256('x') }), { type: 'flail-check', ticket: 'T1' }, railCheck('T1')], dir);
+    write([build('T1', { 'gone.mjs': sha256('x') }), flailCheck('T1'), railCheck('T1')], dir);
     const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
     assert.equal(result.ok, false);
     assert.equal(result.operational, false);
@@ -83,7 +87,7 @@ describe('p4 evidence is bound to the current tree (#759)', () => {
 
   it('rejects a p4-build that binds no files', (t) => {
     const { cwd, dir } = p4Fixture(t);
-    write([build('T1', {}), { type: 'flail-check', ticket: 'T1' }, railCheck('T1')], dir);
+    write([build('T1', {}), flailCheck('T1'), railCheck('T1')], dir);
     const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
     assert.equal(result.ok, false);
     assert.equal(result.operational, false);
@@ -93,7 +97,7 @@ describe('p4 evidence is bound to the current tree (#759)', () => {
   for (const [label, files] of [['an array', [SRC]], ['a string', SRC], ['absent', undefined], ['null', null]]) {
     it(`rejects a p4-build whose files field is ${label}`, (t) => {
       const { cwd, dir } = p4Fixture(t);
-      write([build('T1', files), { type: 'flail-check', ticket: 'T1' }, railCheck('T1')], dir);
+      write([build('T1', files), flailCheck('T1'), railCheck('T1')], dir);
       const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
       assert.equal(result.ok, false);
       assert.equal(result.operational, false);
@@ -110,7 +114,7 @@ describe('p4 evidence is bound to the current tree (#759)', () => {
 
   it('rejects a p4-build whose recorded hash is null (file was unreadable when recorded)', (t) => {
     const { cwd, dir } = p4Fixture(t);
-    write([build('T1', { [SRC]: null }), { type: 'flail-check', ticket: 'T1' }, railCheck('T1')], dir);
+    write([build('T1', { [SRC]: null }), flailCheck('T1'), railCheck('T1')], dir);
     const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
     assert.equal(result.ok, false);
     assert.ok(result.errors.some((e) => e.includes('p4-build') && e.includes(SRC)));
@@ -119,7 +123,7 @@ describe('p4 evidence is bound to the current tree (#759)', () => {
   it('accepts flail-check recorded before p4-build (the documented harness order)', (t) => {
     const { cwd, dir } = p4Fixture(t);
     write([
-      { type: 'flail-check', ticket: 'T1' },
+      flailCheck('T1'),
       build('T1', { [SRC]: sha256('export const x = 1;\n') }),
       railCheck('T1'),
     ], dir);
@@ -132,7 +136,7 @@ describe('p4 evidence is bound to the current tree (#759)', () => {
     writeFileSync(join(cwd, SRC), 'export const x = 2;\n');
     write([
       build('T1', { [SRC]: sha256('export const x = 2;\n') }),
-      { type: 'flail-check', ticket: 'T1' },
+      flailCheck('T1', { [SRC]: sha256('export const x = 2;\n') }),
     ], dir);
     assert.equal(assertPhase('p4', { dir, ticket: 'T1', cwd }).ok, true);
   });
@@ -141,7 +145,7 @@ describe('p4 evidence is bound to the current tree (#759)', () => {
     const { cwd, dir } = p4Fixture(t);
     write([
       build('T9', { [SRC]: sha256('export const x = 1;\n') }),
-      { type: 'flail-check', ticket: 'T1' },
+      flailCheck('T1'),
       railCheck('T1'),
     ], dir);
     const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
@@ -272,7 +276,7 @@ describe('real adlc bin (#759, #760)', () => {
     const buildRec = run('packages/gate-manifest/bin/gate-manifest.mjs', ['record', 'p4-build', '--ticket', 'T1', '--files', SRC]);
     assert.equal(buildRec.status, 0, buildRec.stderr);
     writeFileSync(join(cwd, 'session.log'), 'Build started\nDone in 2.3s\nAll tests passed.\n');
-    const flail = run('packages/flail-detector/bin/flail-detector.mjs', [join(cwd, 'session.log'), '--record', '--ticket', 'T1']);
+    const flail = run('packages/flail-detector/bin/flail-detector.mjs', [join(cwd, 'session.log'), '--record', '--ticket', 'T1', '--files', SRC]);
     assert.equal(flail.status, 0, flail.stderr);
 
     const ok = spawnSync(process.execPath, [adlcBin, 'run', 'p4', '--ticket', 'T1'], { cwd, encoding: 'utf8' });

@@ -160,6 +160,12 @@ function p4Build(ticket) {
   return { gate: 'p4-build', ticket, files: { [P4_SRC]: sha256(P4_SRC_CONTENT) } };
 }
 
+// flail-check is tree-bound like p4-build (#759): same files, `type:` because
+// flail-detector.mjs sets that field explicitly.
+function flailCheck(ticket) {
+  return { type: 'flail-check', ticket, files: { [P4_SRC]: sha256(P4_SRC_CONTENT) } };
+}
+
 // p4-build fixtures use `gate:`, not `type:` — the real, documented producer
 // (`adlc gate-manifest record p4-build`) only ever sets `gate` (see
 // packages/gate-manifest/lib/record.mjs's `record()`), so entryType()'s
@@ -176,7 +182,7 @@ function writeP4Evidence(dir, content) {
       suppressionsClean: true,
       railFiles: { 'test/a.test.mjs': sha256(content) },
     },
-    { type: 'flail-check', ticket: 'T1' },
+    flailCheck('T1'),
   ]);
 }
 
@@ -190,7 +196,7 @@ function writeP4EvidenceForTicket(dir, ticket, content) {
       suppressionsClean: true,
       railFiles: { 'test/a.test.mjs': sha256(content) },
     },
-    { type: 'flail-check', ticket },
+    flailCheck(ticket),
   ]);
 }
 
@@ -231,7 +237,7 @@ describe('assertPhase', () => {
         suppressionsClean: true,
         railFiles: { 'test/a.test.mjs': sha256(readFileSync(railPath)) },
       },
-      { type: 'flail-check', ticket: 'T1' },
+      flailCheck('T1'),
     ]);
     const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
     assert.equal(result.ok, false);
@@ -243,7 +249,7 @@ describe('assertPhase', () => {
     writeManifest(dir, [
       p4Build('T1'),
       // rails-check deliberately omitted
-      { type: 'flail-check', ticket: 'T1' },
+      flailCheck('T1'),
     ]);
     const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
     assert.equal(result.ok, false);
@@ -274,7 +280,7 @@ describe('assertPhase', () => {
     writeManifest(dir, [
       p4Build('T1'),
       { type: 'rails-check', ticket: 'T1', railsDiffEmpty: true, suppressionsClean: true },
-      { type: 'flail-check', ticket: 'T1' },
+      flailCheck('T1'),
     ]);
     const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
     assert.equal(result.ok, false);
@@ -1158,7 +1164,7 @@ describe('adlc cli', () => {
     writeFileSync(logFile, 'Build started\nDone in 2.3s\nAll tests passed.\n');
     const flailBin = join(repoRoot, 'packages/flail-detector/bin/flail-detector.mjs');
     const flailResult = spawnSync(process.execPath, [
-      flailBin, logFile, '--record', '--ticket', 'T1',
+      flailBin, logFile, '--record', '--ticket', 'T1', '--files', 'src.mjs',
     ], { cwd, encoding: 'utf8' });
     assert.equal(flailResult.status, 0, `flail-detector --record failed: ${flailResult.stderr}`);
 

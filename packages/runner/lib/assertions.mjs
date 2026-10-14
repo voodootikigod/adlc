@@ -549,34 +549,40 @@ function p4IntegrityErrors(entries, ticket, revision, cwd) {
   return errors;
 }
 
-// p4-build is a bare-presence marker unless bound to the tree it vouches for
-// (#759): it must hash the files it covers (--files) and every hash must still
-// match the worktree. flail-check is not bound here: the flail-detector records
-// no tree identity (only its log path and hash), and the shipped harness
-// workflows record it before p4-build, so no ordering rule is sound. Absent
-// markers are not reported here — the presence check names them as missing.
-export function p4EvidenceBindingErrors(entries, ticket, cwd) {
-  const scoped = entries.filter((entry) => matchesTicket(entry, ticket));
-  const buildIndex = scoped.findLastIndex((entry) => entryType(entry) === 'p4-build');
-  if (buildIndex === -1) return [];
-  const errors = [];
-  const files = scoped[buildIndex].files;
+// p4-build and flail-check are bare-presence markers unless bound to the tree
+// they vouch for (#759): each must hash the files it covers (--files) and every
+// hash must still match the worktree. The LATEST entry of each marker is
+// judged, in any order — the shipped harness workflows record flail-check
+// before p4-build, so no ordering rule is sound. Absent markers are not
+// reported here — the presence check names them as missing.
+const TREE_BOUND_MARKERS = ['p4-build', 'flail-check'];
+
+function markerBindingErrors(marker, entry, cwd) {
+  const files = entry.files;
   const paths = files && typeof files === 'object' && !Array.isArray(files) ? Object.keys(files) : [];
   if (paths.length === 0) {
-    errors.push('P4 evidence is incomplete: p4-build binds no files (record it with --files and the changed paths)');
-  } else {
-    const current = hashFiles(paths, (path) => readFileSync(resolve(cwd, path)));
-    for (const path of paths) {
-      if (typeof files[path] !== 'string') {
-        errors.push(`P4 evidence is incomplete: p4-build missing hash for ${path}`);
-      } else if (current[path] === null) {
-        errors.push(`P4 evidence is stale: file cannot be read since p4-build was recorded: ${path}`);
-      } else if (current[path] !== files[path]) {
-        errors.push(`P4 evidence is stale: file changed after p4-build was recorded: ${path}`);
-      }
+    return [`P4 evidence is incomplete: ${marker} binds no files (record it with --files and the changed paths)`];
+  }
+  const current = hashFiles(paths, (path) => readFileSync(resolve(cwd, path)));
+  const errors = [];
+  for (const path of paths) {
+    if (typeof files[path] !== 'string') {
+      errors.push(`P4 evidence is incomplete: ${marker} missing hash for ${path}`);
+    } else if (current[path] === null) {
+      errors.push(`P4 evidence is stale: file cannot be read since ${marker} was recorded: ${path}`);
+    } else if (current[path] !== files[path]) {
+      errors.push(`P4 evidence is stale: file changed after ${marker} was recorded: ${path}`);
     }
   }
   return errors;
+}
+
+export function p4EvidenceBindingErrors(entries, ticket, cwd) {
+  const scoped = entries.filter((entry) => matchesTicket(entry, ticket));
+  return TREE_BOUND_MARKERS.flatMap((marker) => {
+    const index = scoped.findLastIndex((entry) => entryType(entry) === marker);
+    return index === -1 ? [] : markerBindingErrors(marker, scoped[index], cwd);
+  });
 }
 
 export function requirementsForPhase(phase) {

@@ -43,8 +43,10 @@ Phases run p0 through p7; p0–p6 require `--ticket`.
 `adlc run p0` does (no unresolved gaps, ticket definition unchanged since the audit), and its
 `merge-forecast` must belong to the same ticket. `adlc run p4` binds `p4-build` to the files it
 covers: record it with `--files <changed files>`, and the run is rejected (exit 2, naming the
-file) when any of those files has changed since. `flail-check` is still presence-only: the
-flail detector records no tree identity, so the runner cannot tell which build it analysed.
+file) when any of those files has changed since. `flail-check` is bound the same way: record it
+with `flail-detector --record --files <changed files>`, and the run is rejected (exit 2, naming the
+marker and file) when it binds no files or any of them has changed since. The latest entry of each
+marker is judged, in any order.
 
 ## Exit codes
 

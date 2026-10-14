@@ -18,8 +18,10 @@ to a ticket; `adlc run p0`, `adlc run p1`, `adlc run p2`, `adlc run p3`, `adlc r
 `adlc run p0` does (no unresolved gaps, ticket definition unchanged since the audit), and its
 `merge-forecast` must belong to the same ticket. `adlc run p4` binds `p4-build` to the files it
 covers: record it with `--files <changed files>`, and the run is rejected (exit 2, naming the
-file) when any of those files has changed since. `flail-check` is still presence-only: the
-flail detector records no tree identity, so the runner cannot tell which build it analysed.
+file) when any of those files has changed since. `flail-check` is bound the same way: record it
+with `flail-detector --record --files <changed files>`, and the run is rejected (exit 2, naming the
+marker and file) when it binds no files or any of them has changed since. The latest entry of each
+marker is judged, in any order.
 
 For normal git worktree use, omit `--revision`. P5 and P6 use the current content
 fingerprint and fail closed if reviewed content changes. Committing the exact content

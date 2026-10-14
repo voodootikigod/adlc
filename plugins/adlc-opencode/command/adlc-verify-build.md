@@ -14,12 +14,15 @@ Target ticket: **$ARGUMENTS** (default to the active ticket).
    the project's `package.json`). Capture exit codes and keep the output in a
    log file.
 2. If any fail, STOP — report the failures; the change is not eligible for P5.
-3. Check the session for flail: `adlc flail-detector <log-file> --record --ticket
-   <id>` (add `--scope <glob>` when the ticket declares scope globs). It flags
+3. Check the session for flail (add `--scope <glob>` when the ticket declares scope globs):
+   `adlc flail-detector <log-file> --record --ticket <id> --files <changed files>`. It flags
    repeated errors, scope violations, edit churn, and oversized logs — exit `2`
    means the build session itself is unhealthy; investigate before proceeding.
    On a clean verdict, `--record` appends the `flail-check` manifest entry
-   `adlc-runner run p4` requires.
+   `adlc-runner run p4` requires. `--files` hashes the changed files into the entry (use the same list you
+   pass to `p4-build` in the recording step below); `adlc-runner run p4` rejects a
+   `flail-check` that binds no files or whose files changed since, so re-run this step
+   after any further edit.
 4. On success, RECORD the build evidence with
    `adlc gate-manifest record p4-build --ticket <id> --files <changed files>`
    (or, if that is unavailable, append an unsigned `p4-build` entry to
