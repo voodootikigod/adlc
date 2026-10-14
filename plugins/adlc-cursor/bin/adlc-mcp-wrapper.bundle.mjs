@@ -1737,7 +1737,7 @@ function usageFromGemini(raw) {
   if (!raw || typeof raw !== "object") return null;
   return {
     inputTokens: raw.promptTokenCount ?? 0,
-    outputTokens: raw.candidatesTokenCount ?? 0,
+    outputTokens: (raw.candidatesTokenCount ?? 0) + (raw.thoughtsTokenCount ?? 0),
     cachedTokens: raw.cachedContentTokenCount ?? 0
   };
 }
