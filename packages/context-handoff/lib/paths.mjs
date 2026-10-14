@@ -39,18 +39,21 @@ export function handoffsDir(root) {
 /**
  * True when `<root>/.adlc` is a ledger the enforcing hook reads: either
  * `handoffs/` exists as a directory (a deny always creates it) or the
- * `.deny-store` sentinel survives it — the D0 state an unbound bypass exists to
- * repair. Anything else is a cwd that is not the repo root.
+ * `.deny-store` sentinel survives it — the D0 state only an UNBOUND bypass can
+ * repair, so a bound grant (`sentinelCounts` false) gets no credit for it.
+ * Anything else is a cwd that is not the repo root.
  *
  * @param {string} root
+ * @param {{ sentinelCounts?: boolean }} [opts]
  * @returns {boolean}
  */
-export function isEstablishedLedger(root) {
+export function isEstablishedLedger(root, { sentinelCounts = false } = {}) {
   try {
     if (statSync(handoffsDir(root)).isDirectory()) return true;
   } catch {
     // fall through to the sentinel
   }
+  if (!sentinelCounts) return false;
   try {
     return statSync(join(root, LEDGER_DIRNAME, '.deny-store')).isFile();
   } catch {

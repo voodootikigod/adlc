@@ -135,3 +135,15 @@ test('a sentinel that is a directory, not a file, does not establish the ledger'
     assert.equal(isEstablishedLedger(root), false);
   });
 });
+
+test('a BOUND bypass against sentinel-only D0 state is refused: it could not clear D0 and would be consumed for nothing', () => {
+  withRepo({ handoffs: false }, ({ root }) => {
+    writeFileSync(join(root, '.adlc', '.deny-store'), '');
+    const r = bypass(root, ['--write']);
+    assert.equal(r.status, 1, r.stderr);
+    assert.ok(!`${r.stdout}${r.stderr}`.includes('recorded'));
+    assert.equal(existsSync(join(root, '.adlc', 'handoffs')), false, 'nothing written');
+    assert.equal(isEstablishedLedger(root), false);
+    assert.equal(isEstablishedLedger(root, { sentinelCounts: true }), true);
+  });
+});

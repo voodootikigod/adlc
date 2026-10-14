@@ -868,7 +868,7 @@ authorization.
   // The hook reads the grant under ITS repo root. A ledger with no handoffs
   // directory is not that tree, so a grant written here would be reported as
   // recorded while unblocking nothing.
-  if (!isEstablishedLedger(root)) {
+  if (!isEstablishedLedger(root, { sentinelCounts: unbound !== null })) {
     opError(
       `no handoffs directory or .deny-store at ${handoffsDir(root)} — the grant would not reach the enforcing hook; run from the repo root (an operator outside the hook may instead pass --dir <repo>/.adlc)`,
     );
