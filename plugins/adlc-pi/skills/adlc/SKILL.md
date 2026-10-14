@@ -26,7 +26,7 @@ For strict phase assertions, use:
 adlc run <p0|p1|p2|p3|p4|p5|p6|p7> --dir .adlc --json
 ```
 
-P0, P1, P3, P4, P5, and P6 assertions are ticket-scoped; include `--ticket <ticket-id>` for those phases.
+P0, P1, P2, P3, P4, P5, and P6 assertions are ticket-scoped; include `--ticket <ticket-id>` for those phases.
 
 ## The adversarial-review loop
 
