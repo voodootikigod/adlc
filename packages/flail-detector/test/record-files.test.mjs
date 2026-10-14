@@ -78,6 +78,6 @@ describe('--record --files', () => {
   test('--help documents --files', () => {
     const result = spawnSync(process.execPath, [BIN, '--help'], { encoding: 'utf8' });
     assert.equal(result.status, 0);
-    assert.match(result.stdout, /--files <a,b,c>/);
+    assert.match(result.stdout, /^\s+--files <a,b,c>\s+With --record: hash these changed files/m);
   });
 });

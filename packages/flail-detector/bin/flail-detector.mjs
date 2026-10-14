@@ -60,7 +60,7 @@ Options:
   --files <a,b,c>   With --record: hash these changed files into the entry so
                     'adlc run p4' can tell the flail-check still describes
                     the current tree. Without it the entry binds no tree and
-                    p4 rejects it. An unreadable path exits 1, records nothing.
+                    p4 rejects it.
   --json            Machine-readable JSON output.
   --help            Show this help.
 
