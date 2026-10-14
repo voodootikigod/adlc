@@ -17,14 +17,15 @@ const HANDOFF_CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', '
 const KEY = 'a'.repeat(64);
 
 function withRepo({ handoffs = true } = {}, fn) {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-bypass-dir-')));
+  const base = mkdtempSync(join(tmpdir(), 'adlc-bypass-dir-'));
+  const root = realpathSync(base);
   try {
     mkdirSync(join(root, handoffs ? '.adlc/handoffs' : '.adlc'), { recursive: true });
     const sub = join(root, 'packages', 'x');
     mkdirSync(sub, { recursive: true });
     return fn({ root, sub });
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    rmSync(base, { recursive: true, force: true });
   }
 }
 
