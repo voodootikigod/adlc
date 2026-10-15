@@ -336,14 +336,14 @@ P4 red test file first, RED, implement, GREEN, package suite, docs → P3 `adlc 
 --base origin/main --ticket <id>` → P5 `scripts/mutation-gate.mjs origin/main --max 12` then
 `--max 80`, `scripts/run-tests.mjs <pkg>`, the three ledger/comment guards, then the
 cross-model loop `adversarial-review --base origin/main --provider agy --model
-gemini-3.8-flash-medium --timeout 600` until a round has exit 0 AND zero findings AND no
+gemini-3.8-flash-medium --timeout 1500` until a round has exit 0 AND zero findings AND no
 warnings (cap 8) → commit (`-F file`) → push → `gh pr create` with `Closes #n`.
 
 **Reviewer of record: `agy` (Antigravity, Gemini family) on `gemini-3.8-flash-medium`;
 codex is the fallback.** Always pass `--model` explicitly: a global pin in
 `~/.config/adversarial-review/config.json` (`defaults.models["cli:agy"]`) cannot be relied
 on (it was found empty on 2026-10-14), and agy retires model ids, so `gemini-3.7-flash-medium`
-stopped working. Run `agy models` before a batch and use the current flash-medium id. Attest an agy review with
+stopped working. Run `agy models` before a batch and use the current flash-medium id. Use `--timeout 1500`: on large diffs agy timed out at 1200s (#1223) and 600s is too short. Attest an agy review with
 `--provider gemini` (family token) — distinct from the `anthropic` author.
 
 ## 4b. The cross-model attestation (key-holder step — for SOME lanes, not all)
