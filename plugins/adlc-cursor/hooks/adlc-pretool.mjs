@@ -218,17 +218,15 @@ export async function consultBuildGate(payload, {
 
 /**
  * The buildgate was opted into but no workspace root resolved, so there is no
- * repo to consult. A mutating tool is denied (the same direction the gate takes
- * on an internal error); anything else keeps the rails verdict.
+ * repo to consult. The buildgate is advisory and treats "no ADLC repo" as a
+ * no-op, so it keeps the rails verdict (which already fails closed under
+ * ADLC_P4_ENFORCEMENT=1) and says on stderr that it was skipped.
  */
-function unresolvedBuildGate(payload, rails) {
-  const tool = extractToolName(payload);
-  const cls = classifyTool(tool);
-  const mutating = cls === 'mutating' || (cls === 'other' && !isShellTool(tool));
-  if (!mutating) return rails;
-  return buildGateDeny(
-    'the workspace root could not be resolved from the hook payload or CURSOR_PROJECT_DIR — failing closed.',
+function unresolvedBuildGate(rails) {
+  process.stderr.write(
+    'adlc-pretool: build-gate skipped — the workspace root could not be resolved from the hook payload or CURSOR_PROJECT_DIR\n',
   );
+  return rails;
 }
 
 /**
@@ -257,7 +255,7 @@ export async function dispatch(payload, { root, env = process.env, now, importMo
   if (env.ADLC_BUILD_GATE_ENFORCEMENT !== '1') return rails; // buildgate is default-OFF
 
   const owningRoot = root ?? resolveOwning(payload, extractFilePaths(payload)[0], undefined, env).root;
-  if (owningRoot == null) return unresolvedBuildGate(payload, rails);
+  if (owningRoot == null) return unresolvedBuildGate(rails);
   const gate = await consultBuildGate(payload, { root: owningRoot, env, now, importModule });
   return gate ?? rails;
 }

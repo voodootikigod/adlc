@@ -184,12 +184,16 @@ test('decide: a shell tool with no path and no root is allowed even under enforc
   assert.deepEqual(v, { permission: 'allow' });
 });
 
-test('dispatch: buildgate on, P4 off, no root, mutating tool → buildgate denies instead of evaluating cwd', async () => {
-  const v = await dispatch({ tool_name: 'Write', tool_input: { file_path: '/nowhere/x.js' } },
-    { env: { ADLC_BUILD_GATE_ENFORCEMENT: '1' } });
-  assert.equal(v.permission, 'deny');
-  assert.match(v.user_message, /build-gate/);
-  assert.match(v.user_message, UNRESOLVED);
+test('dispatch: buildgate on, P4 off, no root → rails verdict kept, buildgate skipped with a notice', (t) => {
+  for (const payload of [
+    { tool_name: 'Write', tool_input: { file_path: '/nowhere/x.js' } },
+    JSON.parse(readFileSync(join(HERE, 'fixtures', 'pretool-task-prosecutor.json'), 'utf8')),
+  ]) {
+    const { verdict, stderr } = runPretool(t, payload, hookEnv(t, { ADLC_BUILD_GATE_ENFORCEMENT: '1' }));
+    assert.deepEqual(verdict, { permission: 'allow' }, `${payload.tool_name} keeps the rails allow`);
+    assert.match(stderr, /build-gate skipped/);
+    assert.match(stderr, UNRESOLVED);
+  }
 });
 
 test('dispatch: buildgate on, no root, read-only tool → allowed', async () => {
@@ -244,4 +248,13 @@ test('dispatch: buildgate consults the root that OWNS the edited path in a multi
   });
   assert.equal(v.permission, 'deny', 'the owning root (second declared) is the one gated');
   assert.match(v.user_message, /build-gate/);
+});
+
+test('a no-root Task payload reaches the P5 policy once CURSOR_PROJECT_DIR names a repo with no active build', (t) => {
+  const repo = railedRepo(t);
+  const task = JSON.parse(readFileSync(join(HERE, 'fixtures', 'pretool-task-prosecutor.json'), 'utf8'));
+  const { verdict, stderr } = runPretool(t, task,
+    hookEnv(t, { ADLC_P4_ENFORCEMENT: '1', CURSOR_PROJECT_DIR: repo }));
+  assert.doesNotMatch(verdict.user_message ?? '', UNRESOLVED);
+  assert.doesNotMatch(stderr, UNRESOLVED);
 });
