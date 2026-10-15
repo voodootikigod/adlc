@@ -218,15 +218,19 @@ export async function consultBuildGate(payload, {
 
 /**
  * The buildgate was opted into but no workspace root resolved, so there is no
- * repo to consult. The buildgate is advisory and treats "no ADLC repo" as a
- * no-op, so it keeps the rails verdict (which already fails closed under
- * ADLC_P4_ENFORCEMENT=1) and says on stderr that it was skipped.
+ * repo to consult and the edit's fitness cannot be checked. A structured
+ * mutating or unrecognized tool is denied (the direction the gate takes on an
+ * internal error). A Task/subagent spawn has no file target, so it keeps the
+ * rails verdict and goes on to the P5 policy; read-only and shell tools are
+ * never gated.
  */
-function unresolvedBuildGate(rails) {
-  process.stderr.write(
-    'adlc-pretool: build-gate skipped — the workspace root could not be resolved from the hook payload or CURSOR_PROJECT_DIR\n',
+function unresolvedBuildGate(payload, toolName, rails) {
+  const cls = classifyTool(toolName);
+  const mutating = cls === 'mutating' || (cls === 'other' && !isShellTool(toolName));
+  if (!mutating || isP5TaskPayload(payload, toolName)) return rails;
+  return buildGateDeny(
+    'the workspace root could not be resolved from the hook payload or CURSOR_PROJECT_DIR — failing closed.',
   );
-  return rails;
 }
 
 /**
@@ -255,7 +259,7 @@ export async function dispatch(payload, { root, env = process.env, now, importMo
   if (env.ADLC_BUILD_GATE_ENFORCEMENT !== '1') return rails; // buildgate is default-OFF
 
   const owningRoot = root ?? resolveOwning(payload, extractFilePaths(payload)[0], undefined, env).root;
-  if (owningRoot == null) return unresolvedBuildGate(rails);
+  if (owningRoot == null) return unresolvedBuildGate(payload, toolName, rails);
   const gate = await consultBuildGate(payload, { root: owningRoot, env, now, importModule });
   return gate ?? rails;
 }

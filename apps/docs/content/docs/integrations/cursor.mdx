@@ -82,11 +82,14 @@ exits 1 instead of counting it as present.
 
 The `preToolUse` dispatcher checks an edit against the workspace root it resolves
 in this order: the root keys in the hook payload (`workspace_roots`, `cwd`, `root`,
-and their variants), then the host's `CURSOR_PROJECT_DIR`. It never falls back to
-the plugin cwd, because Cursor runs the hook from the plugin directory. When
+and their variants), then the host's `CURSOR_PROJECT_DIR`. Only absolute roots
+count; a relative one is ignored. It never falls back to the plugin cwd, because
+Cursor runs the hook from the plugin directory. When
 neither source names a root, the dispatcher denies the edit under
 `ADLC_P4_ENFORCEMENT=1` (it cannot be checked against any rails), and otherwise
 allows it with one stderr notice. Read-only and shell tools are not affected.
+With `ADLC_BUILD_GATE_ENFORCEMENT=1` and no resolvable root, the build gate
+denies structured mutating tools and lets Task spawns through to the P5 policy.
 
 ## Formal ADLC coverage
 

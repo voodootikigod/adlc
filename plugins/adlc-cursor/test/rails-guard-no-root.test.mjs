@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { tmp } from '@adlc/core/test-kit';
-import { decide, resolveOwning, resolveRoot } from '../hooks/adlc-rails-guard.mjs';
+import { decide, resolveOwning, resolveRoot, candidateRoots } from '../hooks/adlc-rails-guard.mjs';
 import { dispatch } from '../hooks/adlc-pretool.mjs';
 import { audit, flailCheck } from '../hooks/adlc-audit.mjs';
 import { spawnHook } from './helpers/run-hook.mjs';
@@ -138,6 +138,7 @@ test('AC4 resolveOwning falls back to a normalized CURSOR_PROJECT_DIR', (t) => {
 
 test('AC4 a relative CURSOR_PROJECT_DIR does not resolve (it would be read against cwd)', () => {
   assert.equal(resolveRoot({}, undefined, undefined, { CURSOR_PROJECT_DIR: 'not/absolute/dir' }), null);
+  assert.equal(resolveRoot({}, undefined, undefined, { CURSOR_PROJECT_DIR: '.' }), null, 'an existing relative dir is still relative');
 });
 
 test('AC4 payload roots take precedence over CURSOR_PROJECT_DIR, and an explicit fallback is honored', (t) => {
@@ -184,16 +185,24 @@ test('decide: a shell tool with no path and no root is allowed even under enforc
   assert.deepEqual(v, { permission: 'allow' });
 });
 
-test('dispatch: buildgate on, P4 off, no root → rails verdict kept, buildgate skipped with a notice', (t) => {
-  for (const payload of [
-    { tool_name: 'Write', tool_input: { file_path: '/nowhere/x.js' } },
-    JSON.parse(readFileSync(join(HERE, 'fixtures', 'pretool-task-prosecutor.json'), 'utf8')),
-  ]) {
-    const { verdict, stderr } = runPretool(t, payload, hookEnv(t, { ADLC_BUILD_GATE_ENFORCEMENT: '1' }));
-    assert.deepEqual(verdict, { permission: 'allow' }, `${payload.tool_name} keeps the rails allow`);
-    assert.match(stderr, /build-gate skipped/);
-    assert.match(stderr, UNRESOLVED);
-  }
+test('dispatch: buildgate on, P4 off, no root, mutating tool → buildgate denies instead of evaluating cwd', async () => {
+  const v = await dispatch({ tool_name: 'Write', tool_input: { file_path: '/nowhere/x.js' } },
+    { env: { ADLC_BUILD_GATE_ENFORCEMENT: '1' } });
+  assert.equal(v.permission, 'deny');
+  assert.match(v.user_message, /build-gate/);
+  assert.match(v.user_message, UNRESOLVED);
+});
+
+test('dispatch: buildgate on, P4 off, no root, Task spawn → not denied by the buildgate', (t) => {
+  const task = JSON.parse(readFileSync(join(HERE, 'fixtures', 'pretool-task-prosecutor.json'), 'utf8'));
+  const { verdict } = runPretool(t, task, hookEnv(t, { ADLC_BUILD_GATE_ENFORCEMENT: '1' }));
+  assert.doesNotMatch(verdict.user_message ?? '', /build-gate/);
+});
+
+test('dispatch: buildgate on, P4 off, no root, shell tool → allowed', async () => {
+  const v = await dispatch({ tool_name: 'run_terminal_cmd', tool_input: { command: 'npm test' } },
+    { env: { ADLC_BUILD_GATE_ENFORCEMENT: '1' } });
+  assert.deepEqual(v, { permission: 'allow' });
 });
 
 test('dispatch: buildgate on, no root, read-only tool → allowed', async () => {
@@ -257,4 +266,18 @@ test('a no-root Task payload reaches the P5 policy once CURSOR_PROJECT_DIR names
     hookEnv(t, { ADLC_P4_ENFORCEMENT: '1', CURSOR_PROJECT_DIR: repo }));
   assert.doesNotMatch(verdict.user_message ?? '', UNRESOLVED);
   assert.doesNotMatch(stderr, UNRESOLVED);
+});
+
+test('a RELATIVE payload root is not read against the plugin cwd: enforcement denies as unresolved', (t) => {
+  const repo = railedRepo(t);
+  const payload = { ...noRootPayload(join(repo, 'src', 'frozen.js')), cwd: '.' };
+  const { verdict } = runPretool(t, payload, hookEnv(t, { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' }));
+  assert.equal(verdict.permission, 'deny');
+  assert.match(verdict.user_message, UNRESOLVED);
+});
+
+test('candidateRoots normalizes roots and drops relative or blank ones', (t) => {
+  const repo = railedRepo(t);
+  assert.deepEqual(candidateRoots({ workspace_roots: ['.', '  ', `${repo}/`, 'rel/dir'], cwd: repo }), [repo, repo]);
+  assert.deepEqual(candidateRoots({ cwd: '.' }), []);
 });

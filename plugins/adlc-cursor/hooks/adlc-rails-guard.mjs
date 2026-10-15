@@ -141,17 +141,33 @@ export function extractFilePath(payload) {
   return extractFilePaths(payload)[0];
 }
 
-/** Collect every candidate workspace root (handles single-root keys and arrays). */
+/**
+ * Collect every candidate workspace root (handles single-root keys and arrays).
+ * Each is normalized, and a relative root is dropped: it would be read against
+ * the hook process cwd, which is the plugin directory, not the workspace.
+ */
 export function candidateRoots(payload) {
-  const roots = [];
+  const raw = [];
   if (payload && typeof payload === 'object') {
     for (const k of ROOT_KEYS) {
       const v = payload[k];
-      if (typeof v === 'string' && v.trim()) roots.push(v.trim());
-      else if (Array.isArray(v)) for (const e of v) if (typeof e === 'string' && e.trim()) roots.push(e.trim());
+      if (typeof v === 'string') raw.push(v);
+      else if (Array.isArray(v)) for (const e of v) if (typeof e === 'string') raw.push(e);
     }
   }
-  return roots;
+  return raw.map(absoluteRoot).filter((r) => r != null);
+}
+
+/**
+ * A normalized ABSOLUTE root, or null. normalizeRootPath alone would resolve an
+ * existing relative path (".") against the process cwd, so absoluteness is
+ * checked on the raw value first.
+ */
+export function absoluteRoot(raw) {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!isAbsolute(trimmed)) return null;
+  return normalizeRootPath(trimmed);
 }
 
 /**
@@ -206,7 +222,7 @@ export function resolveRoot(payload, filePath, fallback, env = process.env) {
 
 /** The host-supplied project dir (CURSOR_PROJECT_DIR), normalized; null when unset or relative. */
 export function hostProjectRoot(env = process.env) {
-  return normalizeRootPath(env?.CURSOR_PROJECT_DIR);
+  return absoluteRoot(env?.CURSOR_PROJECT_DIR);
 }
 
 const UNRESOLVED_CAUSE =
