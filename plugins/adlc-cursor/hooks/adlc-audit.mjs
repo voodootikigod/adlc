@@ -38,7 +38,7 @@ export function audit(payload, { root, env = process.env } = {}) {
     if (!paths.length) return { rail: false };
     for (const filePath of paths) {
       const owned = root != null ? { root, absFile: undefined } : resolveOwning(payload, filePath, undefined, env);
-      if (owned.root == null) return { rail: false }; // no workspace to check against
+      if (owned.root == null) continue; // no workspace for this path; later paths are still audited
       const verdict = checkRail({ filePath: owned.absFile ?? filePath, tool: 'edit', root: owned.root, env });
       if (verdict.decision === 'deny') {
         process.stderr.write(

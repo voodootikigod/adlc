@@ -301,3 +301,11 @@ test('an explicit fallback is honored even for a target outside it (caller-asser
   const target = join(repo, 'src', 'frozen.js');
   assert.equal(resolveRoot(noRootPayload(target), target, other, {}), other);
 });
+
+test('audit: an unresolvable path in a batch does not hide a later rail touch', (t) => {
+  const repo = railedRepo(t);
+  const outside = join(realpathSync(tmp(t, 'adlc-cursor-noroot-out-')), 'x.js');
+  const payload = { edits: [{ file_path: outside }, { file_path: join(repo, 'src', 'frozen.js') }] };
+  const v = audit(payload, { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1', CURSOR_PROJECT_DIR: repo } });
+  assert.equal(v.rail, true);
+});
