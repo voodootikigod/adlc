@@ -6,7 +6,7 @@
 // driven here with the output of a real git, through the same trimming adapter
 // the live deps use.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, realpathSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -118,8 +118,13 @@ test('a present, byte-identical protected file and inert paths still pass', asyn
 
 // ── AC3: parseStatusPaths on real git output ───────────────────────────────
 
+const fixtureDirs = [];
+after(() => { for (const dir of fixtureDirs) rmSync(dir, { recursive: true, force: true }); });
+
 function makeRepo() {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'fleet-status-z-')));
+  const fixtureDir = mkdtempSync(join(tmpdir(), 'fleet-status-z-'));
+  fixtureDirs.push(fixtureDir);
+  const root = realpathSync(fixtureDir);
   const g = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   g('init', '-q');
   g('config', 'user.email', 't@example.com');
@@ -140,34 +145,26 @@ test('STATUS_ARGS is the NUL-delimited porcelain v1 listing with ignored and all
 
 test('parseStatusPaths returns literal paths from real git -z output: deletion, tab+quote name, rename, ignored', () => {
   const { root, g } = makeRepo();
-  try {
-    rmSync(join(root, TRUST_ROOT)); // " D" record — sorts first, so the adapter's trim eats its leading space
-    const odd = '.adlc/we\tird"name.json';
-    writeFileSync(join(root, odd), '{}');
-    g('mv', 'a.txt', 'b.txt');
-    mkdirSync(join(root, '.claude'));
-    writeFileSync(join(root, '.claude/settings.local.json'), '{}');
+  rmSync(join(root, TRUST_ROOT)); // " D" record — sorts first, so the adapter's trim eats its leading space
+  const odd = '.adlc/we\tird"name.json';
+  writeFileSync(join(root, odd), '{}');
+  g('mv', 'a.txt', 'b.txt');
+  mkdirSync(join(root, '.claude'));
+  writeFileSync(join(root, '.claude/settings.local.json'), '{}');
 
-    const out = defaultGit(root)(...STATUS_ARGS); // the production (trimming) adapter
-    assert.ok(out.startsWith('D '), `the first record lost its leading space to the adapter's trim: ${JSON.stringify(out)}`);
-    const paths = parseStatusPaths(out);
-    assert.deepEqual([...paths].sort(), [TRUST_ROOT, '.claude/settings.local.json', odd, 'a.txt', 'b.txt'].sort());
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  const out = defaultGit(root)(...STATUS_ARGS); // the production (trimming) adapter
+  assert.ok(out.startsWith('D '), `the first record lost its leading space to the adapter's trim: ${JSON.stringify(out)}`);
+  const paths = parseStatusPaths(out);
+  assert.deepEqual([...paths].sort(), [TRUST_ROOT, '.claude/settings.local.json', odd, 'a.txt', 'b.txt'].sort());
 });
 
 test('parseStatusPaths end to end: a deleted trust root in a real repo fails the gate', async () => {
   const { root } = makeRepo();
-  try {
-    rmSync(join(root, TRUST_ROOT));
-    const readBytes = (p) => (existsSync(join(root, p)) ? readFileSync(join(root, p), 'utf8') : undefined);
-    const r = await gateWith(() => parseStatusPaths(defaultGit(root)(...STATUS_ARGS)), readBytes);
-    assert.equal(r.ok, false);
-    assert.equal(r.output, `${TRUST_ROOT}: ${UNREADABLE_REASON}`);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  rmSync(join(root, TRUST_ROOT));
+  const readBytes = (p) => (existsSync(join(root, p)) ? readFileSync(join(root, p), 'utf8') : undefined);
+  const r = await gateWith(() => parseStatusPaths(defaultGit(root)(...STATUS_ARGS)), readBytes);
+  assert.equal(r.ok, false);
+  assert.equal(r.output, `${TRUST_ROOT}: ${UNREADABLE_REASON}`);
 });
 
 test('parseStatusPaths parses untrimmed records, both rename forms, and empty input', () => {
