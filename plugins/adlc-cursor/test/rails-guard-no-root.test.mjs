@@ -281,3 +281,23 @@ test('candidateRoots normalizes roots and drops relative or blank ones', (t) => 
   assert.deepEqual(candidateRoots({ workspace_roots: ['.', '  ', `${repo}/`, 'rel/dir'], cwd: repo }), [repo, repo]);
   assert.deepEqual(candidateRoots({ cwd: '.' }), []);
 });
+
+test('CURSOR_PROJECT_DIR naming a DIFFERENT repo leaves an absolute target unresolved (enforcement denies)', (t) => {
+  const repo = railedRepo(t);
+  const other = realpathSync(tmp(t, 'adlc-cursor-noroot-elsewhere-'));
+  const env = { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1', CURSOR_PROJECT_DIR: other };
+  const target = join(repo, 'src', 'frozen.js');
+  assert.deepEqual(resolveOwning(noRootPayload(target), target, undefined, env), { root: null, absFile: target });
+  const v = decide(noRootPayload(target), { env });
+  assert.equal(v.permission, 'deny');
+  assert.match(v.user_message, UNRESOLVED);
+  const trust = decide(noRootPayload(join(repo, '.adlc', 'tickets.json')), { env });
+  assert.equal(trust.permission, 'deny');
+});
+
+test('an explicit fallback is honored even for a target outside it (caller-asserted root)', (t) => {
+  const repo = railedRepo(t);
+  const other = realpathSync(tmp(t, 'adlc-cursor-noroot-fb-'));
+  const target = join(repo, 'src', 'frozen.js');
+  assert.equal(resolveRoot(noRootPayload(target), target, other, {}), other);
+});

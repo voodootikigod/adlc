@@ -204,15 +204,22 @@ export function resolveOwning(payload, filePath, fallback, env = process.env) {
     : isAbsolute(filePath) ? resolve(filePath) : (base != null ? resolve(base, filePath) : undefined);
   if (absFile) {
     const owning = roots
+      .filter((raw) => contains(raw, absFile))
       .map((raw) => ({ raw, real: realpathDeepest(resolve(raw)) }))
-      .filter(({ real }) => {
-        const rel = relative(real, realpathDeepest(absFile));
-        return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
-      })
       .sort((a, b) => b.real.length - a.real.length)[0];
     if (owning) return { root: owning.raw, absFile };
   }
+  // CURSOR_PROJECT_DIR is only a default: an absolute target outside it belongs to
+  // some other workspace, which this hook cannot see, so it stays unresolved.
+  const hostOnly = !roots.length && fallback == null;
+  if (hostOnly && base != null && absFile && !contains(base, absFile)) return { root: null, absFile };
   return { root: base ?? null, absFile };
+}
+
+/** Symlink-aware, boundary-aware containment of an absolute path in a root. */
+function contains(root, absFile) {
+  const rel = relative(realpathDeepest(resolve(root)), realpathDeepest(absFile));
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
 /** The owning workspace root for an edited path (back-compat wrapper). */
