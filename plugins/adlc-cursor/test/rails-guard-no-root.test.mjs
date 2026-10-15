@@ -321,3 +321,12 @@ test('dispatch: buildgate on, a resolvable first target does not hide a later UN
     assert.match(v.user_message, UNRESOLVED);
   }
 });
+
+test('a shell command that NAMES a file is checked like an edit: no root + enforcement → unresolved deny', () => {
+  const env = { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' };
+  const patch = { tool_name: 'run_terminal_cmd', tool_input: { command: "apply_patch <<'P'\n*** Update File: /nowhere/src/frozen.js\nP" } };
+  const v = decide(patch, { env });
+  assert.equal(v.permission, 'deny');
+  assert.match(v.user_message, UNRESOLVED);
+  assert.deepEqual(decide({ tool_name: 'run_terminal_cmd', tool_input: { command: 'npm test' } }, { env }), { permission: 'allow' });
+});

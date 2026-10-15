@@ -88,7 +88,9 @@ inside it: an absolute path outside it is treated as unresolved. It never falls 
 Cursor runs the hook from the plugin directory. When
 neither source names a root, the dispatcher denies the edit under
 `ADLC_P4_ENFORCEMENT=1` (it cannot be checked against any rails), and otherwise
-allows it with one stderr notice. Read-only and shell tools are not affected.
+allows it with one stderr notice. Read-only tools, and shell commands that name no
+file path, are not affected; a shell command whose payload names a file (for
+example an `apply_patch` envelope) is checked like any other edit.
 With `ADLC_BUILD_GATE_ENFORCEMENT=1` and no resolvable root, the build gate
 denies structured mutating tools and lets Task spawns through to the P5 policy.
 
