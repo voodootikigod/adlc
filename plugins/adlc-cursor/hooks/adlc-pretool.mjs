@@ -258,10 +258,21 @@ export async function dispatch(payload, { root, env = process.env, now, importMo
 
   if (env.ADLC_BUILD_GATE_ENFORCEMENT !== '1') return rails; // buildgate is default-OFF
 
+  if (root == null && hasUnresolvedTarget(payload, env)) return unresolvedBuildGate(payload, toolName, rails);
   const owningRoot = root ?? resolveOwning(payload, extractFilePaths(payload)[0], undefined, env).root;
-  if (owningRoot == null) return unresolvedBuildGate(payload, toolName, rails);
   const gate = await consultBuildGate(payload, { root: owningRoot, env, now, importModule });
   return gate ?? rails;
+}
+
+/**
+ * True when ANY target of the payload (or a path-less payload) has no
+ * resolvable workspace root, so no target can hide an unresolved one by
+ * ordering.
+ */
+function hasUnresolvedTarget(payload, env) {
+  const paths = extractFilePaths(payload);
+  const targets = paths.length ? paths : [undefined];
+  return targets.some((p) => resolveOwning(payload, p, undefined, env).root == null);
 }
 
 async function readStdin() {

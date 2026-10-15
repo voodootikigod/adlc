@@ -309,3 +309,15 @@ test('audit: an unresolvable path in a batch does not hide a later rail touch', 
   const v = audit(payload, { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1', CURSOR_PROJECT_DIR: repo } });
   assert.equal(v.rail, true);
 });
+
+test('dispatch: buildgate on, a resolvable first target does not hide a later UNRESOLVED target', async (t) => {
+  const repo = railedRepo(t);
+  const outside = join(realpathSync(tmp(t, 'adlc-cursor-noroot-bgout-')), 'x.js');
+  const env = { ADLC_BUILD_GATE_ENFORCEMENT: '1', CURSOR_PROJECT_DIR: repo };
+  for (const order of [[join(repo, 'src', 'free.js'), outside], [outside, join(repo, 'src', 'free.js')]]) {
+    const v = await dispatch({ tool_name: 'MultiEdit', tool_input: { edits: order.map((file_path) => ({ file_path })) } }, { env });
+    assert.equal(v.permission, 'deny', `order ${order.join(', ')}`);
+    assert.match(v.user_message, /build-gate/);
+    assert.match(v.user_message, UNRESOLVED);
+  }
+});
