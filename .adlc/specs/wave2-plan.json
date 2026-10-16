@@ -1,0 +1,84 @@
+{
+  "repo": "/home/voodootikigod/Projects/voodootikigod/adlc/.worktrees/adlc-modernization-plan",
+  "base": "feat/adlc-modernization-plan",
+  "gate": {
+    "build": "npm run build:cursor-mcp",
+    "test": "npm test"
+  },
+  "tickets": [
+    {
+      "id": "W2-T1",
+      "title": "docs(adlc): update ADLC.md to v0.3 with F9-F13, E6-E8, trust-root quorum, and 5-layer operating stack",
+      "body": "## Context\n`ADLC.md` has fallen behind the repository's empirical evolution across ADRs 0005-0016:\n1. Cross-model review is demoted in `ADLC.md` (§2 Principle 3, §3 P5, §4 Norms Rejected) as a 'third-order bonus', whereas ADRs 0007 and 0012 proved same-model P5 shares training blind spots on security deny-paths, requiring a two-family quorum on trust-root surfaces with gateway discounting.\n2. Adversarial review is restricted to P5 in `ADLC.md`, whereas ADRs 0005 and 0008 established a four-point coverage map: P1->P2 (`design-review` for trust boundaries), P3 (rail adequacy vs rail integrity), P5 (diff prosecution), and P6.\n3. Token quotas are blanket-rejected in §4, whereas `@adlc/autopilot` (ADR 0016) and `@adlc/quartermaster` use a 50% subscription quota start-gate (`five_hour < 50 && seven_day < 50`) and multi-channel supply routing.\n4. Five emergent flaws (F9 in-band reviewer authority-smuggling, F10 same-family blind-spot sharing & causal-path vacuity, F11 cross-ticket horizontal drift, F12 fail-open lookalike-grammar bias, F13 compaction amnesia & fix-loop oscillation) and three exploits (E6 cross-family prior independence, E7 calibrated fast decision heads, E8 horizontal release audits) need to be added to §1.\n5. Appendix D0 needs the decomposition-compiler distinction (compilers may use models to propose a frozen validated DAG; dispatch schedulers may not), the gate failure-policy table (invariant gates fail closed, heuristic gates fail open, evidence gates degrade to advisory; errored review lenses reset dry-pass counters), sharded/segmented stores (ADRs 0010, 0014, 0015), and the 5-layer operating stack (`adlc-herdr` cockpit, `@adlc/autopilot` outer loop, `@adlc/quartermaster` supply router, `@adlc/fleet` two-plane sandbox orchestrator, and 7 harness plugins).\n\n## Changes Required\n1. Update `ADLC.md` to incorporate all five areas above cleanly while preserving existing section structure.\n\n## Acceptance Criteria\n- `ADLC.md` contains F9-F13, E6-E8, trust-root two-family quorum + gateway discounting, P1/P3/P5/P6 adversarial coverage map, 50% subscription start-gate nuance, D0 compiler amendment, gate failure-policy table, and `adlc-herdr` / `quartermaster` / `autopilot` / `fleet` 5-layer stack.\n- Verify: `for term in \"F9\" \"F10\" \"F11\" \"F12\" \"F13\" \"E6\" \"E7\" \"E8\" \"quartermaster\" \"adlc-herdr\"; do rg -q \"$term\" ADLC.md || exit 1; done`",
+      "scope": [
+        "ADLC.md",
+        "docs/models-by-phase.md",
+        "docs/toolkit.md"
+      ],
+      "rails": [
+        "CONVENTIONS.md"
+      ],
+      "edges": [],
+      "tier": "mid",
+      "pool_hint": "auto"
+    },
+    {
+      "id": "W2-T2",
+      "title": "feat(core): promote writeFileAtomic, acquireDirLock, redactSecrets, and recordPromptOnlyVerdict to @adlc/core",
+      "body": "## Context\nAcross `packages/*`, four foundational primitives are duplicated 3 to 9 times:\n1. Symlink-safe atomic file writing (`writeFileAtomic`: `lstatSync` symlink rejection, mode preservation, `openSync(tmp, 'wx')`, `fsyncSync`, `renameSync`, parent-dir `fsync`) is copied 9 times (`hollow-test/lib/inflight.mjs`, `review-calibration/lib/inflight.mjs`, `consensus-fix/lib/snapshot.mjs`, `tickets/lib/durability.mjs`, etc.).\n2. Directory locking with `owner.json` and `/proc/<pid>/stat` field-22 `starttime` PID-reuse verification (`acquireDirLock`) is copied 7 times (`fleet/lib/lock.mjs`, `autopilot/lib/lock.mjs`, `tickets/lib/lock.mjs`, etc.), while `packages/core/lib/ledger.mjs` (`withLedgerLock`) still uses a bare `mkdirSync` spinlock with no `owner.json` and no crashed-holder recovery.\n3. Secret redaction (`redactSecrets`) is copied 4 times (`context-handoff/lib/redact.mjs`, `autopilot/lib/redact.mjs`, `decision-layer/lib/sanitizer.mjs`, `core/lib/ledger.mjs`).\n4. Prompt-only verdict recording (`recordPromptOnlyVerdict` / `readVerdictSource`) is copied 3 times (`coldstart/lib/verdict.mjs`, `premortem/lib/verdict.mjs`, `parallax/lib/verdict.mjs`).\n\n## Changes Required\n1. Add `writeFileAtomic`, `acquireDirLock` (and upgrade `withLedgerLock` in `packages/core/lib/ledger.mjs` to use it), `redactSecrets`, and `recordPromptOnlyVerdict` + `readVerdictSource` to `@adlc/core` (`packages/core/lib/`, exported from `packages/core/index.mjs` and declared in `packages/core/index.d.ts`).\n2. Add comprehensive offline unit tests in `packages/core/test/` covering atomic write symlink rejection, stale lock recovery with `/proc/<pid>/stat` starttime comparison, secret string/object redaction, and verdict recording.\n\n## Acceptance Criteria\n- `writeFileAtomic`, `acquireDirLock`, `redactSecrets`, `recordPromptOnlyVerdict`, and `readVerdictSource` are exported from `@adlc/core` and declared in `packages/core/index.d.ts`.\n- Verify: `node --test packages/core/test/*.test.mjs`",
+      "scope": [
+        "packages/core/lib/**",
+        "packages/core/index.mjs",
+        "packages/core/index.d.ts",
+        "packages/core/test/**"
+      ],
+      "rails": [
+        "packages/core/package.json"
+      ],
+      "edges": [
+        {
+          "to": "W2-T3"
+        }
+      ],
+      "tier": "mid",
+      "pool_hint": "auto"
+    },
+    {
+      "id": "W2-T3",
+      "title": "fix(context-handoff,build-gate): align HARD_BYTES and DEFAULT_BYTES_THRESHOLD to 8 MiB",
+      "body": "## Context\nIn `packages/context-handoff/lib/thresholds.mjs:14`, `HARD_BYTES` is set to `256 * 1024` (256 KiB), even though the comment at lines 18-21 notes that a fresh session with skills/plugins exceeds 256 KiB on turn 0. `packages/build-gate/bin/build-gate.mjs:20-30` overrides the CLI default to `8 * 1024 * 1024` (8 MiB), but `packages/build-gate/lib/depth-signal.mjs:30` still sets `DEFAULT_BYTES_THRESHOLD = HARD_BYTES` (256 KiB), leaving programmatic callers of `isDegraded()` and `evaluateBands()` with the broken 256 KiB threshold.\n\n## Changes Required\n1. Update `HARD_BYTES` in `packages/context-handoff/lib/thresholds.mjs` (and corresponding `WARN_BYTES` / `SOFT_BYTES` band constants if scaled relative to `HARD_BYTES`, or keep `WARN_BYTES = 4 * 1024 * 1024`, `SOFT_BYTES = 6 * 1024 * 1024`, `HARD_BYTES = 8 * 1024 * 1024`) and `DEFAULT_BYTES_THRESHOLD` in `packages/build-gate/lib/depth-signal.mjs` to `8 * 1024 * 1024`.\n2. Update unit tests in `packages/context-handoff/test/` and `packages/build-gate/test/` that construct small synthetic transcripts (~300 KB) to pass explicit threshold overrides where they test byte-limit tripping, and add tests asserting the default `HARD_BYTES` and `DEFAULT_BYTES_THRESHOLD` equal `8 * 1024 * 1024`.\n\n## Acceptance Criteria\n- `HARD_BYTES` in `packages/context-handoff/lib/thresholds.mjs` and `DEFAULT_BYTES_THRESHOLD` in `packages/build-gate/lib/depth-signal.mjs` equal `8 * 1024 * 1024`.\n- Verify: `node --test packages/context-handoff/test/*.test.mjs packages/build-gate/test/*.test.mjs`",
+      "scope": [
+        "packages/context-handoff/**",
+        "packages/build-gate/**"
+      ],
+      "rails": [
+        "packages/core/index.mjs"
+      ],
+      "edges": [
+        {
+          "to": "W2-T4"
+        }
+      ],
+      "tier": "mid",
+      "pool_hint": "auto"
+    },
+    {
+      "id": "W2-T4",
+      "title": "refactor(plugins): remove disconnected handoff hook forks and unwire inert copilot build-gate hook",
+      "body": "## Context\nSince v1.11.1 (#966), enforcing context-rot handoff hooks are disconnected by default across harnesses, leaving thousands of lines of dead inline hook forks in `plugins/`:\n- `plugins/adlc-claude-code/hooks/handoff-gate.mjs` (498L) and `plugins/adlc-claude-code/hooks/handoff-resolve.mjs` (213L)\n- `plugins/adlc-codex/hooks/adlc-handoff-gate.mjs` (1,437L) and `plugins/adlc-codex/hooks/handoff-resolve.mjs` (213L)\n- Corresponding drift tests `packages/context-handoff/test/cc-helper-drift.test.mjs` and `packages/context-handoff/test/codex-helper-drift.test.mjs`.\nAdditionally, `plugins/adlc-copilot/hooks/adlc-build-gate.mjs` (561L) is wired in `plugins/adlc-copilot/hooks/hooks.json` for `postToolUse` despite its header stating `!!! CURRENTLY INERT ON COPILOT !!!`.\n\n## Changes Required\n1. Remove the unwired `handoff-gate.mjs` and `handoff-resolve.mjs` files from `plugins/adlc-claude-code/hooks/` and `plugins/adlc-codex/hooks/` (and remove/update their dedicated unit/drift tests in `plugins/adlc-claude-code/hooks/test/`, `plugins/adlc-codex/hooks/test/`, and `packages/context-handoff/test/{cc,codex}-helper-drift.test.mjs`), keeping `adlc-hook.mjs` and `hooks.json` working cleanly.\n2. Remove the inert `postToolUse` `adlc-build-gate.mjs` entry from `plugins/adlc-copilot/hooks/hooks.json` (and update `plugins/adlc-copilot/test/` if it asserts `hooks.json` entries).\n\n## Acceptance Criteria\n- Disconnected handoff hook files in `adlc-claude-code` and `adlc-codex` are removed, inert `postToolUse` is unwired in `adlc-copilot/hooks/hooks.json`, and all plugin & context-handoff tests pass.\n- Verify: `node --test plugins/adlc-claude-code/hooks/test/*.test.mjs plugins/adlc-codex/hooks/test/*.test.mjs plugins/adlc-copilot/test/*.test.mjs packages/context-handoff/test/*.test.mjs`",
+      "scope": [
+        "plugins/adlc-claude-code/hooks/**",
+        "plugins/adlc-codex/hooks/**",
+        "plugins/adlc-copilot/hooks/**",
+        "plugins/adlc-copilot/test/**",
+        "packages/context-handoff/test/**"
+      ],
+      "rails": [
+        "packages/context-handoff/lib/thresholds.mjs"
+      ],
+      "edges": [],
+      "tier": "mid",
+      "pool_hint": "auto"
+    }
+  ]
+}
