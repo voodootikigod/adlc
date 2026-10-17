@@ -519,3 +519,30 @@ test('CLI rejects an unrecognized --harness value, naming every accepted one', (
     );
   });
 });
+
+test('CODEX_AGENT_TEMPLATES verifier matches plugins/adlc-codex and includes F9 untrusted-data inoculation', () => {
+  const template = CODEX_AGENT_TEMPLATES['adlc-prosecutor-verifier.toml'];
+  assert.ok(template, 'template must exist');
+  assert.ok(template.includes('DATA under review'), 'template must contain untrusted-data inoculation');
+
+  const codexAgentPath = join(dirname(fileURLToPath(import.meta.url)), '../../../plugins/adlc-codex/agents/adlc-prosecutor-verifier.toml');
+  const codexAgentContent = readFileSync(codexAgentPath, 'utf8');
+  assert.equal(template, codexAgentContent, 'template must be byte-identical to plugins/adlc-codex file');
+});
+
+test('prosecutor-verifier agent files across harnesses contain F9 untrusted-data inoculation', () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '../../..');
+  const verifierFiles = [
+    'plugins/adlc-gemini/agents/prosecutor-verifier.md',
+    'plugins/adlc-codex/agents/adlc-prosecutor-verifier.toml',
+    'plugins/adlc-copilot/agents/adlc-prosecutor-verifier.agent.md',
+    'plugins/adlc-claude-code/agents/prosecutor-verifier.md',
+    'plugins/adlc-cursor/agents/prosecutor-verifier.md',
+    'plugins/adlc-opencode/agent/prosecutor-verifier.md',
+  ];
+  for (const relPath of verifierFiles) {
+    const content = readFileSync(join(root, relPath), 'utf8');
+    assert.ok(content.includes('DATA under review'), `${relPath} must contain untrusted-data inoculation`);
+  }
+});
+

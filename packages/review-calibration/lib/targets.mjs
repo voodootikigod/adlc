@@ -5,9 +5,27 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-/** Paths that are not source code — excluded from plant targets. */
-const EXCLUDE_PATH_RE = /(?:test|spec)/i;
-const EXCLUDE_EXT_RE = /\.(?:md|json|jsonl|yml|yaml|lock|txt|toml|snap|css|svg|png|jpg|gif)$/i;
+/**
+ * Combined anchored test path regex: matches test directory segments or test filename conventions,
+ * ported from packages/hollow-test/lib/targets.mjs.
+ */
+export const TEST_PATH_RE =
+  /(?:^|\/)(?:tests?|specs?|__tests__)\/|(?:^|\/)(?:[^/]*\.(?:test|spec)\.[^/]+|(?:test|spec)\.[^/.]+|(?:test|spec)[-_][^/]+|[^/]*[-_](?:test|spec)\.[^/.]+)$/i;
+
+/**
+ * Positive code extension filter: positive include-list rather than negative blocklist,
+ * preventing extensionless files (LICENSE, CODEOWNERS) from being treated as code.
+ */
+export const CODE_EXT_RE = /\.(?:mjs|cjs|js|ts|mts|cts|jsx|tsx|py)$/i;
+
+/**
+ * Returns true if the file path represents a test file (directory or filename convention).
+ * @param {string} file
+ * @returns {boolean}
+ */
+export function isTestFile(file) {
+  return TEST_PATH_RE.test(file);
+}
 
 /**
  * Map a mechanical mutation operator to a real bug CATEGORY. Per-category
@@ -75,8 +93,8 @@ export function parseCommitFiles(showOutput) {
  */
 export function filterCodeFiles(files) {
   return files.filter((f) => {
-    if (EXCLUDE_PATH_RE.test(f)) return false;
-    if (EXCLUDE_EXT_RE.test(f)) return false;
+    if (!CODE_EXT_RE.test(f)) return false;
+    if (isTestFile(f)) return false;
     return true;
   });
 }

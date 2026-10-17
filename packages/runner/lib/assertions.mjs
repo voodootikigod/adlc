@@ -1,4 +1,4 @@
-import { ADLC_DIR, canonicalJson, hashFiles, resolveRevision, sha256 } from '@adlc/core';
+import { ADLC_DIR, canonicalJson, hashFiles, resolveChangeSetRevision, resolveRevision, sha256 } from '../../core/index.mjs';
 // Scoped to root + this checkout's own segment, NOT the whole forest: every
 // `.at(-1)`, `indexOf`, and `slice` below reads array position as chronology,
 // which is only true of a chain this checkout can place in sequence. See
@@ -615,8 +615,14 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
   const ignoredEvidencePaths = phase === 'p6'
     ? [...manifestArtifactPaths(cwd, dir), ...p5TranscriptEvidencePaths, ...p5ReviewPacketEvidencePaths, ...p6ArtifactPaths(entries, ticket, cwd)]
     : [...manifestArtifactPaths(cwd, dir), ...p5TranscriptEvidencePaths, ...p5ReviewPacketEvidencePaths];
+  const recordedP5Revision = assertedP5Entry?.revision ?? latestScopedP5Revision;
+  const changeSetMatch = !explicitRevision && typeof recordedP5Revision === 'string'
+    ? recordedP5Revision.match(/^git-change:([0-9a-f]{40}):[0-9a-f]{64}$/)
+    : null;
   const liveWorktreeRevision = requiresRevision(phase) && !explicitRevision
-    ? resolveRevision({ cwd, ignorePaths: ignoredEvidencePaths })
+    ? (changeSetMatch
+        ? resolveChangeSetRevision({ cwd, base: changeSetMatch[1], ignorePaths: ignoredEvidencePaths })
+        : resolveRevision({ cwd, ignorePaths: ignoredEvidencePaths }))
     : null;
   const currentRevision = requiresRevision(phase)
     ? explicitRevision ?? liveWorktreeRevision

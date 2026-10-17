@@ -15,8 +15,8 @@ function realpathOr(p) {
   try { return realpathSync(p); } catch { return p; }
 }
 
-function segmentsOf(p) {
-  return p.split(/[\\/]+/).filter(Boolean);
+export function segmentsOf(p) {
+  return p.replace(/^[A-Za-z]:[\\/]?/, '').split(/[\\/]+/).filter(Boolean);
 }
 
 function lstatOrNull(p) {

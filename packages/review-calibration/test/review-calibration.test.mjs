@@ -136,6 +136,42 @@ describe('filterCodeFiles', () => {
     assert.deepEqual(filterCodeFiles(['src/e.mjs', 'lib/f.js']), ['src/e.mjs', 'lib/f.js']);
   });
 
+  it('retains production files whose paths contain test or spec substrings', () => {
+    const retained = [
+      'packages/hollow-test/lib/run.mjs',
+      'packages/spec-lint/lib/lint.mjs',
+      'packages/gate-manifest/lib/attest.mjs',
+    ];
+    assert.deepEqual(filterCodeFiles(retained), retained);
+  });
+
+  it('excludes test and spec files as well as non-code/extensionless files', () => {
+    const excluded = [
+      'packages/core/test/foo.test.mjs',
+      'src/foo.spec.ts',
+      'LICENSE',
+      'README.md',
+    ];
+    assert.deepEqual(filterCodeFiles(excluded), []);
+  });
+
+  it('correctly filters mixed list of production code, test files, and non-code files', () => {
+    const mixed = [
+      'packages/hollow-test/lib/run.mjs',
+      'packages/spec-lint/lib/lint.mjs',
+      'packages/gate-manifest/lib/attest.mjs',
+      'packages/core/test/foo.test.mjs',
+      'src/foo.spec.ts',
+      'LICENSE',
+      'README.md',
+    ];
+    assert.deepEqual(filterCodeFiles(mixed), [
+      'packages/hollow-test/lib/run.mjs',
+      'packages/spec-lint/lib/lint.mjs',
+      'packages/gate-manifest/lib/attest.mjs',
+    ]);
+  });
+
   it('returns empty for empty input', () => {
     assert.deepEqual(filterCodeFiles([]), []);
   });

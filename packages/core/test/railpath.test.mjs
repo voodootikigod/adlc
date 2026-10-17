@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync, symlinkSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
-import { resolveRailPath } from '../lib/railpath.mjs';
+import { resolveRailPath, segmentsOf } from '../lib/railpath.mjs';
 import { tmp } from '../lib/test-kit.mjs';
 
 function makeRepo(t) {
@@ -42,4 +42,17 @@ test('resolveRailPath: not-yet-existing file under a symlinked ancestor still re
 test('resolveRailPath: unresolvable paths fall back lexically (relative to root)', (t) => {
   const root = makeRepo(t);
   assert.equal(resolveRailPath('no/such/dir/file.ts', root), 'no/such/dir/file.ts');
+});
+
+test('segmentsOf: strips Windows drive letters and slashes across platforms', () => {
+  assert.deepEqual(segmentsOf('D:\\a\\adlc\\file.js'), ['a', 'adlc', 'file.js']);
+  assert.deepEqual(segmentsOf('C:/repo/src/index.mjs'), ['repo', 'src', 'index.mjs']);
+  assert.deepEqual(segmentsOf('D:\\a\\b\\c.mjs'), ['a', 'b', 'c.mjs']);
+});
+
+test('resolveRailPath: preserves relative forward-slash output across path styles', (t) => {
+  const root = makeRepo(t);
+  assert.equal(resolveRailPath('src/app.ts', root), 'src/app.ts');
+  assert.equal(resolveRailPath('src\\app.ts', root), 'src/app.ts');
+  assert.equal(resolveRailPath(join(root, 'src', 'app.ts'), root), 'src/app.ts');
 });

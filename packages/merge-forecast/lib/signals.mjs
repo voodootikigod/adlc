@@ -9,7 +9,7 @@
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
+import { join, resolve, dirname, win32 } from 'node:path';
 import { scopesOverlap, globMatch, pairKey } from '@adlc/core';
 
 // ─── Signal 1: Declared scope overlap ────────────────────────────────────────
@@ -29,6 +29,8 @@ export function signalScopeOverlap(a, b) {
  * skipping node_modules and .git.
  */
 export function walkTree(root) {
+  const rootClean = root.replace(/\\/g, '/').replace(/\/+$/, '') || '/';
+  const rootLen = rootClean === '/' ? 0 : rootClean.length;
   const results = [];
   const skipDirs = new Set(['node_modules', '.git']);
   function walk(dir) {
@@ -45,11 +47,11 @@ export function walkTree(root) {
         walk(fullPath);
       } else if (ent.isFile()) {
         // Return path relative to root
-        results.push(fullPath.slice(root.length + 1));
+        results.push(fullPath.slice(rootLen + 1).replace(/\\/g, '/'));
       }
     }
   }
-  walk(root);
+  walk(rootClean);
   return results;
 }
 
@@ -81,12 +83,19 @@ function extractImports(filePath) {
  * Resolve a specifier relative to the importing file.
  * Returns normalized path (without leading ./) or null for non-relative.
  */
-function resolveSpecifier(specifier, importingFile, root) {
+export function resolveSpecifier(specifier, importingFile, root) {
   if (!specifier.startsWith('.')) return null; // package specifier — ignore
-  const importingDir = dirname(join(root, importingFile));
-  const resolved = resolve(importingDir, specifier);
+  const rootNorm = root.replace(/\\/g, '/').replace(/\/+$/, '');
+  const importingFileNorm = importingFile.replace(/\\/g, '/');
+  const isWinDrive = /^[a-zA-Z]:/.test(rootNorm);
+  const p = isWinDrive ? win32 : { dirname, join, resolve };
+  const importingDir = p.dirname(p.join(rootNorm, importingFileNorm));
+  const resolved = p.resolve(importingDir, specifier);
+  const resolvedNorm = resolved.replace(/\\/g, '/');
   // Make relative to root
-  const rel = resolved.startsWith(root + '/') ? resolved.slice(root.length + 1) : null;
+  const rel = resolvedNorm.startsWith(rootNorm + '/')
+    ? resolvedNorm.slice(rootNorm.length + 1)
+    : null;
   return rel;
 }
 
@@ -96,14 +105,17 @@ function resolveSpecifier(specifier, importingFile, root) {
  * ticket b's scope.
  */
 function importRadiusIntersects(a, b, repoFiles, root) {
-  const aFiles = repoFiles.filter((f) =>
-    (a.scope ?? []).some((g) => globMatch(g, f))
-  );
+  const aFiles = repoFiles.filter((f) => {
+    const fNorm = f.replace(/\\/g, '/');
+    return (a.scope ?? []).some((g) => globMatch(g, fNorm));
+  });
   const bScope = b.scope ?? [];
+  const rootNorm = root.replace(/\\/g, '/').replace(/\/+$/, '');
   for (const af of aFiles) {
-    const specifiers = extractImports(join(root, af));
+    const afNorm = af.replace(/\\/g, '/');
+    const specifiers = extractImports(join(rootNorm, afNorm));
     for (const spec of specifiers) {
-      const resolved = resolveSpecifier(spec, af, root);
+      const resolved = resolveSpecifier(spec, afNorm, rootNorm);
       if (resolved === null) continue;
       // Also try with extensions
       const candidates = [

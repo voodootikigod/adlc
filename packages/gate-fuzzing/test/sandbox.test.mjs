@@ -8,6 +8,8 @@ import {
   buildSandboxedArgs,
   detectSandbox,
   buildMacOSSbpl,
+  escapeSeatbeltPath,
+  seatbeltWrap,
   SANDBOX_PROFILES,
 } from '../lib/sandbox.mjs';
 
@@ -94,3 +96,29 @@ test('unsupported sandbox type throws', () => {
     /unsupported.*sandbox/i
   );
 });
+
+test('seatbeltWrap escapes quotes and backslashes in paths', () => {
+  const dangerousDir = '/tmp/test"dir\\with\\slash';
+  const sbpl = seatbeltWrap(dangerousDir);
+
+  // Must escape " as \" and \ as \\
+  assert.ok(sbpl.includes('(subpath "/tmp/test\\"dir\\\\with\\\\slash")'));
+  assert.equal(seatbeltWrap, buildMacOSSbpl, 'seatbeltWrap should be an alias of buildMacOSSbpl');
+});
+
+test('escapeSeatbeltPath escapes backslashes and double quotes', () => {
+  assert.equal(escapeSeatbeltPath('simple/path'), 'simple/path');
+  assert.equal(escapeSeatbeltPath('path"with"quotes'), 'path\\"with\\"quotes');
+  assert.equal(escapeSeatbeltPath('path\\with\\backslashes'), 'path\\\\with\\\\backslashes');
+  assert.equal(escapeSeatbeltPath('mix"\\quote\\and"slash'), 'mix\\"\\\\quote\\\\and\\"slash');
+});
+
+test('buildSandboxedArgs with sandbox-exec escapes quotes and backslashes in cloneDir', () => {
+  const cloneDir = '/tmp/dir"with\\special';
+  const args = buildSandboxedArgs('sandbox-exec', cloneDir, ['node', 'test.mjs']);
+  const pIdx = args.indexOf('-p');
+  assert.ok(pIdx !== -1);
+  const sbpl = args[pIdx + 1];
+  assert.ok(sbpl.includes('/tmp/dir\\"with\\\\special'));
+});
+

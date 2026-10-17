@@ -35,6 +35,15 @@ function defaultWhich(cmd) {
 }
 
 /**
+ * Escape backslashes and double quotes in a path for inclusion in a Seatbelt (SBPL) profile.
+ * @param {string} p
+ * @returns {string}
+ */
+export function escapeSeatbeltPath(p) {
+  return String(p).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/**
  * Build the macOS SBPL sandbox profile.
  * Deny default, allow process execution, allow file reads everywhere,
  * deny all network, allow writes only inside cloneDir.
@@ -43,16 +52,19 @@ function defaultWhich(cmd) {
  * @returns {string} SBPL profile string
  */
 export function buildMacOSSbpl(cloneDir) {
+  const escapedDir = escapeSeatbeltPath(cloneDir);
   return [
     '(version 1)',
     '(deny default)',
     '(allow process*)',
     '(allow file-read*)',
     '(deny network*)',
-    `(allow file-write* (subpath "${cloneDir}"))`,
+    `(allow file-write* (subpath "${escapedDir}"))`,
     '(allow file-write-data (path "/dev/null"))',
   ].join('');
 }
+
+export const seatbeltWrap = buildMacOSSbpl;
 
 /**
  * Build sandboxed argv for running a command inside the sandbox.

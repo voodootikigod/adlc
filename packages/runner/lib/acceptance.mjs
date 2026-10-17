@@ -1,4 +1,4 @@
-import { canonicalJson, resolveRevision, sha256 } from '@adlc/core';
+import { canonicalJson, resolveChangeSetRevision, resolveRevision, sha256 } from '../../core/index.mjs';
 import { appendManifestEntry } from '@adlc/gate-manifest';
 // Scoped to root + this checkout's own segment: `latestP5Entry`'s `.at(-1)`
 // below is a chronology claim, and only this chain can carry one. See
@@ -210,7 +210,15 @@ export function recordAcceptancePacket({
   const ignorePaths = packetPath
     ? [...manifestArtifactPaths(cwd, dir), ...transcriptPaths, ...reviewPacketPaths, ...artifactPaths, packetPath]
     : [...manifestArtifactPaths(cwd, dir), ...transcriptPaths, ...reviewPacketPaths, ...artifactPaths];
-  const liveWorktreeRevision = revision ? null : resolveRevision({ cwd, ignorePaths });
+  const recordedP5Revision = assertedP5Entry?.revision ?? p5Revision;
+  const changeSetMatch = !revision && typeof recordedP5Revision === 'string'
+    ? recordedP5Revision.match(/^git-change:([0-9a-f]{40}):[0-9a-f]{64}$/)
+    : null;
+  const liveWorktreeRevision = revision
+    ? null
+    : (changeSetMatch
+        ? resolveChangeSetRevision({ cwd, base: changeSetMatch[1], ignorePaths })
+        : resolveRevision({ cwd, ignorePaths }));
   const assertedRevision = revision ?? p5Revision;
   if (!revision && assertedRevision && !liveWorktreeRevision) {
     errors.push(`current worktree revision could not be resolved while P5 evidence exists at ${assertedRevision}`);

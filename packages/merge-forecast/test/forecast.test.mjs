@@ -29,6 +29,7 @@ import {
   signalMigrationCollision,
   signalGraphCoupling,
   walkTree,
+  resolveSpecifier,
   pairScore,
 } from '../lib/signals.mjs';
 
@@ -214,6 +215,112 @@ describe('signalImportRadius', () => {
 
     const score = signalImportRadius(a, b, repoFiles, root);
     assert.equal(score, 0);
+  });
+
+  test('normalizes Windows backslashes and trailing slashes in root', (t) => {
+    const root = tmp(t);
+    writeFile(root, 'src/auth/index.js', "import { foo } from '../billing/foo.js';\n");
+    writeFile(root, 'src/billing/foo.js', 'export const foo = 1;\n');
+
+    const repoFiles = walkTree(root);
+    const a = mkTicket('A', { scope: ['src/auth/**'] });
+    const b = mkTicket('B', { scope: ['src/billing/**'] });
+
+    // Trailing slash in root
+    assert.equal(signalImportRadius(a, b, repoFiles, root + '/'), 0.6);
+    // Trailing backslash in root
+    assert.equal(signalImportRadius(a, b, repoFiles, root + '\\'), 0.6);
+  });
+
+  test('recognizes imports when repoFiles contains backslashes', (t) => {
+    const root = tmp(t);
+    writeFile(root, 'src/auth/index.js', "import { foo } from '../billing/foo.js';\n");
+    writeFile(root, 'src/billing/foo.js', 'export const foo = 1;\n');
+
+    // repoFiles with Windows separators
+    const repoFiles = ['src\\auth\\index.js', 'src\\billing\\foo.js'];
+    const a = mkTicket('A', { scope: ['src/auth/**'] });
+    const b = mkTicket('B', { scope: ['src/billing/**'] });
+
+    assert.equal(signalImportRadius(a, b, repoFiles, root), 0.6);
+  });
+
+  test('returns 0 when relative import escapes outside root', (t) => {
+    const root = tmp(t);
+    writeFile(root, 'src/index.js', "import { outside } from '../../outside.js';\n");
+
+    const repoFiles = walkTree(root);
+    const a = mkTicket('A', { scope: ['src/**'] });
+    const b = mkTicket('B', { scope: ['outside.js'] });
+
+    assert.equal(signalImportRadius(a, b, repoFiles, root), 0);
+  });
+});
+
+describe('resolveSpecifier', () => {
+  test('resolves relative import to forward-slash repo-relative path', (t) => {
+    const root = tmp(t);
+    const res = resolveSpecifier('./foo.js', 'src/auth/index.js', root);
+    assert.equal(res, 'src/auth/foo.js');
+  });
+
+  test('resolves parent-relative import to forward-slash repo-relative path', (t) => {
+    const root = tmp(t);
+    const res = resolveSpecifier('../billing/foo.js', 'src/auth/index.js', root);
+    assert.equal(res, 'src/billing/foo.js');
+  });
+
+  test('normalizes Windows backslashes in importingFile', (t) => {
+    const root = tmp(t);
+    const res = resolveSpecifier('./foo.js', 'src\\auth\\index.js', root);
+    assert.equal(res, 'src/auth/foo.js');
+
+    const resParent = resolveSpecifier('../billing/foo.js', 'src\\auth\\index.js', root);
+    assert.equal(resParent, 'src/billing/foo.js');
+  });
+
+  test('normalizes trailing slash in root', (t) => {
+    const root = tmp(t);
+    const res = resolveSpecifier('./foo.js', 'src/auth/index.js', root + '/');
+    assert.equal(res, 'src/auth/foo.js');
+  });
+
+  test('normalizes backslashes and trailing backslash in root', (t) => {
+    const root = tmp(t);
+    const res = resolveSpecifier('./foo.js', 'src/auth/index.js', root + '\\');
+    assert.equal(res, 'src/auth/foo.js');
+
+    const resBoth = resolveSpecifier('./foo.js', 'src\\auth\\index.js', root + '\\');
+    assert.equal(resBoth, 'src/auth/foo.js');
+  });
+
+  test('handles Windows drive letter root format', () => {
+    const res = resolveSpecifier('./bar.mjs', 'lib\\signals.mjs', 'C:\\repo\\project');
+    assert.equal(res, 'lib/bar.mjs');
+
+    const resParent = resolveSpecifier('../other/bar.mjs', 'lib\\signals.mjs', 'C:\\repo\\project\\');
+    assert.equal(resParent, 'other/bar.mjs');
+  });
+
+  test('returns null when escaping outside root (../../outside)', (t) => {
+    const root = tmp(t);
+    const res = resolveSpecifier('../../outside.js', 'src/index.js', root);
+    assert.equal(res, null);
+
+    const resDeep = resolveSpecifier('../../../outside.js', 'src/auth/index.js', root);
+    assert.equal(resDeep, null);
+
+    const resRootLevel = resolveSpecifier('../outside.js', 'index.js', root);
+    assert.equal(resRootLevel, null);
+
+    const resWin = resolveSpecifier('../../outside.js', 'src\\index.js', 'C:\\repo');
+    assert.equal(resWin, null);
+  });
+
+  test('returns null for non-relative package specifiers', (t) => {
+    const root = tmp(t);
+    assert.equal(resolveSpecifier('lodash', 'src/index.js', root), null);
+    assert.equal(resolveSpecifier('@adlc/core', 'src/index.js', root), null);
   });
 });
 
@@ -947,6 +1054,19 @@ describe('walkTree', () => {
     assert.ok(files.includes('src/a.js'));
     assert.ok(!files.some((f) => f.includes('node_modules')));
     assert.ok(!files.some((f) => f.includes('.git')));
+  });
+
+  test('returns forward-slash relative paths when root has trailing slash or backslash', (t) => {
+    const root = tmp(t);
+    writeFile(root, 'src/sub/file.js', '');
+
+    const filesSlash = walkTree(root + '/');
+    assert.ok(filesSlash.includes('src/sub/file.js'));
+    assert.ok(filesSlash.every((f) => !f.includes('\\')));
+
+    const filesBackslash = walkTree(root + '\\');
+    assert.ok(filesBackslash.includes('src/sub/file.js'));
+    assert.ok(filesBackslash.every((f) => !f.includes('\\')));
   });
 });
 

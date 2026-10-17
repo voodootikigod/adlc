@@ -4,7 +4,7 @@ import { mkdirSync, appendFileSync, writeFileSync, readFileSync, rmSync } from '
 import { dirname, join, resolve } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { assertPhase } from '../lib/assertions.mjs';
-import { canonicalJson, resolveRevision, sha256 } from '@adlc/core';
+import { canonicalJson, resolveChangeSetRevision, resolveRevision, sha256 } from '@adlc/core';
 import { tmp, gitRepo } from '@adlc/core/test-kit';
 import { appendManifestEntry as realAppendManifestEntry } from '@adlc/gate-manifest';
 import { recordAcceptancePacket as realRecordAcceptancePacket } from '../lib/acceptance.mjs';
@@ -1064,6 +1064,121 @@ describe('assertPhase', () => {
     const result = assertPhase('p5', { dir, ticket: 'T1', revision });
     assert.equal(result.ok, false);
     assert.equal(result.skipped.length, 1);
+  });
+
+  it('succeeds p5, recordAcceptancePacket, and p6 when p5-complete uses matching git-change revision without explicit revision', (t) => {
+    const repo = gitRepo(t);
+    const dir = join(repo.dir, '.adlc');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(repo.dir, 'base.txt'), 'base\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base');
+    const baseSha = repo.g('rev-parse', 'HEAD').trim();
+
+    writeFileSync(join(repo.dir, 'feature.txt'), 'feature content\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'feature');
+
+    const revision = resolveChangeSetRevision({ cwd: repo.dir, base: baseSha });
+    assert.match(revision, /^git-change:([0-9a-f]{40}):[0-9a-f]{64}$/);
+
+    writeP5Evidence(dir, { revision });
+
+    // assertPhase p5 succeeds without explicit revision
+    const p5Result = assertPhase('p5', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(p5Result.ok, true);
+    assert.equal(p5Result.revision, revision);
+
+    // recordAcceptancePacket succeeds without explicit revision
+    const packet = join(repo.dir, '.adlc/packet.json');
+    writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
+    const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
+    assert.equal(recorded.ok, true);
+    assert.equal(recorded.revision, revision);
+
+    // assertPhase p6 succeeds without explicit revision
+    const p6Result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(p6Result.ok, true);
+    assert.equal(p6Result.revision, revision);
+  });
+
+  it('succeeds with external manifest dir when p5-complete uses matching git-change revision', (t) => {
+    const repo = gitRepo(t);
+    const dir = tmpAdlc(t);
+    writeFileSync(join(repo.dir, 'base.txt'), 'base\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base');
+    const baseSha = repo.g('rev-parse', 'HEAD').trim();
+
+    writeFileSync(join(repo.dir, 'feature.txt'), 'feature content\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'feature');
+
+    const revision = resolveChangeSetRevision({ cwd: repo.dir, base: baseSha });
+    assert.match(revision, /^git-change:([0-9a-f]{40}):[0-9a-f]{64}$/);
+
+    writeP5Evidence(dir, { revision });
+
+    const p5Result = assertPhase('p5', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(p5Result.ok, true);
+    assert.equal(p5Result.revision, revision);
+
+    mkdirSync(join(repo.dir, '.adlc'), { recursive: true });
+    const packet = join(repo.dir, '.adlc/packet.json');
+    writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
+    const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
+    assert.equal(recorded.ok, true);
+    assert.equal(recorded.revision, revision);
+
+    const p6Result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(p6Result.ok, true);
+    assert.equal(p6Result.revision, revision);
+  });
+
+  it('fails p5, recordAcceptancePacket, and p6 when git-change change-set has drifted', (t) => {
+    const repo = gitRepo(t);
+    const dir = join(repo.dir, '.adlc');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(repo.dir, 'base.txt'), 'base\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'base');
+    const baseSha = repo.g('rev-parse', 'HEAD').trim();
+
+    writeFileSync(join(repo.dir, 'feature.txt'), 'feature content\n');
+    repo.g('add', '-A');
+    repo.g('commit', '-qm', 'feature');
+
+    const revision = resolveChangeSetRevision({ cwd: repo.dir, base: baseSha });
+    assert.match(revision, /^git-change:([0-9a-f]{40}):[0-9a-f]{64}$/);
+
+    writeP5Evidence(dir, { revision });
+    const packet = join(repo.dir, '.adlc/packet.json');
+    writeFileSync(packet, JSON.stringify({ behaviorDiff: 'accepted' }));
+
+    // Drift the change-set by modifying feature.txt in working tree
+    writeFileSync(join(repo.dir, 'feature.txt'), 'drifted content\n');
+
+    // assertPhase p5 should fail without explicit revision
+    const p5Result = assertPhase('p5', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(p5Result.ok, false);
+    assert.equal(p5Result.operational, true);
+    assert.ok(p5Result.errors.some((error) => error.includes('P5 evidence is stale')));
+
+    // Explicit revision still acts as an offline selector
+    const pinnedP5 = assertPhase('p5', { dir, ticket: 'T1', revision, cwd: repo.dir });
+    assert.equal(pinnedP5.ok, true);
+    assert.equal(pinnedP5.revision, revision);
+
+    // recordAcceptancePacket should fail without explicit revision
+    const recorded = recordAcceptancePacket({ dir, ticket: 'T1', packet, cwd: repo.dir });
+    assert.equal(recorded.ok, false);
+    assert.ok(recorded.errors.some((error) => error.includes('P5 evidence is stale')));
+
+    // assertPhase p6 should fail without explicit revision
+    const p6Result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
+    assert.equal(p6Result.ok, false);
+    assert.equal(p6Result.operational, true);
+    assert.ok(p6Result.errors.some((error) => error.includes('P5 evidence is stale')));
   });
 });
 
