@@ -2,17 +2,13 @@
 // Review prose is wordier than code findings, so threshold is 0.4 (vs 0.5).
 // Pure functions — no I/O.
 
+import { BASE_STOPWORDS, jaccard, clusterByTokenSets } from '@adlc/core';
+
+export { jaccard };
+
 const STOPWORDS = new Set([
-  'a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
-  'of', 'with', 'by', 'from', 'is', 'are', 'was', 'were', 'be', 'been',
-  'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would',
-  'could', 'should', 'may', 'might', 'shall', 'can', 'not', 'no', 'nor',
-  'so', 'yet', 'both', 'either', 'neither', 'each', 'every', 'all', 'any',
-  'few', 'more', 'most', 'other', 'some', 'such', 'than', 'too', 'very',
-  'just', 'that', 'this', 'it', 'its', 'as', 'if', 'then', 'there', 'when',
-  'where', 'which', 'who', 'how', 'what', 'use', 'used', 'using', 'via',
-  'also', 'only', 'into', 'up', 'out', 'about', 'after', 'before', 'i',
-  'we', 'you', 'they', 'my', 'your', 'our', 'their', 'me', 'us', 'them',
+  ...BASE_STOPWORDS,
+  'i', 'we', 'you', 'they', 'my', 'your', 'our', 'their', 'me', 'us', 'them',
   'please', 'think', 'seems', 'looks', 'feel', 'feels', 'here', 'like',
   'get', 'got', 'getting', 'see', 'seen', 'make', 'makes', 'made',
 ]);
@@ -63,24 +59,6 @@ export function normalizeBody(body) {
 }
 
 /**
- * Token-set Jaccard similarity between two Sets.
- * @param {Set} setA
- * @param {Set} setB
- * @returns {number} 0–1
- */
-export function jaccard(setA, setB) {
-  if (setA.size === 0 && setB.size === 0) return 1;
-  if (setA.size === 0 || setB.size === 0) return 0;
-
-  let intersection = 0;
-  for (const t of setA) {
-    if (setB.has(t)) intersection++;
-  }
-  const union = setA.size + setB.size - intersection;
-  return union === 0 ? 0 : intersection / union;
-}
-
-/**
  * Greedy union-find clustering for review signals.
  * threshold: 0.4 (review prose is wordier — lower threshold for grouping)
  *
@@ -92,39 +70,7 @@ export function clusterSignals(signals, threshold = 0.4) {
   if (signals.length === 0) return [];
 
   const tokenSets = signals.map((s) => normalizeBody(s.body ?? ''));
-
-  const parent = signals.map((_, i) => i);
-
-  function find(x) {
-    while (parent[x] !== x) {
-      parent[x] = parent[parent[x]];
-      x = parent[x];
-    }
-    return x;
-  }
-
-  function union(x, y) {
-    const px = find(x);
-    const py = find(y);
-    if (px !== py) parent[px] = py;
-  }
-
-  for (let i = 0; i < signals.length; i++) {
-    for (let j = i + 1; j < signals.length; j++) {
-      if (jaccard(tokenSets[i], tokenSets[j]) >= threshold) {
-        union(i, j);
-      }
-    }
-  }
-
-  const groups = new Map();
-  for (let i = 0; i < signals.length; i++) {
-    const root = find(i);
-    if (!groups.has(root)) groups.set(root, []);
-    groups.get(root).push(i);
-  }
-
-  return [...groups.values()].sort((a, b) => a[0] - b[0]);
+  return clusterByTokenSets(tokenSets, threshold);
 }
 
 /**

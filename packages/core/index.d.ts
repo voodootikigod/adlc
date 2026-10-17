@@ -364,5 +364,41 @@ export function recordPromptOnlyVerdict<T = unknown>(options?: {
   recordFn?: (params: { gate?: string; ticket?: string; rawData: string; dir?: string }) => T;
 }): T;
 
+// lib/inflight.mjs
+export function makeTempPath(targetPath: string, pid?: number): string;
+export function writeInflightAtomic(
+  targetPath: string,
+  content: string | NodeJS.ArrayBufferView,
+  options?: { tempPath?: string }
+): void;
+export function probeOwner(
+  pid: unknown,
+  killFn?: (pid: number, signal: number) => void
+): 'alive' | 'dead' | 'unknown';
+export function ownerStateFor(
+  recordPid: unknown,
+  selfPid?: number,
+  probe?: (pid: unknown) => 'alive' | 'dead' | 'unknown'
+): 'alive' | 'dead' | 'unknown';
+export function isContainedRelPath(relPath: unknown): boolean;
+export function resolveTarget(repoRoot: string, relFile: unknown): string | null;
+export function sweepStaleTemps(
+  targetPath: string,
+  options?: {
+    probe?: (pid: unknown) => 'alive' | 'dead' | 'unknown';
+    selfPid?: number;
+  }
+): number;
+export function clearRecord(recordPath: string): void;
+
+// lib/cluster.mjs
+export const BASE_STOPWORDS: ReadonlySet<string>;
+export function jaccard(setA: ReadonlySet<unknown>, setB: ReadonlySet<unknown>): number;
+export function clusterByTokenSets(
+  tokenSets: ReadonlyArray<ReadonlySet<string>>,
+  threshold?: number
+): number[][];
+
 // Types of the @adlc/core/test-kit subpath, declared in lib/test-kit.d.mts.
 export type { TestContext, GitRepoOptions, GitRepoResult, RunBinOptions } from './lib/test-kit.mjs';
+

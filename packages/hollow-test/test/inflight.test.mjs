@@ -22,6 +22,27 @@ import {
   writeFileAtomic, writeRecord, readRecord, clearRecord, RECORD_VERSION,
   makeTempPath, ownerStateFor, sweepStaleTemps,
 } from '../lib/inflight.mjs';
+import {
+  writeInflightAtomic,
+  probeOwner as coreProbeOwner,
+  ownerStateFor as coreOwnerStateFor,
+  isContainedRelPath as coreIsContainedRelPath,
+  resolveTarget as coreResolveTarget,
+  makeTempPath as coreMakeTempPath,
+  sweepStaleTemps as coreSweepStaleTemps,
+  clearRecord as coreClearRecord,
+} from '@adlc/core';
+
+test('re-exported primitives match @adlc/core', () => {
+  assert.equal(writeFileAtomic, writeInflightAtomic);
+  assert.equal(probeOwner, coreProbeOwner);
+  assert.equal(ownerStateFor, coreOwnerStateFor);
+  assert.equal(isContainedRelPath, coreIsContainedRelPath);
+  assert.equal(resolveTarget, coreResolveTarget);
+  assert.equal(makeTempPath, coreMakeTempPath);
+  assert.equal(sweepStaleTemps, coreSweepStaleTemps);
+  assert.equal(clearRecord, coreClearRecord);
+});
 
 function killError(code) {
   const err = new Error(code);

@@ -3,59 +3,11 @@
  * Pure operations around a snapshot map: { [path]: string }.
  */
 
-import {
-  readFileSync,
-  writeFileSync,
-  renameSync,
-  unlinkSync,
-  openSync,
-  closeSync,
-  fchmodSync,
-  lstatSync,
-  statSync,
-  realpathSync,
-} from 'node:fs';
-import { dirname, basename, join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { writeInflightAtomic as writeFileAtomic } from '@adlc/core';
 import { applyHunks } from './hunks.mjs';
 
-/**
- * Write file atomically using write-temp-then-rename in the same directory.
- * Preserves file permissions and resolves symlinks. Cleans up temp file on failure.
- */
-export function writeFileAtomic(filePath, content) {
-  let realPath = filePath;
-  try {
-    if (lstatSync(filePath).isSymbolicLink()) {
-      realPath = realpathSync(filePath);
-    }
-  } catch {
-    // If path is absent or unreadable, fall through and let openSync report it.
-  }
-
-  let mode = null;
-  try {
-    mode = statSync(realPath).mode & 0o7777;
-  } catch {
-    // New file: use default mode.
-  }
-
-  const dir = dirname(realPath);
-  const tmp = join(dir, `.${basename(realPath)}.${process.pid}.${randomUUID()}.tmp`);
-  const fd = openSync(tmp, 'wx');
-
-  try {
-    writeFileSync(fd, content, 'utf8');
-    if (mode !== null) {
-      fchmodSync(fd, mode);
-    }
-    closeSync(fd);
-    renameSync(tmp, realPath);
-  } finally {
-    try { closeSync(fd); } catch {}
-    try { unlinkSync(tmp); } catch {}
-  }
-}
+export { writeFileAtomic };
 
 /**
  * Capture the current content of each path.

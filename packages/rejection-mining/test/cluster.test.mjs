@@ -1,7 +1,13 @@
 // Tests for clustering logic.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { jaccard as coreJaccard } from '@adlc/core';
 import { normalizeBody, jaccard, clusterSignals, deriveSlug } from '../lib/cluster.mjs';
+
+test('jaccard: re-export identity with @adlc/core', () => {
+  assert.strictEqual(jaccard, coreJaccard);
+});
+
 
 // ---------------------------------------------------------------------------
 // normalizeBody

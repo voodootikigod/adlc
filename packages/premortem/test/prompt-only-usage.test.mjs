@@ -15,6 +15,8 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 import { aggregateSpend } from '../../gate-manifest/lib/spend.mjs';
+import { readVerdictSource as coreReadVerdictSource } from '@adlc/core';
+import { recordVerdict, readVerdictSource } from '../lib/verdict.mjs';
 
 // Every fixture the factories below mint; removed once this file's tests finish.
 const fixtureDirs = new Set();
@@ -73,4 +75,41 @@ test('the recorded verdict is then COUNTED at P1 by aggregateSpend', () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('recordVerdict and readVerdictSource unit contract: re-exports core and enforces immutability', () => {
+  assert.equal(readVerdictSource, coreReadVerdictSource, 'readVerdictSource must match @adlc/core');
+
+  const dir = mkdtempSync(join(tmpdir(), 'premortem-unit-verdict-'));
+  fixtureDirs.add(dir);
+  const adlcDir = join(dir, '.adlc');
+
+  const entry = recordVerdict({
+    ticket: 'T-UNIT-1',
+    verdict: 'honest verdict',
+    extra: {
+      promptOnly: false,
+      usageStatus: 'measured',
+      verdict: 'spoofed',
+      customField: 'preserved',
+    },
+    dir: adlcDir,
+    key: null,
+  });
+
+  const manifestPath = join(adlcDir, 'manifest.jsonl');
+  const entries = readFileSync(manifestPath, 'utf8')
+    .trim()
+    .split('\n')
+    .map((l) => JSON.parse(l));
+
+  assert.equal(entries.length, 1);
+  const [diskEntry] = entries;
+  assert.equal(diskEntry.gate, 'premortem');
+  assert.equal(diskEntry.ticket, 'T-UNIT-1');
+  assert.equal(diskEntry.data.promptOnly, true, 'promptOnly cannot be overridden');
+  assert.equal(diskEntry.data.usageStatus, 'unreported', 'usageStatus cannot be overridden');
+  assert.equal(diskEntry.data.verdict, 'honest verdict', 'verdict cannot be overridden');
+  assert.equal(diskEntry.data.customField, 'preserved', 'customField is preserved');
+  assert.equal('usage' in diskEntry.data, false);
 });
