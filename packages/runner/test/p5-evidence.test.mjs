@@ -91,16 +91,10 @@ describe('latestP5Entry and latestP5Revision', () => {
     assert.equal(latestP5Revision([], 'T1'), undefined);
   });
 
-  it('returns the latest matching entry by ticket when requireRevision is false', () => {
+  it('returns the latest matching entry with a revision and skips entries without revision', () => {
     const entry = latestP5Entry(entries, 'T1');
-    assert.deepEqual(entry, { type: 'p5-complete', ticket: 'T1' });
-    assert.equal(latestP5Revision(entries, 'T1'), undefined);
-  });
-
-  it('returns the latest entry with a revision when requireRevision is true', () => {
-    const entry = latestP5Entry(entries, 'T1', undefined, { requireRevision: true });
     assert.deepEqual(entry, { type: 'p5-complete', ticket: 'T1', revision: 'r3' });
-    assert.equal(latestP5Revision(entries, 'T1', { requireRevision: true }), 'r3');
+    assert.equal(latestP5Revision(entries, 'T1'), 'r3');
   });
 
   it('matches entry by explicit revision', () => {

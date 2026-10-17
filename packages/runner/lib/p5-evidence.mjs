@@ -15,19 +15,19 @@ export function matchesRevision(entry, revision) {
   return revision === undefined || entry?.revision === revision;
 }
 
-export function latestP5Entry(entries, ticket, revision, { requireRevision = false } = {}) {
+export function latestP5Entry(entries, ticket, revision) {
   return entries
     .filter((entry) =>
       entryType(entry) === 'p5-complete' &&
       matchesTicket(entry, ticket) &&
-      (!requireRevision || Boolean(entry?.revision))
+      Boolean(entry?.revision)
     )
     .filter((entry) => matchesRevision(entry, revision))
     .at(-1);
 }
 
-export function latestP5Revision(entries, ticket, { requireRevision = false } = {}) {
-  return latestP5Entry(entries, ticket, undefined, { requireRevision })?.revision;
+export function latestP5Revision(entries, ticket) {
+  return latestP5Entry(entries, ticket)?.revision;
 }
 
 export function isEvidencePath(cwd, path) {

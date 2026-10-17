@@ -504,10 +504,10 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
   const { entries, skipped, identityError } = readOwnManifestChain(dir, { cwd });
   const hasExplicitRevision = revision !== undefined && revision !== null && String(revision).trim() !== '';
   const explicitRevision = hasExplicitRevision ? String(revision) : undefined;
-  const latestScopedP5Revision = requiresRevision(phase) ? latestP5Revision(entries, ticket, { requireRevision: true }) : null;
+  const latestScopedP5Revision = requiresRevision(phase) ? latestP5Revision(entries, ticket) : null;
   const p5Revision = phase === 'p6' && !explicitRevision ? latestScopedP5Revision : null;
   const assertedP5Entry = requiresRevision(phase)
-    ? latestP5Entry(entries, ticket, explicitRevision ?? latestScopedP5Revision ?? undefined, { requireRevision: true })
+    ? latestP5Entry(entries, ticket, explicitRevision ?? latestScopedP5Revision ?? undefined)
     : null;
   const p5TranscriptEvidencePaths = p5TranscriptPaths(assertedP5Entry, cwd);
   const p5ReviewPacketEvidencePaths = p5ReviewPacketPaths(assertedP5Entry, cwd);

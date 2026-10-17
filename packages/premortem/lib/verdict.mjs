@@ -38,13 +38,7 @@ export function recordVerdict({
   dir = '.adlc',
   key,
 } = {}) {
-  return recordPromptOnlyVerdict({
-    gate: 'premortem',
-    ticket,
-    verdict,
-    extra,
-    dir,
-    recordFn: ({ gate, ticket: t, rawData, dir: d }) =>
-      record({ gate, ticket: t, rawData, rawFiles: specPath, dir: d, key }),
-  });
+  const recordFn = ({ gate, ticket: t, rawData, dir: d }) =>
+    record({ gate, ticket: t, rawData, rawFiles: specPath, dir: d, key });
+  return recordPromptOnlyVerdict({ gate: 'premortem', ticket, verdict, extra, dir, recordFn });
 }
