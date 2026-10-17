@@ -37,9 +37,9 @@ build-gate <ticket-id> [--depth <n>] [--session-bytes <n>] [--transcript <path>]
 | `--json` | off | Emit machine-readable JSON result |
 | `--help` | — | Print this help and exit 0 |
 
-The library export `DEFAULT_BYTES_THRESHOLD` (`lib/depth-signal.mjs`) remains
-`HARD_BYTES` (256 KiB) by design, so the two numbers are not expected to agree:
-this binary's flag default is the recalibrated operating threshold.
+The library export `DEFAULT_BYTES_THRESHOLD` (`lib/depth-signal.mjs`) and
+`HARD_BYTES` are now both `8388608` (`8 MiB`), matching the CLI `--bytes-threshold`
+default (`8388608`).
 
 A CLI process can't observe its own caller's context state — the caller (a
 hook, CI wrapper, or any harness) must supply the signal via `--depth`/

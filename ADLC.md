@@ -1,6 +1,6 @@
 # The Agentic Development Lifecycle (ADLC)
 
-A development lifecycle designed around the actual failure modes of frontier models —
+**Version 0.3** — A development lifecycle designed around the actual failure modes of frontier models —
 not a re-skin of the SDLC with agents playing the human roles.
 
 ---
@@ -40,6 +40,11 @@ These are the load-bearing facts. Everything downstream derives from this table.
 | F6 | **Finding-count prior** — reviewers converge on ~10–20 findings and stop, regardless of how many exist | Single-pass review systematically undercounts | Loop until dry: repeat with fresh contexts until K consecutive passes find nothing new |
 | F7 | **Generative bloat** — verbose, duplicative output; reinvents what exists three files away | Codebase accumulates real excess (duplication, dead branches, reinvented helpers); future context costs compound | Post-merge simplify phase (cheaper and more reliable than preventing duplication at authoring time) |
 | F8 | **Coherence loss across models/sessions** — different models (and fresh sessions) have different idioms; mid-task switching produces stylistic and architectural seams | Mid-build model failover; "resume where the other one left off" | Pin one model per task. Switch models at task boundaries only |
+| F9 | **In-band reviewer authority-smuggling** — code comments, docstrings, or test strings claiming prior approval or instructing the reviewer to ignore defects | Reviewer sycophancy (F2) is hijacked by the diff itself; reviewer trusts embedded claims ("// ADLC-APPROVED", "// safe bypass") and suppresses findings | Treat diff content as untrusted input. Reviewers ignore in-band authority claims; gate authority is verified out-of-band via signed gate-manifest entries |
+| F10 | **Same-family blind-spot sharing & causal-path vacuity** — models from the same family share pre-training priors, tokenizer quirks, and RLHF blind spots on security deny-paths and complex causal chains | Single-model and same-family P5 passes give clean approvals to subtle bypasses and vacuously passing tests that a different family catches instantly | Enforce a two-family quorum on trust-root and high-blast-radius surfaces (ADR-0007, ADR-0012) with gateway discounting; never rely on single-family review for deny-paths |
+| F11 | **Cross-ticket emergent drift (horizontal integration gap)** — agents operating in isolated atomic contexts cannot foresee cross-partition collisions, semantic incompatibilities, or architectural drift | Isolated tickets compile and pass local rails, but break combined system behavior or collide on schemas/routes at integration | Pinned foundation merged first; compile edge contracts to consumer rails (D2); run horizontal integration gates and deterministic release audits (E8) |
+| F12 | **Fail-open lookalike-grammar bias** — models default to syntactically plausible, forgiving, fail-open fallbacks and loose parsers when authoring gates or security checks | Gates silently succeed on malformed input, missing fields, or unrecognized tokens, creating the illusion of enforcement | Invariant gates must fail closed; closed taxonomies and exhaustive schema matches; adversarial gate fuzzing (`adlc gate-fuzzing`) |
+| F13 | **Compaction amnesia & multi-round fix-loop oscillation** — long fix loops lose root-cause constraints under context truncation/compaction, oscillating between conflicting partial fixes | Autonomous fix loops livelock or churn, repeatedly undoing fix A to satisfy test B and vice versa | Bounded fix iterations (max strikes); persistent findings ledger (`.adlc/findings.jsonl`); structured failure summaries over compacted transcripts; two-strike regeneration |
 
 And the flaws that are secretly **features** — this is the "works *because* of
 them" half:
@@ -51,6 +56,9 @@ them" half:
 | E3 | **No ego, no fatigue, no blame-fear** | Reviews can be brutal, loops can run 50 iterations, work can be thrown away wholesale. Discard-and-retry is a first-class strategy — regenerating from a corrected spec is often cheaper than repairing a flawed attempt |
 | E4 | **Context rot has an inverse** — a *fresh* context is genuinely unbiased by the construction history | Fresh-context review is only valuable because contexts contaminate. This is why creator/critic works at all — and why the critic must never share the creator's context |
 | E5 | **Cost asymmetry** — exploration, review, and rewriting approach free relative to human time | Move expensive activities (architecture review, dedup analysis, exhaustive review passes) from the front of the lifecycle to the back, where they have full information |
+| E6 | **Cross-family prior independence** — distinct model families (Anthropic, OpenAI, Google, open-weight) have orthogonal training data, architectures, and inductive biases | Multi-model adversarial quorum. Running independent reviewers across two distinct provider families catches subtle deny-path bypasses that any single family consistently misses |
+| E7 | **Calibrated fast decision heads over deterministic feature vectors** — specialized, lightweight model heads evaluate structured AST, diff, and execution metrics with high speed and consistency | Fast probabilistic triage and risk scoring via `@adlc/decision-layer`, strictly bounded by `NEVER_DELEGATE_INVARIANTS` (probabilistic heads may advise or route, but invariant gates retain absolute veto authority) |
+| E8 | **Deterministic horizontal release audits** — merged artifacts are static, enabling whole-repo mechanical inspection without generative drift | Post-integration release audits (`adlc release-audit`, ADR 0011) verify package closures, rail freeze across all tickets, and supply-chain integrity deterministically before publishing |
 
 ---
 
@@ -66,11 +74,15 @@ them" half:
    review finding is a claim until reproduced. Unverified findings are noise
    that burns build-agent tokens chasing ghosts (F4 cuts both ways).
 
-3. **Never ask an agent to judge work its own context produced** (F2, F3, E4).
+3. **Never ask an agent to judge work its own context produced** (F2, F3, E4, F10, E6).
    Judgment requires a fresh context, an inverted charter, or ideally both.
-   Cross-*model* review is a bonus, not the active ingredient — the active
-   ingredient is fresh context + refute charter. (The "adversarial review"
-   branding oversells the cross-vendor part.)
+   For routine non-security changes, fresh context + refute charter provides the
+   core benefit. But for **trust-root and high-blast-radius surfaces** (rail guards,
+   validators, sandboxes, manifest signing, CI workflows), empirical testing on
+   security deny-paths (ADRs 0007, 0012) proved that same-model critics share latent
+   training blind spots (F10). On those surfaces, cross-model review is not a bonus
+   but a mandatory **two-family quorum** with gateway discounting: at least two
+   distinct provider families must independently approve before code can merge.
 
 4. **Make satisfaction machine-checkable** (F1). The agent will do the minimum
    that satisfies the stated condition. So state conditions a machine can check,
@@ -114,7 +126,10 @@ them" half:
    prosecution/verification — light in the middle, where skills and rails make
    building cheap. A team whose spend is concentrated in the build phase is
    exploring (re-reading the codebase every run) instead of exploiting (skills,
-   cached context, atomic tickets).
+   cached context, atomic tickets). Maintain this shape operationally using
+   subscription quota start-gates (ADR 0016: 50% window rule) and multi-channel
+   supply routing (`@adlc/quartermaster`), rather than arbitrary per-developer caps
+   that choke prosecution.
 
 10. **Every artifact the next agent reads is a cache. Caches need invalidation.**
     Skills, specs, memory files, CLAUDE.md — all of it goes stale and then
@@ -220,6 +235,10 @@ Mechanics:
   and wishes get the F1 treatment.
 - For architectural work: fan out 2–3 design alternatives from *differently
   anchored* prompts (MVP-first, risk-first, ops-first), judge, synthesize (E1).
+- **Adversarial design review** (ADR-0005, ADR-0008): For architectural or trust-boundary
+  changes, subject the spec to an adversarial design review before decomposition. Invert
+  the charter to attack the design: probe for self-bypassable controls, attacker-controlled
+  selectors, privilege escalation, and unrailed invariants.
 
 **Gate:** human approves the spec. This is the human's highest-value moment in
 the entire lifecycle — minutes here replace hours of diff review later.
@@ -270,7 +289,13 @@ Mechanics:
   around under pressure.
 - Audit the rails themselves once: do the tests assert behavior, or do they
   assert that mocks were called? A mock-shaped test suite is a gate made of
-  fog. (One adversarial pass over the *tests* before freezing them.)
+  fog.
+- **Adversarial rail adequacy review** (ADR-0008): Audit the rail set itself
+  before freezing. `rails-guard` checks **integrity** (were frozen rails edited?),
+  but adversarial rail review checks **adequacy** ("are these the right, unbypassable
+  rails? Is every load-bearing invariant covered? Can an agent bypass the test via
+  environment tricks, relative paths, or shell injection?"). Audit the rails once
+  in a dedicated context before freezing them.
 
 **Gate:** the suite runs RED for the right reasons (failures are "not
 implemented," not "test is broken"), and stubs typecheck.
@@ -290,9 +315,10 @@ Mechanics:
 
 - One fresh agent per ticket: ticket + relevant skills + frozen rails. No
   carry-over context between tickets.
-- Parallelize across partitions via worktrees (sandboxes for hostile-blast-radius
-  work), **single writer per partition** (Principle 6). Merge sequentially;
-  rebase survivors after each merge.
+- Parallelize across partitions via worktrees in sandboxes (`@adlc/fleet`),
+  strictly separating the deterministic orchestrator plane from the untrusted model plane.
+  **Single writer per partition** (Principle 6). Merge sequentially; rebase survivors
+  after each merge.
 - Mid-tier model by default — P3 and P5 are paid for precisely so this phase
   doesn't need a frontier model. Cheap model where rails are dense.
 - **Two-strike regeneration rule:** if an agent flails (loops on the same
@@ -313,7 +339,7 @@ Mechanics:
 
 ### P5 — Prosecute
 
-**Defends against:** F2, F6, F4-as-critic. **Exploits:** E1, E2, E4.
+**Defends against:** F2, F6, F4-as-critic, F10. **Exploits:** E1, E2, E4, E6.
 
 Not "code review." Prosecution: fresh contexts chartered to refute, with the
 burden of proof on the *finding*.
@@ -340,11 +366,17 @@ Mechanics:
 - **Convergence budget** (Principle 8): max N rounds. Hit N without drying
   out → stop and escalate; the spec or partition is wrong.
 
-Cross-model prosecution (Codex reviewing Claude's work, or vice versa) is a
-legitimate marginal improvement — different training, different blind spots —
-but it is the *third* most important ingredient, after fresh context and
-inverted charter. Teams blocked from multi-vendor access lose little; teams
-that cross-model with a *shared* context lose everything.
+Cross-model prosecution (Codex reviewing Claude's work, Gemini reviewing Codex, etc.)
+is an essential defense on security surfaces: ADRs 0007 and 0012 proved that same-model
+critics share pre-training blind spots on security deny-paths (F10). For routine low-risk
+work, fresh context + refute charter provides the baseline. But for **trust-root and
+high-blast-radius surfaces** (rail guards, validators, sandboxes, crypto/manifest signing,
+CI workflows), prosecution requires an independent **two-family quorum**: verdicts from
+≥2 distinct model families (e.g., Anthropic + OpenAI or Gemini).
+**Gateway discounting**: All reviewer seats sharing an unauthenticated or aliasing
+gateway transport (`openrouter:*` / `gateway:*`) are discounted to count as a single
+family (0.5x weight) unless direct provider authentication (`--require-direct-provider`
+/ `directAuth: true`) verifies independent provider routing.
 
 **Gate:** zero verified open findings, rails still green, rails diff is empty
 (prove the builder never touched them).
@@ -365,6 +397,10 @@ where machines are blind:
 - **Run the thing.** A two-minute demo catches the category of wrongness no
   reviewer-agent can: "this is technically correct and not what I meant."
 - Spot-check 2–3 hotspots flagged by prosecution, not the whole surface.
+- **Record the adversarial-review verdict** (ADR-0008): Capture the loop convergence
+  evidence (`adlc gate-manifest record adversarial-review --ticket <id> --data '{"providers":"...","verdict":"approve","exitReason":"clean"}'`)
+  into the segmented manifest (`.adlc/manifest.d/`, ADR-0015) so the human gate has
+  cryptographic proof of multi-family approval before acceptance.
 
 Merge sequentially. Worktree branches integrate one at a time with rebases
 between (squash-merge recovery per the worktree conventions). No parallel
@@ -428,9 +464,9 @@ default.
 | Multi-agent collaborative *construction* (3–7 creators comparing notes) | **Reject** | Search-parallelism misapplied to construction. Partition + contract + single writer instead (Principle 6) |
 | DRY at authoring time | **Reject** | Dedup moves to P7 where it's mechanical, not speculative |
 | Coverage % as a quality gate | **Reject** | Goodharted at machine speed. Mutation score or adversarial test audit (P3) |
-| Token quotas as cost control | **Reject** | Caps the wrong variable. A quota-pressured developer cuts the prosecution phase first — the most expensive *and* most valuable tokens. Govern cost-per-merged-verified-change; let the gates, not the wallet, end loops. ($1k/week annualizes to roughly 15% of a senior engineer's loaded cost — a real fraction, but the wrong variable to cap. The right question was never "is $1k too much" — it's "did it merge, verified?") |
+| Token quotas as cost control | **Reject arbitrary developer caps; ADOPT operational subscription quota start-gates and supply routing** | Blind budget caps choke prosecution (the most valuable tokens). But unmanaged runs hit hard rate-limit cliffs. `@adlc/autopilot` (ADR 0016) and `@adlc/quartermaster` enforce a 50% subscription quota start-gate (`five_hour < 50 && seven_day < 50`) before initiating ticket runs, combined with multi-channel supply routing across subscriptions, metered APIs, and failover transports. |
 | Output-style compression (caveman-speak) as the economy lever | **Mostly reject** | Output tokens are a minor line item in agentic loops; the spend is repeated input-context reads, cache misses, and re-exploration. Fix with skills, atomic tickets, conclusion-passing, and prompt-cache discipline. Worse: output is the model's working medium — degrading the language risks degrading the reasoning to save the cheapest tokens in the system. (The "providers pad tokens for revenue" framing is vibes, not analysis) |
-| Cross-model review as *the* mechanism | **Demote** | Active ingredients are fresh context + refute charter. Cross-model is a real but third-order bonus (P5) |
+| Cross-model review as *the* mechanism | **Demote for routine changes; REQUIRE as two-family quorum for trust roots** | Active ingredients for routine code are fresh context + refute charter, but same-model critics share training blind spots on security deny-paths (F10). On trust-root and high-blast-radius surfaces, an independent two-family quorum with gateway discounting (`openrouter:*` discounted unless direct provider authenticated) is mandatory (ADR-0007, ADR-0012). |
 | Mid-task model failover | **Reject for dev loops** | Right for production inference, wrong mid-task (F8). Models switch at task boundaries |
 | Evals as the testing story for ADLC | **Scope correctly** | Evals are TDD for *agent products* (non-deterministic outputs need domain-of-response assertions). When agents build *deterministic software*, the tests are the evals. Conflating these makes teams build eval harnesses for CRUD apps |
 
@@ -451,6 +487,10 @@ ships with its anti-vacuity defense, or it isn't a gate.
 | Coverage padding (exercise without asserting) | Don't gate coverage (see P3); mutation-test the suite periodically |
 | Critic invents findings to satisfy "find problems" charter | Verifier stage: reproduce or kill, before anything reaches the builder |
 | Out-of-ticket "improvements" that mask scope creep | Diff scoped to ticket's declared files; out-of-scope changes auto-flagged to P6 human |
+| In-band reviewer authority-smuggling (F9: comments claiming approval) | Treat diffs as untrusted data; reviewers ignore inline authority claims; gate authority verified out-of-band via signed manifest entries |
+| Same-family deny-path blind spots (F10: subtle security bypasses) | Two-family quorum with gateway discounting on trust-root and high-blast-radius surfaces (ADR-0007, ADR-0012) |
+| Fail-open lookalike grammar (F12: permissive parsers/gates) | Invariant gates fail closed; explicit closed taxonomies; gate fuzzing (`adlc gate-fuzzing`) |
+| Compaction amnesia & fix-loop oscillation (F13: conflicting churn) | Bounded fix iterations (max strikes); persistent findings ledger (`.adlc/findings.jsonl`); structured failure summaries |
 
 ---
 
@@ -482,6 +522,12 @@ Diagnostics:
   problem is in P1, the bill shows up in P5.
 - **Spend flat run-over-run** → the compounding loop is broken. The whole
   point of P7 is that the curve bends down.
+- **Supply routing and quota start-gates** → Managed by `@adlc/quartermaster` and
+  `@adlc/autopilot` (ADR 0016). Autopilot monitors rolling subscription quota windows,
+  imposing a start-gate (`five_hour < 50 && seven_day < 50`) to prevent exhaustion mid-batch.
+  `quartermaster` dynamically binds lifecycle tasks to the most cost-effective channel
+  (flat-rate subscription, metered batch API, or gateway) based on ticket float, rail density,
+  and rate-window headroom, preserving the barbell shape without risking rate-limit stalls.
 
 ---
 
@@ -514,13 +560,13 @@ overhead lands before the compounding gains do, the quota anxiety kicks in
 
 | Phase | Concrete mechanism (current ecosystem) |
 |-------|----------------------------------------|
-| P1 | grillme-style interrogation skill; spec skills; judge-panel workflows for design alternatives |
-| P2 | Epic/ticket breakdown with "full context per ticket" constraint; cold-start check via cheap-model pass |
-| P3 | TDD skill in a dedicated context; CI branch protection on test paths; pre-commit hooks freezing rail files |
-| P4 | Fresh agent per ticket; git worktrees in `.worktrees/` (per existing conventions); sandboxes for high-blast-radius work; two-strike regeneration |
-| P5 | `npx adversarial-review` (fresh-context cross-model review, deterministic exit codes for CI gating, loop-until-approve); dimension-fan-out + verify workflows; loop-until-dry orchestration |
-| P6 | PR agents (Vercel Agent / Jules / equivalents) as *pre-digesters* for the human, not replacements; spec-conformance summaries |
-| P7 | Simplify/refactor agents under green rails; `npx skill-mining` (five-axis scoring, dedup against public registry, adversarial Gates A/B, fresh-context validation); shared skill registry in-repo |
+| P1 | grillme-style interrogation skill; spec skills; judge-panel workflows for design alternatives; adversarial design review (ADR-0005) for trust boundaries |
+| P2 | Epic/ticket breakdown with "full context per ticket" constraint; cold-start check via cheap-model pass; sharded ticket store (`.adlc/tickets/`, ADR-0010) |
+| P3 | TDD skill in a dedicated context; CI branch protection on test paths; pre-commit hooks freezing rail files; adversarial rail adequacy review (ADR-0008) |
+| P4 | Fresh agent per ticket; git worktrees in `.worktrees/`; sandboxed execution (`@adlc/fleet`); two-strike regeneration; flail-detector |
+| P5 | `adlc review` / `npx adversarial-review` (fresh-context multi-lens review, loop-until-dry); two-family trust-root quorum with gateway discounting (ADR-0007, ADR-0012); `adlc prosecute` recording to findings ledger (`.adlc/findings.jsonl`, ADR-0014) |
+| P6 | PR agents (Vercel Agent / Jules / equivalents) as *pre-digesters* for the human; spec-conformance summaries; behavior-diff; adversarial-review convergence record committed to segmented gate manifest (`.adlc/manifest.d/`, ADR-0015) |
+| P7 | Simplify/refactor agents under green rails; `npx skill-mining` (five-axis scoring, dedup against public registry, adversarial Gates A/B, fresh-context validation); `adlc lesson-foundry` converting findings ledger into deterministic lints, skills, or spec templates |
 
 ## Appendix B — The two human gates
 
@@ -749,6 +795,26 @@ rots like any other context. The orchestrator should be a deterministic
 workflow script — loops, DAG scheduling, gate checks — that *spawns* models
 where judgment is needed and never consults one about sequencing.
 
+#### The Decomposition-Compiler Distinction
+
+The principle that "control flow is code" introduces a fundamental boundary
+between plan-time artifact compilation and runtime dispatch scheduling:
+
+- **Decomposition compilers** (`adlc decompose`, `agb plan`): Compilers operate
+  once at P2 plan time. They *may* invoke frontier models in a single dedicated
+  context to analyze the interrogated spec and propose a candidate ticket DAG.
+  However, this invocation is strictly a **compilation pass**: the candidate DAG
+  is immediately validated deterministically (schema validation, acyclicity,
+  disjoint file-scope partitions, boundary contract tests, and coldstart
+  executability) and frozen onto disk as atomic ticket files. Once compiled, the
+  model is dismissed.
+- **Dispatch schedulers** (`@adlc/fleet`): The runtime engine that dispatches
+  tickets to workers and prosecutors. Dispatch schedulers *must never* invoke
+  models to decide what runs next, how to retry a failure, whether a gate passed,
+  or how to sequence a merge. Control flow during execution is pure code:
+  topological dependency dispatch, deterministic gate verification, and fixed
+  state-machine retries (such as the two-strike regeneration rule).
+
 ```
                     ┌─────────────────────────────────────────┐
                     │ ORCHESTRATOR — deterministic script      │
@@ -778,6 +844,49 @@ builder, so dedicated pairing just buys idle time. Builders are **per
 partition, single writer** (Principle 6). The integrator lane is sequential
 by necessity (merges serialize) and is the system's bottleneck — which turns
 out to determine fan-out width (D2).
+
+#### The 5-Layer Operating Stack
+
+To scale beyond single-session scripts into autonomous execution fleets without
+leaking authority or losing control flow, ADLC structures execution into a strict
+5-layer operating stack with fixed, non-overlapping roles:
+
+| Layer | Component | Role | Never does |
+| --- | --- | --- | --- |
+| **1. Cockpit** | `adlc-herdr` | Human-supervised parallel session observability; displays ticket status, gate progress, and board actions over the `.adlc/` event stream | Decide control flow or trigger automated mutations |
+| **2. Outer Loop** | `@adlc/autopilot` | Autonomous issue triage, subscription quota start-gate monitoring (`five_hour < 50 && seven_day < 50`), issue-to-ticket batching, and GitHub label escalation | Merge to main or bypass P6 human behavioral acceptance |
+| **3. Supply Router** | `@adlc/quartermaster` | Operator-local channel registry (`quartermaster.json`), binding lifecycle phases to model channels (subscription, metered API, gateway) with rate-window tracking and gateway discounting | Author code, review code, or read candidate tree config |
+| **4. Two-Plane Orchestrator** | `@adlc/fleet` | Strict two-plane separation: trusted deterministic orchestrator plane vs untrusted model plane; worktree isolation, sandbox backends (bwrap/sandbox-exec), frozen rail enforcement, and sequential merge pipeline | Allow models to direct scheduling, retry logic, or gate validation |
+| **5. Harness Plugins** | 7 harness columns (`@adlc/codex`, `@adlc/cursor`, `@adlc/opencode`, `@adlc/pi`, `@adlc/gemini`, `@adlc/copilot`, Claude Code plugin) | Host-native skills, tools, and hooks executing inside isolated agent contexts under ticket charters | Hold orchestration state or cross-task control flow |
+
+#### Gate Failure-Policy Table
+
+In an automated lifecycle, how a gate fails is as load-bearing as what it checks.
+Gates fall into four strict policy classes:
+
+| Gate class | Examples | Failure policy | Behavior on error or outage |
+|------------|----------|----------------|-----------------------------|
+| **Invariant gates** | `rails-guard` (freeze intact), typecheck, build, test suite assertions, path-scope constraints, sandbox egress rules | **Fail closed** | Immediate non-zero exit (`exit 2`). Execution halts; no code can progress without passing. |
+| **Heuristic gates** | Lint style suggestions, code complexity metrics, formatting checks, dead-code hints | **Fail open** | Advisory warnings. Emits diagnostics but does not block build progression unless explicitly promoted to invariant. |
+| **Evidence gates** | `gate-manifest` attestation, review-calibration score recording, provenance signature chains | **Degrade to advisory** | If telemetry or signing keys are unavailable, cannot mint valid approval; marks run unverified and requires human escalation, but does not corrupt the working tree. |
+| **Review lenses** | Parallel P5 prosecution lenses (security, correctness, contract conformance, test audit) | **Reset dry-pass counters** | An errored lens (network timeout, rate-limit 429, API 500, crash) fails the pass. It is **never** counted as a dry pass; the consecutive dry-pass counter resets to zero. |
+
+#### Sharded and Segmented Storage Architecture
+
+Monolithic metadata files are Git merge hotspots that break down under concurrent
+parallel worktrees. ADLC requires partitioned, Git-native stores behind domain
+boundaries:
+
+- **Sharded ticket store** (`.adlc/tickets/<id>.json`, ADR 0010): Replaces monolithic
+  `tickets.json`. Each ticket is an independent JSON file keyed by ULID. Concurrent
+  worktrees add, edit, or complete distinct tickets with zero Git merge conflicts.
+- **Tracked findings ledger** (`.adlc/findings.jsonl`, ADR 0014): Append-only JSONL
+  ledger of verified prosecution findings bridging P5 to P7 `lesson-foundry`. Persists
+  across ephemeral worktrees and CI environments so lessons compound permanently.
+- **Segmented gate manifest** (`.adlc/manifest.d/<segment>.jsonl`, ADR 0015): Replaces
+  a single serialized `manifest.jsonl` chain with a forest of signed segment files.
+  Allows concurrent worktree commits to append cryptographic gate evidence without
+  hash-chain collisions, rewrite races, or merge conflicts.
 
 ### D1. The cost dial: model routing
 
@@ -831,6 +940,15 @@ cheap tier — which is really a P3 finding wearing a routing costume: the
 ticket isn't railed enough to build cheaply, and that's worth knowing before
 spending either way.
 
+**Supply routing and fast decision heads** (`@adlc/quartermaster`, `@adlc/decision-layer`):
+Model routing maps abstract tiers (`cheap`/`mid`/`frontier`) to concrete operational channels
+via an operator-local registry (`quartermaster.json`), balancing subscription, metered API,
+and gateway transports while enforcing gateway discounting. To accelerate routing without
+burning tokens, fast calibrated probabilistic decision heads (`@adlc/decision-layer`,
+exploiting E7) evaluate structured deterministic feature vectors (AST, diff statistics,
+and file classifications), strictly bounded by `NEVER_DELEGATE_INVARIANTS` so that
+probabilistic classifications can never override hard invariant gates.
+
 ### D2. The time dial: fan-out mechanics
 
 **The schedule is a DAG, not a list.** P2's output should be tickets + edges,
@@ -864,6 +982,12 @@ agent runs, from three signals, each cheaper than one merge conflict:
 High pair-score → sequence them or send the partition back to P2. This is
 the partition-quality measurement the appendix opened with: fan-out width
 should never exceed what the conflict forecast certifies.
+
+**Cross-ticket emergent drift** (F11): Even when declared file scopes and namespaces
+appear disjoint, parallel execution across partitions can introduce emergent semantic
+incompatibilities (the horizontal integration gap). Mitigate this by building and merging
+the shared foundation first, compiling contract tests to both adjacent tickets' frozen
+rails, and executing deterministic horizontal release audits (E8) post-integration.
 
 **Width is set by integrator backpressure — which is why "3–5 agents" keeps
 showing up.** Merges serialize: merge, rebase survivors, re-green, next. If

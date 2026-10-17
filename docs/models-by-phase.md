@@ -16,6 +16,15 @@ ticket. What neither the theory nor the router resolves is the binding from abst
 tier to a concrete model. This document is that binding: recommended models per tier,
 per phase, for the major providers and for open-weight/local deployment.
 
+In the [5-layer operating stack](../ADLC.md#the-5-layer-operating-stack), abstract tiers
+are mapped to concrete operational channels by [`@adlc/quartermaster`](../packages/quartermaster/README.md)
+via an operator-local channel registry (`quartermaster.json`), balancing flat-rate
+subscriptions, metered APIs, and gateways with rate-window tracking and gateway
+discounting. Meanwhile, [`@adlc/autopilot`](../packages/autopilot/README.md) governs the
+outer loop with a 50% subscription quota start-gate (`five_hour < 50 && seven_day < 50`),
+and [`@adlc/decision-layer`](../packages/decision-layer/README.md) provides fast calibrated
+probabilistic triage heads (E7) bounded by `NEVER_DELEGATE_INVARIANTS`.
+
 ## The three tiers
 
 | Tier | Definition | Belongs on |
@@ -46,7 +55,7 @@ Two doctrine points shape everything below:
 | **P2 Decompose** | **frontier** for contracts and boundaries; **cheap** as the gate probe | Interface contracts are frontier work for the same reason as specs. The [`coldstart`](../packages/coldstart/README.md) gate *deliberately* uses a cheap model as the probe: if a cheap model can enumerate what's missing from a ticket, the ticket is underspecified for the mid model that will build it. |
 | **P3 Rail** | mid | Tests, stubs, and contract skeletons authored from spec alone in fresh context. [`hollow-test`](../packages/hollow-test/README.md) catches weak rails deterministically, so frontier is unnecessary; go frontier only for contract-heavy rails on low-coverage surfaces. |
 | **P4 Build** | router-decided: **ladder cheap→mid** with float, **direct best-tier** on the critical path | This is [`model-router`](../packages/model-router/README.md)'s home turf. Float > 0 and rail density ≥ 0.5 → start cheap and ladder up on gate failure (escalation is regeneration, never rescue — F8). Float = 0 → skip the ladder, use the tier with the best first-pass rate from your manifest. Rail density below the floor → frontier, and treat it as a P3 finding. |
-| **P5 Prosecute** | **mid, stacked** — plus a **second provider family** on high blast radius | Search replaces insight (E2): N fresh-context mid passes with loop-until-dry beat one frontier pass, and the cost model favors fanning out cheap readers. For trust-boundary, deny-path, auth, secrets, data-loss, schema, or CI/CD changes, run ≥2 *distinct-family* providers ([ADR-0007](./adr/0007-multimodel-adversarial-review.md)) — different models have different blind spots, and cross-family review has caught deny-path bypasses that same-family prosecution missed. |
+| **P5 Prosecute** | **mid, stacked** — plus a **two-family quorum** on high blast radius | Search replaces insight (E2): N fresh-context mid passes with loop-until-dry beat one frontier pass, and the cost model favors fanning out cheap readers. For trust-boundary, deny-path, auth, secrets, data-loss, schema, or CI/CD changes, run an independent **two-family quorum** of ≥2 distinct-family providers ([ADR-0007](./adr/0007-multimodel-adversarial-review.md), [ADR-0012](./adr/0012-version-only-rail-exemption.md)). Gateway discounting applies: members sharing `gateway:*` / `openrouter:*` collapse to 0.5x weight / 1 family unless `--require-direct-provider` verifies `directAuth: true`. |
 | **P6 Integrate** | none (human gate) | [`behavior-diff`](../packages/behavior-diff/README.md) and [`gate-manifest`](../packages/gate-manifest/README.md) are deterministic. The human is the frontier tier here. |
 | **P7 Distill** | mid for mining; **rent one frontier pass to mint structure** | Banking replaces presence (E4): lesson mining and rejection mining run fine on mid. Occasionally rent the frontier model to crystallize judgment into artifacts — a skill, a contract template, an interrogation template — then spend mid inside that structure indefinitely. |
 
@@ -150,8 +159,13 @@ Notes for local routing:
 
 ## Suggested P5 cross-family quorums
 
-Anchor on your primary family, then add one *different* family per ADR-0007. Pairs
-that work at this snapshot:
+Anchor on your primary family, then add one *different* family per ADR-0007 and ADR-0012.
+On trust-root and high-blast-radius surfaces, an independent **two-family quorum** is
+mandatory. Gateway discounting applies: all reviewer seats sharing an unauthenticated
+gateway transport (`gateway:*` or `openrouter:*`) count as a single family (0.5x weight)
+for quorum purposes unless direct provider authentication (`--require-direct-provider` or
+`directAuth: true`) is verified. A trust-root quorum of 2 must contain at least one member
+with direct provider credentials (`subscription:*` or `api:*`). Pairs that work at this snapshot:
 
 | Primary stack | Cross-family second | Budget alternative |
 | --- | --- | --- |

@@ -10,11 +10,16 @@ through the stable `adlc <tool>` dispatcher.
 
 | Phase | Question | Primary tools |
 | --- | --- | --- |
+| Outer loop / Quota gate | Can an autonomous batch start without hitting subscription quota cliffs? | [`adlc autopilot`](../packages/autopilot/README.md) (ADR-0016: 50% quota start-gate) |
+| Cockpit / Observability | How can an operator supervise parallel sessions across worktrees? | `adlc-herdr` (cockpit) |
+| Supply routing | Which transport channel and model provider should serve this tier? | [`adlc quartermaster`](../packages/quartermaster/README.md) (channel registry) |
+| Triage / Fast classification | What is the probabilistic risk score and feature classification of this diff? | [`adlc decision`](../packages/decision-layer/README.md) (bounded by `NEVER_DELEGATE_INVARIANTS`) |
 | D2 Phase 0 | Is the workspace ready for fan-out? | [`adlc preflight`](../packages/preflight/README.md) |
 | P1 / C1-C2 | Is the spec testable and stress-tested? | [`adlc spec-lint`](../packages/spec-lint/README.md), [`adlc premortem`](../packages/premortem/README.md), [`adlc parallax`](../packages/parallax/README.md) |
 | P2 / C3 | Can an agent execute this ticket without guessing? | [`adlc coldstart`](../packages/coldstart/README.md), [`adlc merge-forecast`](../packages/merge-forecast/README.md), [`adlc model-router`](../packages/model-router/README.md) |
 | P3-P4 / C5-C6 | Are frozen rails protected, and is an agent flailing? | [`adlc rails-guard`](../packages/rails-guard/README.md), [`adlc flail-detector`](../packages/flail-detector/README.md) |
 | P3→P4 / C13 | Is it safe to START a high-risk ticket's build in THIS session? | [`adlc build-gate`](../packages/build-gate/README.md) |
+| P4 Orchestration | How are parallel builds isolated between orchestrator and model planes? | [`adlc fleet`](../packages/fleet/README.md) |
 | P4 / C7 | Can diverse candidates resolve a hard failing test without breaking rails? | [`adlc consensus-fix`](../packages/consensus-fix/README.md) |
 | P5-P6 / C14 | Did prosecution dry out, did behavior change, and can a human review the evidence? | `adlc review` (runs the model review — see [seam note](#p5-recorder-vs-reviewer-seam)), [`adlc prosecute`](../packages/prosecute/README.md) (records its evidence — it runs no model review itself), [`adlc behavior-diff`](../packages/behavior-diff/README.md), [`adlc gate-manifest`](../packages/gate-manifest/README.md), [`adlc hollow-test`](../packages/hollow-test/README.md) |
 | C12 / maintenance | What must be re-prosecuted after model or repo drift? | [`adlc model-ratchet`](../packages/model-ratchet/README.md), [`adlc review-calibration`](../packages/review-calibration/README.md), [`adlc skill-rot`](../packages/skill-rot/README.md), [`adlc ticket-prune`](../packages/ticket-prune/README.md) |
@@ -72,6 +77,11 @@ statement.
    to manage fan-out width and model assignment. The router emits abstract tiers
    (`cheap` / `mid` / `frontier`); [Recommended Models by Phase](./models-by-phase.md)
    maps those tiers to concrete models per provider, including open-weight and local options.
+   In automated fleet operations, [`@adlc/quartermaster`](../packages/quartermaster/README.md) resolves
+   those tiers into concrete transport channels, [`@adlc/autopilot`](../packages/autopilot/README.md)
+   enforces the 50% subscription quota start-gate (`five_hour < 50 && seven_day < 50`), and
+   [`@adlc/decision-layer`](../packages/decision-layer/README.md) provides fast feature triage heads
+   bounded by `NEVER_DELEGATE_INVARIANTS`.
 4. During implementation, use [`adlc rails-guard`](../packages/rails-guard/README.md) for frozen-test and suppression controls,
    [`adlc build-gate`](../packages/build-gate/README.md) to deny starting a high-risk ticket's build in a degraded
    session, and [`adlc flail-detector`](../packages/flail-detector/README.md) to catch repeated error loops, scope drift, churn,
@@ -96,9 +106,12 @@ statement.
    control surface (`.github/workflows/`, `.github/actions/`), or a trust-root file
    (`scripts/rails-guard-ci.mjs`, `docs/ci/rails-guard.yml`, the root install manifests,
    `CODEOWNERS`; full list in `packages/prosecute/lib/tier.mjs`) — cross-model
-   review is no longer advisory but **GATED**: `adlc prosecute` (given `--base`) exits 2
-   unless the manifest holds a `cross-model-review` **`approve`** from a provider distinct
-   from the author, bound to the reviewed revision. Record it with
+   review is no longer advisory but **GATED** under a **two-family trust-root quorum**
+   (ADR-0007, ADR-0012). Gateway discounting applies: reviewer seats sharing a `gateway:*`
+   or `openrouter:*` transport count as one family (0.5x weight) unless direct provider
+   authentication (`--require-direct-provider`) is verified. `adlc prosecute` (given `--base`)
+   exits 2 unless the manifest holds a `cross-model-review` **`approve`** from an independent
+   provider distinct from the author's family, bound to the reviewed revision. Record it with
    `adlc prosecute record-cross-model --ticket <id> --provider <p> --author-provider <a>
    --verdict approve [--input <passes.json>]` (T39; classifier `packages/prosecute/lib/tier.mjs`).
 7. After review, use [`adlc lesson-foundry`](../packages/lesson-foundry/README.md) and [`adlc rejection-mining`](../packages/rejection-mining/README.md) to convert repeated review

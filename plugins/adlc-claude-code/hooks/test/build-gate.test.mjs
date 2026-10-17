@@ -392,20 +392,16 @@ test('the PreToolUse matcher includes a buildgate hook entry (excludes Bash)', (
   assert.equal(/\bBash\b/.test(entry.matcher), false);
 });
 
-test('KEEP-IN-SYNC: BUILD_GATE_DEPTH_THRESHOLD tracks HARD_DEPTH; BUILD_GATE_BYTES_THRESHOLD is the deliberately recalibrated 8 MiB (Round-5)', () => {
+test('KEEP-IN-SYNC: BUILD_GATE_DEPTH_THRESHOLD tracks HARD_DEPTH; BUILD_GATE_BYTES_THRESHOLD tracks HARD_BYTES (8 MiB)', () => {
   const src = readFileSync(HOOK, 'utf8');
   const depth = src.match(/const BUILD_GATE_DEPTH_THRESHOLD = (\d+);/);
   const bytes = src.match(/const BUILD_GATE_BYTES_THRESHOLD = ([^;]+);/);
   assert.ok(depth, 'depth constant present');
   assert.ok(bytes, 'bytes constant present');
   assert.equal(Number(depth[1]), HARD_DEPTH);
-  // Deliberately NOT HARD_BYTES (256 KiB) — see BUILD_GATE_BYTES_THRESHOLD's
-  // own comment: that would reproduce the exact false-lockout bug this
-  // recalibration fixes. Pinned to the new, independently-chosen 8 MiB value
-  // instead of context-handoff's own MAX_ACTIVE_CONTEXT_BYTES export so this
-  // test still catches an accidental revert to HARD_BYTES.
+  // BUILD_GATE_BYTES_THRESHOLD tracks HARD_BYTES (8 MiB) from @adlc/context-handoff.
   assert.equal(Function(`"use strict"; return (${bytes[1]});`)(), 8 * 1024 * 1024);
-  assert.notEqual(Function(`"use strict"; return (${bytes[1]});`)(), HARD_BYTES);
+  assert.equal(Function(`"use strict"; return (${bytes[1]});`)(), HARD_BYTES);
   assert.match(src, /depth >= BUILD_GATE_DEPTH_THRESHOLD/);
   assert.match(src, /sessionBytes >= BUILD_GATE_BYTES_THRESHOLD/);
 });

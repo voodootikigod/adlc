@@ -27,7 +27,7 @@ test('defaults match approved spec table', () => {
   assert.equal(WARN_DEPTH, 20);
   assert.equal(HANDOFF_DEPTH, 30);
   assert.equal(HARD_DEPTH, 40);
-  assert.equal(WARN_BYTES, 128 * 1024);
-  assert.equal(HANDOFF_BYTES, 192 * 1024);
-  assert.equal(HARD_BYTES, 256 * 1024);
+  assert.equal(WARN_BYTES, 4 * 1024 * 1024);
+  assert.equal(HANDOFF_BYTES, 6 * 1024 * 1024);
+  assert.equal(HARD_BYTES, 8 * 1024 * 1024);
 });

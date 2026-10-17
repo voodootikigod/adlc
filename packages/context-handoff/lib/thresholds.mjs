@@ -9,9 +9,9 @@ export const WARN_DEPTH = 20;
 export const HANDOFF_DEPTH = 30;
 export const HARD_DEPTH = 40;
 
-export const WARN_BYTES = 128 * 1024;
-export const HANDOFF_BYTES = 192 * 1024;
-export const HARD_BYTES = 256 * 1024;
+export const WARN_BYTES = 4 * 1024 * 1024;
+export const HANDOFF_BYTES = 6 * 1024 * 1024;
+export const HARD_BYTES = 8 * 1024 * 1024;
 
 /**
  * Phase 0 hotfix (context-rot-threshold-calibration spec §1.2.2): the transcript

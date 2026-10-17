@@ -26,7 +26,7 @@ import { HARD_BYTES, HARD_DEPTH, isHardDegraded } from '@adlc/context-handoff';
 export const DEFAULT_DEPTH_THRESHOLD = HARD_DEPTH;
 
 /** Transcript byte count at which a session is considered context-degraded
- * (HARD_BYTES — 256 KiB). */
+ * (HARD_BYTES — 8 MiB). */
 export const DEFAULT_BYTES_THRESHOLD = HARD_BYTES;
 
 /**

@@ -343,5 +343,26 @@ export function segmentsOf(p: string): string[];
 export function tail(str: string, maxChars?: number): string;
 export function fence(label: string, content: string, maxChars: number, opts?: { bias?: 'head' | 'tail' }): string;
 
+// lib/primitives.mjs
+export function writeFileAtomic(
+  filePath: string,
+  content: string | NodeJS.ArrayBufferView,
+  options?: { mode?: number }
+): void;
+export function acquireDirLock(
+  lockDir: string,
+  options?: { staleMs?: number }
+): () => void;
+export function redactSecrets<T = unknown>(input: T): T;
+export function readVerdictSource(source: string): Promise<string>;
+export function recordPromptOnlyVerdict<T = unknown>(options?: {
+  gate?: string;
+  ticket?: string;
+  verdict: string;
+  extra?: Record<string, unknown>;
+  dir?: string;
+  recordFn?: (params: { gate?: string; ticket?: string; rawData: string; dir?: string }) => T;
+}): T;
+
 // Types of the @adlc/core/test-kit subpath, declared in lib/test-kit.d.mts.
 export type { TestContext, GitRepoOptions, GitRepoResult, RunBinOptions } from './lib/test-kit.mjs';

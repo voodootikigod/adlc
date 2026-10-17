@@ -175,17 +175,8 @@ test('drift: depth-signal computation is identical to packages/build-gate/lib/de
   // isDegraded's COMPARISON LOGIC (inclusive >= against whichever thresholds
   // are resolved) must stay identical between the hook's copy and the
   // canonical — proven here with an EXPLICIT, shared threshold on both
-  // sides. This deliberately does NOT compare the two DEFAULTS against each
-  // other: since Round-5 (context-rot-threshold-calibration), the hook's own
-  // DEFAULT_BYTES_THRESHOLD is intentionally recalibrated to 8 MiB while the
-  // canonical package's default stays at the old 256 KiB (its own test file
-  // is a rail frozen by ticket T156, not completed — and unlike a plain
-  // constant rename, that frozen test directly asserts the OLD numeric
-  // behavior, so recalibrating the library would break it; there is no
-  // override mechanism for a rail-edit violation) — see
-  // plugins/adlc-codex/hooks/adlc-build-gate.mjs's DEFAULT_BYTES_THRESHOLD
-  // comment for the full rationale. Asserting default equality here would
-  // pin exactly the divergence this fix intentionally introduces.
+  // sides. With W2-T3/T4, both the hook and canonical @adlc/build-gate /
+  // @adlc/context-handoff share the 8 MiB default.
   for (const depth of [0, 40, 41, 100]) {
     for (const sessionBytes of [0, 256 * 1024, 256 * 1024 + 1, 1024 * 1024]) {
       assert.equal(
@@ -197,9 +188,19 @@ test('drift: depth-signal computation is identical to packages/build-gate/lib/de
   }
 });
 
-test('the hook build-gate DEFAULT_BYTES_THRESHOLD is deliberately recalibrated to 8 MiB, not the canonical package default (Round-5)', () => {
+test('the hook build-gate DEFAULT_BYTES_THRESHOLD (8 MiB) matches canonical @adlc/build-gate and @adlc/context-handoff default', () => {
   assert.equal(hookIsDegraded({ depth: 0, sessionBytes: 8 * 1024 * 1024 }), true);
   assert.equal(hookIsDegraded({ depth: 0, sessionBytes: 8 * 1024 * 1024 - 1 }), false);
+  // The hook's 8 * 1024 * 1024 DEFAULT_BYTES_THRESHOLD now matches the
+  // canonical @adlc/build-gate and @adlc/context-handoff 8 MiB default.
+  assert.equal(
+    hookIsDegraded({ depth: 0, sessionBytes: 8 * 1024 * 1024 }),
+    coreIsDegraded({ depth: 0, sessionBytes: 8 * 1024 * 1024 }),
+  );
+  assert.equal(
+    hookIsDegraded({ depth: 0, sessionBytes: 400 * 1024 }),
+    coreIsDegraded({ depth: 0, sessionBytes: 400 * 1024 }),
+  );
   // The exact reported bug: a routine fresh-session baseline (well over the
   // old 256 KiB threshold, comfortably under the new 8 MiB one) must NOT be
   // classified as degraded.
