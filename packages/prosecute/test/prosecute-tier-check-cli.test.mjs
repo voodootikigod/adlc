@@ -83,7 +83,7 @@ describe('adlc-prosecute tier-check (#326 CI trust-root gate)', () => {
     // --json contract: a non-tier change reports satisfied:true, crossModelRequired:false.
     const j = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir);
     assert.equal(j.status, 0);
-    assert.deepEqual(JSON.parse(j.stdout), { trustRootTier: false, reasons: [], crossModelRequired: false, satisfied: true });
+    assert.deepEqual(JSON.parse(j.stdout), { trustRootTier: false, reasons: [], crossModelRequired: false, satisfied: true, skippedOwnRails: [] });
   });
 
   it('exits 2 for a trust-root change (enforcement package) with no attestation', (t) => {
@@ -143,6 +143,7 @@ describe('adlc-prosecute tier-check (#326 CI trust-root gate)', () => {
     assert.equal(jj.crossModelRequired, true);
     assert.equal(jj.satisfied, false);
     assert.equal(jj.keyAvailable, false);
+    assert.deepEqual(jj.skippedOwnRails, []);
   });
 
   it('exits 0 once a distinct-provider approve bound to the tier-check revision is recorded', (t) => {

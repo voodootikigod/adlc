@@ -120,7 +120,7 @@ describe('classifyTrustRootTier — negative / ordinary diffs', () => {
 
   it('FALSE for a docs-only change', () => {
     const r = classifyTrustRootTier({ changedFiles: ['apps/docs/x.mdx'], tickets: TICKETS });
-    assert.deepEqual(r, { isTrustRootTier: false, reasons: [] });
+    assert.deepEqual(r, { isTrustRootTier: false, reasons: [], skippedOwnRails: [] });
   });
 
   it('FALSE for a non-enforcement package change', () => {
@@ -145,8 +145,8 @@ describe('classifyTrustRootTier — negative / ordinary diffs', () => {
   });
 
   it('FALSE for empty inputs / defaults', () => {
-    assert.deepEqual(classifyTrustRootTier({}), { isTrustRootTier: false, reasons: [] });
-    assert.deepEqual(classifyTrustRootTier(), { isTrustRootTier: false, reasons: [] });
+    assert.deepEqual(classifyTrustRootTier({}), { isTrustRootTier: false, reasons: [], skippedOwnRails: [] });
+    assert.deepEqual(classifyTrustRootTier(), { isTrustRootTier: false, reasons: [], skippedOwnRails: [] });
   });
 });
 
@@ -242,7 +242,7 @@ describe('classifyTrustRootTier — completed tickets do not tier via rails (#90
       { id: 'T37', title: 'done', scope: [], rails: ['packages/**'], edges: [], completed: true },
     ];
     const r = classifyTrustRootTier({ changedFiles: ['packages/foo/lib/x.mjs'], tickets });
-    assert.deepEqual(r, { isTrustRootTier: false, reasons: [] });
+    assert.deepEqual(r, { isTrustRootTier: false, reasons: [], skippedOwnRails: [] });
   });
 
   it('AC2: the same ticket with completed omitted (or false) still tiers the identical change', () => {

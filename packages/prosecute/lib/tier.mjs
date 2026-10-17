@@ -140,14 +140,30 @@ function isTestFile(path) {
  * owns it with an add-vs-alter contract, so ticket-store changes are either
  * privilege-neutral additions or already-blocked alterations. See TRUST_ROOT_FILES.
  *
+ * A ticket's OWN new rails (#1180): when `ownTicket` names the ticket under
+ * prosecution, a rail of THAT ticket which is absent from `ownTicket.baseRails`
+ * (the rails the base tip already declares for it) does not tier the change.
+ * Such a rail is added by the change itself and only applies once it merges,
+ * matching rails-guard-ci's add-vs-alter contract. Rails already on the base,
+ * rails of every other ticket, and every other surface class still tier.
+ * Omitting `ownTicket` keeps the classification unchanged.
+ *
  * @param {object} args
  * @param {string[]} [args.changedFiles]  repo-relative POSIX paths
  * @param {object[]} [args.tickets]       the ticket array (rails deny-path source)
- * @returns {{ isTrustRootTier: boolean, reasons: string[] }}
+ * @param {{ id: string, baseRails: string[] }} [args.ownTicket]
+ *   the ticket under prosecution and the rails the BASE tip declares for it
+ * @returns {{ isTrustRootTier: boolean, reasons: string[], skippedOwnRails: string[] }}
  */
-export function classifyTrustRootTier({ changedFiles = [], tickets = [] } = {}) {
+export function classifyTrustRootTier({ changedFiles = [], tickets = [], ownTicket } = {}) {
   const reasons = [];
   const push = (reason) => { if (!reasons.includes(reason)) reasons.push(reason); };
+  const skippedOwnRails = [];
+  // Fail closed on a malformed ownTicket: without a usable id AND a baseRails
+  // array there is no way to tell a new rail from a base one, so skip nothing.
+  const usableOwn = typeof ownTicket?.id === 'string' && ownTicket.id.trim() !== '' && Array.isArray(ownTicket.baseRails);
+  const ownId = usableOwn ? ownTicket.id : undefined;
+  const ownBaseRails = usableOwn ? ownTicket.baseRails : [];
 
   for (const raw of changedFiles) {
     if (typeof raw !== 'string' || raw.trim() === '') continue;
@@ -177,11 +193,15 @@ export function classifyTrustRootTier({ changedFiles = [], tickets = [] } = {}) 
       const rails = Array.isArray(ticket?.rails) ? ticket.rails : [];
       for (const glob of rails) {
         if (typeof glob === 'string' && glob && globMatch(glob, path)) {
+          if (ownId !== undefined && ticket.id === ownId && !ownBaseRails.includes(glob)) {
+            if (!skippedOwnRails.includes(glob)) skippedOwnRails.push(glob);
+            continue;
+          }
           push(`touches rails deny-path of ticket ${ticket.id}: ${glob}`);
         }
       }
     }
   }
 
-  return { isTrustRootTier: reasons.length > 0, reasons };
+  return { isTrustRootTier: reasons.length > 0, reasons, skippedOwnRails };
 }

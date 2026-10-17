@@ -25,6 +25,10 @@ function readTicketArray(path) {
     if (err.code === 'ENOENT') return [];
     throw new Error(`ticket table ${path} exists but cannot be read for tiering: ${err.message}`);
   }
+  return parseTicketTable(raw, path);
+}
+
+function parseTicketTable(raw, path) {
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -304,6 +308,118 @@ function readBaseTickets(root, revision) {
   }
 }
 
+// The in-repo --dir ticket table (the third loadTicketsForTier source) as the
+// BASE tip has it. A table outside the repository contributes nothing here,
+// since git cannot hold it at the base. A file absent at the base contributes
+// nothing; a present but malformed one throws.
+function readBaseDirTickets(root, base, dir) {
+  if (!base) return [];
+  const commit = git(['rev-parse', '--verify', '--quiet', `${base}^{commit}`], { cwd: root }).trim();
+  // Every path the base could hold this table at, UNIONED: the HEAD-resolved
+  // one, the literal one, and the one the BASE tree's own symlinks lead to. A
+  // branch that retargets a symlinked --dir moves only the first; reading just
+  // that one would drop the rails the base freezes and re-read them as new.
+  // Extra candidates can only ADD base rails (fewer exemptions), never remove.
+  const literal = join(resolve(dir), 'tickets.json');
+  const candidates = new Set();
+  const viaHead = baseTablePath(root, literal);
+  if (viaHead !== null) candidates.add(viaHead);
+  const lexical = relative(root, literal);
+  if (!lexical.startsWith('..') && !isAbsolute(lexical)) candidates.add(lexical.split(/[\\/]/).join('/'));
+  const tickets = [];
+  const read = new Set();
+  for (const candidate of candidates) {
+    // Follow the BASE tree's links (on the directory AND on tickets.json
+    // itself) so the symlink blob, whose content is a path, is never parsed.
+    const rel = resolveAtBase(root, commit, candidate);
+    if (rel === null || read.has(rel)) continue;
+    read.add(rel);
+    const entry = git(['ls-tree', commit, '--', rel], { cwd: root }).trim();
+    if (entry === '') continue;
+    // Present but not a regular file (a directory, a submodule): the table
+    // cannot be read, and treating it as absent would drop its base rails.
+    if (!/^100\d{3} blob /.test(entry)) {
+      throw new Error(`${rel} at base ${base} is not a regular file — tiering cannot proceed`);
+    }
+    tickets.push(...parseTicketTable(git(['show', `${commit}:${rel}`], { cwd: root }), `${rel} at base ${base}`));
+  }
+  return tickets;
+}
+
+// `rel` with every symlink in it followed AS THE BASE COMMIT HOLDS THEM (git
+// stores a link as a blob, mode 120000, holding its target), or null when a
+// link leaves the repository (an absolute target, or `..` above the root) or the chain is too long. A non-link path comes
+// back unchanged.
+function resolveAtBase(root, commit, rel) {
+  let parts = rel.split('/');
+  for (let hops = 0; hops < 40; hops++) {
+    let resolvedLink = false;
+    for (let i = 1; i <= parts.length && !resolvedLink; i++) {
+      const prefix = parts.slice(0, i).join('/');
+      const entry = git(['ls-tree', commit, '--', prefix], { cwd: root }).trim();
+      if (!entry.startsWith('120000 ')) continue;
+      const target = git(['show', `${commit}:${prefix}`], { cwd: root }).trim();
+      // An absolute target leaves the repository; dropping its leading slash
+      // below would read an unrelated in-repo path as the table.
+      if (target.startsWith('/') || /^[A-Za-z]:/.test(target)) return null;
+      const joined = [...parts.slice(0, i - 1), ...target.split('/'), ...parts.slice(i)];
+      const next = [];
+      for (const seg of joined) {
+        if (seg === '' || seg === '.') continue;
+        if (seg === '..') { if (next.length === 0) return null; next.pop(); } else next.push(seg);
+      }
+      parts = next;
+      resolvedLink = true;
+    }
+    if (!resolvedLink) return parts.join('/');
+  }
+  return null;
+}
+
+// The repo-relative POSIX path at which git holds the worktree's --dir table,
+// or null when it lies outside the repository. The worktree read goes through
+// the filesystem, so it follows a symlinked --dir and the filesystem's case
+// rules; a plain string path here would miss the base copy behind such an
+// alias and read its rails as new. So an existing table is located with
+// realpath, the way the worktree read effectively finds it. A table absent from
+// the worktree keeps its literal path. The canonical `.adlc/tickets.json` may
+// come back too: reading it again only repeats rails readBaseTickets supplies.
+function baseTablePath(root, tablePath) {
+  let from = root;
+  let to = tablePath;
+  try {
+    to = realpathSync.native(tablePath);
+    from = realpathSync.native(root);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  const rel = relative(from, to);
+  if (rel.startsWith('..') || isAbsolute(rel)) return null;
+  return rel.split(/[\\/]/).join('/');
+}
+
+// The ticket under prosecution, as the BASE tip declares it (#1180). Its
+// `baseRails` are the string rails of every base-tip entry with that id, from
+// the canonical store and the in-repo --dir table (empty when the base has no
+// such ticket), so classifyTrustRootTier can tell a rail the change itself adds
+// from one the base already freezes. Read from the base, never HEAD: a HEAD edit
+// that drops a base rail cannot un-freeze it. An unreadable base store still
+// throws (fail closed).
+function ownTicketAtBase(root, base, ticketId, dir) {
+  const baseRails = new Set();
+  for (const ticket of [...readBaseTickets(root, base), ...readBaseDirTickets(root, base, dir)]) {
+    if (ticket?.id !== ticketId || !Array.isArray(ticket.rails)) continue;
+    for (const rail of ticket.rails) if (typeof rail === 'string') baseRails.add(rail);
+  }
+  return { id: ticketId, baseRails: [...baseRails] };
+}
+
+function printSkippedOwnRails(tier, ticketId, base) {
+  for (const rail of tier.skippedOwnRails) {
+    console.error(`tier: skipped own new rail of ticket ${ticketId}: ${rail} (not on base ${base})`);
+  }
+}
+
 // The SOURCE side of every rename/copy between the base and the change.
 //
 // `changedFiles` collects `git diff --name-only`, and with rename detection on
@@ -429,6 +545,26 @@ function mergeTicketsById(sources) {
   return [...unkeyed, ...byId.values()];
 }
 
+// The `tickets.json` under `dir`, canonicalized through the filesystem, or null
+// when it lies outside the repository or does not exist. Containment is judged
+// on the REAL path of the TABLE FILE, not just of its directory: a symlinked
+// --dir, or a `tickets.json` that is itself a symlink, passes a lexical check
+// while pointing outside, and the external table would be read as if the repo
+// held it (and its rails exempted as "new", since the base read excludes it). An
+// absent table is an empty store, so null loses nothing.
+function canonicalInRepoTable(root, dir) {
+  let realTable;
+  let realRoot;
+  try {
+    realTable = realpathSync.native(join(resolve(dir), 'tickets.json'));
+    realRoot = realpathSync.native(root);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+    return null;
+  }
+  return isInsideRepo(realRoot, realTable) ? realTable : null;
+}
+
 function loadTicketsForTier(dir, root, base) {
   // UNION, never replace: rails from the base and from the worktree both apply.
   // The classifier ORs deny-paths across tickets, so adding a source can only
@@ -436,9 +572,9 @@ function loadTicketsForTier(dir, root, base) {
   // TIP deliberately (not the merge-base): a ticket added on the base after the
   // branch point still contributes its rails — widening only, so fail-safe.
   const sources = [readBaseTickets(root, base), readCanonicalTickets(root)];
-  const resolvedDir = resolve(dir);
-  if (isInsideRepo(root, resolvedDir) && resolvedDir !== resolve(root, '.adlc')) {
-    sources.push(readTicketArray(join(resolvedDir, 'tickets.json')));
+  const table = canonicalInRepoTable(root, dir);
+  if (table !== null && resolve(dir) !== resolve(root, '.adlc')) {
+    sources.push(readTicketArray(table));
   }
   return mergeTicketsById(sources);
 }
@@ -502,6 +638,12 @@ ADLC P5 review-evidence recorder.
   tier reasons are printed to stderr on a tiered run. If <base> is unresolvable the
   run FAILS CLOSED (exit 1): CI must fetch/provide the base.
 
+  A rail of the --ticket ticket that the base tip does not declare for it is that
+  ticket's OWN NEW rail: it applies after merge, so it does not tier this change
+  (#1180). Each skipped rail is printed to stderr as
+  'tier: skipped own new rail of ticket <id>: <glob> (not on base <base>)'.
+  Rails already on the base, other tickets' rails, and every other surface still tier.
+
   record-cross-model --ticket id --provider <p> --author-provider <a> --verdict approve
                      [--revision rev] [--input <passes.json>] [--base main] [--dir .adlc]
                      [--allow-unsigned] [--allow-unknown-ticket]
@@ -527,6 +669,13 @@ ADLC P5 review-evidence recorder.
       base actually moved, and the resulting chain depth stays within the cap — otherwise
       a FRESH distinct-provider review is required. --provider/--author-provider/--verdict
       are not accepted here: the carried entry keeps the ORIGINAL review's identity.
+
+  tier-check [--ticket id] [--base main] [--dir .adlc] [--author-provider <a>] [--json]
+      Classify the change and, when it is trust-root tier, require a signature-
+      verified distinct-provider cross-model approve for its revision. With
+      --ticket, that ticket's own new rails are skipped as described above and
+      listed on stderr; without --ticket, every active ticket's rails tier.
+      --json always includes "skippedOwnRails" (empty without --ticket).
 
   tier-check ... [--attestation-store PATH]
       OPTIONAL: pass a direct file path to a protected-ref attestation store to
@@ -785,14 +934,19 @@ if (positionals[0] === 'tier-check') {
   }
   let tier;
   try {
-    tier = classifyTrustRootTier({ changedFiles: changed, tickets });
+    // #1180: only with --ticket may that ticket's own new rails be skipped.
+    // Without it (the CI form), every active ticket's rails tier as before.
+    const ownTicket = values.ticket ? ownTicketAtBase(root, values.base, values.ticket, values.dir) : undefined;
+    tier = classifyTrustRootTier({ changedFiles: changed, tickets, ownTicket });
   } catch (err) {
     opError(`tier-check: cannot classify the change: ${err.message}`);
   }
+  printSkippedOwnRails(tier, values.ticket, values.base);
+  const skippedOwnRails = tier.skippedOwnRails;
 
   // AC3: the tier decision is ALWAYS visible — tiered or not.
   if (!tier.isTrustRootTier) {
-    if (values.json) printJson({ trustRootTier: false, reasons: [], crossModelRequired: false, satisfied: true });
+    if (values.json) printJson({ trustRootTier: false, reasons: [], crossModelRequired: false, satisfied: true, skippedOwnRails });
     else console.log('tier-check: NOT trust-root tier — no cross-model review required.');
     process.exit(0);
   }
@@ -813,7 +967,7 @@ if (positionals[0] === 'tier-check') {
   const key = getKey();
   if (!key) {
     if (values.json) {
-      printJson({ trustRootTier: true, reasons: tier.reasons, crossModelRequired: true, satisfied: false, revision, keyAvailable: false });
+      printJson({ trustRootTier: true, reasons: tier.reasons, crossModelRequired: true, satisfied: false, revision, keyAvailable: false, skippedOwnRails });
     } else {
       console.error(`tier-check: ADLC_MANIFEST_KEY is not available, so cross-model attestations cannot be signature-verified — an unverifiable attestation is forgeable, so NONE is trusted. This required trust-root gate FAILS CLOSED for revision ${revision}. Provide the key as a CI secret (available to same-repo runs) and re-record the attestation with it.`);
     }
@@ -867,7 +1021,7 @@ if (positionals[0] === 'tier-check') {
     truncationDetected = !assertNoTruncation({ prEntries, observedEntries: authorScopedObserved, revision, key }).ok;
   }
   if (values.json) {
-    printJson({ trustRootTier: true, reasons: tier.reasons, crossModelRequired: true, satisfied, revision, chainTrustworthy, truncationDetected });
+    printJson({ trustRootTier: true, reasons: tier.reasons, crossModelRequired: true, satisfied, revision, chainTrustworthy, truncationDetected, skippedOwnRails });
     process.exit(satisfied ? 0 : 2);
   }
   if (satisfied) {
@@ -988,10 +1142,17 @@ try {
 }
 let tier;
 try {
-  tier = classifyTrustRootTier({ changedFiles: changed, tickets: loadTicketsForTier(values.dir, root, values.base) });
+  // #1180: the recorder always has --ticket, so that ticket's own new rails
+  // (absent from the base tip) apply after merge and do not tier this change.
+  tier = classifyTrustRootTier({
+    changedFiles: changed,
+    tickets: loadTicketsForTier(values.dir, root, values.base),
+    ownTicket: ownTicketAtBase(root, values.base, values.ticket, values.dir),
+  });
 } catch (err) {
   opError(`cannot determine trust-root tier: ${err.message}`);
 }
+printSkippedOwnRails(tier, values.ticket, values.base);
 const requireCrossModel = tier.isTrustRootTier;
 if (tier.isTrustRootTier) {
   console.error(`trust-root tier: cross-model adversarial approve REQUIRED (base ${values.base}). Reasons:`);

@@ -127,8 +127,20 @@ long-finished ticket once declared `packages/**` as a rail (#905). Duplicate tic
 across the base and worktree/HEAD ticket tables are merged before classification, with
 the base tip winning for `completed` and rails unioned across copies — so a branch cut
 before a ticket completes on the base still benefits once the base tip completes it, and a
-HEAD-only completion claim still cannot exempt a ticket the base tip keeps active. For such
-a change, a passing P5 **additionally** requires a `cross-model-review`
+HEAD-only completion claim still cannot exempt a ticket the base tip keeps active.
+
+**A ticket's own new rails apply after merge (#1180).** A rail of the `--ticket` ticket that
+the base tip does not declare for that ticket was added by the change itself, so it does not
+tier the change. Such rails are reported as `skippedOwnRails` by `classifyTrustRootTier({
+changedFiles, tickets, ownTicket: { id, baseRails } })`, printed to stderr as
+`tier: skipped own new rail of ticket <id>: <glob> (not on base <base>)`, and included in
+`tier-check --json`. `baseRails` come from the base tip, never HEAD, so a HEAD edit that drops
+a base rail cannot un-freeze it, and an unreadable base store still fails closed. Rails
+already on the base (including the ticket's own), rails of every other ticket, and every other
+surface still tier. The recorder always passes its `--ticket`; `tier-check` does so only when
+`--ticket` is given, so the CI form without `--ticket` classifies exactly as before.
+
+For a trust-root-tier change, a passing P5 **additionally** requires a `cross-model-review`
 **`approve`** in the manifest whose `provider` is distinct from the author and whose
 `revision` equals the reviewed revision. Missing → exit 2.
 
