@@ -14,8 +14,19 @@ import { join } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
 import {
   writeFileAtomic, recoverInflight, createJournal, decideFile, probeOwner, recordPathFor,
-  isContainedRelPath,
+  isContainedRelPath, ownerStateFor, makeTempPath, sweepStaleTemps, clearRecord,
+  resolveTarget,
 } from '../lib/inflight.mjs';
+import {
+  writeInflightAtomic,
+  probeOwner as coreProbeOwner,
+  ownerStateFor as coreOwnerStateFor,
+  isContainedRelPath as coreIsContainedRelPath,
+  resolveTarget as coreResolveTarget,
+  makeTempPath as coreMakeTempPath,
+  sweepStaleTemps as coreSweepStaleTemps,
+  clearRecord as coreClearRecord,
+} from '@adlc/core';
 import { runWithPlants } from '../lib/runner.mjs';
 import { verifyWitness } from '../lib/verify.mjs';
 import { BIN, BOUNDARY_PLANT, MATH_SOURCE, createMathRepo, writePlantsFile, runCli } from './cli-fixtures.mjs';
@@ -196,6 +207,17 @@ describe('recoverInflight', () => {
 });
 
 describe('inflight primitives', () => {
+  it('re-exported primitives match @adlc/core', () => {
+    assert.equal(writeFileAtomic, writeInflightAtomic);
+    assert.equal(probeOwner, coreProbeOwner);
+    assert.equal(ownerStateFor, coreOwnerStateFor);
+    assert.equal(isContainedRelPath, coreIsContainedRelPath);
+    assert.equal(resolveTarget, coreResolveTarget);
+    assert.equal(makeTempPath, coreMakeTempPath);
+    assert.equal(sweepStaleTemps, coreSweepStaleTemps);
+    assert.equal(clearRecord, coreClearRecord);
+  });
+
   it('decideFile distinguishes original, planted and moved-on content', () => {
     const entry = { original: 'a', mutated: 'b' };
     assert.equal(decideFile('a', entry), 'none');

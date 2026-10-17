@@ -1,12 +1,28 @@
-import { ADLC_DIR, canonicalJson, hashFiles, resolveChangeSetRevision, resolveRevision, sha256 } from '@adlc/core';
+import { ADLC_DIR, canonicalJson, hashFiles, sha256 } from '@adlc/core';
 // Scoped to root + this checkout's own segment, NOT the whole forest: every
 // `.at(-1)`, `indexOf`, and `slice` below reads array position as chronology,
 // which is only true of a chain this checkout can place in sequence. See
 // own-chain.mjs for why the forest's own order cannot carry that weight.
 import { readOwnManifestChain } from '@adlc/gate-manifest/lib/own-chain.mjs';
-import { existsSync, readFileSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
-import { LegacyTicketStore, loadTicketSnapshot } from '@adlc/tickets';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import {
+  entryType,
+  historicalTranscriptIntegrityErrors,
+  isEvidencePath,
+  latestP5Entry,
+  latestP5Revision,
+  manifestArtifactPaths,
+  matchesRevision,
+  matchesTicket,
+  p5ReviewPacketPaths,
+  p5TranscriptPaths,
+  resolveLiveP5WorktreeRevision,
+  reviewPacketIntegrityErrors,
+  staleTicketDefinitionError,
+  ticketDefinitionBinding,
+  transcriptIntegrityErrors,
+} from './p5-evidence.mjs';
 
 const PHASE_REQUIREMENTS = {
   p0: ['coldstart'],
@@ -19,110 +35,12 @@ const PHASE_REQUIREMENTS = {
   p7: ['lesson-foundry', 'rejection-mining', 'skill-rot'],
 };
 
-function entryType(entry) {
-  return entry.type ?? entry.gate;
-}
-
-function matchesTicket(entry, ticket) {
-  return ticket === undefined || entry.ticket === ticket;
-}
-
 export function requiresTicket(phase) {
   return phase === 'p0' || phase === 'p1' || phase === 'p2' || phase === 'p3' || phase === 'p4' || phase === 'p5' || phase === 'p6';
 }
 
 function requiresRevision(phase) {
   return phase === 'p5' || phase === 'p6';
-}
-
-function matchesRevision(entry, revision) {
-  return revision === undefined || entry.revision === revision;
-}
-
-function latestP5Revision(entries, ticket) {
-  return latestP5Entry(entries, ticket)?.revision;
-}
-
-function latestP5Entry(entries, ticket, revision) {
-  return entries
-    .filter((entry) => entryType(entry) === 'p5-complete' && matchesTicket(entry, ticket) && entry.revision)
-    .filter((entry) => revision === undefined || entry.revision === revision)
-    .at(-1);
-}
-
-function p5TranscriptPaths(entry, cwd) {
-  const path = entry?.transcript?.path;
-  if (!path || !isEvidencePath(cwd, path)) return [];
-  return [path];
-}
-
-function p5ReviewPacketPaths(entry, cwd) {
-  return [
-    entry?.inputPath,
-    entry?.reviewPacket?.prompt?.path,
-    entry?.reviewPacket?.inputs?.path,
-  ].filter((path) => path && isEvidencePath(cwd, path));
-}
-
-function transcriptIntegrityErrors(entry) {
-  const transcript = entry?.transcript;
-  if (!transcript?.path || !transcript?.hash) return [];
-  try {
-    const content = readFileSync(transcript.path);
-    if (sha256(content) === transcript.hash) return [];
-    return [`P5 evidence is stale: transcript hash changed after prosecution: ${transcript.path}`];
-  } catch (err) {
-    return [`P5 evidence is stale: transcript cannot be read: ${transcript.path}: ${err.message}`];
-  }
-}
-
-function p5ArtifactIntegrityError(label, artifact) {
-  if (!artifact?.path || !artifact?.hash) {
-    return `P5 evidence is incomplete: ${label} missing path/hash`;
-  }
-  try {
-    const content = readFileSync(artifact.path);
-    if (sha256(content) === artifact.hash) return null;
-    return `P5 evidence is stale: ${label} hash changed after prosecution: ${artifact.path}`;
-  } catch (err) {
-    return `P5 evidence is stale: ${label} cannot be read: ${artifact.path}: ${err.message}`;
-  }
-}
-
-function historicalTranscriptIntegrityErrors(entries, assertedEntry, ticket, cwd) {
-  if (!assertedEntry?.transcript?.path) return [];
-  const assertedPath = resolve(cwd, assertedEntry.transcript.path);
-  return entries
-    .filter((entry) => entry !== assertedEntry)
-    .filter((entry) => entryType(entry) === 'p5-complete' && matchesTicket(entry, ticket))
-    .filter((entry) => entry.transcript?.path && resolve(cwd, entry.transcript.path) !== assertedPath)
-    .flatMap((entry) => transcriptIntegrityErrors(entry));
-}
-
-function isEvidencePath(cwd, path) {
-  const rel = relative(cwd, resolve(cwd, path)).replaceAll('\\', '/');
-  return rel.startsWith('.adlc/') || rel.startsWith('.omo/evidence/');
-}
-
-function ticketDefinitionBinding(cwd, ticket, dir) {
-  try {
-    const customPath = resolve(cwd, dir, 'tickets.json');
-    const snapshot = customPath !== resolve(cwd, '.adlc/tickets.json') && existsSync(customPath)
-      ? new LegacyTicketStore(customPath).load()
-      : loadTicketSnapshot({ root: cwd });
-    return snapshot.get(ticket) ? { ticketHash: snapshot.ticketHashes[ticket], storeHash: snapshot.hash } : null;
-  } catch { return null; }
-}
-
-function staleTicketDefinitionError(recordedHash, currentHash) {
-  if (recordedHash === null) {
-    return 'P5 evidence is stale: ticket definition was not bound during prosecution';
-  }
-  if (recordedHash === currentHash) return null;
-  if (currentHash === null) {
-    return 'P5 evidence is stale: ticket definition disappeared after prosecution';
-  }
-  return 'P5 evidence is stale: ticket definition changed after prosecution';
 }
 
 function p5CompletionIntegrityErrors(entries, entry, ticket, revision) {
@@ -142,17 +60,7 @@ function p5CompletionIntegrityErrors(entries, entry, ticket, revision) {
   if (!entry.transcript?.path || !entry.transcript?.hash) {
     errors.push('P5 evidence is incomplete: p5-complete missing transcript path/hash');
   }
-  if (!entry.reviewPacket || typeof entry.reviewPacket !== 'object') {
-    errors.push('P5 evidence is incomplete: p5-complete missing reviewPacket');
-  } else {
-    if (entry.reviewPacket.cleanWorktree !== revision) {
-      errors.push(`P5 evidence is incomplete: reviewPacket cleanWorktree does not match ${revision}`);
-    }
-    const promptError = p5ArtifactIntegrityError('reviewPacket.prompt', entry.reviewPacket.prompt);
-    if (promptError) errors.push(promptError);
-    const inputsError = p5ArtifactIntegrityError('reviewPacket.inputs', entry.reviewPacket.inputs);
-    if (inputsError) errors.push(inputsError);
-  }
+  errors.push(...reviewPacketIntegrityErrors(entry, revision));
   if (!Number.isInteger(entry.consecutiveDry) || entry.consecutiveDry < 2) {
     errors.push('P5 evidence is incomplete: p5-complete requires consecutiveDry >= 2');
   }
@@ -265,15 +173,6 @@ function p6ArtifactPaths(entries, ticket, cwd) {
   ];
 }
 
-function manifestArtifactPaths(cwd, dir) {
-  const root = resolve(cwd, dir);
-  // manifest.d/ (T-MANIFEST-FOREST slice 3) is the segmented equivalent of
-  // manifest.jsonl/manifest.lock — see prosecute/lib/run.mjs's identical
-  // helper for the full rationale (adversarial-review finding: without this,
-  // a segmented repo's evidence appends move the revision they are supposed
-  // to attest).
-  return [join(root, 'manifest.jsonl'), join(root, 'manifest.lock'), join(root, 'manifest.d'), join(root, 'tickets.json')];
-}
 
 function latestP6Entry(entries, ticket, revision) {
   return entries
@@ -616,13 +515,13 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
     ? [...manifestArtifactPaths(cwd, dir), ...p5TranscriptEvidencePaths, ...p5ReviewPacketEvidencePaths, ...p6ArtifactPaths(entries, ticket, cwd)]
     : [...manifestArtifactPaths(cwd, dir), ...p5TranscriptEvidencePaths, ...p5ReviewPacketEvidencePaths];
   const recordedP5Revision = assertedP5Entry?.revision ?? latestScopedP5Revision;
-  const changeSetMatch = !explicitRevision && typeof recordedP5Revision === 'string'
-    ? recordedP5Revision.match(/^git-change:([0-9a-f]{40}):[0-9a-f]{64}$/)
-    : null;
-  const liveWorktreeRevision = requiresRevision(phase) && !explicitRevision
-    ? (changeSetMatch
-        ? resolveChangeSetRevision({ cwd, base: changeSetMatch[1], ignorePaths: ignoredEvidencePaths })
-        : resolveRevision({ cwd, ignorePaths: ignoredEvidencePaths }))
+  const liveWorktreeRevision = requiresRevision(phase)
+    ? resolveLiveP5WorktreeRevision({
+        cwd,
+        explicitRevision,
+        recordedP5Revision,
+        ignorePaths: ignoredEvidencePaths,
+      })
     : null;
   const currentRevision = requiresRevision(phase)
     ? explicitRevision ?? liveWorktreeRevision

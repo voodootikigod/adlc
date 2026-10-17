@@ -1,0 +1,98 @@
+{
+  "repo": "/home/voodootikigod/Projects/voodootikigod/adlc/.worktrees/adlc-modernization-plan",
+  "base": "feat/adlc-wave3",
+  "gate": {
+    "build": "npm run build:cursor-mcp",
+    "test": "npm test"
+  },
+  "tickets": [
+    {
+      "id": "W3-T1",
+      "title": "refactor(coldstart,premortem,parallax): consolidate prompt-only verdict helpers onto @adlc/core",
+      "body": "## Context\n`packages/coldstart/lib/verdict.mjs`, `packages/premortem/lib/verdict.mjs`, and `packages/parallax/lib/verdict.mjs` each duplicate `readVerdictSource(source)` verbatim (25 lines each) and construct `{ promptOnly: true, usageStatus: 'unreported', verdict, ...extra }` in `recordVerdict`.\n\n## Changes Required\n1. In `packages/coldstart/lib/verdict.mjs`, `packages/premortem/lib/verdict.mjs`, and `packages/parallax/lib/verdict.mjs`, re-export `readVerdictSource` directly from `'@adlc/core'` and delegate `recordVerdict` to `recordPromptOnlyVerdict` from `'@adlc/core'` (`recordFn: ({ gate, ticket, rawData, dir }) => record({ gate, ticket, rawData, rawFiles: specPath, dir, key })`), guaranteeing canonical field precedence (`{ ...extra, promptOnly: true, usageStatus: 'unreported', verdict }`).\n2. Add unit tests in `packages/coldstart/test/prompt-only-usage.test.mjs`, `packages/premortem/test/prompt-only-usage.test.mjs`, and `packages/parallax/test/prompt-only-usage.test.mjs` verifying that caller-supplied `extra` properties cannot override `promptOnly: true`, `usageStatus: 'unreported'`, or `verdict`.\n\n## Acceptance Criteria\n- `readVerdictSource` and `recordVerdict` across `coldstart`, `premortem`, and `parallax` delegate to `@adlc/core` and enforce field precedence.\n- Verify: `node --test packages/coldstart/test/prompt-only-usage.test.mjs packages/premortem/test/prompt-only-usage.test.mjs packages/parallax/test/prompt-only-usage.test.mjs`",
+      "scope": [
+        "packages/coldstart/lib/verdict.mjs",
+        "packages/coldstart/test/prompt-only-usage.test.mjs",
+        "packages/premortem/lib/verdict.mjs",
+        "packages/premortem/test/prompt-only-usage.test.mjs",
+        "packages/parallax/lib/verdict.mjs",
+        "packages/parallax/test/prompt-only-usage.test.mjs"
+      ],
+      "rails": [
+        "packages/core/lib/primitives.mjs"
+      ],
+      "edges": [
+        {
+          "to": "W3-T2"
+        },
+        {
+          "to": "W3-T4"
+        }
+      ],
+      "tier": "cheap",
+      "pool_hint": "auto"
+    },
+    {
+      "id": "W3-T2",
+      "title": "feat(core,lesson-foundry,rejection-mining): promote inflight and Jaccard Union-Find clustering primitives to @adlc/core",
+      "body": "## Context\n1. `packages/hollow-test/lib/inflight.mjs`, `packages/review-calibration/lib/inflight.mjs`, and `packages/consensus-fix/lib/snapshot.mjs` duplicate symlink-following atomic file writes (`writeFileAtomic` that resolves symlinks via `realpathSync`, preserves mode `& 0o777`, writes to a random sibling `.tmp-<pid>-<hex>`, `fsyncSync`s, and renames) and crash-recovery helpers (`probeOwner`, `ownerStateFor`, `isContainedRelPath`, `resolveTarget`, `makeTempPath`, `sweepStaleTemps`, `clearRecord`).\n2. `packages/lesson-foundry/lib/cluster.mjs` and `packages/rejection-mining/lib/cluster.mjs` duplicate `STOPWORDS`, `jaccard(setA, setB)`, and the greedy Union-Find clustering algorithm (`find`, `union`, pairwise Jaccard `>= threshold`, group collection sorted by `a - b` and `a[0] - b[0]`).\n\n## Changes Required\n1. Create `packages/core/lib/inflight.mjs` exporting `probeOwner`, `ownerStateFor`, `isContainedRelPath`, `resolveTarget`, `makeTempPath`, `writeInflightAtomic`, `sweepStaleTemps`, and `clearRecord`.\n2. Create `packages/core/lib/cluster.mjs` exporting `BASE_STOPWORDS`, `jaccard(setA, setB)`, and `clusterByTokenSets(tokenSets, threshold)`.\n3. Re-export all symbols from `packages/core/index.mjs` and declare them in `packages/core/index.d.ts`, with comprehensive unit tests in `packages/core/test/wave3-primitives.test.mjs`.\n4. Refactor `packages/lesson-foundry/lib/cluster.mjs` and `packages/rejection-mining/lib/cluster.mjs` to import and re-export `jaccard` from `'@adlc/core'` and delegate `clusterFindings` and `clusterSignals` to `clusterByTokenSets` from `'@adlc/core'`.\n\n## Acceptance Criteria\n- `@adlc/core` exports inflight and clustering primitives (`probeOwner`, `ownerStateFor`, `isContainedRelPath`, `resolveTarget`, `makeTempPath`, `writeInflightAtomic`, `sweepStaleTemps`, `clearRecord`, `BASE_STOPWORDS`, `jaccard`, `clusterByTokenSets`), and `lesson-foundry` and `rejection-mining` delegate to `@adlc/core`.\n- Verify: `node --test packages/core/test/wave3-primitives.test.mjs packages/core/test/core.test.mjs packages/lesson-foundry/test/cluster.test.mjs packages/rejection-mining/test/cluster.test.mjs`",
+      "scope": [
+        "packages/core/lib/inflight.mjs",
+        "packages/core/lib/cluster.mjs",
+        "packages/core/index.mjs",
+        "packages/core/index.d.ts",
+        "packages/core/test/wave3-primitives.test.mjs",
+        "packages/lesson-foundry/lib/cluster.mjs",
+        "packages/lesson-foundry/test/cluster.test.mjs",
+        "packages/rejection-mining/lib/cluster.mjs",
+        "packages/rejection-mining/test/cluster.test.mjs"
+      ],
+      "rails": [
+        "packages/core/lib/primitives.mjs"
+      ],
+      "edges": [
+        {
+          "to": "W3-T3"
+        }
+      ],
+      "tier": "cheap",
+      "pool_hint": "auto"
+    },
+    {
+      "id": "W3-T3",
+      "title": "refactor(hollow-test,review-calibration,consensus-fix): adopt shared inflight and symlink-following atomic write primitives from @adlc/core",
+      "body": "## Context\n`packages/hollow-test/lib/inflight.mjs`, `packages/review-calibration/lib/inflight.mjs`, and `packages/consensus-fix/lib/snapshot.mjs` maintain separate copies of symlink-following `writeFileAtomic` and crash-recovery primitives (`probeOwner`, `ownerStateFor`, `isContainedRelPath`, `resolveTarget`, `makeTempPath`, `sweepStaleTemps`, `clearRecord`).\n\n## Changes Required\n1. Refactor `packages/hollow-test/lib/inflight.mjs` and `packages/review-calibration/lib/inflight.mjs` to import and re-export `probeOwner`, `ownerStateFor`, `isContainedRelPath`, `resolveTarget`, `makeTempPath`, `writeInflightAtomic as writeFileAtomic`, `sweepStaleTemps`, and `clearRecord` from `'@adlc/core'` while preserving each package's record schema (`RECORD_VERSION = 2` single-file record in `hollow-test` and `RECORD_VERSION = 1` multi-file journal in `review-calibration`).\n2. Refactor `packages/consensus-fix/lib/snapshot.mjs` to import and re-export `writeInflightAtomic as writeFileAtomic` from `'@adlc/core'` and add symlink/mode preservation tests in `packages/consensus-fix/test/snapshot.test.mjs`.\n\n## Acceptance Criteria\n- `hollow-test`, `review-calibration`, and `consensus-fix` delegate inflight and symlink-following atomic writes to `@adlc/core` with all unit and recovery tests passing.\n- Verify: `node --test packages/hollow-test/test/inflight.test.mjs packages/review-calibration/test/inflight-restore.test.mjs packages/consensus-fix/test/snapshot.test.mjs`",
+      "scope": [
+        "packages/hollow-test/lib/inflight.mjs",
+        "packages/hollow-test/test/inflight.test.mjs",
+        "packages/review-calibration/lib/inflight.mjs",
+        "packages/review-calibration/test/inflight-restore.test.mjs",
+        "packages/consensus-fix/lib/snapshot.mjs",
+        "packages/consensus-fix/test/snapshot.test.mjs"
+      ],
+      "rails": [
+        "packages/core/lib/inflight.mjs"
+      ],
+      "edges": [],
+      "tier": "cheap",
+      "pool_hint": "auto"
+    },
+    {
+      "id": "W3-T4",
+      "title": "refactor(runner): extract shared P5/P6 evidence integrity helpers into packages/runner/lib/p5-evidence.mjs",
+      "body": "## Context\n`packages/runner/lib/acceptance.mjs` and `packages/runner/lib/assertions.mjs` duplicate 11 P5/P6 evidence lookup and integrity-checking functions (`latestP5Revision`, `latestP5Entry`, `isEvidencePath`, `p5TranscriptPaths`, `p5ReviewPacketPaths`, `transcriptIntegrityErrors`, `p5ArtifactIntegrityError`, `reviewPacketIntegrityErrors`, `historicalTranscriptIntegrityErrors`, `ticketDefinitionBinding`, `staleTicketDefinitionError`, `manifestArtifactPaths`).\n\n## Changes Required\n1. Create `packages/runner/lib/p5-evidence.mjs` exporting `entryType`, `matchesTicket`, `matchesRevision`, `latestP5Revision`, `latestP5Entry`, `isEvidencePath`, `p5TranscriptPaths`, `p5ReviewPacketPaths`, `transcriptIntegrityErrors`, `p5ArtifactIntegrityError`, `reviewPacketIntegrityErrors`, `historicalTranscriptIntegrityErrors`, `ticketDefinitionBinding`, `staleTicketDefinitionError`, `manifestArtifactPaths`, and `resolveLiveP5WorktreeRevision`.\n2. Refactor `packages/runner/lib/acceptance.mjs` and `packages/runner/lib/assertions.mjs` to import those helpers from `./p5-evidence.mjs`.\n3. Add unit tests in `packages/runner/test/p5-evidence.test.mjs` covering every exported helper.\n\n## Acceptance Criteria\n- `packages/runner/lib/p5-evidence.mjs` is the single source of truth for P5/P6 evidence helpers in `@adlc/runner` and all runner tests pass.\n- Verify: `node --test packages/runner/test/runner.test.mjs packages/runner/test/p5-evidence.test.mjs`",
+      "scope": [
+        "packages/runner/lib/p5-evidence.mjs",
+        "packages/runner/lib/acceptance.mjs",
+        "packages/runner/lib/assertions.mjs",
+        "packages/runner/test/p5-evidence.test.mjs"
+      ],
+      "rails": [
+        "packages/runner/test/runner.test.mjs"
+      ],
+      "edges": [],
+      "tier": "cheap",
+      "pool_hint": "auto"
+    }
+  ]
+}

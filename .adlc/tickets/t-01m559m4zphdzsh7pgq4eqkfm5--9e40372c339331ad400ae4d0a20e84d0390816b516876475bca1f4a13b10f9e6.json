@@ -1,0 +1,41 @@
+{
+  "body": "## Context\nConsolidate duplicated helpers across ADLC packages per `.adlc/specs/adlc-wave3-consolidation.md`:\n1. `W3-T1`: Re-export `readVerdictSource` and delegate `recordVerdict` to `recordPromptOnlyVerdict` from `@adlc/core` in `coldstart`, `premortem`, and `parallax`.\n2. `W3-T2`: Promote shared inflight crash-recovery (`probeOwner`, `ownerStateFor`, `isContainedRelPath`, `resolveTarget`, `makeTempPath`, `writeInflightAtomic`, `sweepStaleTemps`, `clearRecord`) and Jaccard Union-Find clustering (`BASE_STOPWORDS`, `jaccard`, `clusterByTokenSets`) primitives to `@adlc/core`, and adopt clustering primitives in `lesson-foundry` and `rejection-mining`.\n3. `W3-T3`: Adopt shared inflight and symlink-following atomic write primitives from `@adlc/core` in `hollow-test`, `review-calibration`, and `consensus-fix`.\n4. `W3-T4`: Extract duplicated P5/P6 evidence integrity helpers into `packages/runner/lib/p5-evidence.mjs` and adopt in `packages/runner/lib/acceptance.mjs` and `packages/runner/lib/assertions.mjs`.\n\n## Acceptance Criteria\n- All 9 acceptance criteria in `.adlc/specs/adlc-wave3-consolidation.md` pass.\n- Verify: `node --test packages/coldstart/test/prompt-only-usage.test.mjs packages/premortem/test/prompt-only-usage.test.mjs packages/parallax/test/prompt-only-usage.test.mjs packages/core/test/wave3-primitives.test.mjs packages/core/test/types.test.mjs packages/lesson-foundry/test/cluster.test.mjs packages/rejection-mining/test/cluster.test.mjs packages/hollow-test/test/inflight.test.mjs packages/review-calibration/test/inflight-restore.test.mjs packages/consensus-fix/test/snapshot.test.mjs packages/runner/test/runner.test.mjs packages/runner/test/p5-evidence.test.mjs`",
+  "category": "refactor",
+  "duration": 2,
+  "edges": [],
+  "id": "T-01M559M4ZPHDZSH7PGQ4EQKFM5",
+  "rails": [
+    "packages/core/lib/primitives.mjs",
+    "packages/runner/test/runner.test.mjs"
+  ],
+  "scope": [
+    "packages/coldstart/lib/verdict.mjs",
+    "packages/coldstart/test/prompt-only-usage.test.mjs",
+    "packages/premortem/lib/verdict.mjs",
+    "packages/premortem/test/prompt-only-usage.test.mjs",
+    "packages/parallax/lib/verdict.mjs",
+    "packages/parallax/test/prompt-only-usage.test.mjs",
+    "packages/core/lib/inflight.mjs",
+    "packages/core/lib/cluster.mjs",
+    "packages/core/index.mjs",
+    "packages/core/index.d.ts",
+    "packages/core/test/wave3-primitives.test.mjs",
+    "packages/lesson-foundry/lib/cluster.mjs",
+    "packages/lesson-foundry/test/cluster.test.mjs",
+    "packages/rejection-mining/lib/cluster.mjs",
+    "packages/rejection-mining/test/cluster.test.mjs",
+    "packages/hollow-test/lib/inflight.mjs",
+    "packages/hollow-test/test/inflight.test.mjs",
+    "packages/review-calibration/lib/inflight.mjs",
+    "packages/review-calibration/test/inflight-restore.test.mjs",
+    "packages/consensus-fix/lib/snapshot.mjs",
+    "packages/consensus-fix/test/snapshot.test.mjs",
+    "packages/runner/lib/p5-evidence.mjs",
+    "packages/runner/lib/acceptance.mjs",
+    "packages/runner/lib/assertions.mjs",
+    "packages/runner/test/p5-evidence.test.mjs",
+    ".adlc/specs/adlc-wave3-consolidation.md",
+    ".adlc/specs/wave3-plan.json"
+  ],
+  "title": "refactor(adlc): Wave 3 cross-package consolidation of verdict, inflight, clustering, and runner P5/P6 helpers"
+}

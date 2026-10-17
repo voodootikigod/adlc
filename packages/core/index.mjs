@@ -14,6 +14,8 @@ export * from './lib/railpath.mjs';
 export * as mutate from './lib/mutate.mjs';
 export * from './lib/text.mjs';
 export * from './lib/primitives.mjs';
+export * from './lib/inflight.mjs';
+export * from './lib/cluster.mjs';
 
 // Promoted shared helpers
 export { activeTickets } from './lib/tickets.mjs';
@@ -25,3 +27,19 @@ export {
   readVerdictSource,
   recordPromptOnlyVerdict,
 } from './lib/primitives.mjs';
+export {
+  makeTempPath,
+  writeInflightAtomic,
+  probeOwner,
+  ownerStateFor,
+  isContainedRelPath,
+  resolveTarget,
+  sweepStaleTemps,
+  clearRecord,
+} from './lib/inflight.mjs';
+export {
+  BASE_STOPWORDS,
+  jaccard,
+  clusterByTokenSets,
+} from './lib/cluster.mjs';
+

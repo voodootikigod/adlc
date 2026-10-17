@@ -1,100 +1,33 @@
-import { canonicalJson, resolveChangeSetRevision, resolveRevision, sha256 } from '@adlc/core';
+import { sha256 } from '@adlc/core';
 import { appendManifestEntry } from '@adlc/gate-manifest';
 // Scoped to root + this checkout's own segment: `latestP5Entry`'s `.at(-1)`
 // below is a chronology claim, and only this chain can carry one. See
 // own-chain.mjs.
 import { readOwnManifestChain } from '@adlc/gate-manifest/lib/own-chain.mjs';
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
-import { LegacyTicketStore, loadTicketSnapshot } from '@adlc/tickets';
+import { readFileSync, statSync } from 'node:fs';
+import { relative, resolve } from 'node:path';
+import {
+  historicalTranscriptIntegrityErrors,
+  isEvidencePath,
+  latestP5Entry,
+  latestP5Revision,
+  manifestArtifactPaths,
+  p5ReviewPacketPaths,
+  p5TranscriptPaths,
+  resolveLiveP5WorktreeRevision,
+  reviewPacketIntegrityErrors,
+  staleTicketDefinitionError,
+  ticketDefinitionBinding,
+  transcriptIntegrityErrors,
+} from './p5-evidence.mjs';
 
 function now() {
   return new Date().toISOString();
 }
 
-function latestP5Revision(entries, ticket) {
-  return latestP5Entry(entries, ticket)?.revision;
-}
-
-function latestP5Entry(entries, ticket, revision) {
-  return entries
-    .filter((entry) => entry.type === 'p5-complete' && entry.ticket === ticket)
-    .filter((entry) => revision === undefined || entry.revision === revision)
-    .at(-1);
-}
-
-function p5TranscriptPaths(entry, cwd) {
-  const path = entry?.transcript?.path;
-  if (!path || !isEvidencePath(cwd, path)) return [];
-  return [path];
-}
-
-function p5ReviewPacketPaths(entry, cwd) {
-  return [
-    entry?.inputPath,
-    entry?.reviewPacket?.prompt?.path,
-    entry?.reviewPacket?.inputs?.path,
-  ].filter((path) => path && isEvidencePath(cwd, path));
-}
-
 function isInsideCwd(cwd, absolute) {
   const rel = relative(cwd, absolute).replaceAll('\\', '/');
   return rel !== '' && !rel.startsWith('../') && rel !== '..';
-}
-
-function transcriptIntegrityErrors(entry) {
-  const transcript = entry?.transcript;
-  if (!transcript?.path || !transcript?.hash) return [];
-  try {
-    const content = readFileSync(transcript.path);
-    if (sha256(content) === transcript.hash) return [];
-    return [`P5 evidence is stale: transcript hash changed after prosecution: ${transcript.path}`];
-  } catch (err) {
-    return [`P5 evidence is stale: transcript cannot be read: ${transcript.path}: ${err.message}`];
-  }
-}
-
-function p5ArtifactIntegrityError(label, artifact) {
-  if (!artifact?.path || !artifact?.hash) {
-    return `P5 evidence is incomplete: ${label} missing path/hash`;
-  }
-  try {
-    const content = readFileSync(artifact.path);
-    if (sha256(content) === artifact.hash) return null;
-    return `P5 evidence is stale: ${label} hash changed after prosecution: ${artifact.path}`;
-  } catch (err) {
-    return `P5 evidence is stale: ${label} cannot be read: ${artifact.path}: ${err.message}`;
-  }
-}
-
-function reviewPacketIntegrityErrors(entry) {
-  if (!entry?.reviewPacket || typeof entry.reviewPacket !== 'object') {
-    return ['P5 evidence is incomplete: p5-complete missing reviewPacket'];
-  }
-  const errors = [];
-  if (entry.reviewPacket.cleanWorktree !== entry.revision) {
-    errors.push(`P5 evidence is incomplete: reviewPacket cleanWorktree does not match ${entry.revision}`);
-  }
-  const promptError = p5ArtifactIntegrityError('reviewPacket.prompt', entry.reviewPacket.prompt);
-  if (promptError) errors.push(promptError);
-  const inputsError = p5ArtifactIntegrityError('reviewPacket.inputs', entry.reviewPacket.inputs);
-  if (inputsError) errors.push(inputsError);
-  return errors;
-}
-
-function historicalTranscriptIntegrityErrors(entries, ticket, assertedEntry, cwd) {
-  if (!assertedEntry?.transcript?.path) return [];
-  const assertedPath = resolve(cwd, assertedEntry.transcript.path);
-  return entries
-    .filter((entry) => entry !== assertedEntry)
-    .filter((entry) => entry.type === 'p5-complete' && entry.ticket === ticket)
-    .filter((entry) => entry.transcript?.path && resolve(cwd, entry.transcript.path) !== assertedPath)
-    .flatMap((entry) => transcriptIntegrityErrors(entry));
-}
-
-function isEvidencePath(cwd, path) {
-  const rel = relative(cwd, resolve(cwd, path)).replaceAll('\\', '/');
-  return rel.startsWith('.adlc/') || rel.startsWith('.omo/evidence/');
 }
 
 function validateInWorktreeEvidencePath(cwd, label, path) {
@@ -103,37 +36,6 @@ function validateInWorktreeEvidencePath(cwd, label, path) {
     return `${label} inside the worktree must live under .adlc/ or .omo/evidence/: ${path}`;
   }
   return null;
-}
-
-function ticketDefinitionBinding(cwd, ticket, dir) {
-  try {
-    const customPath = resolve(cwd, dir, 'tickets.json');
-    const snapshot = customPath !== resolve(cwd, '.adlc/tickets.json') && existsSync(customPath)
-      ? new LegacyTicketStore(customPath).load()
-      : loadTicketSnapshot({ root: cwd });
-    return snapshot.get(ticket) ? { ticketHash: snapshot.ticketHashes[ticket], storeHash: snapshot.hash } : null;
-  } catch { return null; }
-}
-
-function staleTicketDefinitionError(recordedHash, currentHash) {
-  if (recordedHash === null) {
-    return 'P5 evidence is stale: ticket definition was not bound during prosecution';
-  }
-  if (recordedHash === currentHash) return null;
-  if (currentHash === null) {
-    return 'P5 evidence is stale: ticket definition disappeared after prosecution';
-  }
-  return 'P5 evidence is stale: ticket definition changed after prosecution';
-}
-
-function manifestArtifactPaths(cwd, dir) {
-  const root = resolve(cwd, dir);
-  // manifest.d/ (T-MANIFEST-FOREST slice 3) is the segmented equivalent of
-  // manifest.jsonl/manifest.lock — see prosecute/lib/run.mjs's identical
-  // helper for the full rationale (adversarial-review finding: without this,
-  // a segmented repo's evidence appends move the revision they are supposed
-  // to attest).
-  return [join(root, 'manifest.jsonl'), join(root, 'manifest.lock'), join(root, 'manifest.d'), join(root, 'tickets.json')];
 }
 
 export function recordAcceptancePacket({
@@ -206,19 +108,17 @@ export function recordAcceptancePacket({
     : null;
   errors.push(...transcriptIntegrityErrors(assertedP5Entry));
   errors.push(...reviewPacketIntegrityErrors(assertedP5Entry));
-  errors.push(...historicalTranscriptIntegrityErrors(entries, ticket, assertedP5Entry, cwd));
+  errors.push(...historicalTranscriptIntegrityErrors(entries, assertedP5Entry, ticket, cwd));
   const ignorePaths = packetPath
     ? [...manifestArtifactPaths(cwd, dir), ...transcriptPaths, ...reviewPacketPaths, ...artifactPaths, packetPath]
     : [...manifestArtifactPaths(cwd, dir), ...transcriptPaths, ...reviewPacketPaths, ...artifactPaths];
   const recordedP5Revision = assertedP5Entry?.revision ?? p5Revision;
-  const changeSetMatch = !revision && typeof recordedP5Revision === 'string'
-    ? recordedP5Revision.match(/^git-change:([0-9a-f]{40}):[0-9a-f]{64}$/)
-    : null;
-  const liveWorktreeRevision = revision
-    ? null
-    : (changeSetMatch
-        ? resolveChangeSetRevision({ cwd, base: changeSetMatch[1], ignorePaths })
-        : resolveRevision({ cwd, ignorePaths }));
+  const liveWorktreeRevision = resolveLiveP5WorktreeRevision({
+    cwd,
+    explicitRevision: revision,
+    recordedP5Revision,
+    ignorePaths,
+  });
   const assertedRevision = revision ?? p5Revision;
   if (!revision && assertedRevision && !liveWorktreeRevision) {
     errors.push(`current worktree revision could not be resolved while P5 evidence exists at ${assertedRevision}`);

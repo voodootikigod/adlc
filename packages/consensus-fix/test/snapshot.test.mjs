@@ -5,10 +5,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync } from 'node:fs';
+import { writeFileSync, readFileSync, symlinkSync, lstatSync, statSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
-import { takeSnapshot, restoreSnapshot, applyChanges } from '../lib/snapshot.mjs';
+import { writeInflightAtomic } from '@adlc/core';
+import { takeSnapshot, restoreSnapshot, applyChanges, writeFileAtomic } from '../lib/snapshot.mjs';
 
 test('takeSnapshot captures current file contents', (t) => {
   const dir = tmp(t, 'consensus-fix-test-');
@@ -110,4 +111,58 @@ test('snapshot round-trip: take → mutate → restore is stable', (t) => {
   restoreSnapshot(snap);
 
   assert.equal(readFileSync(f1, 'utf8'), original);
+});
+
+test('re-exported writeFileAtomic matches @adlc/core writeInflightAtomic', () => {
+  assert.equal(writeFileAtomic, writeInflightAtomic);
+});
+
+test('writeFileAtomic and restoreSnapshot preserve symlinks and write through them', (t) => {
+  const dir = tmp(t, 'consensus-symlink-test-');
+  const realFile = join(dir, 'real.mjs');
+  const symlinkFile = join(dir, 'link.mjs');
+
+  writeFileSync(realFile, 'real content');
+  symlinkSync(realFile, symlinkFile);
+
+  assert.equal(lstatSync(symlinkFile).isSymbolicLink(), true);
+
+  // writeFileAtomic writes through symlink and preserves link
+  writeFileAtomic(symlinkFile, 'updated via atomic');
+  assert.equal(lstatSync(symlinkFile).isSymbolicLink(), true, 'writeFileAtomic preserved symlink');
+  assert.equal(readFileSync(realFile, 'utf8'), 'updated via atomic');
+  assert.equal(readFileSync(symlinkFile, 'utf8'), 'updated via atomic');
+
+  // restoreSnapshot preserves symlink and restores target
+  const snap = takeSnapshot([symlinkFile]);
+  writeFileSync(realFile, 'corrupted');
+  assert.equal(readFileSync(symlinkFile, 'utf8'), 'corrupted');
+
+  restoreSnapshot(snap);
+  assert.equal(lstatSync(symlinkFile).isSymbolicLink(), true, 'restoreSnapshot preserved symlink');
+  assert.equal(readFileSync(realFile, 'utf8'), 'updated via atomic');
+  assert.equal(readFileSync(symlinkFile, 'utf8'), 'updated via atomic');
+});
+
+test('writeFileAtomic and restoreSnapshot preserve file modes', (t) => {
+  const dir = tmp(t, 'consensus-mode-test-');
+  const execFile = join(dir, 'script.sh');
+
+  writeFileSync(execFile, '#!/bin/sh\necho hi\n');
+  chmodSync(execFile, 0o755);
+  assert.equal(statSync(execFile).mode & 0o777, 0o755);
+
+  // writeFileAtomic preserves mode
+  writeFileAtomic(execFile, '#!/bin/sh\necho updated\n');
+  assert.equal(statSync(execFile).mode & 0o777, 0o755, 'writeFileAtomic preserved 0755 mode');
+  assert.equal(readFileSync(execFile, 'utf8'), '#!/bin/sh\necho updated\n');
+
+  // restoreSnapshot preserves mode
+  const snap = takeSnapshot([execFile]);
+  writeFileSync(execFile, 'mutated content');
+  assert.equal(statSync(execFile).mode & 0o777, 0o755);
+
+  restoreSnapshot(snap);
+  assert.equal(statSync(execFile).mode & 0o777, 0o755, 'restoreSnapshot preserved 0755 mode');
+  assert.equal(readFileSync(execFile, 'utf8'), '#!/bin/sh\necho updated\n');
 });
