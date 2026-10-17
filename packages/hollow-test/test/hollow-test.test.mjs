@@ -892,7 +892,7 @@ describe('CLI: a syntactically invalid mutant is not a kill', () => {
 // OTHER file yields a kill — so an explicitly named target whose every mutant
 // was unparseable gets reported as success without a single test touching it.
 // That is the worst version of #293: the caller asked for that file specifically.
-describe('CLI: an explicit target with only invalid mutants is not masked', () => {
+describe('CLI: per-file accounting of invalid mutants', () => {
   let dir;
 
   beforeEach((t) => {
@@ -923,20 +923,19 @@ describe('CLI: an explicit target with only invalid mutants is not masked', () =
     commitAll(dir, 'add a plainly mutable file');
   });
 
-  it('fails even though the other file produced a killed mutant', () => {
-    // --max 2: one mutant each. shape.mjs's single allocated mutant is the
-    // invalid null-return. Without per-file accounting the run exits 0 on the
-    // strength of plain.mjs.
+  it('refills an explicit target after its first mutant is invalid', () => {
+    // --max 2 gives one slot to each file. --target mutates the whole shape file,
+    // so after discarding null-return it can reach and kill the next candidate;
+    // the invalid candidate no longer consumes shape.mjs's only slot.
     const result = runCli(
       ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1',
-       '--target', 'src/shape.mjs', '--max', '2'],
+       '--target', 'src/shape.mjs', '--max', '2', '--json'],
       dir
     );
-    const out = result.stderr + result.stdout;
-    assert.notEqual(result.status, 0,
-      `an explicit target with no valid mutant must not pass: ${out}`);
-    assert.match(out, /src\/shape\.mjs/,
-      'the refusal must name the target that went unchecked');
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.summary.invalid, 1);
+    assert.equal(report.summary.killed, 2);
   });
 
   // Same hole one step over: the file arrives via the DIFF rather than --target.

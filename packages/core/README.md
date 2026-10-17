@@ -15,6 +15,7 @@ import { parseArgs, pass, gateFail, opError, printJson, readStdin, promptOnly } 
 import { ADLC_DIR, appendEntry, readEntries, ledgerPath, sha256, hashFiles } from '../../core/index.mjs';
 import { TICKETS_PATH, loadTickets, validateTicket, topoSort, computeFloat, globMatch, inScope, scopesOverlap } from '../../core/index.mjs';
 import { mutate } from '../../core/index.mjs'; // mutate.generateMutants / applyMutant / changedLinesFromDiff / OPERATORS
+import { syntaxLanguage, resolveTypeScript, checkSyntaxDetail, checkSyntax, syntaxCheckProblem } from '../../core/index.mjs';
 ```
 
 ## llm
@@ -71,6 +72,21 @@ Schema (see lib/tickets.mjs header): `{ id, title, body, scope[], rails[], edges
 - `mutate.generateMutants(content, { targetLines?, maxMutants? })` → `[{ line, operator, original, mutated }]` (skips comments/imports/console lines).
 - `mutate.applyMutant(content, mutant)` → mutated content (throws if line content drifted).
 - `mutate.changedLinesFromDiff(diffText)` → `{ file: Set<newSideLineNo> }`. Hunk body lines are classified by their first character only, so a source line that itself begins with `--` or `++` is still a deletion or addition.
+
+## syntax
+
+- `syntaxLanguage(file)` identifies JavaScript and the TypeScript family.
+- `resolveTypeScript(filePath)` walks upward for the nearest `typescript` with
+  the JavaScript parser API, skipping native TypeScript 7 packages.
+- `checkSyntaxDetail(filePath, cwd, execPath?)` returns `{ verdict, detail }`.
+  The detail is `null` for syntax verdicts and explains an `unknown` result.
+- `checkSyntax(filePath, cwd, execPath?)` returns only `valid`, `invalid`, or
+  `unknown`; checker failures never become syntax verdicts.
+- `syntaxCheckProblem(filePath)` explains a missing checker and includes the
+  `npm i -D typescript` install hint for TypeScript-family files.
+
+TypeScript is resolved from the repository under test and is not a dependency of
+`@adlc/core`.
 
 ## text (shared payload-capping helpers)
 

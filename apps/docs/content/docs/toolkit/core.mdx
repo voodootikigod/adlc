@@ -88,6 +88,12 @@ The rest of core is the deterministic machinery the gates share:
   a deletion or addition.
 - **Usage**: `onUsage` for Gemini reports `outputTokens` including thinking
   tokens (`thoughtsTokenCount`), as Anthropic and OpenAI already do.
+- **Syntax**: `syntaxLanguage` identifies JavaScript and TypeScript-family files;
+  `resolveTypeScript` finds a repository-local JavaScript parser API;
+  `checkSyntaxDetail` returns a verdict plus the cause of an `unknown` result;
+  `checkSyntax` returns only `valid`, `invalid`, or `unknown`; and
+  `syntaxCheckProblem` explains when no checker is available. Core adds no
+  TypeScript dependency.
 
 ## test-kit (`@adlc/core/test-kit`)
 

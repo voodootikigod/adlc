@@ -13,6 +13,7 @@ export * from './lib/shell.mjs';
 export * from './lib/railpath.mjs';
 export * as mutate from './lib/mutate.mjs';
 export * from './lib/text.mjs';
+export * from './lib/syntax.mjs';
 
 // Promoted shared helpers
 export { activeTickets } from './lib/tickets.mjs';

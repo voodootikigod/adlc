@@ -342,5 +342,16 @@ export function resolveRailPath(filePath: string, root: string): string;
 export function tail(str: string, maxChars?: number): string;
 export function fence(label: string, content: string, maxChars: number, opts?: { bias?: 'head' | 'tail' }): string;
 
+export type SyntaxLanguage = 'javascript' | 'typescript';
+export type SyntaxCheckResult = 'valid' | 'invalid' | 'unknown';
+export function syntaxLanguage(file: string): SyntaxLanguage | null;
+export function resolveTypeScript(filePath: string): { path: string; version: string } | null;
+export function checkSyntaxDetail(filePath: string, cwd: string, execPath?: string): {
+  verdict: SyntaxCheckResult;
+  detail: string | null;
+};
+export function checkSyntax(filePath: string, cwd: string, execPath?: string): SyntaxCheckResult;
+export function syntaxCheckProblem(filePath: string): string | null;
+
 // Types of the @adlc/core/test-kit subpath, declared in lib/test-kit.d.mts.
 export type { TestContext, GitRepoOptions, GitRepoResult, RunBinOptions } from './lib/test-kit.mjs';

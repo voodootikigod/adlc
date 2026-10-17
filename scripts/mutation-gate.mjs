@@ -207,6 +207,8 @@ export function testTargetFor(file, root = ROOT) {
 // dangerous direction: if the wrapper decides a file is not source, hollow-test
 // is never invoked for it, so the required gate goes green without testing the
 // change. Re-declaring the predicate here, however carefully, recreates that.
+// This now includes the TypeScript family because hollow-test can judge it with
+// the repository's parser; declarations remain outside the runtime source set.
 // scripts/test/mutation-gate.test.mjs asserts the two agree.
 // This repository owns two production files whose names match a test convention
 // (`node --test` discovers `*-test.*`). Convention cannot resolve the ambiguity,

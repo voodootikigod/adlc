@@ -5,9 +5,8 @@
 // file; nothing here runs a command authored by the reviewer under test.
 
 import { readFileSync } from 'node:fs';
-import { extname } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { tail } from '@adlc/core';
+import { checkSyntax, syntaxLanguage, tail } from '@adlc/core';
 import { writeFileAtomic, NO_JOURNAL } from './inflight.mjs';
 
 // Enough of a failing witness's output to show its failure line, small enough
@@ -58,22 +57,12 @@ export function classifyWitnessRun(run) {
   return 'completed';
 }
 
-const SYNTAX_CHECKED_EXTENSIONS = new Set(['.mjs', '.cjs', '.js']);
-
 /**
- * Tri-state syntax check of a file as it is on disk: `node --check` for
- * JavaScript, 'unknown' when the checker could not run.
- *
- * @returns {'valid'|'invalid'|'unknown'}
- */
-function defaultSyntaxCheck(absolutePath, cwd) {
-  const r = spawnSync(process.execPath, ['--check', absolutePath], { cwd, encoding: 'utf8', timeout: 30_000 });
-  return classifySyntaxResult(r);
-}
-
-/**
- * A checker that did not run to a normal exit (spawn error, signal, no status)
- * proves nothing about the file, so only a real exit status decides.
+ * Classify a `node --check` result. A checker that did not run to a normal exit
+ * (spawn error, signal, no status) proves nothing about the file, so only a
+ * real exit status decides. @adlc/core's checkSyntax applies this same rule to
+ * JavaScript; TypeScript-family workers have their own exit codes, so callers
+ * must not use this classifier for TypeScript.
  *
  * @param {{error?:unknown, signal?:string|null, status:number|null}} r
  * @returns {'valid'|'invalid'|'unknown'}
@@ -93,14 +82,14 @@ function mutatedSource(plant, original) {
 /**
  * Does the mutated file parse? Applied inside the in-flight journal like any
  * other write, restored before returning. Anything that prevents a verdict
- * (non-JavaScript file, unreadable or drifted file, checker failure) is
- * 'unknown' — the plant keeps today's treatment and records that it was never
+ * (unsupported file, unreadable or drifted file, checker failure) is 'unknown'
+ * — the plant keeps today's treatment and records that it was never
  * syntax-checked.
  *
  * @returns {'valid'|'invalid'|'unknown'}
  */
-function checkPlantSyntax(plant, cwd, { journal = NO_JOURNAL, syntaxFn = defaultSyntaxCheck } = {}) {
-  if (!SYNTAX_CHECKED_EXTENSIONS.has(extname(plant.absolutePath))) return 'unknown';
+function checkPlantSyntax(plant, cwd, { journal = NO_JOURNAL, syntaxFn = checkSyntax } = {}) {
+  if (syntaxLanguage(plant.absolutePath) === null) return 'unknown';
   let original;
   try {
     original = readFileSync(plant.absolutePath, 'utf8');

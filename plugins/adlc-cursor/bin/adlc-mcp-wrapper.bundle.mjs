@@ -6,7 +6,7 @@ var define_ADLC_MCP_BUILD_METADATA_default = { pluginVersion: "1.12.0", bundledD
 // plugins/adlc-cursor/bin/adlc-mcp-wrapper.mjs
 import { realpathSync } from "node:fs";
 import { resolve as resolve5 } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // plugins/adlc-cursor/lib/mcp-roots-proxy.mjs
 import { spawn as spawn2 } from "node:child_process";
@@ -1958,6 +1958,10 @@ var ARRAY_LITERAL_RE = new RegExp(
   `\\[\\s*(${ARRAY_LITERAL_ELEMENT}(?:\\s*,\\s*${ARRAY_LITERAL_ELEMENT})+)\\s*\\]`
 );
 
+// packages/core/lib/syntax.mjs
+import { fileURLToPath } from "node:url";
+var TYPESCRIPT_WORKER = fileURLToPath(new URL("./syntax-check-typescript.mjs", import.meta.url));
+
 // plugins/adlc-cursor/generated-active-ticket.mjs
 import { lstatSync as lstatSync7, openSync as openSync4, fstatSync, readSync as readSync2, closeSync as closeSync4, constants as fsConstants2 } from "node:fs";
 import { dirname as dirname10, join as join10 } from "node:path";
@@ -3241,7 +3245,7 @@ function canonicalPath(path) {
     return resolve5(path);
   }
 }
-if (process.argv[1] && canonicalPath(fileURLToPath(import.meta.url)) === canonicalPath(process.argv[1])) {
+if (process.argv[1] && canonicalPath(fileURLToPath2(import.meta.url)) === canonicalPath(process.argv[1])) {
   main().catch((err) => {
     process.stderr.write(`adlc-mcp-wrapper: ${err?.message ?? err}
 `);

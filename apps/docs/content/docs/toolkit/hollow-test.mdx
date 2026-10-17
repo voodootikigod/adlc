@@ -40,11 +40,36 @@ adlc hollow-test --test-cmd "node --test test/" [--base <ref>] [--max <n>] [--ti
 Refuses to run on a dirty working tree, and requires a green baseline before mutating
 so a failing suite cannot masquerade as killing every mutant. If the baseline suite fails, hollow-test emits the test command's captured stdout and stderr to stderr before exiting, ensuring failure reasons and failing tests are diagnosable.
 
+## JavaScript and TypeScript source
+
+The source allow-list is `.js`, `.mjs`, `.cjs`, `.ts`, `.mts`, `.cts`, `.tsx`,
+and `.jsx`. Declaration files (`.d.ts`, `.d.mts`, `.d.cts`) and test paths are
+not mutated. Before writing any mutant, hollow-test verifies that every
+unmutated target parses.
+
+JavaScript uses `node --check`. TypeScript-family files use the nearest
+repository-local `typescript` with the 5.x or 6.x JavaScript parser API; a
+TypeScript 7 native package is skipped while the resolver walks toward the
+filesystem root. A TypeScript diff therefore needs:
+
+```sh
+npm i -D typescript
+```
+
+The check is syntactic, not a type check: a mutant that only breaks types still
+counts as valid. TypeScript's parser also accepts a few invalid regular-expression
+bodies that V8 rejects. A diff that changes only types has no mutant and exits 1,
+like an import-only change.
+
+A mutant that does not parse does not use a budget slot; hollow-test tries the
+next candidate, up to 8 tries for each slot. Invalid candidates remain visible
+in the report, but only killed or surviving mutants spend the file's quota.
+
 ## Exit codes
 
 <div style={{ display: 'grid', gap: '0.25rem' }}>
   <span style={{ color: 'var(--adlc-pass)' }}>**0**: gate passes. Every generated mutant was killed by the suite.</span>
-  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error. Dirty tree, not a git repo, bad arguments, non-green baseline, nothing eligible to mutate with no `--target`/`--rails`, or a selected file received no mutation budget (see below).</span>
+  <span style={{ color: 'var(--adlc-wish)' }}>**1**: operational error. Dirty tree, not a git repo, bad arguments, non-green baseline, no usable `typescript` for a TypeScript target, a target that does not parse unmutated, nothing eligible to mutate with no `--target`/`--rails`, or a selected file received no mutation budget (see below).</span>
   <span style={{ color: 'var(--adlc-fail)' }}>**2**: gate fails. One or more mutants survived (hollow coverage).</span>
 </div>
 

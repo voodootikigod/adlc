@@ -8,7 +8,10 @@ import { readFileSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { checkSyntax, checkSyntaxDetail } from '@adlc/core';
 import { writeFileAtomic } from './inflight.mjs';
+
+export { checkSyntax };
 
 // Strip NODE_TEST_CONTEXT from the child environment so that a test command
 // using `node --test` does not hit Node.js v22's recursive-invocation guard
@@ -308,13 +311,13 @@ export function runMutant(filePath, original, mutated, testCmd, timeoutMs, cwd) 
     // per-file quota of one, that single invalid mutant can be the only trial,
     // and the gate reports success having exercised no assertion at all.
     //
-    // `node --check` rather than a parser dependency: @adlc/hollow-test is
-    // published, and this asks exactly the right question — would Node accept
-    // this file — honouring the real extension and package type instead of
-    // approximating them.
-    syntax = checkSyntax(filePath, cwd);
-    invalid = syntax === 'invalid';
-    if (syntax === 'valid') trial = runTest(testCmd, timeoutMs, cwd);
+    // The shared core check uses `node --check` for JavaScript and the
+    // repository's own TypeScript parser for the TS family. Keeping resolution
+    // in the repository under test avoids a runtime dependency while preserving
+    // the real extension's grammar.
+    syntax = checkSyntaxDetail(filePath, cwd);
+    invalid = syntax.verdict === 'invalid';
+    if (syntax.verdict === 'valid') trial = runTest(testCmd, timeoutMs, cwd);
   } finally {
     // Always restore original content, even if the test run threw — and
     // atomically, for the same reason as the mutation write above.
@@ -326,10 +329,10 @@ export function runMutant(filePath, original, mutated, testCmd, timeoutMs, cwd) 
   // the tests for a mutation that was never valid code.
   // Could not determine validity — refuse to score it either way. The caller
   // turns this into an operational failure; guessing is what reopens #293.
-  if (syntax === 'unknown') {
+  if (syntax.verdict === 'unknown') {
     return {
       killed: false, invalid: false, undetermined: true,
-      reason: 'syntax check did not run', timedOut: false, exitCode: null,
+      reason: `syntax check did not run (${syntax.detail})`, timedOut: false, exitCode: null,
     };
   }
 
@@ -357,31 +360,4 @@ export function runMutant(filePath, original, mutated, testCmd, timeoutMs, cwd) 
     timedOut: trial.timedOut,
     exitCode: trial.status,
   };
-}
-
-/**
- * TRI-STATE syntax check: 'valid' | 'invalid' | 'unknown'.
- *
- * "Could not determine" must never collapse into "valid". If the checker is
- * killed, times out, or cannot spawn, assuming validity reopens the exact
- * false-kill path this exists to close: the test command then runs against
- * unparseable source, exits non-zero on the parse error, and that is scored as a
- * kill. Transient process exhaustion would become coverage evidence.
- *
- * Exported so the three outcomes can be tested directly, including the one that
- * needs an injected failure.
- *
- * @param {string} filePath absolute path to the (currently mutated) file
- * @param {string} cwd
- * @param {string} [execPath] node binary to check with; overridable for tests
- * @returns {'valid'|'invalid'|'unknown'}
- */
-export function checkSyntax(filePath, cwd, execPath = process.execPath) {
-  const r = spawnSync(execPath, ['--check', filePath], {
-    cwd,
-    encoding: 'utf8',
-    timeout: 30000,
-  });
-  if (r.error || r.signal || typeof r.status !== 'number') return 'unknown';
-  return r.status === 0 ? 'valid' : 'invalid';
 }

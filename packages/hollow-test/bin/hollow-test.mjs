@@ -7,7 +7,10 @@
 
 import { readFileSync, realpathSync, existsSync } from 'node:fs';
 import { resolve, relative, isAbsolute, sep } from 'node:path';
-import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
+import {
+  parseArgs, pass, gateFail, opError, printJson, checkSyntaxDetail,
+  resolveTypeScript, syntaxCheckProblem, syntaxLanguage,
+} from '@adlc/core';
 import { gitDiff, isDirty, isGitRepo, resolveBase, mutate, git, repoRoot } from '@adlc/core';
 import {
   filterTargetFiles, buildFileTargets, readFileSafe, fileChangeIsCommentOnly, fileChangeIsVersionOnly,
@@ -74,6 +77,9 @@ Options:
                         as mutation targets (repeatable).
   --json                Machine-readable JSON output
   --help                Show this help
+
+Source files: JavaScript (.js/.mjs/.cjs) and the TypeScript family
+(.ts/.mts/.cts/.tsx/.jsx), not declaration files.
 
 Exit codes:
   0  All mutants killed (gate passes)
@@ -644,6 +650,43 @@ if (starvedByBudget.length > 0) {
   );
 }
 
+// Validate every original before the first mutation. If an original does not
+// parse, a mutant's parse result cannot be compared with a known-good baseline;
+// stopping here also guarantees that a missing TypeScript parser never leaves a
+// target briefly changed on disk.
+let typeScriptNotice = null;
+for (const target of fileTargets) {
+  // An unreadable file keeps its own reporting path in the mutation loop below
+  // (#658); judging its syntax here would misreport it as "does not parse".
+  if (readFileSafe(target.absolutePath) === null) continue;
+  const problem = syntaxCheckProblem(target.absolutePath);
+  if (problem !== null) opError(problem.replace(target.absolutePath, target.file));
+  const language = syntaxLanguage(target.absolutePath);
+  const typeScript = language === 'typescript' ? resolveTypeScript(target.absolutePath) : null;
+  if (typeScript !== null && typeScriptNotice === null) {
+    typeScriptNotice = `hollow-test: TypeScript-family files are syntax-checked with typescript ${typeScript.version} (${typeScript.path})`;
+  }
+  const syntax = checkSyntaxDetail(target.absolutePath, cwd);
+  if (syntax.verdict !== 'valid') {
+    const checker = language === 'javascript'
+      ? 'node --check'
+      : typeScript !== null
+        ? `typescript ${typeScript.version} (${typeScript.path})`
+        : 'the syntax checker';
+    if (syntax.verdict === 'unknown') {
+      opError(
+        `${target.file} could not be syntax-checked with ${checker}: ${syntax.detail}, so its mutants cannot be judged`
+      );
+    }
+    opError(
+      `${target.file} does not parse unmutated with ${checker}, so its mutants cannot be judged`
+    );
+  }
+}
+if (typeScriptNotice !== null) {
+  (useJson ? console.error : console.log)(typeScriptNotice);
+}
+
 // ── SIGINT handler: track which file is currently mutated so we can restore ──
 
 let currentFilePath = null;
@@ -686,6 +729,13 @@ process.on('SIGINT', () => {
 
 // ── mutation loop ────────────────────────────────────────────────────────────
 
+// Invalid candidates must not spend the evidence budget: no test ran against
+// them. The cap keeps pathological files bounded while still reaching a valid
+// candidate on most measured TypeScript. In line order, 8 tries leave 13.4% of
+// sampled mm-js TS files and 3.9% of this repository's with no valid mutant at
+// one slot, against measured floors of 12.5% and 3.9% respectively.
+const INVALID_TRIES_PER_SLOT = 8;
+
 const results = [];
 // Diff-derived files that could not be read at all (deleted/renamed/permission
 // issue between diff computation and this loop). Tracked separately from a
@@ -704,10 +754,19 @@ for (const target of fileTargets) {
     continue;
   }
 
+  // A zero-quota file remains selected for the fail-closed budget check below,
+  // but no candidate from it is attempted.
+  if (target.quota === 0) continue;
+
+  // Keep the mutator's existing line/operator order. The quota counts only
+  // candidates that reached a syntax-valid test verdict; invalid and
+  // undetermined candidates stay visible in results but do not spend a slot.
+  const tryLimit = target.quota * INVALID_TRIES_PER_SLOT;
   const mutants = mutate.generateMutants(content, {
     targetLines: target.targetLines,
-    maxMutants: target.quota,
+    maxMutants: tryLimit,
   });
+  let validResults = 0;
 
   for (const mutant of mutants) {
     let mutatedContent;
@@ -772,6 +831,8 @@ for (const target of fileTargets) {
       original: mutant.original,
       mutated: mutant.mutated,
     });
+    if (!trial.invalid && !trial.undetermined) validResults++;
+    if (validResults >= target.quota) break;
   }
 }
 
@@ -945,19 +1006,21 @@ const unchecked = [...validByFile.entries()]
 if (unchecked.length > 0) {
   const named = unchecked.filter((f) => mutableExplicitFiles.includes(f));
   opError(
-    `every mutant generated for ${unchecked.join(', ')} was syntactically invalid — no test ` +
+    `every mutant tried for ${unchecked.join(', ')} was syntactically invalid — no test ` +
     `ran against ${unchecked.length === 1 ? 'it' : 'them'}, so this run says nothing about ` +
     `${named.length > 0 ? 'the file(s) you asked to prosecute' : 'those changed file(s)'}. ` +
-    `Raise --max so a valid mutant is reached (see #293).`
+    `Up to each file's quota × ${INVALID_TRIES_PER_SLOT} candidates were tried; raise --max ` +
+    `to try more candidates (see #293).`
   );
 }
 
 if (invalidMutants.length === results.length) {
   const msg =
-    `every one of the ${results.length} generated mutant(s) was syntactically invalid, so ` +
+    `every one of the ${results.length} tried mutant(s) was syntactically invalid, so ` +
     `no assertion was ever exercised — this run proves nothing. Line-based operators can ` +
-    `produce unparseable code on multiline constructs (see issue #293); raise --max so a ` +
-    `valid mutant is reached, or narrow --target to a file with mutable single-line logic.`;
+    `produce unparseable code on multiline constructs (see issue #293); up to quota × ` +
+    `${INVALID_TRIES_PER_SLOT} candidates were tried per file. Raise --max to try more, or ` +
+    `narrow --target to a file with mutable single-line logic.`;
   if (useJson) {
     console.error(`error: ${msg}`);
     process.exit(1);

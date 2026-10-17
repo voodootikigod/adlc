@@ -81,23 +81,25 @@ test('hollowTestWouldMutate does not treat dotfiles as source', () => {
 // Caught by adversarial review, not by the tests written alongside that fix,
 // because those tests only asserted the extensions the fix happened to allow.
 // It must ALSO admit nothing more. An extension the operators cannot handle
-// produces INVALID mutants, and runner.mjs scores `killed = timedOut ||
-// status !== 0` — so a parse failure is credited as a kill. `invert-comparison`
-// rewrites `Promise<unknown>` to `Promise>=unknown>` and `<Button>` to
-// `>=Button>`; with the common per-file quota of one, that single invalid mutant
-// satisfies the entire gate having exercised no assertion.
+// produces INVALID mutants: `invert-comparison` rewrites `Promise<unknown>` to
+// `Promise>=unknown>` and `<Button>` to `>=Button>`. Before #306 such a mutant
+// was credited as a kill, so with a quota of one it could satisfy the whole gate
+// having exercised no assertion; that is why TypeScript was excluded (#293).
 //
-// Both directions were learned the hard way here: narrowing to mjs|cjs|js first
-// dropped 49 .ts/.tsx files while hollow-test still accepted them, then adding
-// TS back admitted the invalid-mutant path. Plain JavaScript only — and the
-// exclusion is REPORTED (see the skipped-files tests), which is the difference
-// between a documented coverage boundary and a hole. Tracked in #293.
-test('the allow-list admits plain JavaScript and nothing the operators cannot handle', () => {
-  for (const f of ['a.mjs', 'a.cjs', 'a.js', 'packages/x/lib/y.mjs', 'plugins/p/hooks/h.mjs']) {
+// #306 made an unparseable mutant a discard, and #313 gave the syntax check a
+// TypeScript parser (the repository's own `typescript`, see
+// packages/core/lib/syntax.mjs), so the TypeScript family is source again.
+// Declaration files are not: they hold no runtime behaviour a test could notice.
+// Python stays out (operators and test discovery are JS-shaped, see below).
+test('the allow-list admits JavaScript and the TypeScript family', () => {
+  for (const f of [
+    'a.mjs', 'a.cjs', 'a.js', 'packages/x/lib/y.mjs', 'plugins/p/hooks/h.mjs',
+    'a.ts', 'a.mts', 'a.cts', 'a.tsx', 'a.jsx', 'apps/docs/app/page.tsx', 'plugins/adlc-pi/index.ts',
+  ]) {
     assert.equal(hollowTestWouldMutate(f), true, `${f} is mutable source`);
   }
-  for (const f of ['a.ts', 'a.mts', 'a.cts', 'a.tsx', 'a.jsx', 'a.py', 'apps/docs/app/page.tsx']) {
-    assert.equal(hollowTestWouldMutate(f), false, `${f} needs syntax-aware mutation (#293)`);
+  for (const f of ['a.d.ts', 'packages/core/lib/test-kit.d.mts', 'a.d.cts', 'a.py', 'a.css']) {
+    assert.equal(hollowTestWouldMutate(f), false, `${f} is not mutable source`);
   }
 });
 
@@ -281,6 +283,7 @@ test('Python is not treated as mutable source while operators are JS-shaped', ()
 test('the wrapper and hollow-test agree on what source is', () => {
   const cases = [
     'a.mjs', 'a.cjs', 'a.js', 'a.jsx', 'a.ts', 'a.mts', 'a.cts', 'a.tsx',
+    'a.d.ts', 'a.d.mts', 'packages/core/lib/test-kit.d.mts',
     'packages/x/lib/y.mjs', 'apps/docs/app/page.tsx', 'plugins/p/index.ts',
     'CODEOWNERS', 'LICENSE', 'Dockerfile', 'Makefile', '.gitignore', '.nvmrc',
     'README.md', 'package.json', 'a.yml', 'a.lock', 'a.snap',
@@ -298,14 +301,19 @@ test('the wrapper and hollow-test agree on what source is', () => {
 
 // End to end at the classify() level: the unit above proves the predicate, this
 // proves the predicate is actually what gates the run. A TypeScript-only diff
-// must NOT short-circuit to 'nothing'.
-// TypeScript is excluded deliberately (#293 — invalid mutants score as kills),
-// so the requirement is not that it be mutated but that its exclusion is
-// REPORTED. Silence is the failure mode; a declared skip is a coverage boundary.
-test('a TypeScript-only diff is reported as skipped, not silently passed', () => {
+// must NOT short-circuit to 'nothing' — that was a declared skip while TypeScript
+// was excluded (#293), and is a coverage hole now that hollow-test mutates it.
+test('a TypeScript-only diff reaches the mutation gate', () => {
   const decision = classify(['plugins/adlc-pi/index.ts'], 12);
+  assert.notEqual(decision.kind, 'nothing');
+  assert.deepEqual(decision.skipped, []);
+});
+
+// A declaration file is still a reported skip, not a silent one.
+test('a declaration-only diff is reported as skipped', () => {
+  const decision = classify(['packages/core/lib/test-kit.d.mts'], 12);
   assert.equal(decision.kind, 'nothing');
-  assert.deepEqual(decision.skipped, ['plugins/adlc-pi/index.ts']);
+  assert.deepEqual(decision.skipped, ['packages/core/lib/test-kit.d.mts']);
 });
 
 test('hollowTestWouldMutate excludes non-code extensions', () => {

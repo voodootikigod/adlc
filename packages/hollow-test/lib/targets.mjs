@@ -57,7 +57,13 @@ const EXCLUDE_DIR_RE = /(?:^|\/)(?:tests?|specs?|__tests__)\//i;
 const EXCLUDE_FILE_RE =
   /(?:^|\/)(?:[^/]*\.(?:test|spec)\.[^/]+|(?:test|spec)\.[^/.]+|(?:test|spec)[-_][^/]+|[^/]*[-_](?:test|spec)\.[^/.]+)$/i;
 
-const SOURCE_EXT_RE = /\.(?:mjs|cjs|js)$/i;
+// TypeScript was excluded because JS-shaped operators often produce invalid TS
+// around generics and JSX. #306 made invalid mutants discards rather than false
+// kills, and #313 supplies the repository's TypeScript parser, so those files can
+// now be judged safely. Declaration files remain excluded: they describe types,
+// not runtime behaviour that a test can observe.
+const SOURCE_EXT_RE = /\.(?:mjs|cjs|js|mts|cts|ts|tsx|jsx)$/i;
+const DECLARATION_RE = /\.d\.[mc]?ts$/i;
 
 /**
  * True when a path is source this tool can mutate. The single definition of
@@ -76,10 +82,13 @@ const SOURCE_EXT_RE = /\.(?:mjs|cjs|js)$/i;
  * @param {string} file repo-relative path
  */
 export function isSupportedSourceExtension(file) {
-  return SOURCE_EXT_RE.test(file);
+  return SOURCE_EXT_RE.test(file) && !DECLARATION_RE.test(file);
 }
 
 export function isMutableSource(file, { testGlobs = [], sourceGlobs = [] } = {}) {
+  // A source declaration can resolve ambiguous test-like names, but cannot turn
+  // a declaration file into runtime source: there is no behaviour to mutate.
+  if (DECLARATION_RE.test(file)) return false;
   // Explicit source declaration wins over every heuristic below. Names like
   // `hollow-test.mjs` are indistinguishable from a test by convention alone, so
   // the only correct answer is to let the project say which it is.
