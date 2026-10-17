@@ -519,3 +519,56 @@ test('recordPromptOnlyVerdict: appends to manifest ledger when recordFn is not p
   assert.equal(entries[0].data.verdict, 'clear');
   assert.equal(entries[0].data.reason, 'clean audit');
 });
+
+test('writeFileAtomic: explicit options.mode overrides existing file mode', (t) => {
+  const dir = tmp(t, 'wfa-explicit-mode-');
+  const file = join(dir, 'config.json');
+  writeFileAtomic(file, '{}', { mode: 0o644 });
+  assert.equal(statSync(file).mode & 0o777, 0o644);
+  writeFileAtomic(file, '{"tight":true}', { mode: 0o600 });
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+});
+
+test('acquireDirLock: recovers stale lock directory when owner.json is missing and mtime exceeds staleMs', (t) => {
+  const dir = tmp(t, 'lock-missing-owner-');
+  const lockDir = join(dir, 'test.lock');
+  mkdirSync(lockDir);
+  const release = acquireDirLock(lockDir, { staleMs: -1000 });
+  try {
+    assert.equal(existsSync(join(lockDir, 'owner.json')), true);
+  } finally {
+    release();
+  }
+});
+
+test('redactSecrets: redacts Error message/stack and preserves Date/RegExp/Buffer instances', () => {
+  const err = new Error('leaked sk-12345678901234567890 in error');
+  const redactedErr = redactSecrets(err);
+  assert.equal(redactedErr instanceof Error, true);
+  assert.equal(redactedErr.message, 'leaked [REDACTED] in error');
+
+  const d = new Date(0);
+  const re = /abc/;
+  const buf = Buffer.from('hello');
+  assert.equal(redactSecrets(d), d);
+  assert.equal(redactSecrets(re), re);
+  assert.equal(redactSecrets(buf), buf);
+});
+
+test('recordPromptOnlyVerdict: canonical fields cannot be overwritten by extra', () => {
+  let recorded = null;
+  recordPromptOnlyVerdict({
+    gate: 'coldstart',
+    ticket: 'T1',
+    verdict: 'real-verdict',
+    extra: { promptOnly: false, usageStatus: 'reported', verdict: 'spoofed', custom: 1 },
+    recordFn: (arg) => {
+      recorded = JSON.parse(arg.rawData);
+    },
+  });
+  assert.equal(recorded.promptOnly, true);
+  assert.equal(recorded.usageStatus, 'unreported');
+  assert.equal(recorded.verdict, 'real-verdict');
+  assert.equal(recorded.custom, 1);
+});
+

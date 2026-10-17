@@ -37,7 +37,7 @@ export function writeFileAtomic(filePath, content, options = {}) {
   if (st && st.isSymbolicLink()) {
     throw new Error('refusing to write through symlink: ' + filePath);
   }
-  const mode = st ? (st.mode & 0o777) : (options.mode ?? 0o600);
+  const mode = options.mode ?? (st ? (st.mode & 0o777) : 0o600);
   const tmpPath = `${filePath}.tmp-${process.pid}-${randomUUID()}`;
   let fd = null;
   let closed = false;
@@ -77,7 +77,14 @@ export function acquireDirLock(lockDir, options = {}) {
       createdAt: Date.now(),
     };
     const ownerPath = join(lockDir, 'owner.json');
-    writeFileSync(ownerPath, JSON.stringify(owner), 'utf8');
+    try {
+      writeFileSync(ownerPath, JSON.stringify(owner), 'utf8');
+    } catch (writeErr) {
+      try {
+        rmdirSync(lockDir);
+      } catch {}
+      throw writeErr;
+    }
     return () => {
       try {
         const current = JSON.parse(readFileSync(ownerPath, 'utf8'));
@@ -110,9 +117,24 @@ export function acquireDirLock(lockDir, options = {}) {
             }
           }
         }
-      } catch {}
+      } catch (readErr) {
+        if (readErr.code === 'ENOENT') {
+          try {
+            const st = lstatSync(lockDir);
+            if (Date.now() - st.mtimeMs > options.staleMs) {
+              isStale = true;
+            }
+          } catch {}
+        }
+      }
       if (isStale) {
-        rmSync(lockDir, { recursive: true, force: true });
+        const staleDir = `${lockDir}.stale-${process.pid}-${randomUUID()}`;
+        try {
+          renameSync(lockDir, staleDir);
+          rmSync(staleDir, { recursive: true, force: true });
+        } catch {
+          throw err;
+        }
         return tryAcquire();
       }
     }
@@ -134,7 +156,20 @@ export function redactSecrets(input) {
   if (Array.isArray(input)) {
     return input.map((item) => redactSecrets(item));
   }
-  if (input !== null && typeof input === 'object') {
+  if (input instanceof Error) {
+    const cloned = new Error(redactSecrets(input.message));
+    if (typeof input.stack === 'string') {
+      cloned.stack = redactSecrets(input.stack);
+    }
+    return cloned;
+  }
+  if (
+    input !== null &&
+    typeof input === 'object' &&
+    !Buffer.isBuffer(input) &&
+    !(input instanceof Date) &&
+    !(input instanceof RegExp)
+  ) {
     const out = {};
     for (const [k, v] of Object.entries(input)) {
       out[k] = redactSecrets(v);
@@ -181,7 +216,7 @@ export async function readVerdictSource(source) {
  * @returns {unknown}
  */
 export function recordPromptOnlyVerdict({ gate, ticket, verdict, extra = {}, dir, recordFn } = {}) {
-  const data = { promptOnly: true, usageStatus: 'unreported', verdict, ...extra };
+  const data = { ...extra, promptOnly: true, usageStatus: 'unreported', verdict };
   if (recordFn) {
     return recordFn({ gate, ticket, rawData: JSON.stringify(data), dir });
   }

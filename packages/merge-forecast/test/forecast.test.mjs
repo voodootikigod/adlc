@@ -322,6 +322,12 @@ describe('resolveSpecifier', () => {
     assert.equal(resolveSpecifier('lodash', 'src/index.js', root), null);
     assert.equal(resolveSpecifier('@adlc/core', 'src/index.js', root), null);
   });
+
+  test('resolves correctly when root is "/" or relative "."', () => {
+    assert.equal(resolveSpecifier('./util.mjs', 'src/index.mjs', '/'), 'src/util.mjs');
+    assert.equal(resolveSpecifier('./util.mjs', 'src/index.mjs', '.'), 'src/util.mjs');
+    assert.equal(resolveSpecifier('./util.mjs', 'src/index.mjs', 'C:\\'), 'src/util.mjs');
+  });
 });
 
 describe('signalCoChange', () => {

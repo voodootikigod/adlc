@@ -90,5 +90,10 @@ describe('targets.mjs: filterCodeFiles & anchored predicates', () => {
     assert.equal(isTestFile('packages/spec-lint/lib/lint.mjs'), false);
     assert.equal(isTestFile('packages/gate-manifest/lib/attest.mjs'), false);
     assert.equal(isTestFile('packages/review-calibration/lib/targets.mjs'), false);
+
+    // Windows backslash paths
+    assert.equal(isTestFile('packages\\core\\test\\foo.test.mjs'), true);
+    assert.equal(isTestFile('packages\\hollow-test\\lib\\run.mjs'), false);
   });
 });
+

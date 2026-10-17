@@ -236,3 +236,28 @@ test('discriminateWitness rejects exit 126 on baseline', () => {
   assert.match(result.reason, /shell launch failure.*baseline.*126/);
 });
 
+test('verifyWitness and discriminateWitness reject null or undefined candidate exitCode', () => {
+  const v = verifyWitness(
+    { status: 0, exitCode: 0, timedOut: false },
+    { status: null, exitCode: null, timedOut: false }
+  );
+  assert.equal(v.verified, false);
+  assert.equal(v.discriminates, false);
+
+  const d = discriminateWitness(
+    { cmd: 'sig-killed-cmd' },
+    { baselineDir: 'baseline', candidateDir: 'candidate' },
+    {
+      trials: 1,
+      runFn: (_spec, dir) =>
+        dir === 'baseline'
+          ? { status: 0, exitCode: 0, timedOut: false }
+          : { status: null, exitCode: null, timedOut: false },
+    }
+  );
+  assert.equal(d.discriminates, false);
+  assert.equal(d.verified, false);
+  assert.match(d.reason, /did not exit with a positive status/);
+});
+
+

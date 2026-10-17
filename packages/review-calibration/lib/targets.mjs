@@ -24,7 +24,7 @@ export const CODE_EXT_RE = /\.(?:mjs|cjs|js|ts|mts|cts|jsx|tsx|py)$/i;
  * @returns {boolean}
  */
 export function isTestFile(file) {
-  return TEST_PATH_RE.test(file);
+  return TEST_PATH_RE.test(String(file).replace(/\\/g, '/'));
 }
 
 /**

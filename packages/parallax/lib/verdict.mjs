@@ -62,7 +62,7 @@ export function recordVerdict({ ticket, verdict, extra = {}, dir, key } = {}) {
   // `aggregateSpend` discards it, which is why a --prompt-only workflow used to
   // aggregate to "no recorded usage" after months of real work. NO counters are
   // invented: the entry has no `usage` key, so nothing is booked as free.
-  const data = { promptOnly: true, usageStatus: 'unreported', verdict, ...extra };
+  const data = { ...extra, promptOnly: true, usageStatus: 'unreported', verdict };
   return record({ gate: GATE_NAME, ticket, rawData: JSON.stringify(data), dir, key });
 }
 

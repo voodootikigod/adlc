@@ -89,7 +89,7 @@ export function verifyWitness(base, cand, opts = {}) {
   const baseCode = b.exitCode ?? b.status;
   const candCode = c.exitCode ?? c.status;
 
-  if (baseCode === 0 && candCode !== 0) {
+  if (baseCode === 0 && Number.isInteger(candCode) && candCode > 0) {
     return {
       verified: true,
       discriminates: true,
@@ -102,7 +102,7 @@ export function verifyWitness(base, cand, opts = {}) {
     discriminates: false,
     reason: baseCode !== 0
       ? `baseline failed (exit ${baseCode})`
-      : `candidate passed (exit ${candCode})`,
+      : `candidate passed or did not exit with a positive status (exit ${candCode})`,
   };
 }
 
@@ -151,7 +151,7 @@ export function discriminateWitness(witnessSpec, dirs, opts = {}) {
     }
   }
 
-  // Run N trials on candidate — must ALL exit non-0
+  // Run N trials on candidate — must ALL exit with a positive integer status
   for (let i = 0; i < trials; i++) {
     const r = runFn(witnessSpec, candidateDir);
     if (r.spawnError) {
@@ -172,11 +172,13 @@ export function discriminateWitness(witnessSpec, dirs, opts = {}) {
     if (r.timedOut) {
       return { discriminates: false, verified: false, reason: 'inconclusive' };
     }
-    if (exitCode === 0) {
+    if (!Number.isInteger(exitCode) || exitCode <= 0) {
       return {
         discriminates: false,
         verified: false,
-        reason: `inconclusive: candidate trial ${i + 1} passed (exit 0) — witness is flaky on candidate`,
+        reason: exitCode === 0
+          ? `inconclusive: candidate trial ${i + 1} passed (exit 0) — witness is flaky on candidate`
+          : `inconclusive: candidate trial ${i + 1} did not exit with a positive status (${exitCode})`,
       };
     }
   }

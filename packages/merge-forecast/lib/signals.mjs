@@ -29,11 +29,9 @@ export function signalScopeOverlap(a, b) {
  * skipping node_modules and .git.
  */
 export function walkTree(root) {
-  const rootClean = root.replace(/\\/g, '/').replace(/\/+$/, '') || '/';
-  const rootLen = rootClean === '/' ? 0 : rootClean.length;
   const results = [];
   const skipDirs = new Set(['node_modules', '.git']);
-  function walk(dir) {
+  function walk(dir, relDir) {
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
@@ -43,15 +41,15 @@ export function walkTree(root) {
     for (const ent of entries) {
       if (skipDirs.has(ent.name)) continue;
       const fullPath = join(dir, ent.name);
+      const relPath = relDir ? `${relDir}/${ent.name}` : ent.name;
       if (ent.isDirectory()) {
-        walk(fullPath);
+        walk(fullPath, relPath);
       } else if (ent.isFile()) {
-        // Return path relative to root
-        results.push(fullPath.slice(rootLen + 1).replace(/\\/g, '/'));
+        results.push(relPath);
       }
     }
   }
-  walk(rootClean);
+  walk(root.replace(/\\/g, '/'), '');
   return results;
 }
 
@@ -85,18 +83,17 @@ function extractImports(filePath) {
  */
 export function resolveSpecifier(specifier, importingFile, root) {
   if (!specifier.startsWith('.')) return null; // package specifier — ignore
-  const rootNorm = root.replace(/\\/g, '/').replace(/\/+$/, '');
-  const importingFileNorm = importingFile.replace(/\\/g, '/');
-  const isWinDrive = /^[a-zA-Z]:/.test(rootNorm);
+  const rootRaw = root.replace(/\\/g, '/');
+  const isWinDrive = /^[a-zA-Z]:/.test(rootRaw);
   const p = isWinDrive ? win32 : { dirname, join, resolve };
-  const importingDir = p.dirname(p.join(rootNorm, importingFileNorm));
-  const resolved = p.resolve(importingDir, specifier);
-  const resolvedNorm = resolved.replace(/\\/g, '/');
-  // Make relative to root
-  const rel = resolvedNorm.startsWith(rootNorm + '/')
-    ? resolvedNorm.slice(rootNorm.length + 1)
+  const rootNorm = p.resolve(rootRaw || '/').replace(/\\/g, '/').replace(/\/+$/, '');
+  const importingFileNorm = importingFile.replace(/\\/g, '/');
+  const importingDir = p.dirname(p.join(rootNorm || '/', importingFileNorm));
+  const resolvedNorm = p.resolve(importingDir, specifier).replace(/\\/g, '/');
+  const prefix = rootNorm === '' ? '/' : `${rootNorm}/`;
+  return resolvedNorm.startsWith(prefix)
+    ? resolvedNorm.slice(prefix.length)
     : null;
-  return rel;
 }
 
 /**
