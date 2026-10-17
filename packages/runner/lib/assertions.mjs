@@ -1,4 +1,4 @@
-import { ADLC_DIR, canonicalJson, hashFiles, resolveChangeSetRevision, resolveRevision, sha256 } from '../../core/index.mjs';
+import { ADLC_DIR, canonicalJson, hashFiles, resolveChangeSetRevision, resolveRevision, sha256 } from '@adlc/core';
 // Scoped to root + this checkout's own segment, NOT the whole forest: every
 // `.at(-1)`, `indexOf`, and `slice` below reads array position as chronology,
 // which is only true of a chain this checkout can place in sequence. See

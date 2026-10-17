@@ -1,4 +1,4 @@
-import { canonicalJson, resolveChangeSetRevision, resolveRevision, sha256 } from '../../core/index.mjs';
+import { canonicalJson, resolveChangeSetRevision, resolveRevision, sha256 } from '@adlc/core';
 import { appendManifestEntry } from '@adlc/gate-manifest';
 // Scoped to root + this checkout's own segment: `latestP5Entry`'s `.at(-1)`
 // below is a chronology claim, and only this chain can carry one. See
