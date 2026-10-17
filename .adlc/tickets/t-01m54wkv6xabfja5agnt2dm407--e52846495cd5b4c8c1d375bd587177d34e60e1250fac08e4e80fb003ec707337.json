@@ -1,0 +1,30 @@
+{
+  "body": "Implements Waves 1 and 2 of the ADLC v0.3 modernization plan (.adlc/specs/adlc-modernization-v0.3.md):\n\nWave 1 (W1-T1..W1-T7):\n- W1-T1: Strip Windows drive prefix in @adlc/core railpath segmentsOf() and export segmentsOf.\n- W1-T2: Normalize Windows backslashes in @adlc/merge-forecast walkTree and exported resolveSpecifier.\n- W1-T3: Support git-change:<baseSha>:<digest> revisions in @adlc/runner assertPhase (p5/p6) and recordAcceptancePacket when --revision is omitted.\n- W1-T4: Replace unanchored EXCLUDE_PATH_RE and negative EXCLUDE_EXT_RE in @adlc/review-calibration filterCodeFiles with anchored TEST_PATH_RE and positive CODE_EXT_RE.\n- W1-T5: Separate spawnError from timedOut and reject shell exit codes 126/127 in @adlc/gate-fuzzing witness, and escape backslashes/quotes in seatbeltWrap.\n- W1-T6: Include usageStatus: 'unreported' in @adlc/parallax recordVerdict.\n- W1-T7: Add F9 untrusted-data prompt-injection inoculation ('DATA under review') to Gemini, Codex, and Copilot prosecutor-verifier agents and packages/init scaffold.\n\nWave 2 (W2-T1..W2-T4):\n- W2-T1: Update ADLC.md to v0.3 (F9-F13, E6-E8, two-family trust-root quorum + gateway discounting, four-point adversarial review map, 50% subscription quota start-gate, decomposition-compiler distinction, gate failure-policy table, sharded/segmented stores, and 5-layer operating stack) plus docs/models-by-phase.md and docs/toolkit.md.\n- W2-T2: Promote writeFileAtomic, acquireDirLock, redactSecrets, readVerdictSource, and recordPromptOnlyVerdict into @adlc/core (packages/core/lib/primitives.mjs).\n- W2-T3 & W2-T4: Align WARN_BYTES (4 MiB), HANDOFF_BYTES (6 MiB), HARD_BYTES (8 MiB), and DEFAULT_BYTES_THRESHOLD (8 MiB) across @adlc/context-handoff, @adlc/build-gate, and Claude Code, Codex, and Copilot build-gate test suites.\n\nAcceptance Criteria:\n- AC1: All 11 spec criteria in .adlc/specs/adlc-modernization-v0.3.md pass spec-lint (verify: node packages/spec-lint/bin/spec-lint.mjs .adlc/specs/adlc-modernization-v0.3.md).\n- AC2: Wave 1 and Wave 2 package and plugin test suites pass (verify: node scripts/run-tests.mjs).\n- AC3: PR-blocking gates pass (verify: npm run preflight).",
+  "category": "feature",
+  "duration": 3,
+  "edges": [],
+  "id": "T-01M54WKV6XABFJA5AGNT2DM407",
+  "rails": [
+    "packages/core/lib/ledger.mjs",
+    "packages/build-gate/bin/build-gate.mjs"
+  ],
+  "scope": [
+    ".adlc/specs/**",
+    "ADLC.md",
+    "docs/**",
+    "packages/core/**",
+    "packages/merge-forecast/**",
+    "packages/runner/**",
+    "packages/review-calibration/**",
+    "packages/gate-fuzzing/**",
+    "packages/parallax/**",
+    "packages/init/**",
+    "packages/context-handoff/**",
+    "packages/build-gate/**",
+    "plugins/adlc-claude-code/hooks/test/build-gate.test.mjs",
+    "plugins/adlc-codex/**",
+    "plugins/adlc-copilot/**",
+    "plugins/adlc-gemini/**"
+  ],
+  "title": "ADLC v0.3 Waves 1-2: cross-OS path and gate bug fixes, ADLC.md v0.3 doctrine, @adlc/core shared primitives, and 8 MiB build-gate threshold unification"
+}
