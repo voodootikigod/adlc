@@ -1,0 +1,102 @@
+{
+  "repo": "/home/voodootikigod/Projects/voodootikigod/adlc/.worktrees/adlc-modernization-plan",
+  "base": "feat/adlc-wave4",
+  "gate": {
+    "build": "npm run build:cursor-mcp",
+    "test": "npm test"
+  },
+  "tickets": [
+    {
+      "id": "W4-T1",
+      "title": "feat(core): add process identity and lock probe primitives to @adlc/core",
+      "body": "## Context\n`packages/fleet/lib/proc.mjs` (`pidAlive`, `procStartTimeOf`, `thisHost`, `selfIdentity`, `lockProbes`) and `packages/autopilot/lib/lock.mjs` (`pidStartTimeOf`, `pidAlive`, `selfIdentity`, `defaultProbes`) independently implement `/proc/<pid>/stat` field-22 `starttime` and `ps -o lstart=` PID-reuse process identity probing. Adding the canonical implementation to `@adlc/core` first allows downstream consumer packages (`W4-T5`) to import the new exports cleanly in `agb` child worktrees.\n\n## Changes Required\n1. Create `packages/core/lib/proc.mjs` exporting:\n   - `thisHost()`: returns `hostname()` from `node:os` (`string`).\n   - `pidAlive(pid)`: returns `false` if `typeof pid !== 'number'`; otherwise calls `process.kill(pid, 0)` and returns `true` on success or `e.code === 'EPERM'` on catch (`boolean`).\n   - `procStartTimeOf(pid, { platform = process.platform, readFile = readFileSync, execFile = execFileSync } = {})`: returns `null` if `typeof pid !== 'number'` or if reading/spawning throws; when `platform === 'linux'`, reads `/proc/<pid>/stat` with `readFile('/proc/' + pid + '/stat', 'utf8')`, slices after the last `')'` (`stat.slice(stat.lastIndexOf(')') + 2)`), splits on `' '`, and returns `fields[19] || null` (`string | null`); on non-Linux platforms, calls `execFile('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' })` and returns `out.trim() || null` (`string | null`).\n   - `selfProcessIdentity()`: computes `const start = procStartTimeOf(process.pid)` and returns `{ pid: process.pid, host: thisHost(), procStartTime: start, pidStartTime: start }`.\n   - `defaultLockProbes()`: returns `{ host: thisHost(), pidAlive, procStartTimeOf, pidStartTimeOf: procStartTimeOf }`.\n2. Re-export `thisHost`, `pidAlive`, `procStartTimeOf`, `selfProcessIdentity`, and `defaultLockProbes` from `packages/core/index.mjs` and declare their TypeScript types in `packages/core/index.d.ts`.\n3. Add unit tests in `packages/core/test/proc.test.mjs` covering `thisHost`, `pidAlive`, `procStartTimeOf` (Linux `/proc/<pid>/stat` field 22 with spaces/parens in `comm`, `ps -o lstart=` fallback, dead/invalid PID returning `null`), `selfProcessIdentity`, and `defaultLockProbes`.\n4. Run `npm run build:cursor-mcp` to keep `plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs` in sync.\n\n## Acceptance Criteria\n- `packages/core/lib/proc.mjs` exports `thisHost`, `pidAlive`, `procStartTimeOf`, `selfProcessIdentity`, and `defaultLockProbes` (re-exported from `@adlc/core` and `packages/core/index.d.ts`), and `plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs` is rebuilt.\n- Verify: `node --test packages/core/test/proc.test.mjs packages/core/test/core.test.mjs scripts/test/ticket-store-boundary.test.mjs`",
+      "scope": [
+        "packages/core/lib/proc.mjs",
+        "packages/core/index.mjs",
+        "packages/core/index.d.ts",
+        "packages/core/test/proc.test.mjs",
+        "plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs"
+      ],
+      "rails": [
+        "packages/core/test/core.test.mjs",
+        "scripts/test/ticket-store-boundary.test.mjs"
+      ],
+      "edges": [
+        {
+          "to": "W4-T5"
+        }
+      ],
+      "tier": "cheap",
+      "pool_hint": "auto"
+    },
+    {
+      "id": "W4-T2",
+      "title": "feat(hollow-test): promote diff-scoped fast test target and mutant budget planner from scripts/mutation-gate.mjs",
+      "body": "## Context\n`scripts/mutation-gate.mjs` (`564` LOC) embeds pure diff-scoped fast test-target mapping and proportional mutant-budget planning (`ROOT`, `testTargetFor`, `classify`, `mutantBudget`, `mutableChangedFiles`, `hollowTestWouldMutate`, `SOURCE_GLOBS`, `MUTANTS_PER_CHANGED_FILE`, `HOLLOW_WINDOW_MS`, `FAST_RUN_TIMEOUT_MS`, `SLOW_RUN_TIMEOUT_MS`, `SURVIVOR_GUIDANCE`) that external consumers of `@adlc/hollow-test` cannot import.\n\n## Changes Required\n1. Create `packages/hollow-test/lib/gate-plan.mjs` by moving the exact constants and pure functions from `scripts/mutation-gate.mjs` (`ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')`, `MUTANTS_PER_CHANGED_FILE`, `HOLLOW_WINDOW_MS`, `FAST_RUN_TIMEOUT_MS`, `SLOW_RUN_TIMEOUT_MS`, `SURVIVOR_GUIDANCE`, `SOURCE_GLOBS`, `hollowTestWouldMutate(file)`, `testTargetFor(file, root = ROOT)`, `mutableChangedFiles(changed, root = ROOT)`, `classify(changed, requestedMax, root = ROOT)`, and `mutantBudget(decision, { runMs = null, windowMs = HOLLOW_WINDOW_MS, perRunTimeoutMs = FAST_RUN_TIMEOUT_MS } = {})`) into `packages/hollow-test/lib/gate-plan.mjs` (importing `isMutableSource` from `./targets.mjs`).\n2. Refactor `scripts/mutation-gate.mjs` to import and re-export (`export { ... } from '../packages/hollow-test/lib/gate-plan.mjs'`) those 12 planner symbols while retaining and exporting `GENERATED_VERSION_FILES`, `declarationArgs`, `measureRun`, and `main` in `scripts/mutation-gate.mjs` (preserving all 16 named exports imported by `scripts/test/mutation-gate.test.mjs`).\n3. Add comprehensive unit tests in `packages/hollow-test/test/gate-plan.test.mjs` covering package, plugin, and script target resolution, `hollowTestWouldMutate`, `classify`, `mutantBudget`, and `mutableChangedFiles` across all branches.\n\n## Acceptance Criteria\n- `packages/hollow-test/lib/gate-plan.mjs` exports the diff-scoped mutation planner primitives with exact signature parity, and `scripts/mutation-gate.mjs` delegates to and re-exports them while retaining `GENERATED_VERSION_FILES`, `declarationArgs`, `measureRun`, and `main`.\n- Verify: `node --test packages/hollow-test/test/gate-plan.test.mjs scripts/test/mutation-gate.test.mjs`",
+      "scope": [
+        "packages/hollow-test/lib/gate-plan.mjs",
+        "packages/hollow-test/test/gate-plan.test.mjs",
+        "scripts/mutation-gate.mjs"
+      ],
+      "rails": [
+        "scripts/test/mutation-gate.test.mjs"
+      ],
+      "edges": [],
+      "tier": "cheap",
+      "pool_hint": "auto"
+    },
+    {
+      "id": "W4-T3",
+      "title": "refactor(decision-layer): consolidate canonical JSON and SHA-256 hashing onto @adlc/core",
+      "body": "## Context\n`packages/decision-layer/lib/canonical.mjs` re-implements recursive key-sorted `canonicalJson` and `sha256` hashing that already exist in `@adlc/core` (`packages/core/lib/ledger.mjs`, re-exported by `packages/core/index.mjs`).\n\n## Changes Required\n1. Refactor `packages/decision-layer/lib/canonical.mjs` to import and re-export `canonicalJson` and `sha256` from `@adlc/core`, delegating `canonicalHash(value)` to `sha256(canonicalJson(value))` and `canonicalBytes(value)` to `Buffer.byteLength(canonicalJson(value), 'utf8')`.\n2. Add unit tests in `packages/decision-layer/test/canonical.test.mjs` verifying key-order invariance, nested array/object canonicalization, UTF-8 byte length calculation, and parity with `@adlc/core`.\n\n## Acceptance Criteria\n- `packages/decision-layer/lib/canonical.mjs` delegates `canonicalJson` and `sha256` to `@adlc/core` while preserving `canonicalHash` and `canonicalBytes`.\n- Verify: `node --test packages/decision-layer/test/canonical.test.mjs packages/decision-layer/test/evaluate.test.mjs packages/decision-layer/test/record.test.mjs`",
+      "scope": [
+        "packages/decision-layer/lib/canonical.mjs",
+        "packages/decision-layer/test/canonical.test.mjs"
+      ],
+      "rails": [
+        "packages/decision-layer/test/evaluate.test.mjs",
+        "packages/decision-layer/test/record.test.mjs"
+      ],
+      "edges": [],
+      "tier": "cheap",
+      "pool_hint": "auto"
+    },
+    {
+      "id": "W4-T4",
+      "title": "feat(lesson-foundry): promote ADR 0014 findings-ledger git-boundary scanner and append-only guard",
+      "body": "## Context\n`scripts/scan-findings-ledger.mjs` and `scripts/guard-findings-ledger-append-only.mjs` implement the ADR 0014 committed `.adlc/findings.jsonl` secret/dump scanner and append-only merge-base prefix guard as repo-local scripts rather than reusable library modules in `@adlc/lesson-foundry`.\n\n## Changes Required\n1. Create `packages/lesson-foundry/lib/ledger-guard.mjs` by moving the exact implementation and exports from `scripts/scan-findings-ledger.mjs` (`LEDGER`, `scan as scanFindingsLedger`) and `scripts/guard-findings-ledger-append-only.mjs` (`baseLedger(baseRef, run)`, `headLedgerText(read, exists)`, `appendOnlyViolations(baseText, headText)`, `guard as guardFindingsLedgerAppendOnly`).\n2. Refactor `scripts/scan-findings-ledger.mjs` and `scripts/guard-findings-ledger-append-only.mjs` to import and re-export (`LEDGER`, `scanFindingsLedger as scan`, `baseLedger`, `headLedgerText`, `appendOnlyViolations`, `guardFindingsLedgerAppendOnly as guard`) from `../packages/lesson-foundry/lib/ledger-guard.mjs` while keeping their `pathToFileURL(process.argv[1]).href` CLI entry guards, exact `scan-findings-ledger:` and `guard-findings-ledger-append-only:` stdout/stderr diagnostic prefixes and wording, and exit codes (`0`, `1`, `2`) intact.\n3. Add unit tests in `packages/lesson-foundry/test/ledger-guard.test.mjs` covering clean, malformed, secret-bearing, rewritten, and truncated ledger scenarios.\n\n## Acceptance Criteria\n- `packages/lesson-foundry/lib/ledger-guard.mjs` exports `LEDGER`, `scanFindingsLedger`, `baseLedger`, `headLedgerText`, `appendOnlyViolations`, and `guardFindingsLedgerAppendOnly`, and `scripts/scan-findings-ledger.mjs` and `scripts/guard-findings-ledger-append-only.mjs` delegate to it while preserving all diagnostic prefixes and exit codes.\n- Verify: `node --test packages/lesson-foundry/test/ledger-guard.test.mjs scripts/test/scan-findings-ledger.test.mjs scripts/test/guard-findings-ledger-append-only.test.mjs scripts/test/entry-guard-space-path.test.mjs`",
+      "scope": [
+        "packages/lesson-foundry/lib/ledger-guard.mjs",
+        "packages/lesson-foundry/test/ledger-guard.test.mjs",
+        "scripts/scan-findings-ledger.mjs",
+        "scripts/guard-findings-ledger-append-only.mjs"
+      ],
+      "rails": [
+        "scripts/test/scan-findings-ledger.test.mjs",
+        "scripts/test/guard-findings-ledger-append-only.test.mjs",
+        "scripts/test/entry-guard-space-path.test.mjs"
+      ],
+      "edges": [],
+      "tier": "cheap",
+      "pool_hint": "auto"
+    },
+    {
+      "id": "W4-T5",
+      "title": "refactor(fleet,autopilot): delegate process identity and lock probes to @adlc/core",
+      "body": "## Context\nWith `thisHost`, `pidAlive`, `procStartTimeOf`, `selfProcessIdentity`, and `defaultLockProbes` promoted to `@adlc/core` in `W4-T1`, `packages/fleet/lib/proc.mjs` and `packages/autopilot/lib/lock.mjs` can now delegate their duplicated process identity and lock probe helpers directly to `@adlc/core`.\n\n## Changes Required\n1. Replace `packages/fleet/lib/proc.mjs` with pure `@adlc/core` re-exports (`export { thisHost, pidAlive, procStartTimeOf, selfProcessIdentity as selfIdentity, defaultLockProbes as lockProbes } from '@adlc/core';`).\n2. In `packages/autopilot/lib/lock.mjs`, replace the inline `pidStartTimeOf`, `pidAlive`, `selfIdentity`, and `defaultProbes` definitions at the bottom of the file with `export { pidAlive, procStartTimeOf as pidStartTimeOf, selfProcessIdentity as selfIdentity, defaultLockProbes as defaultProbes } from '@adlc/core';`, while keeping all `registerSeams(['lock.twoStepPublish', 'lock.releaseByToken'])` and lock lifecycle exports (`LOCK_FS`, `LOCK_DIR_NAME`, `OWNER_FILE`, `HEARTBEAT_MS`, `STALE_AFTER_MS`, `LockHeldError`, `ownerPath`, `readOwner`, `isStale`, `acquireLock`, `releaseLock`, `lockHeldBy`, `staleDirs`) unchanged.\n\n## Acceptance Criteria\n- `packages/fleet/lib/proc.mjs` and `packages/autopilot/lib/lock.mjs` delegate `thisHost`, `pidAlive`, `procStartTimeOf`/`pidStartTimeOf`, `selfIdentity`, and `lockProbes`/`defaultProbes` to `@adlc/core` while preserving all autopilot mutation seams.\n- Verify: `node --test packages/fleet/test/lock-recovery.test.mjs packages/fleet/test/lock-reclaim-race.test.mjs packages/autopilot/test/lock.test.mjs packages/autopilot/test/spec-coverage.test.mjs`",
+      "scope": [
+        "packages/fleet/lib/proc.mjs",
+        "packages/autopilot/lib/lock.mjs"
+      ],
+      "rails": [
+        "packages/fleet/test/lock-recovery.test.mjs",
+        "packages/fleet/test/lock-reclaim-race.test.mjs",
+        "packages/autopilot/test/lock.test.mjs",
+        "packages/autopilot/test/spec-coverage.test.mjs"
+      ],
+      "edges": [],
+      "tier": "cheap",
+      "pool_hint": "auto"
+    }
+  ]
+}

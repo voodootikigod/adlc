@@ -1,0 +1,94 @@
+{
+  "repo": "/home/voodootikigod/Projects/voodootikigod/adlc/.worktrees/adlc-modernization-plan",
+  "base": "feat/adlc-wave4",
+  "gate": {
+    "build": "npm run build:cursor-mcp",
+    "test": "npm test"
+  },
+  "tickets": [
+    {
+      "id": "W5-T1",
+      "title": "feat(core,codegen): canonicalize trusted-binary resolver and extend generate.mjs to emit generated-shell, generated-risk-tier, and generated-trusted-binary",
+      "body": "## Context\nInstalled plugin hooks (`plugins/adlc-codex/hooks/`, `plugins/adlc-copilot/hooks/`, `plugins/adlc-claude-code/hooks/`) execute without `node_modules` and currently hand-inline ~950 lines of `KEEP IN SYNC` copies of `@adlc/core` shell classifiers, risk-tier matchers, and trusted-binary resolvers.\n\n## Changes Required\n1. Create `packages/core/lib/trusted-binary.mjs` (`// GENERATED-TRUSTED-BINARY SOURCE.`) exporting `resolveTrustedBinary`, `ownershipRejection`, `ancestorDirs`, `candidateAncestors`, `binaryCandidates`, `candidateStats`, `candidateRejection`, and `untrustedBinaryReason`. Re-export from `packages/core/index.mjs` and declare in `packages/core/index.d.ts`, with unit tests in `packages/core/test/trusted-binary.test.mjs`.\n2. Add `// GENERATED-SHELL SOURCE.` header to `packages/core/lib/shell.mjs`.\n3. Add `'packages/core/lib/generated-glob-match.mjs'` to the `generated-glob-match` outputs list in `scripts/ticket-readers/generate.mjs` (`source: 'packages/core/lib/glob.mjs'`), and update `packages/core/lib/risk-tier.mjs` to start with `// GENERATED-RISK-TIER SOURCE.` and `import { globMatch } from './generated-glob-match.mjs'`.\n4. Extend `ARTIFACTS` in `scripts/ticket-readers/generate.mjs` to emit `generated-shell.mjs`, `generated-risk-tier.mjs`, and `generated-trusted-binary.mjs`, run `node scripts/ticket-readers/generate.mjs`, add byte-for-byte parity checks in `scripts/test/ticket-reader-generation.test.mjs`, and run `npm run build:cursor-mcp`.\n\n## Acceptance Criteria\n- `scripts/ticket-readers/generate.mjs --check` verifies byte-for-byte identity of `generated-shell.mjs`, `generated-risk-tier.mjs`, and `generated-trusted-binary.mjs` across `adlc-claude-code`, `adlc-codex`, and `adlc-copilot`.\n- Verify: `node scripts/ticket-readers/generate.mjs --check && node --test packages/core/test/trusted-binary.test.mjs packages/core/test/core.test.mjs packages/core/test/risk-tier.test.mjs scripts/test/ticket-reader-generation.test.mjs scripts/test/ticket-store-boundary.test.mjs`",
+      "scope": [
+        "packages/core/lib/trusted-binary.mjs",
+        "packages/core/lib/shell.mjs",
+        "packages/core/lib/risk-tier.mjs",
+        "packages/core/lib/generated-glob-match.mjs",
+        "packages/core/index.mjs",
+        "packages/core/index.d.ts",
+        "packages/core/test/trusted-binary.test.mjs",
+        "scripts/ticket-readers/generate.mjs",
+        "scripts/test/ticket-reader-generation.test.mjs",
+        "plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs",
+        "plugins/adlc-codex/hooks/generated-shell.mjs",
+        "plugins/adlc-copilot/hooks/generated-shell.mjs",
+        "plugins/adlc-codex/hooks/generated-risk-tier.mjs",
+        "plugins/adlc-copilot/hooks/generated-risk-tier.mjs",
+        "plugins/adlc-claude-code/hooks/generated-trusted-binary.mjs",
+        "plugins/adlc-codex/hooks/generated-trusted-binary.mjs",
+        "plugins/adlc-copilot/hooks/generated-trusted-binary.mjs"
+      ],
+      "rails": [
+        "packages/core/test/core.test.mjs",
+        "packages/core/test/risk-tier.test.mjs",
+        "scripts/test/ticket-store-boundary.test.mjs"
+      ],
+      "edges": [
+        {
+          "to": "W5-T2"
+        }
+      ],
+      "tier": "cheap",
+      "pool_hint": "auto"
+    },
+    {
+      "id": "W5-T2",
+      "title": "refactor(adlc-codex,adlc-copilot): replace hand-inlined shell classifiers and risk-tier matchers with generated hook modules",
+      "body": "## Context\n`plugins/adlc-codex/hooks/adlc-rails-guard.mjs` and `plugins/adlc-copilot/hooks/adlc-rails-guard.mjs` each inline ~250 lines of `packages/core/lib/shell.mjs`, and `plugins/adlc-codex/hooks/adlc-lifecycle.mjs` and `plugins/adlc-copilot/hooks/adlc-lifecycle.mjs` each inline ~75 lines of `packages/core/lib/risk-tier.mjs`.\n\n## Changes Required\n1. In `plugins/adlc-codex/hooks/adlc-rails-guard.mjs` and `plugins/adlc-copilot/hooks/adlc-rails-guard.mjs`, replace the hand-inlined shell classifier and path-extraction functions with imports (and re-exports) from `./generated-shell.mjs`.\n2. In `plugins/adlc-codex/hooks/adlc-lifecycle.mjs` and `plugins/adlc-copilot/hooks/adlc-lifecycle.mjs`, delete the hand-inlined `RISK_TIER_PATTERNS`, `matchRiskTier`, `classifyRiskTier`, `filesOverlapOrUnscoped`, and `decideAdversarialReviewNotice` definitions, import and re-export `{ RISK_TIER_PATTERNS, matchRiskTier, classifyRiskTier, decideAdversarialReviewNotice }` from `./generated-risk-tier.mjs`, and retain `export { globMatch } from './generated-glob-match.mjs';`.\n3. Update `packages/core/test/shell.test.mjs` and `plugins/adlc-copilot/test/shell-drift.test.mjs` to assert that the hooks import `./generated-shell.mjs` and `./generated-risk-tier.mjs` and that the generated modules match `@adlc/core`.\n\n## Acceptance Criteria\n- `adlc-codex` and `adlc-copilot` `adlc-rails-guard.mjs` and `adlc-lifecycle.mjs` import from `./generated-shell.mjs` and `./generated-risk-tier.mjs` (while retaining `export { globMatch } from './generated-glob-match.mjs'` in `adlc-lifecycle.mjs`) with zero hand-inlined classifier copies.\n- Verify: `node --test packages/core/test/shell.test.mjs plugins/adlc-copilot/test/shell-drift.test.mjs plugins/adlc-codex/hooks/test/shell-quoting.test.mjs plugins/adlc-codex/hooks/test/review-notice.test.mjs plugins/adlc-copilot/hooks/test/review-notice.test.mjs plugins/adlc-copilot/test/rails-guard-contract.test.mjs && node scripts/copilot-install-smoke.mjs`",
+      "scope": [
+        "plugins/adlc-codex/hooks/adlc-rails-guard.mjs",
+        "plugins/adlc-copilot/hooks/adlc-rails-guard.mjs",
+        "plugins/adlc-codex/hooks/adlc-lifecycle.mjs",
+        "plugins/adlc-copilot/hooks/adlc-lifecycle.mjs",
+        "packages/core/test/shell.test.mjs",
+        "plugins/adlc-copilot/test/shell-drift.test.mjs"
+      ],
+      "rails": [
+        "plugins/adlc-codex/hooks/test/shell-quoting.test.mjs",
+        "plugins/adlc-codex/hooks/test/review-notice.test.mjs",
+        "plugins/adlc-copilot/hooks/test/review-notice.test.mjs",
+        "plugins/adlc-copilot/test/rails-guard-contract.test.mjs"
+      ],
+      "edges": [
+        {
+          "to": "W5-T3"
+        }
+      ],
+      "tier": "cheap",
+      "pool_hint": "auto"
+    },
+    {
+      "id": "W5-T3",
+      "title": "refactor(adlc-claude-code,adlc-codex,adlc-copilot): replace hand-inlined trusted binary resolvers with generated-trusted-binary.mjs",
+      "body": "## Context\n`plugins/adlc-claude-code/hooks/adlc-hook.mjs`, `plugins/adlc-codex/hooks/adlc-handoff-gate.mjs`, and `plugins/adlc-copilot/hooks/adlc-build-gate.mjs` each hand-inline ~100 lines of `resolveTrustedBinary`, `ownershipRejection`, `ancestorDirs`, `candidateAncestors`, `binaryCandidates`, `candidateStats`, `candidateRejection`, and `untrustedBinaryReason`.\n\n## Changes Required\n1. In `plugins/adlc-claude-code/hooks/adlc-hook.mjs`, `plugins/adlc-codex/hooks/adlc-handoff-gate.mjs`, and `plugins/adlc-copilot/hooks/adlc-build-gate.mjs`, replace the hand-inlined trusted-binary resolver helpers with imports and re-exports from `./generated-trusted-binary.mjs`.\n2. Update `isolatedPluginDir(t)` in `plugins/adlc-claude-code/hooks/test/handoff-continuation-start.test.mjs`, `plugins/adlc-claude-code/hooks/test/handoff-secret-scrub.test.mjs`, `plugins/adlc-codex/hooks/test/handoff-deny.test.mjs`, and `plugins/adlc-codex/hooks/test/handoff-secret-scrub.test.mjs` to copy `generated-trusted-binary.mjs` into the isolated hook fixture directory.\n\n## Acceptance Criteria\n- `adlc-hook.mjs`, `adlc-handoff-gate.mjs`, and `adlc-build-gate.mjs` import and re-export `resolveTrustedBinary` and its ownership helpers from `./generated-trusted-binary.mjs` and pass all trusted-spawn and handoff tests.\n- Verify: `node --test plugins/adlc-claude-code/hooks/test/adlc-trusted-spawn.test.mjs plugins/adlc-codex/hooks/test/trusted-binary-root.test.mjs plugins/adlc-copilot/hooks/test/trusted-binary-root.test.mjs plugins/adlc-claude-code/hooks/test/handoff-continuation-start.test.mjs plugins/adlc-claude-code/hooks/test/handoff-secret-scrub.test.mjs plugins/adlc-codex/hooks/test/handoff-deny.test.mjs plugins/adlc-codex/hooks/test/handoff-secret-scrub.test.mjs`",
+      "scope": [
+        "plugins/adlc-claude-code/hooks/adlc-hook.mjs",
+        "plugins/adlc-codex/hooks/adlc-handoff-gate.mjs",
+        "plugins/adlc-copilot/hooks/adlc-build-gate.mjs",
+        "plugins/adlc-claude-code/hooks/test/handoff-continuation-start.test.mjs",
+        "plugins/adlc-claude-code/hooks/test/handoff-secret-scrub.test.mjs",
+        "plugins/adlc-codex/hooks/test/handoff-deny.test.mjs",
+        "plugins/adlc-codex/hooks/test/handoff-secret-scrub.test.mjs"
+      ],
+      "rails": [
+        "plugins/adlc-claude-code/hooks/test/adlc-trusted-spawn.test.mjs",
+        "plugins/adlc-codex/hooks/test/trusted-binary-root.test.mjs",
+        "plugins/adlc-copilot/hooks/test/trusted-binary-root.test.mjs"
+      ],
+      "edges": [],
+      "tier": "cheap",
+      "pool_hint": "auto"
+    }
+  ]
+}
