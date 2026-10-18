@@ -32,6 +32,35 @@ test('every shipped glob matcher is the canonical one, byte for byte', () => {
     'plugins/adlc-copilot/hooks/generated-glob-match.mjs',
     'plugins/adlc-gemini/generated-glob-match.mjs',
     'packages/tickets/lib/generated-glob-match.mjs',
+    'packages/core/lib/generated-glob-match.mjs',
+  ]) assert.equal(readFileSync(join(ROOT, output), 'utf8'), source, `${output} drifted; run the generator`);
+});
+
+test('every shipped shell helper is the canonical one, byte for byte', () => {
+  const source = readFileSync(join(ROOT, 'packages/core/lib/shell.mjs'), 'utf8')
+    .replace('// GENERATED-SHELL SOURCE.', '// GENERATED FILE — DO NOT EDIT DIRECTLY.');
+  for (const output of [
+    'plugins/adlc-codex/hooks/generated-shell.mjs',
+    'plugins/adlc-copilot/hooks/generated-shell.mjs',
+  ]) assert.equal(readFileSync(join(ROOT, output), 'utf8'), source, `${output} drifted; run the generator`);
+});
+
+test('every shipped risk-tier classifier is the canonical one, byte for byte', () => {
+  const source = readFileSync(join(ROOT, 'packages/core/lib/risk-tier.mjs'), 'utf8')
+    .replace('// GENERATED-RISK-TIER SOURCE.', '// GENERATED FILE — DO NOT EDIT DIRECTLY.');
+  for (const output of [
+    'plugins/adlc-codex/hooks/generated-risk-tier.mjs',
+    'plugins/adlc-copilot/hooks/generated-risk-tier.mjs',
+  ]) assert.equal(readFileSync(join(ROOT, output), 'utf8'), source, `${output} drifted; run the generator`);
+});
+
+test('every shipped trusted-binary resolver is the canonical one, byte for byte', () => {
+  const source = readFileSync(join(ROOT, 'packages/core/lib/trusted-binary.mjs'), 'utf8')
+    .replace('// GENERATED-TRUSTED-BINARY SOURCE.', '// GENERATED FILE — DO NOT EDIT DIRECTLY.');
+  for (const output of [
+    'plugins/adlc-claude-code/hooks/generated-trusted-binary.mjs',
+    'plugins/adlc-codex/hooks/generated-trusted-binary.mjs',
+    'plugins/adlc-copilot/hooks/generated-trusted-binary.mjs',
   ]) assert.equal(readFileSync(join(ROOT, output), 'utf8'), source, `${output} drifted; run the generator`);
 });
 

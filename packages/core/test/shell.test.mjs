@@ -218,31 +218,119 @@ test('classifyShellCommand: fd-duplication (2>&1) is not a file write', () => {
   assert.equal(hasUnquotedFileRedirect('echo hi >&2'), false);
 });
 
-// ---- drift pin: the codex hook's inline copy must stay in sync ----
-// The codex hook cannot import npm packages at runtime, so it keeps a verbatim
-// copy of the classifier bodies. Compare the load-bearing regex sources so an
-// edit to either side fails here instead of silently drifting.
-test('codex inline copy matches the canonical core classifier', () => {
+// ---- drift pin: codex and copilot hooks consume generated modules + match @adlc/core ----
+const PINNED_SHELL_FNS = [
+  'shellHasMutation', 'hasUnquotedFileRedirect', 'shellHasOpaqueMutation',
+  'shellIsPositivelyReadOnly', 'shellHasWriteOption', 'shellChangesCwd', 'shellHasExpansion',
+  'shellTokens', 'collectShellPaths', 'collectPatchPaths', 'looksPathLike',
+  'looksBarePathLike', 'keyValuePath',
+];
+
+const PINNED_RISK_TIER_FNS = [
+  'matchRiskTier', 'classifyRiskTier', 'decideAdversarialReviewNotice',
+];
+
+test('codex and copilot hooks import generated-shell.mjs and generated-risk-tier.mjs (no inline copies)', () => {
   const here = dirname(fileURLToPath(import.meta.url));
-  const codex = readFileSync(join(here, '..', '..', '..', 'plugins', 'adlc-codex', 'hooks', 'adlc-rails-guard.mjs'), 'utf8');
-  const core = readFileSync(join(here, '..', 'lib', 'shell.mjs'), 'utf8');
-  // Pin the FULL set of shell classifier + path-extraction functions, not just
-  // the boolean classifiers — the path functions decide WHICH paths a mutating
-  // command touches (i.e. which edits are blocked as rail violations), so a
-  // silent divergence there is a rail-enforcement hole. Signature-agnostic
-  // extraction: these take (text), (value), (text, out), etc.
-  const PINNED = [
-    'shellHasMutation', 'hasUnquotedFileRedirect', 'shellHasOpaqueMutation',
-    'shellIsPositivelyReadOnly', 'shellHasWriteOption', 'shellChangesCwd', 'shellHasExpansion',
-    'shellTokens', 'collectShellPaths', 'collectPatchPaths', 'looksPathLike',
-    'looksBarePathLike', 'keyValuePath',
+  const coreShell = readFileSync(join(here, '..', 'lib', 'shell.mjs'), 'utf8');
+
+  const extractFn = (src, fn) => {
+    const m = src.match(new RegExp(`function ${fn}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`));
+    assert.ok(m, `${fn} found`);
+    return m[0].replace(/\s+/g, ' ');
+  };
+
+  for (const plugin of ['adlc-codex', 'adlc-copilot']) {
+    const hooksDir = join(here, '..', '..', '..', 'plugins', plugin, 'hooks');
+    const railsGuard = readFileSync(join(hooksDir, 'adlc-rails-guard.mjs'), 'utf8');
+    const genShell = readFileSync(join(hooksDir, 'generated-shell.mjs'), 'utf8');
+    const lifecycle = readFileSync(join(hooksDir, 'adlc-lifecycle.mjs'), 'utf8');
+
+    assert.match(railsGuard, /from ['"]\.\/generated-shell\.mjs['"]/, `${plugin}/adlc-rails-guard.mjs must import ./generated-shell.mjs`);
+    for (const fn of PINNED_SHELL_FNS) {
+      assert.doesNotMatch(
+        railsGuard,
+        new RegExp(`function ${fn}\\s*\\(`),
+        `${plugin}/adlc-rails-guard.mjs must not define inline function ${fn}`,
+      );
+      assert.equal(
+        extractFn(genShell, fn),
+        extractFn(coreShell, fn),
+        `${fn} drifted between ${plugin}/generated-shell.mjs and @adlc/core`,
+      );
+    }
+
+    assert.match(lifecycle, /from ['"]\.\/generated-risk-tier\.mjs['"]/, `${plugin}/adlc-lifecycle.mjs must import ./generated-risk-tier.mjs`);
+    assert.doesNotMatch(lifecycle, /const RISK_TIER_PATTERNS\s*=/, `${plugin}/adlc-lifecycle.mjs must not define inline RISK_TIER_PATTERNS`);
+    for (const fn of PINNED_RISK_TIER_FNS) {
+      assert.doesNotMatch(
+        lifecycle,
+        new RegExp(`function ${fn}\\s*\\(`),
+        `${plugin}/adlc-lifecycle.mjs must not define inline function ${fn}`,
+      );
+    }
+  }
+});
+
+test('behavioral parity across @adlc/core, adlc-codex, and adlc-copilot for shell and risk-tier classifiers', async () => {
+  const coreShell = await import('../lib/shell.mjs');
+  const codexRailsGuard = await import('../../../plugins/adlc-codex/hooks/adlc-rails-guard.mjs');
+  const codexGenShell = await import('../../../plugins/adlc-codex/hooks/generated-shell.mjs');
+  const copilotGenShell = await import('../../../plugins/adlc-copilot/hooks/generated-shell.mjs');
+
+  const shellCommands = [
+    'git status',
+    'echo hi > out.txt',
+    'cat payload.txt>protected/rail.txt',
+    'git diff "--output=.adlc/handoffs/x"',
+    "sed -n '10w.adlc/handoffs/x' /dev/null",
+    'cd sub && echo x > f',
+    'echo $HOME > f',
+    'git checkout -- test/x.mjs',
   ];
-  for (const fn of PINNED) {
-    const extract = (src) => {
-      const m = src.match(new RegExp(`function ${fn}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`));
-      assert.ok(m, `${fn} found`);
-      return m[0].replace(/\s+/g, ' ');
-    };
-    assert.equal(extract(codex), extract(core), `${fn} drifted between codex hook and @adlc/core`);
+
+  for (const mod of [codexRailsGuard, codexGenShell, copilotGenShell]) {
+    for (const cmd of shellCommands) {
+      assert.deepEqual(mod.classifyShellCommand(cmd), coreShell.classifyShellCommand(cmd));
+      assert.equal(mod.shellHasMutation(cmd), coreShell.shellHasMutation(cmd));
+      assert.equal(mod.hasUnquotedFileRedirect(cmd), coreShell.hasUnquotedFileRedirect(cmd));
+      assert.equal(mod.shellHasOpaqueMutation(cmd), coreShell.shellHasOpaqueMutation(cmd));
+      assert.equal(mod.shellIsPositivelyReadOnly(cmd), coreShell.shellIsPositivelyReadOnly(cmd));
+      assert.equal(mod.shellHasWriteOption(cmd), coreShell.shellHasWriteOption(cmd));
+      assert.equal(mod.shellChangesCwd(cmd), coreShell.shellChangesCwd(cmd));
+      assert.equal(mod.shellHasExpansion(cmd), coreShell.shellHasExpansion(cmd));
+      assert.deepEqual(mod.shellTokens(cmd), coreShell.shellTokens(cmd));
+      const p1 = new Set();
+      const p2 = new Set();
+      mod.collectShellPaths(cmd, p1);
+      coreShell.collectShellPaths(cmd, p2);
+      assert.deepEqual([...p1], [...p2]);
+    }
+    const patch = '*** Update File: src/a.mjs\n*** Add File: test/b.mjs\n';
+    const pp1 = new Set();
+    const pp2 = new Set();
+    mod.collectPatchPaths(patch, pp1);
+    coreShell.collectPatchPaths(patch, pp2);
+    assert.deepEqual([...pp1], [...pp2]);
+    for (const tok of ['src/a.mjs', 'Makefile', '--output=test/x.mjs', '-f']) {
+      assert.equal(mod.looksPathLike(tok), coreShell.looksPathLike(tok));
+      assert.equal(mod.looksBarePathLike(tok), coreShell.looksBarePathLike(tok));
+      assert.equal(mod.keyValuePath(tok), coreShell.keyValuePath(tok));
+    }
+  }
+
+  const coreRisk = await import('../lib/risk-tier.mjs');
+  const codexLifecycle = await import('../../../plugins/adlc-codex/hooks/adlc-lifecycle.mjs');
+  const copilotLifecycle = await import('../../../plugins/adlc-copilot/hooks/adlc-lifecycle.mjs');
+
+  const riskPaths = ['src/auth/login.js', '.env', 'src/security/guard.mjs', 'README.md', '.github/workflows/ci.yml'];
+  for (const mod of [codexLifecycle, copilotLifecycle]) {
+    assert.deepEqual(mod.RISK_TIER_PATTERNS, coreRisk.RISK_TIER_PATTERNS);
+    for (const p of riskPaths) {
+      assert.deepEqual(mod.matchRiskTier(p), coreRisk.matchRiskTier(p));
+    }
+    assert.deepEqual(mod.classifyRiskTier(riskPaths), coreRisk.classifyRiskTier(riskPaths));
+    const noticeInput = { changedPaths: riskPaths, manifestEntries: [], ticketId: 'T1' };
+    assert.deepEqual(mod.decideAdversarialReviewNotice(noticeInput), coreRisk.decideAdversarialReviewNotice(noticeInput));
   }
 });

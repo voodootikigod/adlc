@@ -1870,6 +1870,9 @@ function ticketStoreExists(root = ".", override = null) {
 var GIT_MAX_BUFFER3 = 64 * 1024 * 1024;
 var NULL_OBJECT = "0".repeat(40);
 
+// packages/core/lib/generated-glob-match.mjs
+var SLASH3 = "/".charCodeAt(0);
+
 // packages/core/lib/risk-tier.mjs
 var RISK_TIER_PATTERNS = Object.freeze({
   "auth-trust-boundary": Object.freeze([

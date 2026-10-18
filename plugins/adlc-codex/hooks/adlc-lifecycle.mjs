@@ -1,18 +1,13 @@
 #!/usr/bin/env node
-// KEEP IN SYNC — RISK_TIER_PATTERNS/matchRiskTier/classifyRiskTier/
-// decideAdversarialReviewNotice below are a verbatim inline copy of
-// packages/core/lib/risk-tier.mjs (that file's own header names this
-// pattern: a hook script can't resolve npm packages from its installed
-// location — same reason plugins/adlc-codex/hooks/adlc-build-gate.mjs
-// inline-copies packages/build-gate). globMatch is the canonical tokenized
-// implementation from packages/core/lib/tickets.mjs (NOT a naive replace-**
-// chain — see the T49 fix in adlc-build-gate.mjs's own globMatch comment for
-// why that matters for these `**/`-prefixed patterns specifically). The
-// gitChangedPaths/stopReview shape below follows plugins/adlc-cursor/hooks/
-// adlc-stop.mjs's stopAudit, which implements the same feature more cleanly
-// than Claude Code's original (one function, -z NUL-delimited git parsing,
-// no manual quote-unescaping). A drift test (hooks/test/review-notice.test.mjs)
-// pins the inline copy against packages/core/lib/risk-tier.mjs's real exports.
+// RISK_TIER_PATTERNS, matchRiskTier, classifyRiskTier, and
+// decideAdversarialReviewNotice are imported from ./generated-risk-tier.mjs
+// (generated from packages/core/lib/risk-tier.mjs via
+// scripts/generate-canonical-readers.mjs). globMatch is imported from
+// ./generated-glob-match.mjs. The gitChangedPaths/stopReview shape below
+// follows plugins/adlc-cursor/hooks/adlc-stop.mjs's stopAudit (one function,
+// -z NUL-delimited git parsing, no manual quote-unescaping). A drift test
+// (hooks/test/review-notice.test.mjs) pins the exports against
+// packages/core/lib/risk-tier.mjs.
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
@@ -21,6 +16,12 @@ import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadTicketStoreReadOnly, ticketStoreExists } from './generated-ticket-reader.mjs';
 import { readActiveTicketPointer, resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
+import {
+  RISK_TIER_PATTERNS,
+  matchRiskTier,
+  classifyRiskTier,
+  decideAdversarialReviewNotice,
+} from './generated-risk-tier.mjs';
 
 async function stdinJson() {
   const chunks = [];
@@ -124,85 +125,18 @@ function verifyOutput(root) {
   return { systemMessage: `ADLC evidence advisory: gate-manifest verification did not pass (${detail}). This warning does not override deterministic phase gates.` };
 }
 
-// ---------------------------------------------------------------------------
-// KEEP IN SYNC with packages/core/lib/risk-tier.mjs.
-// ---------------------------------------------------------------------------
-
-export const RISK_TIER_PATTERNS = Object.freeze({
-  'auth-trust-boundary': Object.freeze([
-    '**/auth/**', '**/authn/**', '**/authz/**', '**/oauth/**', '**/sso/**',
-    '**/session/**', '**/login/**', '**/permissions/**', '**/rbac/**', '**/acl/**',
-  ]),
-  'security-control-deny-path': Object.freeze([
-    '**/*guard*', '**/*validator*', '**/*validators*', '**/sandbox/**', '**/sandboxes/**',
-    '**/middleware/**', '**/*deny-path*', '**/*policy*', '**/policies/**',
-  ]),
-  secrets: Object.freeze([
-    '**/.env', '**/.env.*', '**/*.pem', '**/*.key', '**/*.p12', '**/*.pfx',
-    '**/secrets/**', '**/secret/**', '**/*credentials*', '**/vault/**',
-  ]),
-  'data-loss-destructive': Object.freeze([
-    '**/*delete*', '**/*destroy*', '**/*purge*', '**/*truncate*', '**/*wipe*',
-    '**/*irreversible*',
-  ]),
-  'schema-migration': Object.freeze([
-    '**/migrations/**', '**/migrate/**', '**/*.sql', '**/schema.*', '**/*.prisma',
-  ]),
-  'ci-cd-supply-chain': Object.freeze([
-    '.github/workflows/**', '**/Dockerfile', '**/Dockerfile.*', '**/docker-compose*.yml',
-    '**/package.json', '**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock',
-    '**/requirements*.txt', '**/Gemfile*', '**/go.sum', '**/go.mod', '**/Cargo.lock',
-    '.circleci/**', '.gitlab-ci.yml',
-  ]),
-});
-
-// The rail/scope glob matcher is a GENERATED verbatim copy of
-// packages/core/lib/glob.mjs: this file is installed without node_modules, so it
-// cannot import @adlc/core, and a hand-kept copy is what drifted before.
+// The rail/scope glob matcher and risk-tier classifier are GENERATED verbatim
+// copies of packages/core/lib/glob.mjs and packages/core/lib/risk-tier.mjs:
+// this file is installed without node_modules, so it cannot import @adlc/core.
 import { globMatch } from './generated-glob-match.mjs';
 
-export { globMatch };
-
-export function matchRiskTier(path) {
-  const norm = String(path).split('\\').join('/');
-  for (const [tier, patterns] of Object.entries(RISK_TIER_PATTERNS)) {
-    for (const pattern of patterns) {
-      if (globMatch(pattern, norm)) return { tier, pattern };
-    }
-  }
-  return null;
-}
-
-export function classifyRiskTier(paths) {
-  const matches = [];
-  for (const path of paths ?? []) {
-    const hit = matchRiskTier(path);
-    if (hit) matches.push({ path, ...hit });
-  }
-  return { gated: matches.length > 0, matches };
-}
-
-function filesOverlapOrUnscoped(entry, matches) {
-  const files = entry && entry.files;
-  if (!files || typeof files !== 'object') return true;
-  const recorded = Object.keys(files);
-  if (recorded.length === 0) return true;
-  const gatedPaths = new Set(matches.map((m) => m.path));
-  return recorded.some((p) => gatedPaths.has(p));
-}
-
-export function decideAdversarialReviewNotice({ changedPaths = [], manifestEntries = [], ticketId = null } = {}) {
-  const { gated, matches } = classifyRiskTier(changedPaths);
-  if (!gated) return { needed: false, matches: [] };
-  const hasRecord = (manifestEntries ?? []).some(
-    (e) =>
-      e &&
-      e.gate === 'adversarial-review' &&
-      (!ticketId || !e.ticket || e.ticket === ticketId) &&
-      filesOverlapOrUnscoped(e, matches),
-  );
-  return { needed: !hasRecord, matches };
-}
+export {
+  globMatch,
+  RISK_TIER_PATTERNS,
+  matchRiskTier,
+  classifyRiskTier,
+  decideAdversarialReviewNotice,
+};
 
 // ---------------------------------------------------------------------------
 // gitChangedPaths / stopReview — shape follows plugins/adlc-cursor/hooks/

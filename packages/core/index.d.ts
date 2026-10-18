@@ -423,6 +423,42 @@ export function defaultLockProbes(): {
   pidStartTimeOf: typeof procStartTimeOf;
 };
 
+// lib/trusted-binary.mjs
+export type TrustedBinaryStatLike = {
+  readonly uid: number;
+  readonly mode: number;
+};
+export type TrustedBinaryStats = {
+  file: TrustedBinaryStatLike;
+  link: TrustedBinaryStatLike;
+  dir: TrustedBinaryStatLike;
+  ancestors?: TrustedBinaryStatLike[];
+};
+export function resolveTrustedBinary(name: string, pathEnv: unknown): string | null;
+export function ownershipRejection(
+  stats: TrustedBinaryStats,
+  selfUid: number | null
+): string | null;
+export function ancestorDirs(file: string): string[];
+export function candidateAncestors(candidate: string, dir: string, name: string): string[];
+export function binaryCandidates(
+  name: string,
+  pathEnv: unknown
+): Array<{ candidate: string; rejection: string | null }>;
+export function candidateStats(
+  candidate: string,
+  dir: string,
+  name: string,
+  file: TrustedBinaryStatLike,
+  selfUid: number | null
+): TrustedBinaryStats;
+export function candidateRejection(
+  dir: string,
+  stats: TrustedBinaryStats | null,
+  selfUid: number | null
+): string | null;
+export function untrustedBinaryReason(name: string, pathEnv: unknown): string | null;
+
 // Types of the @adlc/core/test-kit subpath, declared in lib/test-kit.d.mts.
 export type { TestContext, GitRepoOptions, GitRepoResult, RunBinOptions } from './lib/test-kit.mjs';
 

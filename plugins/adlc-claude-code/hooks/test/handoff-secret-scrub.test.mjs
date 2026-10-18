@@ -75,6 +75,7 @@ function isolatedPluginDir(t) {
     'generated-active-ticket.mjs',
     'generated-ticket-reader.mjs',
     'generated-glob-match.mjs',
+    'generated-trusted-binary.mjs',
   ]) {
     writeFileSync(join(hooks, f), readFileSync(join(HOOKS_DIR, f), 'utf8'));
   }

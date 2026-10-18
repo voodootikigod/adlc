@@ -346,6 +346,7 @@ test('the direct-execution guard survives a path containing a space', (t) => {
     'generated-active-ticket.mjs',
     'generated-ticket-reader.mjs',
     'generated-glob-match.mjs',
+    'generated-trusted-binary.mjs',
   ]) {
     copyFileSync(join(HOOKS_DIR, f), join(copyDir, f));
   }

@@ -1,3 +1,4 @@
+// GENERATED-SHELL SOURCE.
 // shell.mjs — shell-command classification for in-session rail gating.
 //
 // CANONICAL copy of the shell parser first built in

@@ -32,6 +32,7 @@ const ARTIFACTS = [
       // @adlc/tickets cannot import @adlc/core — core depends on IT, so the
       // copy goes the same way as the harnesses' rather than inverting that.
       'packages/tickets/lib/generated-glob-match.mjs',
+      'packages/core/lib/generated-glob-match.mjs',
     ],
   },
   {
@@ -46,6 +47,31 @@ const ARTIFACTS = [
       'plugins/adlc-pi/lib/generated-active-ticket.mjs',
       'plugins/adlc-copilot/hooks/generated-active-ticket.mjs',
       'plugins/adlc-herdr/lib/generated-active-ticket.mjs',
+    ],
+  },
+  {
+    source: 'packages/core/lib/shell.mjs',
+    marker: '// GENERATED-SHELL SOURCE.',
+    outputs: [
+      'plugins/adlc-codex/hooks/generated-shell.mjs',
+      'plugins/adlc-copilot/hooks/generated-shell.mjs',
+    ],
+  },
+  {
+    source: 'packages/core/lib/risk-tier.mjs',
+    marker: '// GENERATED-RISK-TIER SOURCE.',
+    outputs: [
+      'plugins/adlc-codex/hooks/generated-risk-tier.mjs',
+      'plugins/adlc-copilot/hooks/generated-risk-tier.mjs',
+    ],
+  },
+  {
+    source: 'packages/core/lib/trusted-binary.mjs',
+    marker: '// GENERATED-TRUSTED-BINARY SOURCE.',
+    outputs: [
+      'plugins/adlc-claude-code/hooks/generated-trusted-binary.mjs',
+      'plugins/adlc-codex/hooks/generated-trusted-binary.mjs',
+      'plugins/adlc-copilot/hooks/generated-trusted-binary.mjs',
     ],
   },
 ];

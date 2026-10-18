@@ -1,3 +1,4 @@
+// GENERATED-RISK-TIER SOURCE.
 // risk-tier.mjs — deterministic (no-LLM) risk-tier path-pattern matcher, per
 // ADR-0007 §1 / ADR-0008's coverage map. Pure, no I/O: given repo-relative
 // changed paths (and, for the notice decision, already-loaded gate-manifest
@@ -10,13 +11,11 @@
 // trust-boundary trigger; nothing here invents a new policy, it just makes the
 // existing one checkable without a human remembering to run the CLI.
 //
-// KEEP IN SYNC: `plugins/adlc-claude-code/hooks/adlc-hook.mjs` cannot resolve
-// @adlc/core at runtime (same constraint as its ported `globMatch` — see that
-// file's own header comment), so RISK_TIER_PATTERNS/matchRiskTier/
-// classifyRiskTier/decideAdversarialReviewNotice are ported VERBATIM there.
-// `plugins/adlc-opencode/lib/session-hooks.mjs` imports this module directly.
+// Copied by scripts/ticket-readers/generate.mjs into plugin hooks that cannot
+// resolve @adlc/core at runtime. `plugins/adlc-opencode/lib/session-hooks.mjs`
+// imports this module directly.
 
-import { globMatch } from './tickets.mjs';
+import { globMatch } from './generated-glob-match.mjs';
 
 /**
  * ADR-0007 §1 risk-tier categories → representative path glob patterns (the

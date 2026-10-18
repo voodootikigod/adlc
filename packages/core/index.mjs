@@ -17,6 +17,7 @@ export * from './lib/primitives.mjs';
 export * from './lib/inflight.mjs';
 export * from './lib/cluster.mjs';
 export * from './lib/proc.mjs';
+export * from './lib/trusted-binary.mjs';
 
 // Promoted shared helpers
 export { activeTickets } from './lib/tickets.mjs';
@@ -50,4 +51,14 @@ export {
   selfProcessIdentity,
   defaultLockProbes,
 } from './lib/proc.mjs';
+export {
+  resolveTrustedBinary,
+  ownershipRejection,
+  ancestorDirs,
+  candidateAncestors,
+  binaryCandidates,
+  candidateStats,
+  candidateRejection,
+  untrustedBinaryReason,
+} from './lib/trusted-binary.mjs';
 
