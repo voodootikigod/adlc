@@ -16,6 +16,7 @@ export * from './lib/text.mjs';
 export * from './lib/primitives.mjs';
 export * from './lib/inflight.mjs';
 export * from './lib/cluster.mjs';
+export * from './lib/proc.mjs';
 
 // Promoted shared helpers
 export { activeTickets } from './lib/tickets.mjs';
@@ -42,4 +43,11 @@ export {
   jaccard,
   clusterByTokenSets,
 } from './lib/cluster.mjs';
+export {
+  thisHost,
+  pidAlive,
+  procStartTimeOf,
+  selfProcessIdentity,
+  defaultLockProbes,
+} from './lib/proc.mjs';
 

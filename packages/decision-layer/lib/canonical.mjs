@@ -1,23 +1,12 @@
 // Canonical JSON: object keys sorted at every depth, no whitespace. Hashes and
 // size limits are computed over this form, so key order never changes either.
-import { createHash } from 'node:crypto';
+import { canonicalJson, sha256 } from '@adlc/core';
 
-function sortKeys(value) {
-  if (Array.isArray(value)) return value.map(sortKeys);
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortKeys(value[key])]));
-  }
-  return value;
-}
-
-/** @param {unknown} value */
-export function canonicalJson(value) {
-  return JSON.stringify(sortKeys(value));
-}
+export { canonicalJson, sha256 };
 
 /** sha256 hex digest of the canonical JSON of `value`. */
 export function canonicalHash(value) {
-  return createHash('sha256').update(canonicalJson(value)).digest('hex');
+  return sha256(canonicalJson(value));
 }
 
 /** Byte length of the canonical JSON of `value`, as UTF-8. */

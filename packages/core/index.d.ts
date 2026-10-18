@@ -399,6 +399,30 @@ export function clusterByTokenSets(
   threshold?: number
 ): number[][];
 
+// lib/proc.mjs
+export function thisHost(): string;
+export function pidAlive(pid: unknown): boolean;
+export function procStartTimeOf(
+  pid: unknown,
+  options?: {
+    platform?: string;
+    readFile?: (path: string, encoding: string) => string;
+    execFile?: (file: string, args: readonly string[], options: { encoding: string }) => string;
+  }
+): string | null;
+export function selfProcessIdentity(): {
+  pid: number;
+  host: string;
+  procStartTime: string | null;
+  pidStartTime: string | null;
+};
+export function defaultLockProbes(): {
+  host: string;
+  pidAlive: typeof pidAlive;
+  procStartTimeOf: typeof procStartTimeOf;
+  pidStartTimeOf: typeof procStartTimeOf;
+};
+
 // Types of the @adlc/core/test-kit subpath, declared in lib/test-kit.d.mts.
 export type { TestContext, GitRepoOptions, GitRepoResult, RunBinOptions } from './lib/test-kit.mjs';
 

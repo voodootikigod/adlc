@@ -160,20 +160,9 @@ export function lockHeldBy(adlcDir, token) {
   return !!cur && cur.token === token;
 }
 
-/** Linux /proc start time (field 22), mirroring fleet's proc.mjs; null elsewhere. */
-export function pidStartTimeOf(pid) {
-  try {
-    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
-    const after = stat.slice(stat.lastIndexOf(')') + 2);
-    return after.split(' ')[19] ?? null;
-  } catch { return null; }
-}
-export function pidAlive(pid) {
-  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
-}
-export function selfIdentity() { return { pid: process.pid, pidStartTime: pidStartTimeOf(process.pid) }; }
-export function defaultProbes() { return { pidAlive, pidStartTimeOf }; }
+export { pidAlive, procStartTimeOf as pidStartTimeOf, selfProcessIdentity as selfIdentity, defaultLockProbes as defaultProbes } from '@adlc/core';
 /** Stale-reclaim quarantine directories left by crashes (for status/forensics). */
 export function staleDirs(adlcDir) {
   try { return readdirSync(adlcDir).filter((n) => n.startsWith(`${LOCK_DIR_NAME}.stale-`)); } catch { return []; }
 }
+
