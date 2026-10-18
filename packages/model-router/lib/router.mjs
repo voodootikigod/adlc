@@ -19,6 +19,7 @@ import { assertFloor, DEFAULT_FLOOR } from './floor.mjs';
  * @param {string} [opts.ticketsPath] - path to tickets.json
  * @param {number} [opts.floor=0.2] - rail density floor, in (0, 1] — 0 is rejected (#697)
  * @param {string} [opts.adlcDir] - override .adlc dir (for tests)
+ * @param {string} [opts.ticketId] - optional ticket id to scope routing and gate findings
  * @returns {{ assignments, p3Findings, ticketErrors, skippedLedger }}
  *   or throws with a message suitable for opError()
  */
@@ -27,6 +28,7 @@ export async function runRouter(opts = {}) {
     ticketsPath,
     floor = DEFAULT_FLOOR,
     adlcDir = ADLC_DIR,
+    ticketId,
   } = opts;
 
   // Before anything is read: an empty store returns early below, and a
@@ -45,6 +47,10 @@ export async function runRouter(opts = {}) {
   // segmented, priors recorded post-cutover live in manifest.d/, not root.
   const { entries, skipped: skippedLedger } = readManifestForest(adlcDir);
 
+  if (ticketId !== undefined && !tickets.some((t) => t.id === ticketId)) {
+    throw Object.assign(new Error(`Ticket not found: ${ticketId}`), { isOpError: true });
+  }
+
   if (tickets.length === 0) {
     return { assignments: [], p3Findings: [], ticketErrors, skippedLedger };
   }
@@ -58,7 +64,10 @@ export async function runRouter(opts = {}) {
   const priors = buildPriors(entries);
 
   // Assign routes
-  const assignments = assignAll(tickets, cpmResult, priors, floor);
+  const allAssignments = assignAll(tickets, cpmResult, priors, floor);
+  const assignments = ticketId !== undefined
+    ? allAssignments.filter((a) => a.id === ticketId)
+    : allAssignments;
 
   // P3 gate: any non-frontier-category ticket with railDensity < floor
   const p3Findings = assignments

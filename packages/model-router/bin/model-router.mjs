@@ -2,7 +2,7 @@
 /**
  * model-router — Deterministic per-ticket model assignment (ADLC D1).
  *
- * Usage: model-router [--tickets <path>] [--floor <number>] [--json]
+ * Usage: model-router [--tickets <path>] [--ticket <id>] [--floor <number>] [--json]
  */
 
 import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
@@ -35,6 +35,7 @@ function parseFlags(argv) {
       args: argv,
       options: {
         tickets: { type: 'string' },
+        ticket: { type: 'string' },
         floor: { type: 'string' },
         json: { type: 'boolean', default: false },
       },
@@ -52,6 +53,10 @@ function parseFlags(argv) {
 
 const values = parseFlags(process.argv.slice(2));
 
+if (values.ticket !== undefined && values.ticket.trim() === '') {
+  opError('--ticket requires a non-empty ticket id');
+}
+
 // (0, 1] only. `--floor 0` used to be accepted and silently disabled the P3
 // gate — every ticket set exited 0 and unrailed tickets left frontier (#697).
 const floor = values.floor !== undefined ? parseFloor(values.floor) : DEFAULT_FLOOR;
@@ -66,6 +71,7 @@ try {
   result = await runRouter({
     ticketsPath: values.tickets,
     floor,
+    ticketId: values.ticket,
   });
 } catch (err) {
   opError(err.message);

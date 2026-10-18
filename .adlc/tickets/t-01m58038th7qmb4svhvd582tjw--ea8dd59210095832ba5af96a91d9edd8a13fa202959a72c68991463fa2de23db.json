@@ -1,0 +1,17 @@
+{
+  "body": "Add `--ticket <id>` to `packages/model-router/bin/model-router.mjs` and `runRouter()` in `packages/model-router/lib/router.mjs` so P2 coldstart can route a single ticket without failing on unrelated under-railed tickets in the store.\n\nAcceptance criteria:\n1. `adlc model-router --ticket <id>` and `adlc model-router --ticket <id> --json` compute critical-path float over the active ticket DAG, then filter `assignments` and `p3Findings` to only `<id>`, exiting `0` when `<id>` has rails and `2` when `<id>` is under-railed. Verify: `node --test packages/model-router/test/model-router.test.mjs`\n2. Passing `--ticket <unknown>` (or an empty/whitespace `--ticket`) exits `1` with an operator error on stderr. Verify: `node --test packages/model-router/test/model-router.test.mjs`",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M58038TH7QMB4SVHVD582TJW",
+  "rails": [
+    "packages/model-router/test/floor-ladder.test.mjs",
+    "packages/model-router/test/floor-zero.test.mjs"
+  ],
+  "scope": [
+    "packages/model-router/bin/model-router.mjs",
+    "packages/model-router/lib/router.mjs",
+    "packages/model-router/test/model-router.test.mjs"
+  ],
+  "title": "Scope adlc model-router to a single ticket when --ticket <id> is supplied (#1238)"
+}
