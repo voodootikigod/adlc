@@ -43,6 +43,16 @@ const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 //     gates return canned verdicts instead of exercising the real path.
 // Tests that NEED one of these set their own value inline and are unaffected.
 export const PRESERVE_EMPTY = new Set(['ADLC_MANIFEST_KEY']);
+export const AMBIENT_SESSION_ENV_VARS = [
+  'GEMINI_CONVERSATION_ID',
+  'JETSKI_CONVERSATION_ID',
+  'ANTIGRAVITY_CONVERSATION_ID',
+  'CONVERSATION_ID',
+  'ADLC_SESSION_ID',
+  'AGY_SESSION_ID',
+  'GEMINI_SESSION_ID',
+  'ADLC_CURSOR_SESSION_ID',
+];
 export const SCRUBBED_ENV_VARS = [
   'ADLC_MANIFEST_KEY',
   'RAILS_BASE',
@@ -50,7 +60,18 @@ export const SCRUBBED_ENV_VARS = [
   'ADLC_RAILS_BYPASS',
   'ADLC_BUILD_GATE_BYPASS',
   'ADLC_GATE_MOCK_RESPONSE',
+  ...AMBIENT_SESSION_ENV_VARS,
 ];
+
+/**
+ * True when a present environment variable `name` with `value` must be deleted
+ * from the spawned segment environment. Only an explicitly-empty ADLC_MANIFEST_KEY
+ * is preserved (it blocks .env.local fallback by presence); every other variable in
+ * SCRUBBED_ENV_VARS — including ambient session IDs — is deleted even when empty.
+ */
+export function shouldScrubEnvValue(name, value) {
+  return !(value === '' && PRESERVE_EMPTY.has(name));
+}
 
 /**
  * Build the env every segment is spawned with: the caller's env with the repo's
@@ -81,12 +102,7 @@ export function buildSegmentEnv(baseEnv = process.env, { platform = process.plat
       : (Object.hasOwn(env, name) ? [name] : []);
     let removed = false;
     for (const match of matches) {
-      // The explicit-'' carve-out applies ONLY to the key: its presence (even empty)
-      // is a deliberate fail-closed that blocks the .env.local loader. The other
-      // variables have PRESENCE-checked consumers (e.g. ADLC_GATE_MOCK_RESPONSE
-      // present-but-empty can still select a mock path), so for them any present
-      // value — empty included — is scrubbed (codex review finding).
-      if (env[match] === '' && PRESERVE_EMPTY.has(name)) continue;
+      if (!shouldScrubEnvValue(name, env[match])) continue;
       delete env[match];
       removed = true;
     }

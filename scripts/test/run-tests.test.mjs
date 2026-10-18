@@ -18,12 +18,69 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { join, dirname, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildSegmentEnv, packageHasTests, packageSegments, SCRUBBED_ENV_VARS } from '../run-tests.mjs';
+import { AMBIENT_SESSION_ENV_VARS, buildSegmentEnv, packageHasTests, packageSegments, SCRUBBED_ENV_VARS, shouldScrubEnvValue } from '../run-tests.mjs';
 
 const REPO_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
-test('the sensitive set is exactly the six ambient trust-root/override variables', () => {
-  assert.deepEqual([...SCRUBBED_ENV_VARS].sort(), ['ADLC_BUILD_GATE_BYPASS', 'ADLC_GATE_MOCK_RESPONSE', 'ADLC_MANIFEST_KEY', 'ADLC_RAILS_BYPASS', 'BASE_REF', 'RAILS_BASE']);
+test('the sensitive set includes the six trust-root/override variables plus the eight ambient session IDs', () => {
+  assert.deepEqual(
+    [...AMBIENT_SESSION_ENV_VARS].sort(),
+    [
+      'ADLC_CURSOR_SESSION_ID',
+      'ADLC_SESSION_ID',
+      'AGY_SESSION_ID',
+      'ANTIGRAVITY_CONVERSATION_ID',
+      'CONVERSATION_ID',
+      'GEMINI_CONVERSATION_ID',
+      'GEMINI_SESSION_ID',
+      'JETSKI_CONVERSATION_ID',
+    ],
+  );
+  assert.deepEqual(
+    [...SCRUBBED_ENV_VARS].sort(),
+    [
+      'ADLC_BUILD_GATE_BYPASS',
+      'ADLC_CURSOR_SESSION_ID',
+      'ADLC_GATE_MOCK_RESPONSE',
+      'ADLC_MANIFEST_KEY',
+      'ADLC_RAILS_BYPASS',
+      'ADLC_SESSION_ID',
+      'AGY_SESSION_ID',
+      'ANTIGRAVITY_CONVERSATION_ID',
+      'BASE_REF',
+      'CONVERSATION_ID',
+      'GEMINI_CONVERSATION_ID',
+      'GEMINI_SESSION_ID',
+      'JETSKI_CONVERSATION_ID',
+      'RAILS_BASE',
+    ],
+  );
+});
+
+test('ambient session and conversation IDs are scrubbed from segment env (both non-empty and empty)', () => {
+  assert.equal(shouldScrubEnvValue('ADLC_MANIFEST_KEY', ''), false);
+  assert.equal(shouldScrubEnvValue('ADLC_MANIFEST_KEY', 'secret'), true);
+  for (const name of AMBIENT_SESSION_ENV_VARS) {
+    assert.equal(shouldScrubEnvValue(name, ''), true);
+    assert.equal(shouldScrubEnvValue(name, 'session-123'), true);
+  }
+  const input = {
+    HOME: '/h',
+    GEMINI_CONVERSATION_ID: 'gem-1',
+    JETSKI_CONVERSATION_ID: 'jet-1',
+    ANTIGRAVITY_CONVERSATION_ID: 'agy-conv-1',
+    CONVERSATION_ID: 'conv-1',
+    ADLC_SESSION_ID: 'adlc-1',
+    AGY_SESSION_ID: '',
+    GEMINI_SESSION_ID: 'gem-sess-1',
+    ADLC_CURSOR_SESSION_ID: 'cursor-1',
+  };
+  const { env, scrubbed } = buildSegmentEnv(input);
+  for (const name of AMBIENT_SESSION_ENV_VARS) {
+    assert.equal(Object.hasOwn(env, name), false, `${name} must be scrubbed from segment env`);
+  }
+  assert.deepEqual([...scrubbed].sort(), [...AMBIENT_SESSION_ENV_VARS].sort());
+  assert.equal(env.HOME, '/h');
 });
 
 test('non-empty sensitive values are ABSENT from the segment env and reported', () => {

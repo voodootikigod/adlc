@@ -1,0 +1,16 @@
+{
+  "body": "Prevent ambient host session and conversation ID environment variables from leaking into test segments when npm test or npm run preflight runs inside a live agent harness.\n\nAcceptance criteria:\n1. SCRUBBED_ENV_VARS in scripts/run-tests.mjs includes GEMINI_CONVERSATION_ID, JETSKI_CONVERSATION_ID, ANTIGRAVITY_CONVERSATION_ID, CONVERSATION_ID, ADLC_SESSION_ID, AGY_SESSION_ID, GEMINI_SESSION_ID, and ADLC_CURSOR_SESSION_ID so buildSegmentEnv strips them from every test segment. Verify: node --test scripts/test/run-tests.test.mjs",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M582DRTSYJDPS9H9EW4VVW1X",
+  "rails": [
+    "scripts/test/env-hermeticity-guard.test.mjs",
+    "scripts/test/smoke-teardown.test.mjs"
+  ],
+  "scope": [
+    "scripts/run-tests.mjs",
+    "scripts/test/run-tests.test.mjs"
+  ],
+  "title": "Scrub ambient session and conversation IDs in scripts/run-tests.mjs"
+}
