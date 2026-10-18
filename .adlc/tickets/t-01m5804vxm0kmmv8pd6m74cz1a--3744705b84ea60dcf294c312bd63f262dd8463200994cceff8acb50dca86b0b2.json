@@ -1,0 +1,18 @@
+{
+  "body": "Fix two multi-root defects in plugins/adlc-cursor/hooks/ for issues 1234 and 1235:\n1. In plugins/adlc-cursor/hooks/adlc-rails-guard.mjs resolveOwning, when workspace_roots are declared and an absolute target path is not contained within any declared root and no explicit fallback was asserted by the caller, return root null so the target is treated as unresolved rather than silently checked against the first root.\n2. In plugins/adlc-cursor/hooks/adlc-pretool.mjs dispatch, resolve owning roots across all target paths in a batch and consult consultBuildGate once per distinct owning root, returning the first deny verdict if any root denies.\n\nAcceptance criteria:\n1. resolveOwning returns root null when an absolute target lies outside all declared workspace_roots including symlinked roots, triggering unresolvedRootVerdict. Verify: node --test plugins/adlc-cursor/test/rails-guard-no-root.test.mjs\n2. dispatch in adlc-pretool.mjs consults consultBuildGate once per distinct owning root across all extracted target paths in a multi-root batch and denies if any root build gate denies. Verify: node --test plugins/adlc-cursor/test/pretool-dispatch.test.mjs",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M5804VXM0KMMV8PD6M74CZ1A",
+  "rails": [
+    "plugins/adlc-cursor/test/rails-guard.test.mjs",
+    "plugins/adlc-cursor/test/build-gate.test.mjs"
+  ],
+  "scope": [
+    "plugins/adlc-cursor/hooks/adlc-rails-guard.mjs",
+    "plugins/adlc-cursor/hooks/adlc-pretool.mjs",
+    "plugins/adlc-cursor/test/rails-guard-no-root.test.mjs",
+    "plugins/adlc-cursor/test/pretool-dispatch.test.mjs"
+  ],
+  "title": "Fix Cursor multi-root target resolution and per-root build-gate consultation"
+}

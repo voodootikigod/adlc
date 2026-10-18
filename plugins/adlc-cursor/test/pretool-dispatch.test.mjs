@@ -219,3 +219,72 @@ test('the dispatcher obtains the RAILS verdict only from decide(), before any ex
   }
   assert.ok(!/\bextractFilePath\b(?!s)/.test(src), 'must not use a singular single-path extractor to build the rails verdict');
 });
+
+test('multi-root batch edits consult buildgate for EVERY owning workspace root (#1235)', async () => {
+  const rootA = fixture({ tickets: [{ id: 'T1', title: 'low', risk: 'low', rails: ['src/frozen.js'] }] });
+  const rootB = fixture({ tickets: HIGH_RISK, currentTicket: 'T1' });
+  try {
+    const fileA = join(rootA, 'src', 'free.js');
+    const fileB = join(rootB, 'src', 'free.js');
+    const e = env({ ADLC_BUILD_GATE_ENFORCEMENT: '1', ADLC_BUILD_GATE_DEPTH: '999' });
+
+    // Regardless of whether rootA (allow) or rootB (high-risk degraded deny) comes first
+    // in MultiEdit, dispatch must consult rootB's buildgate and return its deny verdict.
+    for (const order of [[fileA, fileB], [fileB, fileA]]) {
+      const multi = {
+        tool_name: 'MultiEdit',
+        tool_input: { edits: order.map((file_path) => ({ file_path })) },
+        workspace_roots: [rootA, rootB],
+      };
+      const verdict = await dispatch(multi, { env: e });
+      assert.equal(verdict.permission, 'deny', `expected build-gate deny for order ${order.join(' -> ')}`);
+      assert.match(verdict.user_message, /build-gate/);
+    }
+
+    // Same guarantee for apply_patch touching rootA first and rootB second.
+    const patch = {
+      tool_name: 'apply_patch',
+      tool_input: {
+        command: `*** Begin Patch\n*** Update File: ${fileA}\n@@\n-a\n+b\n*** Update File: ${fileB}\n@@\n-c\n+d\n*** End Patch`,
+      },
+      workspace_roots: [rootA, rootB],
+    };
+    const patchVerdict = await dispatch(patch, { env: e });
+    assert.equal(patchVerdict.permission, 'deny');
+    assert.match(patchVerdict.user_message, /build-gate/);
+  } finally {
+    cleanup(rootA);
+    cleanup(rootB);
+  }
+});
+
+test('multi-file batch edits within the SAME root deduplicate buildgate consultation (#1235)', async () => {
+  const rootA = fixture({ tickets: HIGH_RISK, currentTicket: 'T1' });
+  const stateDir = mkdtempSync(join(tmpdir(), 'adlc-cursor-dispatch-state-'));
+  fixtureDirs.add(stateDir);
+  try {
+    const file1 = join(rootA, 'src', 'one.js');
+    const file2 = join(rootA, 'src', 'two.js');
+    const calls = [];
+    const spyImporter = async (spec) => { calls.push(spec); return import(spec); };
+    const e = env({
+      ADLC_BUILD_GATE_ENFORCEMENT: '1',
+      ADLC_CURSOR_STATE_DIR: stateDir,
+    });
+    const batch = {
+      tool_name: 'MultiEdit',
+      session_id: 'dedup-session',
+      tool_input: { edits: [{ file_path: file1 }, { file_path: file2 }] },
+      workspace_roots: [rootA],
+    };
+    // A 2-file MultiEdit inside rootA must consult rootA's buildgate only once
+    // (5 module imports for one consultBuildGate call, not 10).
+    const res = await dispatch(batch, { env: e, importModule: spyImporter });
+    assert.equal(res.permission, 'allow');
+    assert.equal(calls.length, 5, `expected 1 consultBuildGate pass (5 imports), got ${calls.length}`);
+  } finally {
+    cleanup(rootA);
+    cleanup(stateDir);
+  }
+});
+
