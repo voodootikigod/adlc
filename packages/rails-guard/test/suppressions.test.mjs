@@ -2,7 +2,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseAddedLines, findSuppressions, isMarkerAllowed, isDocFile, computeFencedLines } from '../lib/suppressions.mjs';
+import { parseAddedLines, findSuppressions, isMarkerAllowed, isDocFile, computeFencedLines, DOC_EXTENSIONS } from '../lib/suppressions.mjs';
 
 describe('parseAddedLines', () => {
   test('extracts added lines with correct file and line numbers', () => {
@@ -254,11 +254,22 @@ describe('findSuppressions', () => {
   // strict while letting its own detector be tested honestly. UPPERCASE names below
   // avoid matching the lowercase markers the (case-sensitive) scanner looks for.
   const SKIP = '.sk' + 'ip(';        // the skip-open-paren marker
+  const ONLY = '.on' + 'ly(';        // the only-open-paren marker
   const XFAIL = 'x' + 'fail';        // the pytest expected-fail marker
   const TSIG = '@ts-' + 'ignore';    // the TypeScript ignore marker
 
   test('does NOT flag a marker inside a markdown (.md) doc — prose false positive', () => {
     const lines = [{ file: 'plugins/adlc-antigravity/skills/adlc-doctrine/SKILL.md', lineNo: 28, content: `  skip/${XFAIL}/suppression markers fail review.` }];
+    assert.deepEqual(findSuppressions(lines), []);
+  });
+
+  test('does NOT flag a marker inside a .diff or .patch evidence file (#1237)', () => {
+    const lines = [
+      { file: 'evidence.diff', lineNo: 12, content: `+  it${SKIP}'quoted in diff', () => {})` },
+      { file: 'dir/fix.patch', lineNo: 18, content: `+  describe${ONLY}'quoted in patch', () => {})` },
+      { file: 'UPPER.DIFF', lineNo: 4, content: `+// ${TSIG}` },
+      { file: 'UPPER.PATCH', lineNo: 9, content: `+@pytest.mark.${XFAIL}` },
+    ];
     assert.deepEqual(findSuppressions(lines), []);
   });
 
@@ -279,10 +290,15 @@ describe('findSuppressions', () => {
     assert.equal(found.length, 3);
   });
 
-  test('scans a marker in a .md.mjs code file (extension check is on the true suffix)', () => {
-    // A code file whose name merely contains ".md" is NOT a doc — only the final extension counts.
-    const lines = [{ file: 'src/render.md.mjs', lineNo: 1, content: `x${SKIP}` }];
-    assert.equal(findSuppressions(lines).length, 1);
+  test('scans a marker in a .md.mjs, .diff.mjs, or .patch.ts code file (extension check is on the true suffix)', () => {
+    // A code file whose name merely contains ".md", ".diff", or ".patch" is NOT a doc — only the final extension counts.
+    const lines = [
+      { file: 'src/render.md.mjs', lineNo: 1, content: `x${SKIP}` },
+      { file: 'foo.diff.mjs', lineNo: 2, content: `y${ONLY}` },
+      { file: 'bar.patch.ts', lineNo: 3, content: `// ${TSIG}` },
+      { file: 'baz.test.ts', lineNo: 4, content: `z${SKIP}` },
+    ];
+    assert.equal(findSuppressions(lines).length, 4);
   });
 
   // --- MDX prose code-contexts: markers inside Markdown inline-code spans and fenced
@@ -424,13 +440,16 @@ describe('computeFencedLines', () => {
 });
 
 describe('isDocFile', () => {
-  test('true for non-executable prose markdown extensions', () => {
-    for (const f of ['README.md', 'a/b/NOTES.markdown', 'X.MD']) {
+  test('DOC_EXTENSIONS includes .diff and .patch alongside .md and .markdown', () => {
+    assert.deepEqual(DOC_EXTENSIONS, ['.md', '.markdown', '.diff', '.patch']);
+  });
+  test('true for non-executable prose markdown and diff/patch evidence extensions', () => {
+    for (const f of ['README.md', 'a/b/NOTES.markdown', 'X.MD', 'evidence.diff', 'dir/fix.patch', 'UPPER.DIFF', 'UPPER.PATCH']) {
       assert.equal(isDocFile(f), true, `${f} should be a doc`);
     }
   });
   test('false for code/test files AND for .mdx (compiles to code)', () => {
-    for (const f of ['test/a.test.mjs', 'src/b.ts', 'x.py', 'y.rs', 'render.md.mjs', 'Makefile', 'docs/guide.mdx']) {
+    for (const f of ['test/a.test.mjs', 'src/b.ts', 'x.py', 'y.rs', 'render.md.mjs', 'foo.diff.mjs', 'bar.patch.ts', 'baz.test.mjs', 'Makefile', 'docs/guide.mdx']) {
       assert.equal(isDocFile(f), false, `${f} should NOT be a doc`);
     }
   });

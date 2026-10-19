@@ -1,5 +1,5 @@
 {
-  "body": "Treat `.diff` and `.patch` files as inert documentation/evidence files in `packages/rails-guard/lib/suppressions.mjs` (`DOC_EXTENSIONS`) so `findSuppressions` does not flag `.skip(` or other suppression markers quoted in committed diff/patch evidence.\n\nAcceptance criteria:\n1. `DOC_EXTENSIONS` in `packages/rails-guard/lib/suppressions.mjs` includes `.diff` and `.patch` (case-insensitive via `isDocFile`), so `findSuppressions` returns `[]` for `.diff` and `.patch` paths while still scanning `.diff.mjs` / `.patch.ts` / `.test.mjs` code files. Verify: `node --test packages/rails-guard/test/suppressions.test.mjs`",
+  "body": "Treat `.diff` and `.patch` files as inert documentation/evidence files in `packages/rails-guard/lib/suppressions.mjs` (`DOC_EXTENSIONS`) so `findSuppressions` does not flag `skip-call` or other suppression markers quoted in committed diff/patch evidence.\n\nAcceptance criteria:\n1. `DOC_EXTENSIONS` in `packages/rails-guard/lib/suppressions.mjs` includes `.diff` and `.patch` (case-insensitive via `isDocFile`), so `findSuppressions` returns `[]` for `.diff` and `.patch` paths while still scanning `.diff.mjs` / `.patch.ts` / `.test.mjs` code files. Verify: `node --test packages/rails-guard/test/suppressions.test.mjs`",
   "category": "bugfix",
   "duration": 1,
   "edges": [],

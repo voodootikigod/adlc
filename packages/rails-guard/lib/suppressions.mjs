@@ -129,27 +129,31 @@ export function parseAddedLines(diffText) {
 export { computeFencedLines } from '@adlc/core';
 
 /**
- * Documentation file extensions (lowercase, leading dot). Suppression markers are
- * code constructs; prose documentation legitimately names them (an integration
- * guide, this package's own README). A marker in a prose doc is never an executed
- * suppression, so scanning docs only yields false positives with no coverage gain.
+ * Documentation and inert-evidence file extensions (lowercase, leading dot).
+ * Suppression markers are code constructs; prose documentation legitimately names
+ * them (an integration guide, this package's own README), and committed `.diff` /
+ * `.patch` evidence files quote raw diffs that may contain markers. A marker in a
+ * prose doc or committed diff/patch evidence is never an executed suppression, so
+ * scanning them only yields false positives with no coverage gain.
  *
- * Only NON-EXECUTABLE prose markdown is exempt. `.mdx` is deliberately EXCLUDED: it
- * compiles to JSX/TS and can carry real, operative type- and lint-ignore
- * suppressions, so it is scanned like any other code file. Kept intentionally minimal
- * — every exempt extension is bypass surface for a security gate (both this list's
- * scope and the `.mdx` exclusion were tightened by cross-model adversarial review).
+ * Only NON-EXECUTABLE prose markdown and diff/patch evidence are exempt. `.mdx` is
+ * deliberately EXCLUDED: it compiles to JSX/TS and can carry real, operative type-
+ * and lint-ignore suppressions, so it is scanned like any other code file. Kept
+ * intentionally minimal — every exempt extension is bypass surface for a security
+ * gate (both this list's scope and the `.mdx` exclusion were tightened by
+ * cross-model adversarial review).
  */
-export const DOC_EXTENSIONS = ['.md', '.markdown'];
+export const DOC_EXTENSIONS = ['.md', '.markdown', '.diff', '.patch'];
 
 /**
- * True when `file`'s FINAL extension is a documentation format (case-insensitive).
- * Only the true trailing suffix counts, so a code file like `render.md.mjs` (ext
- * `.mjs`) is still scanned — the check must not be fooled by `.md` appearing
- * mid-name. Returns false for a non-string, empty path, dotfile, or no-extension file.
+ * True when `file`'s FINAL extension is a documentation or inert-evidence format
+ * (case-insensitive). Only the true trailing suffix counts, so a code file like
+ * `render.md.mjs` or `fix.diff.mjs` (ext `.mjs`) is still scanned — the check must
+ * not be fooled by `.md` or `.diff` appearing mid-name. Returns false for a
+ * non-string, empty path, dotfile, or no-extension file.
  */
 export function isDocFile(file) {
-  if (typeof file !== 'string' || file === '') return false;
+  if (typeof file !== 'string') return false;
   const base = file.slice(file.lastIndexOf('/') + 1);
   const dot = base.lastIndexOf('.');
   if (dot <= 0) return false; // no extension, or a leading-dot name like ".md"
