@@ -330,3 +330,69 @@ test('a shell command that NAMES a file is checked like an edit: no root + enfor
   assert.match(v.user_message, UNRESOLVED);
   assert.deepEqual(decide({ tool_name: 'run_terminal_cmd', tool_input: { command: 'npm test' } }, { env }), { permission: 'allow' });
 });
+
+test('workspace_roots naming repoA leaves an absolute target in repoB unresolved (#1234)', (t) => {
+  const repoA = railedRepo(t);
+  const repoB = railedRepo(t);
+  const outsideTarget = join(repoB, 'src', 'frozen.js');
+  const payload = {
+    tool_name: 'Write',
+    tool_input: { file_path: outsideTarget },
+    workspace_roots: [repoA],
+  };
+
+  assert.deepEqual(resolveOwning(payload, outsideTarget, undefined, {}), {
+    root: null,
+    absFile: outsideTarget,
+  });
+
+  // Enforcement mode: denies as unresolved rather than evaluating against repoA.
+  const enforced = decide(payload, { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' } });
+  assert.equal(enforced.permission, 'deny');
+  assert.match(enforced.user_message, UNRESOLVED);
+
+  // Advisory mode: emits the unresolved stderr notice rather than silently claiming repoA.
+  const { verdict: advisory, stderr } = runPretool(t, payload, hookEnv(t, { ADLC_TICKET: 'T1' }));
+  assert.deepEqual(advisory, { permission: 'allow' });
+  assert.match(stderr, UNRESOLVED);
+});
+
+test('multi-root workspace_roots leaves a target outside ALL declared roots unresolved while honoring inside roots (#1234)', async (t) => {
+  const repoA = railedRepo(t);
+  const repoB = railedRepo(t);
+  const repoC = railedRepo(t);
+  const inA = join(repoA, 'src', 'free.js');
+  const inB = join(repoB, 'src', 'free.js');
+  const inC = join(repoC, 'src', 'frozen.js');
+
+  const multiPayload = (filePath) => ({
+    tool_name: 'Write',
+    tool_input: { file_path: filePath },
+    workspace_roots: [repoA, repoB],
+  });
+
+  assert.deepEqual(resolveOwning(multiPayload(inA), inA, undefined, {}), { root: repoA, absFile: inA });
+  assert.deepEqual(resolveOwning(multiPayload(inB), inB, undefined, {}), { root: repoB, absFile: inB });
+  assert.deepEqual(resolveOwning(multiPayload(inC), inC, undefined, {}), { root: null, absFile: inC });
+
+  const enforced = decide(multiPayload(inC), { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' } });
+  assert.equal(enforced.permission, 'deny');
+  assert.match(enforced.user_message, UNRESOLVED);
+
+  // A MultiEdit mixing an inside-root target and an outside-root target denies as unresolved in both orders.
+  for (const order of [[inA, inC], [inC, inA]]) {
+    const batch = {
+      tool_name: 'MultiEdit',
+      tool_input: { edits: order.map((file_path) => ({ file_path })) },
+      workspace_roots: [repoA, repoB],
+    };
+    const d = decide(batch, { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' } });
+    assert.equal(d.permission, 'deny');
+    assert.match(d.user_message, UNRESOLVED);
+
+    const bg = await dispatch(batch, { env: { ADLC_BUILD_GATE_ENFORCEMENT: '1' } });
+    assert.equal(bg.permission, 'deny');
+    assert.match(bg.user_message, /build-gate/);
+    assert.match(bg.user_message, UNRESOLVED);
+  }
+});

@@ -208,11 +208,11 @@ export function resolveOwning(payload, filePath, fallback, env = process.env) {
       .map((raw) => ({ raw, real: realpathDeepest(resolve(raw)) }))
       .sort((a, b) => b.real.length - a.real.length)[0];
     if (owning) return { root: owning.raw, absFile };
+    // Neither payload-declared roots nor CURSOR_PROJECT_DIR silently claim an
+    // external target: a file outside every candidate workspace root stays
+    // unresolved unless the caller explicitly supplied `fallback`.
+    if (fallback == null && base != null && !contains(base, absFile)) return { root: null, absFile };
   }
-  // CURSOR_PROJECT_DIR is only a default: an absolute target outside it belongs to
-  // some other workspace, which this hook cannot see, so it stays unresolved.
-  const hostOnly = !roots.length && fallback == null;
-  if (hostOnly && base != null && absFile && !contains(base, absFile)) return { root: null, absFile };
   return { root: base ?? null, absFile };
 }
 

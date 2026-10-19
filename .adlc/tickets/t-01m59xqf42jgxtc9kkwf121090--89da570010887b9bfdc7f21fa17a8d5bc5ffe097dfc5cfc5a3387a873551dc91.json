@@ -1,0 +1,16 @@
+{
+  "body": "Fix issue 1234 in plugins/adlc-cursor/hooks/adlc-rails-guard.mjs resolveOwning so that when workspace_roots are declared and an absolute target path is not contained within any declared root and no explicit fallback was asserted by the caller, resolveOwning returns root null so the target is treated as unresolved rather than checked against the first declared root.\n\nAcceptance criteria:\n1. resolveOwning returns root null when an absolute target lies outside all declared workspace_roots including symlinked roots, triggering unresolvedRootVerdict. Verify: node --test plugins/adlc-cursor/test/rails-guard-no-root.test.mjs",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M59XQF42JGXTC9KKWF121090",
+  "rails": [
+    "plugins/adlc-cursor/test/rails-guard.test.mjs",
+    "plugins/adlc-cursor/test/build-gate.test.mjs"
+  ],
+  "scope": [
+    "plugins/adlc-cursor/hooks/adlc-rails-guard.mjs",
+    "plugins/adlc-cursor/test/rails-guard-no-root.test.mjs"
+  ],
+  "title": "Treat absolute targets outside all declared workspace roots as unresolved in adlc-cursor"
+}
