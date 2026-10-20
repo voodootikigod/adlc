@@ -1,0 +1,16 @@
+{
+  "body": "Update coldstartEvidenceShape and coldstartIntegrityErrors in packages/runner/lib/assertions.mjs so P0 coldstart validation fails when coldstart audited only a truncated prefix of the ticket.\n\nAcceptance criteria:\n1. Cache entries where textChars or current serialized ticket length exceeds cap (or 8000 when cap is absent) or where cap is invalid are rejected as incomplete evidence. Verify: node --test packages/runner/test/runner.test.mjs\n2. Prompt-only coldstart verdicts for tickets serializing over 64000 chars are rejected while untruncated evidence within cap is accepted. Verify: node --test packages/runner/test/runner.test.mjs",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M5CNESDHCYZT9MRJKVAN2D93",
+  "rails": [
+    "packages/runner/test/p0-p1-gates.test.mjs",
+    "packages/runner/test/p5-evidence.test.mjs"
+  ],
+  "scope": [
+    "packages/runner/lib/assertions.mjs",
+    "packages/runner/test/runner.test.mjs"
+  ],
+  "title": "runner: reject truncated coldstart evidence in P0 gate validator (#1197)"
+}

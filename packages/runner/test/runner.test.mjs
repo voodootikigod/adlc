@@ -3,7 +3,14 @@ import assert from 'node:assert/strict';
 import { mkdirSync, appendFileSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { assertPhase } from '../lib/assertions.mjs';
+import {
+  assertPhase,
+  CURRENT_COLDSTART_CAP,
+  LEGACY_COLDSTART_CAP,
+  serializeTicketForColdstart,
+} from '../lib/assertions.mjs';
+import { TICKET_TEXT_MAX_CHARS, ticketToText } from '../../coldstart/lib/prompt.mjs';
+import { LEGACY_TICKET_TEXT_CAP } from '../../coldstart/lib/cache.mjs';
 import { canonicalJson, resolveChangeSetRevision, resolveRevision, sha256 } from '@adlc/core';
 import { tmp, gitRepo } from '@adlc/core/test-kit';
 import { appendManifestEntry as realAppendManifestEntry } from '@adlc/gate-manifest';
@@ -1294,5 +1301,214 @@ describe('adlc cli', () => {
       adlcBin, 'run', 'p4', '--ticket', 'T1',
     ], { cwd, encoding: 'utf8' });
     assert.equal(runResult.status, 0, `adlc run p4 failed: ${runResult.stdout}${runResult.stderr}`);
+  });
+});
+
+describe('coldstart truncation completeness (#1197)', () => {
+  it('matches @adlc/coldstart constants and ticketToText serialization across optional fields', () => {
+    assert.equal(LEGACY_COLDSTART_CAP, 8000);
+    assert.equal(LEGACY_COLDSTART_CAP, LEGACY_TICKET_TEXT_CAP);
+    assert.equal(CURRENT_COLDSTART_CAP, 64000);
+    assert.equal(CURRENT_COLDSTART_CAP, TICKET_TEXT_MAX_CHARS);
+
+    const samples = [
+      { id: 'T1', title: 'minimal' },
+      { id: 'T2', title: 'empty arrays', body: '', scope: [], rails: [], edges: [] },
+      {
+        id: 'T3',
+        title: 'populated fields',
+        body: 'Detailed specification body',
+        scope: ['packages/runner/lib/assertions.mjs'],
+        rails: ['packages/runner/test/p0-p1-gates.test.mjs'],
+        edges: ['T1'],
+      },
+    ];
+    for (const sample of samples) {
+      assert.equal(serializeTicketForColdstart(sample), ticketToText(sample));
+    }
+  });
+
+  it('rejects live coldstart evidence when recorded textChars exceeds recorded cap', (t) => {
+    const dir = tmpAdlc(t);
+    const ticket = ticketDefinition('T1');
+    writeFileSync(join(dir, 'tickets.json'), JSON.stringify({ tickets: [ticket] }));
+    const hash = ticketHash(ticket);
+    writeManifest(dir, [{
+      gate: 'coldstart',
+      ticket: 'T1',
+      data: {
+        tier: 'cheap',
+        cache: { ticketHash: hash, model: 'm', gaps: [], textChars: 14296, cap: 8000 },
+      },
+    }]);
+
+    const res = assertPhase('p0', { dir, ticket: 'T1' });
+    assert.equal(res.ok, false);
+    assert.equal(res.operational, false);
+    assert.ok(res.errors.includes('P0 evidence is incomplete: coldstart audited the first 8000 of 14296 chars'));
+  });
+
+  it('enforces exact positive-cap and non-negative-textChars boundaries on live cache records', (t) => {
+    const dir = tmpAdlc(t);
+    const ticket = ticketDefinition('T1');
+    writeFileSync(join(dir, 'tickets.json'), JSON.stringify({ tickets: [ticket] }));
+    const hash = ticketHash(ticket);
+
+    // cap: 1 is a valid positive integer cap, so textChars: 2 fails truncation (not invalid cap).
+    writeManifest(dir, [{
+      gate: 'coldstart',
+      ticket: 'T1',
+      data: {
+        tier: 'cheap',
+        cache: { ticketHash: hash, model: 'm', gaps: [], textChars: 2, cap: 1 },
+      },
+    }]);
+    const capOneRes = assertPhase('p0', { dir, ticket: 'T1' });
+    assert.equal(capOneRes.ok, false);
+    assert.ok(capOneRes.errors.includes('P0 evidence is incomplete: coldstart audited the first 1 of 2 chars'));
+
+    // textChars: 0 is a valid non-negative integer and passes when actualChars <= cap.
+    writeManifest(dir, [{
+      gate: 'coldstart',
+      ticket: 'T1',
+      data: {
+        tier: 'cheap',
+        cache: { ticketHash: hash, model: 'm', gaps: [], textChars: 0, cap: 8000 },
+      },
+    }]);
+    const zeroTextRes = assertPhase('p0', { dir, ticket: 'T1' });
+    assert.equal(zeroTextRes.ok, true, JSON.stringify(zeroTextRes));
+  });
+
+  it('rejects legacy live coldstart evidence (no cap/textChars) when serialized ticket exceeds 8000 chars and accepts <= 8000', (t) => {
+    const dir = tmpAdlc(t);
+    const baseTicket = { id: 'T1', title: 'legacy cap check', body: '' };
+    const baseLen = serializeTicketForColdstart({ ...baseTicket, body: 'x' }).length - 1;
+    const exactFitTicket = { ...baseTicket, body: 'a'.repeat(8000 - baseLen) };
+    assert.equal(serializeTicketForColdstart(exactFitTicket).length, 8000);
+
+    writeFileSync(join(dir, 'tickets.json'), JSON.stringify({ tickets: [exactFitTicket] }));
+    const fitHash = ticketHash(exactFitTicket);
+    writeManifest(dir, [{
+      gate: 'coldstart',
+      ticket: 'T1',
+      data: { tier: 'cheap', cache: { ticketHash: fitHash, model: 'm', gaps: [] } },
+    }]);
+    assert.equal(assertPhase('p0', { dir, ticket: 'T1' }).ok, true);
+
+    const overTicket = { ...baseTicket, body: 'a'.repeat(8001 - baseLen) };
+    assert.equal(serializeTicketForColdstart(overTicket).length, 8001);
+    writeFileSync(join(dir, 'tickets.json'), JSON.stringify({ tickets: [overTicket] }));
+    const overHash = ticketHash(overTicket);
+    writeManifest(dir, [{
+      gate: 'coldstart',
+      ticket: 'T1',
+      data: { tier: 'cheap', cache: { ticketHash: overHash, model: 'm', gaps: [] } },
+    }]);
+    const overRes = assertPhase('p0', { dir, ticket: 'T1' });
+    assert.equal(overRes.ok, false);
+    assert.ok(overRes.errors.includes('P0 evidence is incomplete: coldstart audited the first 8000 of 8001 chars'));
+  });
+
+  it('accepts live coldstart evidence with cap 64000 and textChars 20000 when ticket fits under cap', (t) => {
+    const dir = tmpAdlc(t);
+    const ticket = { ...ticketDefinition('T1'), body: 'b'.repeat(19000) };
+    const chars = serializeTicketForColdstart(ticket).length;
+    writeFileSync(join(dir, 'tickets.json'), JSON.stringify({ tickets: [ticket] }));
+    const hash = ticketHash(ticket);
+    writeManifest(dir, [{
+      gate: 'coldstart',
+      ticket: 'T1',
+      data: {
+        tier: 'cheap',
+        cache: { ticketHash: hash, model: 'm', gaps: [], textChars: chars, cap: 64000 },
+      },
+    }]);
+    const res = assertPhase('p0', { dir, ticket: 'T1' });
+    assert.equal(res.ok, true, JSON.stringify(res));
+  });
+
+  it('rejects live coldstart evidence when recorded textChars is <= cap but actual ticket length exceeds cap', (t) => {
+    const dir = tmpAdlc(t);
+    const ticket = { ...ticketDefinition('T1'), body: 'c'.repeat(9000) };
+    const actualChars = serializeTicketForColdstart(ticket).length;
+    writeFileSync(join(dir, 'tickets.json'), JSON.stringify({ tickets: [ticket] }));
+    const hash = ticketHash(ticket);
+    writeManifest(dir, [{
+      gate: 'coldstart',
+      ticket: 'T1',
+      data: {
+        tier: 'cheap',
+        cache: { ticketHash: hash, model: 'm', gaps: [], textChars: 100, cap: 8000 },
+      },
+    }]);
+    const res = assertPhase('p0', { dir, ticket: 'T1' });
+    assert.equal(res.ok, false);
+    assert.ok(res.errors.includes(`P0 evidence is incomplete: coldstart audited the first 8000 of ${actualChars} chars`));
+  });
+
+  it('rejects live coldstart evidence with malformed cap or textChars values', (t) => {
+    const dir = tmpAdlc(t);
+    const ticket = ticketDefinition('T1');
+    writeFileSync(join(dir, 'tickets.json'), JSON.stringify({ tickets: [ticket] }));
+    const hash = ticketHash(ticket);
+
+    for (const badCap of [0, -1, '8000', null, 1.5]) {
+      writeManifest(dir, [{
+        gate: 'coldstart',
+        ticket: 'T1',
+        data: {
+          tier: 'cheap',
+          cache: { ticketHash: hash, model: 'm', gaps: [], textChars: 100, cap: badCap },
+        },
+      }]);
+      const res = assertPhase('p0', { dir, ticket: 'T1' });
+      assert.equal(res.ok, false, `expected failure for cap=${String(badCap)}`);
+      assert.ok(res.errors.includes('P0 evidence is incomplete: coldstart cache record has an invalid cap'));
+    }
+
+    for (const badTextChars of [-1, '100', null, 1.5]) {
+      writeManifest(dir, [{
+        gate: 'coldstart',
+        ticket: 'T1',
+        data: {
+          tier: 'cheap',
+          cache: { ticketHash: hash, model: 'm', gaps: [], textChars: badTextChars, cap: 8000 },
+        },
+      }]);
+      const res = assertPhase('p0', { dir, ticket: 'T1' });
+      assert.equal(res.ok, false, `expected failure for textChars=${String(badTextChars)}`);
+      assert.ok(res.errors.includes('P0 evidence is incomplete: coldstart cache record has an invalid textChars'));
+    }
+  });
+
+  it('rejects prompt-only coldstart evidence when ticket exceeds 64000 chars and accepts <= 64000 chars', (t) => {
+    const dir = tmpAdlc(t);
+    const baseTicket = { id: 'T1', title: 'prompt-only cap check', body: '' };
+    const baseLen = serializeTicketForColdstart({ ...baseTicket, body: 'x' }).length - 1;
+    const exactFitTicket = { ...baseTicket, body: 'p'.repeat(64000 - baseLen) };
+    assert.equal(serializeTicketForColdstart(exactFitTicket).length, 64000);
+
+    writeFileSync(join(dir, 'tickets.json'), JSON.stringify({ tickets: [exactFitTicket] }));
+    const fitHash = ticketHash(exactFitTicket);
+    writeManifest(dir, [{
+      gate: 'coldstart',
+      ticket: 'T1',
+      data: { verdict: JSON.stringify({ gaps: [], ticketHash: fitHash }) },
+    }]);
+    assert.equal(assertPhase('p0', { dir, ticket: 'T1' }).ok, true);
+
+    const overTicket = { ...baseTicket, body: 'p'.repeat(64001 - baseLen) };
+    assert.equal(serializeTicketForColdstart(overTicket).length, 64001);
+    writeFileSync(join(dir, 'tickets.json'), JSON.stringify({ tickets: [overTicket] }));
+    const overHash = ticketHash(overTicket);
+    writeManifest(dir, [{
+      gate: 'coldstart',
+      ticket: 'T1',
+      data: { verdict: JSON.stringify({ gaps: [], ticketHash: overHash }) },
+    }]);
+    const overRes = assertPhase('p0', { dir, ticket: 'T1' });
+    assert.equal(overRes.ok, false);
+    assert.ok(overRes.errors.includes('P0 evidence is incomplete: coldstart audited the first 64000 of 64001 chars'));
   });
 });

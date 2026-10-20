@@ -1,4 +1,4 @@
-import { ADLC_DIR, canonicalJson, hashFiles, sha256 } from '@adlc/core';
+import { ADLC_DIR, canonicalJson, hashFiles, loadTickets, sha256 } from '@adlc/core';
 // Scoped to root + this checkout's own segment, NOT the whole forest: every
 // `.at(-1)`, `indexOf`, and `slice` below reads array position as chronology,
 // which is only true of a chain this checkout can place in sequence. See
@@ -244,9 +244,35 @@ function p6IntegrityErrors(entry, currentBinding) {
 //     matching the exact text the P0 authoring flow instructs writing before
 //     --record-verdict)
 // Both must be understood, or a real successful audit reads as a P0 failure.
+export const LEGACY_COLDSTART_CAP = 8000;
+export const CURRENT_COLDSTART_CAP = 64000;
+
+export function serializeTicketForColdstart(ticket) {
+  const payload = {
+    id: ticket.id,
+    title: ticket.title,
+    ...(ticket.body ? { body: ticket.body } : {}),
+    ...(ticket.scope?.length ? { scope: ticket.scope } : {}),
+    ...(ticket.rails?.length ? { rails: ticket.rails } : {}),
+    ...(ticket.edges?.length ? { edges: ticket.edges } : {}),
+  };
+  return JSON.stringify(payload, null, 2);
+}
+
+function loadCurrentTicket(cwd, ticket, dir) {
+  const { tickets } = loadTickets(resolve(cwd, dir, 'tickets.json'));
+  return tickets.find((t) => t?.id === ticket) ?? null;
+}
+
 function coldstartEvidenceShape(data) {
   if (data?.cache && typeof data.cache === 'object' && !Array.isArray(data.cache)) {
-    return { gaps: data.cache.gaps, ticketHash: data.cache.ticketHash };
+    return {
+      kind: 'live',
+      gaps: data.cache.gaps,
+      ticketHash: data.cache.ticketHash,
+      cap: data.cache.cap,
+      textChars: data.cache.textChars,
+    };
   }
   if (typeof data?.verdict === 'string') {
     let parsed;
@@ -256,7 +282,7 @@ function coldstartEvidenceShape(data) {
       return { parseError: true };
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { parseError: true };
-    return { gaps: parsed.gaps, ticketHash: parsed.ticketHash };
+    return { kind: 'prompt-only', gaps: parsed.gaps, ticketHash: parsed.ticketHash };
   }
   return null;
 }
@@ -285,6 +311,27 @@ function coldstartIntegrityErrors(entries, ticket, cwd, dir, phase) {
     errors.push(`${label} evidence is stale: ticket definition is absent`);
   } else if (shape.ticketHash !== binding.ticketHash) {
     errors.push(`${label} evidence is stale: ticket definition changed after coldstart ran`);
+  }
+  const currentTicket = loadCurrentTicket(cwd, ticket, dir);
+  const actualChars = currentTicket ? serializeTicketForColdstart(currentTicket).length : null;
+  if (shape.kind === 'live') {
+    if (shape.cap !== undefined && (!Number.isInteger(shape.cap) || shape.cap <= 0)) {
+      errors.push(`${label} evidence is incomplete: coldstart cache record has an invalid cap`);
+      return errors;
+    }
+    if (shape.textChars !== undefined && (!Number.isInteger(shape.textChars) || shape.textChars < 0)) {
+      errors.push(`${label} evidence is incomplete: coldstart cache record has an invalid textChars`);
+      return errors;
+    }
+    const effectiveCap = shape.cap ?? LEGACY_COLDSTART_CAP;
+    const totalChars = shape.textChars ?? actualChars;
+    if (totalChars !== null && totalChars > effectiveCap) {
+      errors.push(`${label} evidence is incomplete: coldstart audited the first ${effectiveCap} of ${totalChars} chars`);
+    } else if (actualChars !== null && actualChars > effectiveCap) {
+      errors.push(`${label} evidence is incomplete: coldstart audited the first ${effectiveCap} of ${actualChars} chars`);
+    }
+  } else if (actualChars !== null && actualChars > CURRENT_COLDSTART_CAP) {
+    errors.push(`${label} evidence is incomplete: coldstart audited the first ${CURRENT_COLDSTART_CAP} of ${actualChars} chars`);
   }
   return errors;
 }
