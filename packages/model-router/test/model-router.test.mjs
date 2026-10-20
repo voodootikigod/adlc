@@ -42,7 +42,7 @@ function runCLI(args, cwd) {
 
 // ── unit: rail density ────────────────────────────────────────────────────────
 
-import { railDensity } from '../lib/density.mjs';
+import { railDensity, isNonCodeScopePattern } from '../lib/density.mjs';
 
 test('railDensity: no rails → 0', () => {
   assert.equal(railDensity({ id: 'T1', title: 't' }), 0);
@@ -656,3 +656,149 @@ test('CLI: --ticket exits 1 on unknown or empty ticket id', (t) => {
   assert.match(blank.stderr, /--ticket requires a non-empty ticket id/);
 });
 
+// ── issue #1184: non-code config/doc scope exclusion in railDensity ──────────
+
+test('isNonCodeScopePattern: identifies config, documentation, lockfile, and workflow paths vs code paths', () => {
+  for (const nonCode of [
+    'package.json',
+    'tsconfig.jsonc',
+    'README.md',
+    'docs/guide.markdown',
+    'notes.mdx',
+    'notes.txt',
+    '.github/workflows/ci.yml',
+    'config.yaml',
+    'Cargo.toml',
+    'package-lock.json',
+    'yarn.lock',
+    'fixture.snap',
+    'fix.diff',
+    'fix.patch',
+    'README',
+    'packages/foo/README.rst',
+    'CHANGELOG',
+    'CHANGELOG.txt',
+    'LICENSE',
+    'LICENSE.MIT',
+    'CODEOWNERS',
+    'Dockerfile',
+    'Makefile',
+    '.gitignore',
+    '.nvmrc',
+    '.npmrc',
+    '.editorconfig',
+    'docs/architecture/overview.rst',
+    '  package.json\u200b  ',
+  ]) {
+    assert.equal(isNonCodeScopePattern(nonCode), true, `expected non-code for ${nonCode}`);
+  }
+
+  for (const code of [
+    'src/index.mjs',
+    'packages/model-router/lib/density.mjs',
+    'lib/router.ts',
+    'bin/cli.js',
+    'src/**',
+    'packages/foo/src/json-parser.mjs',
+    'packages/foo/src/markdown-renderer.ts',
+    '  src/index.mjs\u200b  ',
+  ]) {
+    assert.equal(isNonCodeScopePattern(code), false, `expected code for ${code}`);
+  }
+});
+
+test('railDensity: excludes non-code config and doc scope paths when code paths exist (#1184)', () => {
+  const configHeavyOneCode = {
+    id: 'T-CFG-1',
+    title: 'One code file plus five config/doc files',
+    category: 'feature',
+    rails: ['test/index.test.mjs'],
+    scope: [
+      'src/index.mjs',
+      'package.json',
+      'tsconfig.json',
+      'README.md',
+      '.github/workflows/ci.yml',
+      'CHANGELOG.md',
+    ],
+  };
+  assert.equal(railDensity(configHeavyOneCode), 1);
+
+  const configHeavyTwoCode = {
+    id: 'T-CFG-2',
+    title: 'Two code files plus four config/doc files',
+    category: 'feature',
+    rails: ['test/index.test.mjs'],
+    scope: [
+      'src/index.mjs',
+      'src/helper.mjs',
+      'package.json',
+      'tsconfig.json',
+      'README.md',
+      'CHANGELOG.md',
+    ],
+  };
+  assert.equal(railDensity(configHeavyTwoCode), 0.5);
+});
+
+test('railDensity: falls back to total scope length when all scope entries are non-code (#1184)', () => {
+  const allNonCode = {
+    id: 'T-DOC-ONLY',
+    title: 'Config and docs only',
+    category: 'feature',
+    rails: ['test/config.test.mjs'],
+    scope: ['package.json', 'README.md', 'tsconfig.json', 'CHANGELOG.md'],
+  };
+  assert.equal(railDensity(allNonCode), 0.25);
+});
+
+test('runRouter & assignTicket: config-heavy ticket with 1 railed code file passes P3 floor and routes to cheap/ladder (#1184)', async (t) => {
+  const dir = tmp(t, 'model-router-1184-');
+  const adlcDir = join(dir, '.adlc');
+  const configHeavy = {
+    id: 'T1',
+    title: 'ConfigHeavyFeature',
+    category: 'feature',
+    rails: ['packages/foo/test/foo.test.mjs'],
+    scope: [
+      'packages/foo/lib/foo.mjs',
+      'packages/foo/package.json',
+      'packages/foo/tsconfig.json',
+      'packages/foo/README.md',
+      '.github/workflows/ci.yml',
+      'CHANGELOG.md',
+    ],
+    edges: [{ to: 'T3', contract: 'types.ts' }],
+    duration: 1,
+  };
+  const criticalSibling = {
+    id: 'T2',
+    title: 'LongCritical',
+    category: 'feature',
+    rails: ['packages/bar/test/bar.test.mjs'],
+    scope: ['packages/bar/lib/bar.mjs'],
+    edges: [{ to: 'T3', contract: 'bar.ts' }],
+    duration: 3,
+  };
+  const gateTicket = {
+    id: 'T3',
+    title: 'Gate',
+    category: 'feature',
+    rails: ['packages/gate/test/gate.test.mjs'],
+    scope: ['packages/gate/lib/gate.mjs'],
+    duration: 1,
+  };
+
+  const directAssignment = assignTicket(configHeavy, 2, emptyPriors, 0.2);
+  assert.equal(directAssignment.railDensity, 1);
+  assert.equal(directAssignment.tier, 'cheap');
+  assert.equal(directAssignment.mode, 'ladder');
+
+  const ticketsPath = writeTickets(dir, [configHeavy, criticalSibling, gateTicket]);
+  const res = await runRouter({ ticketsPath, floor: 0.2, adlcDir });
+  assert.deepEqual(res.p3Findings, [], 'config-heavy ticket with railed code file must not trigger P3 floor finding');
+  const t1 = res.assignments.find((a) => a.id === 'T1');
+  assert.equal(t1.railDensity, 1);
+  assert.equal(t1.tier, 'cheap');
+  assert.equal(t1.mode, 'ladder');
+});

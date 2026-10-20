@@ -1,0 +1,16 @@
+{
+  "body": "Update railDensity in packages/model-router/lib/density.mjs so non-code config and documentation paths in ticket.scope do not dilute railDensity below the floor when code scope paths exist.\n\nAcceptance criteria:\n1. Non-code scope patterns (config, markdown, lockfiles, workflows, changelogs) are excluded from the denominator when code scope patterns are present. Verify: node --test packages/model-router/test/model-router.test.mjs\n2. When a ticket scope consists exclusively of non-code patterns, railDensity falls back to the full usable scope count. Verify: node --test packages/model-router/test/model-router.test.mjs",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M5CNET7QZ03DNSXP78E210CW",
+  "rails": [
+    "packages/model-router/test/floor-ladder.test.mjs",
+    "packages/model-router/test/floor-zero.test.mjs"
+  ],
+  "scope": [
+    "packages/model-router/lib/density.mjs",
+    "packages/model-router/test/model-router.test.mjs"
+  ],
+  "title": "model-router: exclude non-code config and doc paths from railDensity denominator (#1184)"
+}

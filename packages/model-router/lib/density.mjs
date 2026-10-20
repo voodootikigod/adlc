@@ -1,18 +1,29 @@
-/**
- * Rail density computation.
- *
- * railDensity = distinct(rails) / distinct(scope)  clamped to [0, 1]
- * Only distinct, non-blank string patterns count on either side.
- * If the ticket has no rails array (or no usable rail), density = 0.
- * If the ticket has rails but no scope array (or it is empty), density = 0 —
- * NOT 1: the old max(1, scope.length) denominator made an unbounded ticket
- * look perfectly railed and routed it to the cheapest tier (#698).
- */
+// Rail density computation for P3 gate enforcement.
+//
+// railDensity = Math.min(1, rails.length / codeScope.length)
+//   - If a ticket has no rails → 0 (unless category is contract/spec/architecture,
+//     checked by the caller before invoking this or via the P3 check).
+//   - If a ticket has no scope → 0 (unbounded scope cannot be considered railed;
+//     it would let an un-scoped ticket pass the P3 floor and reach cheap/ladder).
+//   - Non-code config and documentation paths (JSON, YAML, TOML, Markdown, lockfiles,
+//     CI workflows, docs/) are excluded from the scope denominator when code paths
+//     are present so config-heavy tickets do not artificially fall under the floor;
+//     when all scope entries are non-code, the denominator falls back to scope.length.
+//   - Clamped to [0, 1].
 
-// Whitespace, format and control characters, and Default_Ignorable code
-// points (zero-width space, word joiner, Hangul fillers, ...) render as
-// nothing; trim() strips only the first of these.
 const INVISIBLE = /[\s\p{Cf}\p{Cc}\p{Default_Ignorable_Code_Point}]/gu;
+
+const NON_CODE_SCOPE_PATTERN =
+  /(?:\.(?:md|markdown|mdx|txt|json|jsonc|ya?ml|toml|lock|snap|diff|patch)|(?:^|\/)(?:README(?:\.[^/]+)?|CHANGELOG(?:\.[^/]+)?|LICENSE(?:\.[^/]+)?|CODEOWNERS|Dockerfile|Makefile|\.(?:gitignore|nvmrc|npmrc|editorconfig)|\.github\/.+|docs\/.+))$/i;
+
+/**
+ * True when a scope pattern names a non-code config or documentation file that
+ * cannot be directly railed with unit tests (e.g. package.json, README.md,
+ * tsconfig.json, .github/workflows/ci.yml).
+ */
+export function isNonCodeScopePattern(pattern) {
+  return NON_CODE_SCOPE_PATTERN.test(String(pattern).replace(INVISIBLE, ''));
+}
 
 /**
  * The distinct, readable path patterns in a rails/scope field. Raw array
@@ -23,7 +34,7 @@ const INVISIBLE = /[\s\p{Cf}\p{Cc}\p{Default_Ignorable_Code_Point}]/gu;
  * rail; the Braille blank U+2800 is not).
  */
 function usablePatterns(field) {
-  if (!Array.isArray(field)) return 0;
+  if (!Array.isArray(field)) return [];
   const seen = new Set();
   for (const item of field) {
     if (typeof item !== 'string') continue;
@@ -31,14 +42,19 @@ function usablePatterns(field) {
     if (!/[\p{L}\p{N}*?]/u.test(visible)) continue;
     seen.add(visible);
   }
-  return seen.size;
+  return [...seen];
 }
 
 /** Compute the rail density for a single ticket. */
 export function railDensity(ticket) {
   const rails = usablePatterns(ticket.rails);
-  if (rails === 0) return 0;
+  if (rails.length === 0) return 0;
+
   const scope = usablePatterns(ticket.scope);
-  if (scope === 0) return 0;
-  return Math.min(1, rails / scope);
+  if (scope.length === 0) return 0;
+
+  const codeScope = scope.filter((p) => !isNonCodeScopePattern(p));
+  const denominator = codeScope.length > 0 ? codeScope.length : scope.length;
+
+  return Math.min(1, rails.length / denominator);
 }
