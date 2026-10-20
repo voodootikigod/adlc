@@ -1,0 +1,17 @@
+{
+  "body": "Raise TICKET_BODY_CAP in packages/parallax/lib/prompts.mjs from 8000 to 64000 so parallax --edge inspects the same 64000-character prefix that coldstart approved.\n\nAcceptance criteria:\n1. TICKET_BODY_CAP equals 64000 and effectiveTicketBodyCap validates positive integer caps with fallback to TICKET_BODY_CAP. Verify: node --test packages/parallax/test/prompts.test.mjs\n2. Ticket bodies up to 64000 chars are embedded whole without truncation markers while 64001 chars are truncated to the opening 64000 chars. Verify: node --test packages/parallax/test/context-fencing.test.mjs",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M5CNERKTEMWMZ0MKT77WDMDZ",
+  "rails": [
+    "packages/parallax/test/modes.test.mjs",
+    "packages/parallax/test/scoring.test.mjs"
+  ],
+  "scope": [
+    "packages/parallax/lib/prompts.mjs",
+    "packages/parallax/test/prompts.test.mjs",
+    "packages/parallax/test/context-fencing.test.mjs"
+  ],
+  "title": "parallax: align edge review TICKET_BODY_CAP with coldstart 64000 char cap (#1196)"
+}

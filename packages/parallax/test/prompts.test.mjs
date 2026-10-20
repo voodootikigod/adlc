@@ -2,6 +2,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  TICKET_BODY_CAP,
+  effectiveTicketBodyCap,
   buildSpecReaderPrompt,
   buildDivergencePrompt,
   buildEdgePrompt,
@@ -187,7 +189,7 @@ test('buildEdgePrompt keeps the OPENING of an over-cap ticket body', () => {
   const big = (id) => ({
     id,
     title: `Ticket ${id}`,
-    body: `INTERFACE_CONTRACT_${id} ${'q'.repeat(9000)} TRAILING_${id}`,
+    body: `INTERFACE_CONTRACT_${id} ${'q'.repeat(65_000)} TRAILING_${id}`,
   });
   const prompt = buildEdgePrompt(big('A'), big('B'));
 
@@ -197,5 +199,43 @@ test('buildEdgePrompt keeps the OPENING of an over-cap ticket body', () => {
     assert.ok(m[1].startsWith(`INTERFACE_CONTRACT_${id}`), `ticket ${id} keeps its opening contract`);
     assert.ok(!m[1].includes(`TRAILING_${id}`), `ticket ${id} drops its trailing detail instead`);
   }
-  assert.match(prompt, /truncated, showing first 8000 of \d+ chars/);
+  assert.match(prompt, /truncated, showing first 64000 of \d+ chars/);
+});
+
+// #1196: edge-mode ticket body cap matches coldstart's TICKET_TEXT_MAX_CHARS = 64,000.
+test('TICKET_BODY_CAP is 64000 and effectiveTicketBodyCap validates positive integer overrides (#1196)', () => {
+  assert.equal(TICKET_BODY_CAP, 64_000);
+  assert.equal(effectiveTicketBodyCap(), 64_000);
+  assert.equal(effectiveTicketBodyCap(undefined), 64_000);
+  assert.equal(effectiveTicketBodyCap(1), 1);
+  assert.equal(effectiveTicketBodyCap(1000), 1000);
+  for (const invalid of [0, -5, NaN, 1.5, null, '8000', Infinity]) {
+    assert.equal(effectiveTicketBodyCap(invalid), 64_000, `invalid cap ${String(invalid)} must fall back to 64000`);
+  }
+});
+
+test('buildEdgePrompt includes a 12000-char ticket body (> old 8000 cap, <= 64000) in full without truncation (#1196)', () => {
+  const bodyA = `OPENING_A_${'m'.repeat(12_000)}_CLOSING_A`;
+  const bodyB = `OPENING_B_${'n'.repeat(12_000)}_CLOSING_B`;
+  const prompt = buildEdgePrompt(
+    { id: 'T1', title: 'Ticket 1', body: bodyA },
+    { id: 'T2', title: 'Ticket 2', body: bodyB },
+  );
+  assert.ok(!prompt.includes('truncated'), '12,000-char ticket body must not be truncated under the 64,000 cap');
+  assert.ok(prompt.includes('OPENING_A_') && prompt.includes('_CLOSING_A'));
+  assert.ok(prompt.includes('OPENING_B_') && prompt.includes('_CLOSING_B'));
+});
+
+test('buildEdgePrompt honors a positive-integer bodyCap override and falls back to 64000 when invalid (#1196)', () => {
+  const ticketA = { id: 'T1', title: 'A', body: `HEAD_A_${'x'.repeat(1000)}_TAIL_A` };
+  const ticketB = { id: 'T2', title: 'B', body: 'short B' };
+
+  const capped = buildEdgePrompt(ticketA, ticketB, { bodyCap: 500 });
+  assert.match(capped, /truncated, showing first 500 of \d+ chars/);
+  assert.ok(capped.includes('HEAD_A_'));
+  assert.ok(!capped.includes('_TAIL_A'));
+
+  const fallback = buildEdgePrompt(ticketA, ticketB, { bodyCap: 0 });
+  assert.ok(!fallback.includes('truncated'));
+  assert.ok(fallback.includes('_TAIL_A'));
 });

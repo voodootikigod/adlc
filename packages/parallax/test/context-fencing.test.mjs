@@ -88,20 +88,20 @@ test('buildEdgePrompt: one missing body still fences the present one', () => {
   assert.equal(opens, 1);
 });
 
-test('buildEdgePrompt: a body of exactly 8000 chars is not truncated; 8001 chars is', () => {
-  const atCap = { id: 'T1', title: 'A', body: 'z'.repeat(8000) };
-  const overCap = { id: 'T2', title: 'B', body: 'z'.repeat(8001) };
+test('buildEdgePrompt: a body of exactly 64000 chars is not truncated; 64001 chars is (#1196)', () => {
+  const atCap = { id: 'T1', title: 'A', body: 'z'.repeat(64_000) };
+  const overCap = { id: 'T2', title: 'B', body: 'z'.repeat(64_001) };
   const other = { id: 'T3', title: 'C', body: 'short' };
 
   const atCapPrompt = buildEdgePrompt(atCap, other);
   assert.ok(!atCapPrompt.includes('truncated'), 'a body of exactly the cap must not be marked truncated');
   const atCapFence = atCapPrompt.match(/<<UNTRUSTED:[^>]*>>\n(z+)\n<<END:/);
-  assert.equal(atCapFence[1].length, 8000);
+  assert.equal(atCapFence[1].length, 64_000);
 
   const overCapPrompt = buildEdgePrompt(overCap, other);
   assert.ok(overCapPrompt.includes('truncated'), 'a body one char over the cap must be marked truncated');
   const overCapFence = overCapPrompt.match(/<<UNTRUSTED:[^>]*>>\n(z+)\n<<END:/);
-  assert.equal(overCapFence[1].length, 8000, 'the embedded content must still be capped at 8000 chars');
+  assert.equal(overCapFence[1].length, 64_000, 'the embedded content must still be capped at 64000 chars');
 });
 
 test('buildEdgePrompt: states the standing data-not-instructions directive', () => {

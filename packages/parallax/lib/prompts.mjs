@@ -6,8 +6,22 @@ import { fence } from '@adlc/core';
 /** Default per-file cap for --route mode context (issue #280). */
 export const DEFAULT_CONTEXT_CAP = 6000;
 
-/** Cap for a fenced ticket body in edge mode (issue #707). */
-const TICKET_BODY_CAP = 8000;
+/**
+ * Cap for a fenced ticket body in edge mode (issue #707, raised from 8,000 to
+ * 64,000 in #1196 to match coldstart's TICKET_TEXT_MAX_CHARS = 64,000 so edge
+ * review sees the same ticket body the P2 gate approved).
+ */
+export const TICKET_BODY_CAP = 64_000;
+
+/**
+ * Resolve the effective ticket body cap for edge mode, falling back to
+ * TICKET_BODY_CAP when the caller supplies no override or a non-positive-integer value.
+ * @param {unknown} [cap]
+ * @returns {number}
+ */
+export function effectiveTicketBodyCap(cap = TICKET_BODY_CAP) {
+  return Number.isInteger(cap) && cap > 0 ? cap : TICKET_BODY_CAP;
+}
 
 /** Cap for a fenced ticket title in edge mode; a title is one short line. */
 const TICKET_TITLE_CAP = 300;
@@ -90,14 +104,17 @@ ${readingText}`;
  * Each agent independently authors the interface implied by two tickets.
  * @param {object} ticketA - First ticket object.
  * @param {object} ticketB - Second ticket object.
+ * @param {object} [opts]
+ * @param {number} [opts.bodyCap] - Optional positive-integer cap for each ticket body.
  * @returns {string}
  */
-export function buildEdgePrompt(ticketA, ticketB) {
+export function buildEdgePrompt(ticketA, ticketB, opts) {
+  const cap = effectiveTicketBodyCap(opts?.bodyCap);
   const bodyBlock = (ticket) =>
     ticket.body
       // Head-biased (#1007): the contract between two tickets is implied by
       // what each one states up front, not by its trailing detail.
-      ? fence(`ticket-${ticket.id}-body`, ticket.body, TICKET_BODY_CAP, { bias: 'head' })
+      ? fence(`ticket-${ticket.id}-body`, ticket.body, cap, { bias: 'head' })
       : '(no body)';
   const titleBlock = (ticket) =>
     fence(`ticket-${ticket.id}-title`, ticket.title, TICKET_TITLE_CAP, { bias: 'head' });
