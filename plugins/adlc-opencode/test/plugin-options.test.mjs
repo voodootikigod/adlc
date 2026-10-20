@@ -46,6 +46,8 @@ test('optionsToEnv maps the documented options and NOTHING else (bypasses stay e
   assert.deepEqual(optionsToEnv({ ungatedTools: 'a,b' }), { ADLC_UNGATED_TOOLS: 'a,b' });
   assert.deepEqual(optionsToEnv({ suppressionEnforcement: true, scopeEnforcement: true }),
     { ADLC_SUPPRESSION_ENFORCEMENT: '1', ADLC_SCOPE_ENFORCEMENT: '1' });
+  assert.deepEqual(optionsToEnv({ nativeProsecute: false }), { ADLC_NATIVE_PROSECUTE: '0' });
+  assert.deepEqual(optionsToEnv({ nativeProsecute: true }), {});
   // audited bypasses must never be settable from repo config
   assert.deepEqual(optionsToEnv({ railsBypass: true, buildGateBypass: true, ADLC_RAILS_BYPASS: '1' }), {});
 });

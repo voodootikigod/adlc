@@ -1,0 +1,19 @@
+{
+  "body": "Add nativeProsecute option (and ADLC_NATIVE_PROSECUTE=0 env var) in plugins/adlc-opencode/index.mjs to skip registering adlc_prosecute with a one-line log notice, and remove the Prefer this over orchestrating the prosecution by hand sentence from buildProsecuteTool description in plugins/adlc-opencode/lib/prosecute-tool.mjs.\n\nAcceptance criteria:\n1. Setting nativeProsecute: false or ADLC_NATIVE_PROSECUTE=0 omits adlc_prosecute from registered tools and logs once. Verify: node --test plugins/adlc-opencode/test/plugin-options.test.mjs plugins/adlc-opencode/test/v2-registration.test.mjs\n2. Default behavior still registers adlc_prosecute without the Prefer this over orchestrating phrase in its description. Verify: node --test plugins/adlc-opencode/test/prosecute-tool.test.mjs",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M5D2YQRD2X5JFNSWCM0CNJ4Z",
+  "rails": [
+    "plugins/adlc-opencode/test/gate-tool.test.mjs",
+    "plugins/adlc-opencode/test/rails-checker.test.mjs"
+  ],
+  "scope": [
+    "plugins/adlc-opencode/index.mjs",
+    "plugins/adlc-opencode/lib/prosecute-tool.mjs",
+    "plugins/adlc-opencode/test/plugin-options.test.mjs",
+    "plugins/adlc-opencode/test/v2-registration.test.mjs",
+    "plugins/adlc-opencode/test/prosecute-tool.test.mjs"
+  ],
+  "title": "opencode: allow disabling adlc_prosecute and drop prefer-this wording (#1183)"
+}

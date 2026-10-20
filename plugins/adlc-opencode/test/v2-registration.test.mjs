@@ -255,3 +255,59 @@ test('session.created reports the statusline on stderr; foreign sessions are ign
   assert.ok(lines.some((l) => /^\[adlc\] info: .*T1/.test(l)), lines.join('\n'));
   p.cleanup();
 });
+
+test('native tools: registers both adlc_gate and adlc_prosecute by default', async (t) => {
+  const dir = repo(t);
+  withEnv(t, { ...ENFORCING, ADLC_NATIVE_PROSECUTE: undefined });
+  const { result: p, lines } = await captureStderr(() => loadPlugin({ root: dir }));
+  const tools = p.tools();
+  assert.equal(tools.has('adlc_gate'), true);
+  assert.equal(tools.has('adlc_prosecute'), true);
+  assert.equal(lines.some((l) => l.includes('adlc_prosecute disabled')), false);
+  p.cleanup();
+});
+
+test('native tools: nativeProsecute:false option disables adlc_prosecute while keeping adlc_gate', async (t) => {
+  const dir = repo(t);
+  withEnv(t, { ...ENFORCING, ADLC_NATIVE_PROSECUTE: undefined });
+  const { result: p, lines } = await captureStderr(() => loadPlugin({ root: dir, options: { nativeProsecute: false } }));
+  const tools = p.tools();
+  assert.equal(tools.has('adlc_gate'), true);
+  assert.equal(tools.has('adlc_prosecute'), false);
+  assert.ok(lines.includes('[adlc] adlc_prosecute disabled (nativeProsecute=false / ADLC_NATIVE_PROSECUTE=0)'), lines.join('\n'));
+  p.cleanup();
+});
+
+test('native tools: ADLC_NATIVE_PROSECUTE=0 and ADLC_NATIVE_PROSECUTE=false disable adlc_prosecute', async (t) => {
+  const dir = repo(t);
+  for (const val of ['0', 'false']) {
+    withEnv(t, { ...ENFORCING, ADLC_NATIVE_PROSECUTE: val });
+    const { result: p, lines } = await captureStderr(() => loadPlugin({ root: dir }));
+    const tools = p.tools();
+    assert.equal(tools.has('adlc_gate'), true, `adlc_gate still registered for ADLC_NATIVE_PROSECUTE=${val}`);
+    assert.equal(tools.has('adlc_prosecute'), false, `adlc_prosecute disabled for ADLC_NATIVE_PROSECUTE=${val}`);
+    assert.ok(lines.includes('[adlc] adlc_prosecute disabled (nativeProsecute=false / ADLC_NATIVE_PROSECUTE=0)'), lines.join('\n'));
+    p.cleanup();
+  }
+});
+
+test('native tools: ADLC_NATIVE_PROSECUTE env var overrides nativeProsecute plugin option in both directions', async (t) => {
+  const dir = repo(t);
+  withEnv(t, { ...ENFORCING, ADLC_NATIVE_PROSECUTE: '1' });
+  const { result: enabled, lines: enabledLines } = await captureStderr(() =>
+    loadPlugin({ root: dir, options: { nativeProsecute: false } })
+  );
+  assert.equal(enabled.tools().has('adlc_gate'), true);
+  assert.equal(enabled.tools().has('adlc_prosecute'), true, 'ADLC_NATIVE_PROSECUTE=1 overrides nativeProsecute:false');
+  assert.equal(enabledLines.some((l) => l.includes('adlc_prosecute disabled')), false);
+  enabled.cleanup();
+
+  withEnv(t, { ...ENFORCING, ADLC_NATIVE_PROSECUTE: '0' });
+  const { result: disabled, lines: disabledLines } = await captureStderr(() =>
+    loadPlugin({ root: dir, options: { nativeProsecute: true } })
+  );
+  assert.equal(disabled.tools().has('adlc_gate'), true);
+  assert.equal(disabled.tools().has('adlc_prosecute'), false, 'ADLC_NATIVE_PROSECUTE=0 overrides nativeProsecute:true');
+  assert.ok(disabledLines.includes('[adlc] adlc_prosecute disabled (nativeProsecute=false / ADLC_NATIVE_PROSECUTE=0)'));
+  disabled.cleanup();
+});

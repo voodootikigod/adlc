@@ -46,7 +46,10 @@ const isVerifier = (text) => VERIFIER_PROMPT.length > 0 && text.startsWith(VERIF
 test('buildProsecuteTool shapes an adlc_prosecute v2 Tool.Info with an optional base input', () => {
   const def = buildProsecuteTool({ root: '/p', pkgRoot: PKG });
   assert.equal(def.name, 'adlc_prosecute');
-  assert.match(def.description, /P5 prosecution|WRITE-DISABLED/);
+  assert.match(def.description, /P5 prosecution/);
+  assert.match(def.description, /WRITE-DISABLED/);
+  assert.match(def.description, /return findings, they cannot edit\. Returns the confirmed findings for the human gate\./);
+  assert.doesNotMatch(def.description, /Prefer this over/i);
   assert.deepEqual(def.input, {
     type: 'object',
     properties: { base: { type: 'string', description: def.input.properties.base.description } },

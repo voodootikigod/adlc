@@ -111,8 +111,7 @@ export function buildProsecuteTool({ root = process.cwd(), pkgRoot, session, age
       'loop-until-dry) deterministically in first-party code over ' +
       `${LENSES.length} lenses + the ${VERIFIER.agent}. Lens/verifier work runs ` +
       'in isolated, WRITE-DISABLED child sessions — they read the diff and ' +
-      'return findings, they cannot edit. Prefer this over orchestrating the ' +
-      'prosecution by hand. Returns the confirmed findings for the human gate.',
+      'return findings, they cannot edit. Returns the confirmed findings for the human gate.',
     input: {
       type: 'object',
       properties: {

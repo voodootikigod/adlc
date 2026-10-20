@@ -74,6 +74,7 @@ export function optionsToEnv(options = {}) {
   }
   if (options.suppressionEnforcement === true) env.ADLC_SUPPRESSION_ENFORCEMENT = '1';
   if (options.scopeEnforcement === true) env.ADLC_SCOPE_ENFORCEMENT = '1';
+  if (options.nativeProsecute === false) env.ADLC_NATIVE_PROSECUTE = '0';
   return env;
 }
 
@@ -490,9 +491,13 @@ async function setup(ctx = {}) {
   // failure here must be VISIBLE — a silent drop would present as "the model
   // never calls gates" — and must not cost the enforcement registered above.
   try {
+    const nativeProsecuteDisabled = env.ADLC_NATIVE_PROSECUTE === '0' || env.ADLC_NATIVE_PROSECUTE === 'false';
+    if (nativeProsecuteDisabled) {
+      console.error('[adlc] adlc_prosecute disabled (nativeProsecute=false / ADLC_NATIVE_PROSECUTE=0)');
+    }
     const tools = [
       buildGateTool({ root, generate: ctx.generate, session: ctx.session }),
-      buildProsecuteTool({ root, pkgRoot: PKG_ROOT, session: ctx.session, agent: ctx.agent }),
+      ...(nativeProsecuteDisabled ? [] : [buildProsecuteTool({ root, pkgRoot: PKG_ROOT, session: ctx.session, agent: ctx.agent })]),
     ];
     await ctx.tool.transform((ed) => { for (const t of tools) ed.add(t); });
   } catch (err) {
