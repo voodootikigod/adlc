@@ -14,7 +14,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { clusterIssues, globMatch, unitFor, unitsForIssue } from '../lib/cluster.mjs';
+import { clusterIssues, globMatch, unitFor, unitsForIssue, unitsForPath } from '../lib/cluster.mjs';
 
 test('** spans separators; * does not', () => {
   assert.ok(globMatch('packages/x/**', 'packages/x/lib/deep/a.mjs'));
@@ -105,4 +105,59 @@ test('an issue spanning SEVERAL units is unclustered, not filed under the first'
   const { clusters, unclustered } = clusterIssues(rows, units);
   assert.deepEqual(clusters, []);
   assert.deepEqual(unclustered, [7]);
+});
+
+test('overlapping unit globs resolve to the MOST SPECIFIC unit regardless of declaration order (#1038)', () => {
+  const broadFirst = [
+    { name: 'all-packages', paths: ['packages/**'] },
+    { name: 'review', paths: ['packages/review/**'] },
+  ];
+  const specificFirst = [...broadFirst].reverse();
+
+  for (const units of [broadFirst, specificFirst]) {
+    assert.equal(unitFor('packages/review/lib/a.mjs', units), 'review');
+    assert.deepEqual(unitsForPath('packages/review/lib/a.mjs', units), ['review']);
+    assert.equal(unitFor('packages/other/lib/a.mjs', units), 'all-packages');
+    assert.deepEqual(
+      unitsForIssue(
+        { verdict: 'valid', verifiedPaths: ['packages/review/lib/a.mjs'] },
+        { references: [{ path: 'packages/review/lib/a.mjs' }] },
+        units,
+      ),
+      ['review'],
+    );
+  }
+});
+
+test('overlapping unit globs with EQUAL specificity are treated as ambiguous, never decided by declaration order (#1038)', () => {
+  const units = [
+    { name: 'u1', paths: ['packages/*/a.mjs'] },
+    { name: 'u2', paths: ['packages/x/*.mjs'] },
+  ];
+  assert.equal('packages/*/a.mjs'.replace(/\*+/g, '').length, 'packages/x/*.mjs'.replace(/\*+/g, '').length);
+  assert.deepEqual(unitsForPath('packages/x/a.mjs', units), ['u1', 'u2']);
+  assert.equal(unitFor('packages/x/a.mjs', units), null);
+
+  const row = {
+    number: 11,
+    verified: { verdict: 'valid', verifiedPaths: ['packages/x/a.mjs'] },
+    classified: { references: [{ path: 'packages/x/a.mjs' }] },
+  };
+  assert.deepEqual(unitsForIssue(row.verified, row.classified, units), ['u1', 'u2']);
+  const { clusters, unclustered } = clusterIssues([row], units);
+  assert.deepEqual(clusters, []);
+  assert.deepEqual(unclustered, [11]);
+});
+
+test('an issue with both an assigned path and an UNASSIGNED path yields no unit and is unclustered (#1038)', () => {
+  const units = [{ name: 'parallax', paths: ['packages/parallax/**'] }];
+  const row = {
+    number: 12,
+    verified: { verdict: 'valid', verifiedPaths: ['packages/parallax/lib/a.mjs', 'scripts/unassigned.mjs'] },
+    classified: { references: [{ path: 'packages/parallax/lib/a.mjs' }, { path: 'scripts/unassigned.mjs' }] },
+  };
+  assert.deepEqual(unitsForIssue(row.verified, row.classified, units), []);
+  const { clusters, unclustered } = clusterIssues([row], units);
+  assert.deepEqual(clusters, []);
+  assert.deepEqual(unclustered, [12]);
 });

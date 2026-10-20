@@ -1,0 +1,17 @@
+{
+  "body": "Update unitFor and unitsForIssue in packages/backlog-groom/lib/cluster.mjs so overlapping unit globs resolve by specificity rather than declaration order and verified paths that match no unit prevent unitsForIssue from claiming a single unique unit.\n\nAcceptance criteria:\n1. Overlapping unit globs resolve to the most specific matching glob regardless of declaration order, and equal-specificity overlaps across distinct units are treated as ambiguous. Verify: node --test packages/backlog-groom/test/cluster.test.mjs\n2. When an issue has both a verified path in a unit and a verified path matching no unit, unitsForIssue does not return a single-unit match so relabelProposals and clusterIssues do not misattribute the issue to one unit. Verify: node --test packages/backlog-groom/test/cluster.test.mjs packages/backlog-groom/test/relabel.test.mjs",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M5D2YTQDM3DSN3B6WA8P4T8P",
+  "rails": [
+    "packages/backlog-groom/test/apply.test.mjs",
+    "packages/backlog-groom/test/cluster-per-location.test.mjs"
+  ],
+  "scope": [
+    "packages/backlog-groom/lib/cluster.mjs",
+    "packages/backlog-groom/test/cluster.test.mjs",
+    "packages/backlog-groom/test/relabel.test.mjs"
+  ],
+  "title": "backlog-groom: resolve overlapping unit globs by specificity and preserve unassigned paths (#1038)"
+}

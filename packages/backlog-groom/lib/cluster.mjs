@@ -20,12 +20,26 @@ import { globMatch } from '@adlc/core';
 
 export { globMatch };
 
-/** The profile unit a path belongs to, or null. */
-export function unitFor(path, units) {
+function globSpecificity(glob) {
+  return String(glob).replace(/\*+/g, '').length;
+}
+
+/** The most-specific profile unit(s) a path belongs to. */
+export function unitsForPath(path, units) {
+  const matches = [];
   for (const u of units ?? []) {
-    for (const g of u.paths ?? []) if (globMatch(g, path)) return u.name;
+    for (const g of u.paths ?? []) {
+      if (globMatch(g, path)) matches.push({ name: u.name, spec: globSpecificity(g) });
+    }
   }
-  return null;
+  const maxSpec = Math.max(...matches.map((m) => m.spec));
+  return [...new Set(matches.filter((m) => m.spec === maxSpec).map((m) => m.name))];
+}
+
+/** The profile unit a path belongs to, or null when unmatched or ambiguous. */
+export function unitFor(path, units) {
+  const best = unitsForPath(path, units);
+  return best.length === 1 ? best[0] : null;
 }
 
 /**
@@ -52,7 +66,9 @@ export function verifiedLocations(verified, classified) {
  */
 export function unitsForIssue(verified, classified, units) {
   const paths = verifiedLocations(verified, classified);
-  return [...new Set(paths.map((p) => unitFor(p, units)).filter(Boolean))];
+  const perPath = paths.map((p) => unitsForPath(p, units));
+  if (perPath.some((u) => !u.length)) return [];
+  return [...new Set(perPath.flat())];
 }
 
 /** Group issues into lane clusters by unit. Issues with no unit are unclustered. */

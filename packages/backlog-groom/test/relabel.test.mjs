@@ -131,3 +131,46 @@ test('AC23: a fixed issue proposes no priority change — its rank is low by con
   const props = relabelProposals([row({ verdict: 'fixed', labels: ['P1-high'], band: 'low' })], PROFILE);
   assert.deepEqual(props.filter((x) => x.field === 'priority'), []);
 });
+
+test('AC23: an issue mixing a unit path with an UNASSIGNED verified path proposes no area relabel (#1038)', () => {
+  const props = relabelProposals(
+    [row({ labels: ['area:ticket-prune'], paths: ['packages/parallax/lib/a.mjs', 'scripts/unassigned.mjs'] })],
+    PROFILE
+  );
+  assert.deepEqual(props.filter((x) => x.field === 'area'), []);
+});
+
+test('AC23: overlapping unit globs pick the more specific unit for area relabel regardless of order (#1038)', () => {
+  const overlappingProfile = parseProfile({
+    schemaVersion: 1,
+    units: [
+      { name: 'monorepo', paths: ['packages/**'] },
+      { name: 'parallax', paths: ['packages/parallax/**'] },
+      { name: 'ticket-prune', paths: ['packages/ticket-prune/**'] },
+    ],
+  });
+  const props = relabelProposals(
+    [row({ labels: ['area:ticket-prune'], paths: ['packages/parallax/lib/modes.mjs'] })],
+    overlappingProfile
+  );
+  const a = props.find((x) => x.field === 'area');
+  assert.ok(a);
+  assert.equal(a.from, 'area:ticket-prune');
+  assert.equal(a.to, 'area:parallax');
+});
+
+test('AC23: equal-specificity overlapping unit globs propose no area relabel (#1038)', () => {
+  const tiedProfile = parseProfile({
+    schemaVersion: 1,
+    units: [
+      { name: 'u1', paths: ['packages/*/a.mjs'] },
+      { name: 'u2', paths: ['packages/x/*.mjs'] },
+      { name: 'ticket-prune', paths: ['packages/ticket-prune/**'] },
+    ],
+  });
+  const props = relabelProposals(
+    [row({ labels: ['area:ticket-prune'], paths: ['packages/x/a.mjs'] })],
+    tiedProfile
+  );
+  assert.deepEqual(props.filter((x) => x.field === 'area'), []);
+});
