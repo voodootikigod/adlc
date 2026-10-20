@@ -1,4 +1,4 @@
-const STATUSES = new Set(['verified', 'killed', 'needs-human']);
+const STATUSES = new Set(['verified', 'killed', 'needs-human', 'deferred']);
 const SEVERITIES = new Set(['critical', 'high', 'medium', 'low']);
 // Core prosecutor lenses (correctness/security/contract/diff/tests) plus legacy
 // recorder vocabulary kept for existing evidence packets.
@@ -146,6 +146,17 @@ export function validateFinding(finding, passIndex, findingIndex) {
   }
   if (finding.verified_status === 'killed') {
     errors.push(...validateProof(finding.verification, `${prefix}: verification`, ['reason', 'method', 'evidence']));
+  }
+  if (finding.verified_status === 'deferred') {
+    if (finding.severity !== 'low') {
+      errors.push(`${prefix}: deferred status is only allowed for severity "low"`);
+    }
+    if (!isNonEmptyString(finding.follow_up)) {
+      errors.push(`${prefix}: follow_up must be a non-empty string when verified_status is deferred`);
+    }
+    if (!isNonEmptyString(finding.reason)) {
+      errors.push(`${prefix}: reason must be a non-empty string when verified_status is deferred`);
+    }
   }
   return errors;
 }

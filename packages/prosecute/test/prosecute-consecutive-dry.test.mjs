@@ -30,9 +30,10 @@ describe('consecutiveDry counter', () => {
       passes: [
         { lens: 'security', findings: [], dry_evidence: 'no security findings' },
         { lens: 'correctness', findings: [], dry_evidence: 'no correctness findings' },
-        // Non-dry: a killed finding still has findings.length > 0, so this must reset the streak.
-        { lens: 'tests', findings: [killedFinding({ id: 'F9' })] },
-        { lens: 'behavior', findings: [], dry_evidence: 'no behavior findings' },
+        // Non-dry: a verified finding resets the streak.
+        { lens: 'tests', findings: [finding({ id: 'F9' })] },
+        // Dry: killing F9 resolves the open finding and starts a new dry streak of 1.
+        { lens: 'behavior', findings: [killedFinding({ id: 'F9' })] },
       ],
     }), { dir, ticket: 'T1', revision: FIXTURE_REVISION });
 
@@ -59,8 +60,8 @@ describe('consecutiveDry counter', () => {
     const result = runProsecution(input(dir, {
       passes: [
         { lens: 'security', findings: [], dry_evidence: 'no security findings' },
-        { lens: 'correctness', findings: [killedFinding({ id: 'F9' })] },
-        { lens: 'tests', findings: [], dry_evidence: 'no test findings' },
+        { lens: 'correctness', findings: [finding({ id: 'F9' })] },
+        { lens: 'tests', findings: [killedFinding({ id: 'F9' })] },
         { lens: 'behavior', findings: [], dry_evidence: 'no behavior findings' },
         { lens: 'integration', findings: [], dry_evidence: 'no integration findings' },
       ],
@@ -75,19 +76,34 @@ describe('consecutiveDry counter', () => {
     assert.equal(result.exitCode, 0);
   });
 
-  it('does not count an all-killed pass as dry', () => {
+  it('counts an all-killed pass and an all-deferred pass as dry', () => {
     const dir = tmpAdlc();
     const result = runProsecution(input(dir, {
       passes: [
         { lens: 'security', findings: [killedFinding({ id: 'F1' })] },
         { lens: 'correctness', findings: [killedFinding({ id: 'F2', category: 'correctness' })] },
-        { lens: 'tests', findings: [killedFinding({ id: 'F3', category: 'test-integrity' })] },
+        {
+          lens: 'tests',
+          findings: [
+            finding({
+              id: 'F3',
+              severity: 'low',
+              category: 'test-integrity',
+              verified_status: 'deferred',
+              follow_up: 'T-99',
+              reason: 'defer low finding to follow-up ticket',
+            }),
+          ],
+        },
       ],
     }), { dir, ticket: 'T1', revision: FIXTURE_REVISION });
 
-    assert.equal(result.exitCode, 2);
-    assert.equal(result.passes.every((pass) => pass.dry === false), true);
-    assert.equal(result.passes.every((pass) => pass.consecutiveDry === 0), true);
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.passes.every((pass) => pass.dry === true), true);
+    assert.deepEqual(result.passes.map((pass) => pass.consecutiveDry), [1, 2, 3]);
+    assert.deepEqual(result.passes.map((pass) => pass.killed), [1, 1, 0]);
+    assert.deepEqual(result.passes.map((pass) => pass.deferred), [0, 0, 1]);
+    assert.deepEqual(result.deferredIds, ['F3']);
   });
 
   it('does not count a needs-human-only pass as dry', () => {

@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runProsecution } from '../lib/run.mjs';
-import { FIXTURE_REVISION, input, reviewPacket, tmpAdlc, transcript } from './helpers.mjs';
+import { FIXTURE_REVISION, finding, input, reviewPacket, tmpAdlc, transcript } from './helpers.mjs';
 
 describe('input validation (op-error)', () => {
   it('returns op-error for invalid schema', () => {
@@ -64,5 +64,71 @@ describe('input validation (op-error)', () => {
 
     assert.equal(result.exitCode, 1);
     assert.ok(result.errors.some((error) => error.includes('no_findings_attestation')));
+  });
+
+  it('rejects deferred status when severity is medium or higher', () => {
+    const dir = tmpAdlc();
+    const result = runProsecution(input(dir, {
+      passes: [
+        {
+          lens: 'security',
+          findings: [
+            finding({
+              id: 'F-MED',
+              severity: 'medium',
+              verified_status: 'deferred',
+              follow_up: 'T-200',
+              reason: 'attempted to defer medium finding',
+            }),
+          ],
+        },
+      ],
+    }), { dir, ticket: 'T1', revision: FIXTURE_REVISION });
+
+    assert.equal(result.exitCode, 1);
+    assert.ok(result.errors.some((error) => error.includes('deferred status is only allowed for severity "low"')));
+  });
+
+  it('rejects deferred status without follow_up or reason', () => {
+    const dir = tmpAdlc();
+    const missingFollowUp = runProsecution(input(dir, {
+      passes: [
+        {
+          lens: 'security',
+          findings: [
+            finding({
+              id: 'F-NO-FOLLOWUP',
+              severity: 'low',
+              verified_status: 'deferred',
+              reason: 'valid reason',
+            }),
+          ],
+        },
+      ],
+    }), { dir, ticket: 'T1', revision: FIXTURE_REVISION });
+
+    assert.equal(missingFollowUp.exitCode, 1);
+    assert.ok(missingFollowUp.errors.some((error) => error.includes('follow_up must be a non-empty string when verified_status is deferred')));
+    assert.equal(missingFollowUp.errors.some((error) => error.includes('reason must be a non-empty string when verified_status is deferred')), false);
+
+    const missingReason = runProsecution(input(dir, {
+      passes: [
+        {
+          lens: 'security',
+          findings: [
+            finding({
+              id: 'F-NO-REASON',
+              severity: 'low',
+              verified_status: 'deferred',
+              follow_up: 'https://github.com/example/repo/issues/42',
+            }),
+          ],
+        },
+      ],
+    }), { dir, ticket: 'T1', revision: FIXTURE_REVISION });
+
+    assert.equal(missingReason.exitCode, 1);
+    assert.ok(missingReason.errors.some((error) => error.includes('reason must be a non-empty string when verified_status is deferred')));
+    assert.equal(missingReason.errors.some((error) => error.includes('follow_up must be a non-empty string when verified_status is deferred')), false);
   });
 });

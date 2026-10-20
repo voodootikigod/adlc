@@ -167,8 +167,9 @@ function classifyPass(pass) {
   const verified = pass.findings.filter((f) => f.verified_status === 'verified');
   const needsHuman = pass.findings.filter((f) => f.verified_status === 'needs-human');
   const killed = pass.findings.filter((f) => f.verified_status === 'killed');
-  const dry = pass.findings.length === 0;
-  return { verified, needsHuman, killed, dry };
+  const deferred = pass.findings.filter((f) => f.verified_status === 'deferred');
+  const dry = verified.length === 0 && needsHuman.length === 0;
+  return { verified, needsHuman, killed, deferred, dry };
 }
 
 function findingIdentity(finding) {
@@ -196,7 +197,7 @@ function findingIdentity(finding) {
  * An unrelated segment's findings are not this chain's to resolve — the branch
  * that owns them prosecutes them as ITS own chain.
  *
- * @returns {{openFindings: Map<string, object>, errors: string[]}} `errors` is
+ * @returns {{openFindings: Map<string, object>, deferredFindings: Map<string, object>, errors: string[]}} `errors` is
  *   non-empty when this checkout's own segment could not be identified. The
  *   caller must refuse rather than proceed on a partial replay: proceeding
  *   would seed FEWER open findings than really exist, which is exactly how a
@@ -204,8 +205,9 @@ function findingIdentity(finding) {
  */
 function seedOpenFindingsFromManifest(dir, ticket, revision, cwd) {
   const openFindings = new Map();
+  const deferredFindings = new Map();
   const { entries, identityError } = readOwnManifestChain(dir, { cwd });
-  if (identityError) return { openFindings, errors: [`refusing to prosecute: ${identityError}`] };
+  if (identityError) return { openFindings, deferredFindings, errors: [`refusing to prosecute: ${identityError}`] };
   for (const entry of entries) {
     if (entry.ticket !== ticket || entry.revision !== revision || !entry.finding) continue;
     const type = entry.type ?? entry.gate;
@@ -213,11 +215,14 @@ function seedOpenFindingsFromManifest(dir, ticket, revision, cwd) {
     if (type === 'p5-finding-verified' || type === 'p5-finding-needs-human') {
       openFindings.set(identity, entry.finding);
     }
-    if (type === 'p5-finding-killed') {
+    if (type === 'p5-finding-killed' || type === 'p5-finding-deferred') {
       openFindings.delete(identity);
     }
+    if (type === 'p5-finding-deferred') {
+      deferredFindings.set(identity, entry.finding);
+    }
   }
-  return { openFindings, errors: [] };
+  return { openFindings, deferredFindings, errors: [] };
 }
 
 /**
@@ -434,6 +439,7 @@ export function runProsecution(input, {
   // the rollback note below: a rejected run must leave no trace.
   if (seeded.errors.length > 0) return { status: 'op-error', exitCode: 1, errors: seeded.errors };
   const openFindings = seeded.openFindings;
+  const deferredFindings = seeded.deferredFindings;
   // Packet identity for the usage carrier: the review packet's own inputs hash
   // when it has one, so "the same call" means the same reviewed content.
   const usagePacketHash = packetIdentity(input?.review_packet);
@@ -495,6 +501,18 @@ export function runProsecution(input, {
     }
 
     const result = classifyPass(pass);
+    for (const finding of pass.findings) {
+      const identity = findingIdentity(finding);
+      if (finding.verified_status === 'verified' || finding.verified_status === 'needs-human') {
+        openFindings.set(identity, finding);
+      }
+      if (finding.verified_status === 'killed' || finding.verified_status === 'deferred') {
+        openFindings.delete(identity);
+      }
+      if (finding.verified_status === 'deferred') {
+        deferredFindings.set(identity, finding);
+      }
+    }
     if (result.dry) {
       consecutiveDry += 1;
       writeEvidence('p5-dry-pass', {
@@ -509,15 +527,6 @@ export function runProsecution(input, {
       }, dir, cwd, key);
     } else {
       consecutiveDry = 0;
-      for (const finding of pass.findings) {
-        const identity = findingIdentity(finding);
-        if (finding.verified_status === 'verified' || finding.verified_status === 'needs-human') {
-          openFindings.set(identity, finding);
-        }
-        if (finding.verified_status === 'killed') {
-          openFindings.delete(identity);
-        }
-      }
     }
 
     // §8a usage carrier. The pass-completed entry is the SOLE carrier for this
@@ -559,6 +568,7 @@ export function runProsecution(input, {
       verified: result.verified.length,
       killed: result.killed.length,
       needsHuman: result.needsHuman.length,
+      deferred: result.deferred.length,
       consecutiveDry,
       ...binding,
       ...usageCarrier.payload,
@@ -572,11 +582,14 @@ export function runProsecution(input, {
       verified: result.verified.length,
       killed: result.killed.length,
       needsHuman: result.needsHuman.length,
+      deferred: result.deferred.length,
       consecutiveDry,
     });
 
   }
 
+  const deferredList = Array.from(deferredFindings.values());
+  const deferredIds = deferredList.map((f) => f.id);
   const dryLenses = finalDryLenses(passResults);
   if (consecutiveDry >= 2 && openFindings.size === 0 && dryLenses.size >= 3) {
     // Trust-root tier: a clean same-model P5 is not sufficient. Require a
@@ -599,6 +612,8 @@ export function runProsecution(input, {
         revision: resolvedRevision,
         passes: passResults,
         openFindings: [],
+        deferredFindings: deferredList,
+        deferredIds,
         message: `P5 incomplete: trust-root-tier change requires a cross-model adversarial approve from a distinct provider, recorded at revision ${resolvedRevision}`,
       };
     }
@@ -613,6 +628,7 @@ export function runProsecution(input, {
       reviewPacket,
       inputPath: inputEvidencePath,
       dryLenses: Array.from(dryLenses).sort(),
+      deferredIds,
       ticketHash,
       storeHash,
       bindingScope: 'ticket',
@@ -625,6 +641,8 @@ export function runProsecution(input, {
       revision: resolvedRevision,
       passes: passResults,
       openFindings: [],
+      deferredFindings: deferredList,
+      deferredIds,
       message: 'P5 review evidence complete: two consecutive dry passes and three distinct dry lenses recorded',
     };
   }
@@ -637,6 +655,8 @@ export function runProsecution(input, {
     revision: resolvedRevision,
     passes: passResults,
     openFindings: Array.from(openFindings.values()),
+    deferredFindings: deferredList,
+    deferredIds,
     message: openFindings.size > 0
       ? 'P5 incomplete: verified or needs-human findings were seen at this revision'
       : consecutiveDry >= 2

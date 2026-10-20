@@ -64,7 +64,6 @@ describe('finalDryLenses boundary', () => {
     const dir = tmpAdlc();
     const result = runProsecution(input(dir, {
       passes: [
-        { lens: 'security', findings: [killedFinding()] },
         { lens: 'tests', findings: [], dry_evidence: 'no test findings' },
         { lens: 'correctness', findings: [], dry_evidence: 'no correctness findings' },
         { lens: 'behavior', findings: [], dry_evidence: 'no behavior findings' },
@@ -88,7 +87,6 @@ describe('finalDryLenses boundary', () => {
         { lens: 'correctness', findings: [finding({ id: 'F2', category: 'test-integrity' })] },
         { lens: 'correctness', findings: [killedFinding({ id: 'F2', category: 'test-integrity' })] },
         { lens: 'tests', findings: [], dry_evidence: 'no test findings after refutation' },
-        { lens: 'behavior', findings: [], dry_evidence: 'no behavior findings after refutation' },
       ],
     }), { dir, ticket: 'T1', revision: FIXTURE_REVISION });
 

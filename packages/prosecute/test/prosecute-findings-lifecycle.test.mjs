@@ -94,4 +94,78 @@ describe('open-finding lifecycle', () => {
     const manifest = readFileSync(join(dir, 'manifest.jsonl'), 'utf8');
     assert.doesNotMatch(manifest, /"type":"p5-complete"/);
   });
+
+  it('passes when a low finding is deferred and lists deferredIds in p5-complete and the result', () => {
+    const dir = tmpAdlc();
+    const deferredLow = finding({
+      id: 'F-LOW-1',
+      severity: 'low',
+      verified_status: 'deferred',
+      follow_up: 'T-1182',
+      reason: 'spec gap belongs in follow-up ticket after merge',
+    });
+    const result = runProsecution(input(dir, {
+      passes: [
+        { lens: 'security', findings: [finding({ id: 'F-LOW-1', severity: 'low' })] },
+        { lens: 'security', findings: [deferredLow] },
+        { lens: 'correctness', findings: [], dry_evidence: 'no correctness findings' },
+        { lens: 'tests', findings: [], dry_evidence: 'no test findings' },
+      ],
+    }), { dir, ticket: 'T1', revision: FIXTURE_REVISION });
+
+    assert.equal(result.exitCode, 0);
+    assert.deepEqual(result.openFindings, []);
+    assert.deepEqual(result.deferredIds, ['F-LOW-1']);
+    assert.equal(result.deferredFindings.length, 1);
+    assert.equal(result.deferredFindings[0].follow_up, 'T-1182');
+    const entries = readFileSync(join(dir, 'manifest.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    assert.ok(entries.some((entry) => entry.type === 'p5-finding-deferred' && entry.finding.id === 'F-LOW-1'));
+    const complete = entries.find((entry) => entry.type === 'p5-complete');
+    assert.ok(complete);
+    assert.deepEqual(complete.deferredIds, ['F-LOW-1']);
+  });
+
+  it('resolves a manifest-seeded open finding when a later run defers it and preserves seeded deferred findings', () => {
+    const dir = tmpAdlc();
+    const first = runProsecution(input(dir, {
+      passes: [{ lens: 'security', findings: [finding({ id: 'F-SEED-LOW', severity: 'low' })] }],
+    }), { dir, ticket: 'T1', revision: FIXTURE_REVISION });
+    assert.equal(first.exitCode, 2);
+    assert.equal(first.openFindings.length, 1);
+
+    const second = runProsecution(input(dir, {
+      passes: [
+        {
+          lens: 'security',
+          findings: [
+            finding({
+              id: 'F-SEED-LOW',
+              severity: 'low',
+              verified_status: 'deferred',
+              follow_up: 'https://github.com/voodootikigod/adlc/issues/1182',
+              reason: 'defer to follow-up issue',
+            }),
+          ],
+        },
+        { lens: 'correctness', findings: [], dry_evidence: 'no correctness findings' },
+      ],
+    }), { dir, ticket: 'T1', revision: FIXTURE_REVISION });
+    assert.equal(second.exitCode, 2);
+    assert.deepEqual(second.openFindings, []);
+    assert.deepEqual(second.deferredIds, ['F-SEED-LOW']);
+
+    const third = runProsecution(input(dir, {
+      passes: [
+        { lens: 'security', findings: [], dry_evidence: 'no security findings' },
+        { lens: 'correctness', findings: [], dry_evidence: 'no correctness findings' },
+        { lens: 'tests', findings: [], dry_evidence: 'no test findings' },
+      ],
+    }), { dir, ticket: 'T1', revision: FIXTURE_REVISION });
+    assert.equal(third.exitCode, 0);
+    assert.deepEqual(third.openFindings, []);
+    assert.deepEqual(third.deferredIds, ['F-SEED-LOW']);
+  });
 });

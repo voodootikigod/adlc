@@ -1,0 +1,19 @@
+{
+  "body": "Update packages/prosecute/lib/schema.mjs and packages/prosecute/lib/run.mjs so passes with zero verified and zero needs-human findings count as dry (advancing consecutiveDry) and low-severity findings can be recorded with verified_status deferred when accompanied by follow_up and reason.\n\nAcceptance criteria:\n1. A pass whose only findings are killed or deferred is classified as dry: true, updates openFindings/deferredFindings, and advances consecutiveDry. Verify: node --test packages/prosecute/test/prosecute-consecutive-dry.test.mjs packages/prosecute/test/prosecute-findings-lifecycle.test.mjs\n2. verified_status deferred is accepted only for severity low with non-empty follow_up and reason, and p5-complete records deferredIds. Verify: node --test packages/prosecute/test/prosecute-schema-validation.test.mjs packages/prosecute/test/prosecute-findings-lifecycle.test.mjs",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M5D2YS82Z9YG7VZTG1P5D7QE",
+  "rails": [
+    "packages/prosecute/test/prosecute-cli.test.mjs"
+  ],
+  "scope": [
+    "packages/prosecute/lib/schema.mjs",
+    "packages/prosecute/lib/run.mjs",
+    "packages/prosecute/test/prosecute-consecutive-dry.test.mjs",
+    "packages/prosecute/test/prosecute-schema-validation.test.mjs",
+    "packages/prosecute/test/prosecute-findings-lifecycle.test.mjs",
+    "packages/prosecute/test/prosecute-dry-lenses.test.mjs"
+  ],
+  "title": "prosecute: count killed-only passes as dry and support deferred low findings (#1212, #1182)"
+}
