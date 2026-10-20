@@ -24,6 +24,21 @@ export function splitByFuzzableTarget(candidates, fuzzableNames) {
 }
 
 /**
+ * Whether a classification verdict result counts as an evaluated candidate
+ * that exercised the target gate's surface and claims (and thus can advance
+ * the dry streak when no new defeat is found).
+ *
+ * `'inconclusive'`, `'out-of-scope'`, and `'wrong-claim'` never exercised the
+ * gate under test and must not count toward a dry round (#1233).
+ *
+ * @param {string} result
+ * @returns {boolean}
+ */
+export function countsAsEvaluated(result) {
+  return result !== 'inconclusive' && result !== 'out-of-scope' && result !== 'wrong-claim';
+}
+
+/**
  * Estimate tokens used from fan results (§3.2 option A).
  * labeled as estimate: ≈chars/4.
  *
@@ -189,7 +204,7 @@ export async function runLoop(suite, baseline, opts) {
         provisionFn,
       });
 
-      if (verdict.result !== 'inconclusive') {
+      if (countsAsEvaluated(verdict.result)) {
         evaluatedThisRound++;
       }
 
@@ -210,7 +225,7 @@ export async function runLoop(suite, baseline, opts) {
     }
 
     if (evaluatedThisRound === 0) {
-      // All candidates this round were inconclusive (e.g. provisioning failed) —
+      // All candidates this round were inconclusive, out-of-scope, or wrong-claim —
       // mark round inconclusive and do NOT advance dryStreak.
       inconclusiveRounds++;
       continue;

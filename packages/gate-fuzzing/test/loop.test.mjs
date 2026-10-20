@@ -3,7 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runLoop } from '../lib/loop.mjs';
+import { countsAsEvaluated, runLoop } from '../lib/loop.mjs';
 import { cannedCandidate, defeatableGateDescriptor } from '../lib/controls.mjs';
 
 const BASELINE = { dir: '/fake/baseline' };
@@ -59,7 +59,7 @@ const SUITE = [defeatableGateDescriptor()];
 test('loop stops when dry-streak reaches K with no defeats → stoppedBy dry, no defeats', async () => {
   const result = await runLoop(SUITE, BASELINE, {
     fanFn: makeDryFan(),
-    classifyFn: makeOutOfScopeClassify(),
+    classifyFn: makeCaughtClassify(),
     maxRounds: 10,
     dryRounds: 3,
     tokenBudget: 1_000_000,
@@ -70,6 +70,7 @@ test('loop stops when dry-streak reaches K with no defeats → stoppedBy dry, no
 
   assert.equal(result.stoppedBy, 'dry');
   assert.equal(result.defeats.length, 0);
+  assert.equal(result.inconclusiveRounds, 0);
   assert.ok(result.rounds >= 3, `Expected at least 3 rounds, got ${result.rounds}`);
 });
 
@@ -79,7 +80,7 @@ test('loop stops at maxRounds when no dry streak', async () => {
   // Actually dryRounds=5 and maxRounds=2, so we hit maxRounds first
   const result = await runLoop(SUITE, BASELINE, {
     fanFn: makeDryFan(),
-    classifyFn: makeOutOfScopeClassify(),
+    classifyFn: makeCaughtClassify(),
     maxRounds: 2,
     dryRounds: 5,
     tokenBudget: 1_000_000,
@@ -96,7 +97,7 @@ test('loop finds a defeat → resets dry streak; stops after K dry rounds post-d
   const candidate = cannedCandidate();
   let roundCount = 0;
 
-  // Round 1: defeat; rounds 2+: no defeat (off-surface)
+  // Round 1: defeat; rounds 2+: no defeat (caught)
   const fanFn = async () => {
     roundCount++;
     if (roundCount === 1) return [{ ok: true, value: JSON.stringify(candidate) }];
@@ -105,7 +106,7 @@ test('loop finds a defeat → resets dry streak; stops after K dry rounds post-d
 
   const classifyFn = (_c, _suite, _baseline, _opts) => {
     if (roundCount === 1) return { result: 'DEFEAT', target: candidate.target, witnessSource: 'contract-derived', reason: 'test' };
-    return { result: 'out-of-scope', reason: 'off surface' };
+    return { result: 'caught', reason: 'gate caught' };
   };
 
   const result = await runLoop(SUITE, BASELINE, {
@@ -271,4 +272,87 @@ test('token estimate treats a missing promptChars as 0 (backward compatible with
   });
 
   assert.equal(result.tokensEstimated, 1); // ceil('ok'.length / 4) = 1
+});
+
+// ─── #1233: out-of-scope and wrong-claim candidates do not advance dryStreak ──
+
+test('countsAsEvaluated rejects inconclusive, out-of-scope, and wrong-claim, and accepts evaluated results', () => {
+  assert.equal(countsAsEvaluated('inconclusive'), false);
+  assert.equal(countsAsEvaluated('out-of-scope'), false);
+  assert.equal(countsAsEvaluated('wrong-claim'), false);
+  assert.equal(countsAsEvaluated('caught'), true);
+  assert.equal(countsAsEvaluated('DEFEAT'), true);
+  assert.equal(countsAsEvaluated('unwitnessed'), true);
+});
+
+test('runLoop: round where all candidates are out-of-scope is inconclusive and does not advance dryStreak (#1233)', async () => {
+  const result = await runLoop(SUITE, BASELINE, {
+    fanFn: makeDryFan(),
+    classifyFn: makeOutOfScopeClassify(),
+    maxRounds: 3,
+    dryRounds: 2,
+    tokenBudget: 1_000_000,
+    maxFailRate: 0.5,
+    cloneDir: CLONE_DIR,
+    n: 1,
+  });
+
+  assert.equal(result.stoppedBy, 'maxRounds');
+  assert.equal(result.rounds, 3);
+  assert.equal(result.inconclusiveRounds, 3);
+  assert.equal(result.candidatesGenerated, 3);
+  assert.equal(result.candidatesEvaluated, 0);
+  assert.equal(result.exhaustive, false);
+});
+
+test('runLoop: round where all candidates are wrong-claim is inconclusive and does not advance dryStreak (#1233)', async () => {
+  const result = await runLoop(SUITE, BASELINE, {
+    fanFn: makeDryFan(),
+    classifyFn: () => ({ result: 'wrong-claim', reason: 'claimKind not in gate claims' }),
+    maxRounds: 3,
+    dryRounds: 2,
+    tokenBudget: 1_000_000,
+    maxFailRate: 0.5,
+    cloneDir: CLONE_DIR,
+    n: 1,
+  });
+
+  assert.equal(result.stoppedBy, 'maxRounds');
+  assert.equal(result.rounds, 3);
+  assert.equal(result.inconclusiveRounds, 3);
+  assert.equal(result.candidatesGenerated, 3);
+  assert.equal(result.candidatesEvaluated, 0);
+  assert.equal(result.exhaustive, false);
+});
+
+test('runLoop: round mixing out-of-scope and wrong-claim with caught counts only caught and advances dryStreak (#1233)', async () => {
+  const c = cannedCandidate();
+  const fanFn = async () => [
+    { ok: true, value: JSON.stringify({ ...c, id: 'c1' }) },
+    { ok: true, value: JSON.stringify({ ...c, id: 'c2' }) },
+    { ok: true, value: JSON.stringify({ ...c, id: 'c3' }) },
+  ];
+  const classifyFn = (cand) => {
+    if (cand.id === 'c1') return { result: 'out-of-scope', reason: 'off surface' };
+    if (cand.id === 'c2') return { result: 'wrong-claim', reason: 'wrong claim' };
+    return { result: 'caught', reason: 'gate caught' };
+  };
+
+  const result = await runLoop(SUITE, BASELINE, {
+    fanFn,
+    classifyFn,
+    maxRounds: 5,
+    dryRounds: 2,
+    tokenBudget: 1_000_000,
+    maxFailRate: 0.5,
+    cloneDir: CLONE_DIR,
+    n: 3,
+  });
+
+  assert.equal(result.stoppedBy, 'dry');
+  assert.equal(result.rounds, 2);
+  assert.equal(result.inconclusiveRounds, 0);
+  assert.equal(result.candidatesGenerated, 6);
+  assert.equal(result.candidatesEvaluated, 2);
+  assert.equal(result.exhaustive, true);
 });

@@ -1,0 +1,16 @@
+{
+  "body": "Ensure runLoop in packages/gate-fuzzing/lib/loop.mjs only increments evaluatedThisRound for candidates that actually evaluated the target gate surface and claims.\n\nAcceptance criteria:\n1. A round where all candidates are out-of-scope or wrong-claim leaves evaluatedThisRound at 0, increments inconclusiveRounds, and does not advance dryStreak. Verify: node --test packages/gate-fuzzing/test/loop.test.mjs\n2. A round mixing out-of-scope or wrong-claim with CAUGHT increments evaluatedThisRound and advances dryStreak. Verify: node --test packages/gate-fuzzing/test/loop.test.mjs",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M5CNE4Q9QS27X368PGHEZVAC",
+  "rails": [
+    "packages/gate-fuzzing/test/classify.test.mjs",
+    "packages/gate-fuzzing/test/unusable-candidates-inconclusive.test.mjs"
+  ],
+  "scope": [
+    "packages/gate-fuzzing/lib/loop.mjs",
+    "packages/gate-fuzzing/test/loop.test.mjs"
+  ],
+  "title": "gate-fuzzing: do not advance dryStreak on out-of-scope or wrong-claim rounds (#1233)"
+}

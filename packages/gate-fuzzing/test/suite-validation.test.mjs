@@ -256,7 +256,7 @@ test('runLoop: a candidate targeting the fuzzable gate is still classified', asy
   let classified = 0;
   const result = await runLoop([FUZZ, BUILD], { dir: '/fake' }, {
     fanFn: fanTargeting('rails-guard'),
-    classifyFn: () => { classified++; return { result: 'out-of-scope', reason: 'off surface' }; },
+    classifyFn: () => { classified++; return { result: 'caught', reason: 'gate caught' }; },
     maxRounds: 4,
     dryRounds: 2,
     tokenBudget: 1_000_000,

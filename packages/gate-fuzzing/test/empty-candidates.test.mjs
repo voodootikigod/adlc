@@ -111,7 +111,7 @@ test('AC1 / Normative 3: candidate rejections are tracked by reason and candidat
 
   const result = await runLoop(SUITE, BASELINE, {
     fanFn: mixedFan,
-    classifyFn: makeOutOfScopeClassify(),
+    classifyFn: () => ({ result: 'caught', reason: 'gate caught' }),
     maxRounds: 3,
     dryRounds: 5,
     tokenBudget: 1_000_000,
