@@ -1,0 +1,16 @@
+{
+  "body": "Update classifyTrustRootAuthorization in packages/rails-guard/lib/trust-root-authorization.mjs to support optional teamMembers expansion and, when authorization fails on a path owned by an unexpanded @org/team entry, return a distinct actionable reason naming the team owner.\n\nAcceptance criteria:\n1. When owners contains an unexpanded team entry (org/team) and no individual owner has approved, classifyTrustRootAuthorization returns authorized: false with a reason naming the team and explaining that the ceremony cannot expand teams without team membership. Verify: node --test packages/rails-guard/test/trust-root-authorization.test.mjs\n2. When an individual co-owner or a member of an expanded team in teamMembers approves, classifyTrustRootAuthorization returns authorized: true. Verify: node --test packages/rails-guard/test/trust-root-authorization.test.mjs",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M5D2YW6KR1RYXC1R8AXS2A9S",
+  "rails": [
+    "packages/rails-guard/test/check.test.mjs",
+    "packages/rails-guard/test/rails.test.mjs"
+  ],
+  "scope": [
+    "packages/rails-guard/lib/trust-root-authorization.mjs",
+    "packages/rails-guard/test/trust-root-authorization.test.mjs"
+  ],
+  "title": "rails-guard: surface team CODEOWNERS reason and optional team expansion in trust-root ceremony (#1136)"
+}

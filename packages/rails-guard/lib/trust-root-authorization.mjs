@@ -14,6 +14,17 @@
 
 const normalizeLogin = (value) => String(value ?? '').trim().replace(/^@/, '').toLowerCase();
 
+/** True when a CODEOWNERS owner token names a GitHub team (`@org/team` or `org/team`). */
+export function isTeamOwner(owner) {
+  return normalizeLogin(owner).includes('/');
+}
+
+function lookupTeamMembers(teamMembers, team) {
+  return teamMembers instanceof Map
+    ? (teamMembers.get(team) ?? teamMembers.get(`@${team}`))
+    : (teamMembers?.[team] ?? teamMembers?.[`@${team}`]);
+}
+
 // State-changing review states, in GitHub's model. COMMENTED and PENDING do NOT
 // change a reviewer's approval standing, so they are ignored when computing the
 // latest effective state; DISMISSED clears a prior approval.
@@ -41,6 +52,7 @@ function latestEffectiveStates(reviews) {
  * @param {Array<{user:string,state:string}>} [args.reviews]  PR reviews (chronological)
  * @param {string} args.author           PR author login
  * @param {string[]} [args.owners]       CODEOWNERS logins for the changed trust-root paths
+ * @param {Map<string,string[]>|Record<string,string[]>|null} [args.teamMembers] optional team slug -> member logins
  * @param {string} [args.requiredLabel]  default 'trust-root-change'
  * @returns {{ authorized: boolean, approver: string|null, reason: string }}
  */
@@ -49,6 +61,7 @@ export function classifyTrustRootAuthorization({
   reviews = [],
   author,
   owners = [],
+  teamMembers = null,
   requiredLabel = 'trust-root-change',
 } = {}) {
   const wantLabel = normalizeLogin(requiredLabel);
@@ -58,9 +71,24 @@ export function classifyTrustRootAuthorization({
   }
 
   const authorLc = normalizeLogin(author);
-  const ownerSet = new Set((Array.isArray(owners) ? owners : []).map(normalizeLogin));
-  if (ownerSet.size === 0) {
+  const normalizedOwners = (Array.isArray(owners) ? owners : []).map(normalizeLogin).filter(Boolean);
+  if (normalizedOwners.length === 0) {
     return { authorized: false, approver: null, reason: 'no CODEOWNERS declared for the changed trust-root paths' };
+  }
+
+  const ownerSet = new Set();
+  const unexpandedTeams = new Set();
+  for (const entry of normalizedOwners) {
+    if (isTeamOwner(entry)) {
+      const members = lookupTeamMembers(teamMembers, entry);
+      if (Array.isArray(members)) {
+        for (const member of members.map(normalizeLogin).filter(Boolean)) ownerSet.add(member);
+      } else {
+        unexpandedTeams.add(`@${entry}`);
+      }
+    } else {
+      ownerSet.add(entry);
+    }
   }
 
   for (const [login, { user, state }] of latestEffectiveStates(reviews)) {
@@ -68,6 +96,13 @@ export function classifyTrustRootAuthorization({
     if (login === authorLc) continue;      // an author cannot authorize their own change
     if (!ownerSet.has(login)) continue;    // must be an owner of the trust-root paths
     return { authorized: true, approver: user, reason: `authorized by non-author CODEOWNER ${user}` };
+  }
+  if (unexpandedTeams.size > 0) {
+    return {
+      authorized: false,
+      approver: null,
+      reason: `trust-root path is owned by team ${[...unexpandedTeams].join(', ')}; the ceremony cannot expand teams — name at least one individual owner, or use the protected-base admin path`,
+    };
   }
   return {
     authorized: false,

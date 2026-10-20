@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyTrustRootAuthorization, codeownersMatch } from '../lib/trust-root-authorization.mjs';
+import { classifyTrustRootAuthorization, codeownersMatch, isTeamOwner } from '../lib/trust-root-authorization.mjs';
 
 // #141 (T77): the trust-root change ceremony. Authorization is a `trust-root-change`
 // LABEL (intent) plus a non-author CODEOWNER APPROVING review (authorization —
@@ -145,4 +145,132 @@ test('codeownersMatch: un-anchored pattern matches by basename, anchored does no
 
 test('codeownersMatch: a pattern for a DIFFERENT path does not match (owners would be empty → deny)', () => {
   assert.equal(codeownersMatch('/.adlc/admin.pub', 'scripts/rails-guard-ci.mjs'), false);
+});
+
+// #1136: team CODEOWNERS entries (@org/team or org/team)
+test('isTeamOwner: distinguishes @org/team and org/team from individual logins', () => {
+  assert.equal(isTeamOwner('@acme/platform-team'), true);
+  assert.equal(isTeamOwner('acme/platform-team'), true);
+  assert.equal(isTeamOwner('  @Acme/Sec-Team  '), true);
+  assert.equal(isTeamOwner('@alice'), false);
+  assert.equal(isTeamOwner('alice'), false);
+  assert.equal(isTeamOwner(''), false);
+  assert.equal(isTeamOwner(null), false);
+});
+
+test('empty or non-array owners fail closed with no CODEOWNERS declared reason', () => {
+  const emptyList = classifyTrustRootAuthorization(base({ owners: [] }));
+  assert.equal(emptyList.authorized, false);
+  assert.equal(emptyList.approver, null);
+  assert.equal(emptyList.reason, 'no CODEOWNERS declared for the changed trust-root paths');
+
+  const blankEntries = classifyTrustRootAuthorization(base({ owners: ['', '  ', '@'] }));
+  assert.equal(blankEntries.authorized, false);
+  assert.equal(blankEntries.reason, 'no CODEOWNERS declared for the changed trust-root paths');
+
+  const nonArray = classifyTrustRootAuthorization(base({ owners: null }));
+  assert.equal(nonArray.authorized, false);
+  assert.equal(nonArray.reason, 'no CODEOWNERS declared for the changed trust-root paths');
+});
+
+test('single individual CODEOWNER authorizes when they approve and denies with individual reason when they do not', () => {
+  const ok = classifyTrustRootAuthorization(base({ owners: ['trusty-reviewer'] }));
+  assert.equal(ok.authorized, true);
+  assert.equal(ok.approver, 'trusty-reviewer');
+
+  const noReview = classifyTrustRootAuthorization(base({ owners: ['trusty-reviewer'], reviews: [] }));
+  assert.equal(noReview.authorized, false);
+  assert.equal(noReview.approver, null);
+  assert.equal(noReview.reason, 'no current approving review from a non-author trust-root CODEOWNER');
+});
+
+test('team-only CODEOWNERS without teamMembers fails closed with actionable team-owner guidance (#1136)', () => {
+  const singleTeam = classifyTrustRootAuthorization(base({
+    owners: ['acme/platform-team'],
+    reviews: [{ user: 'reviewer-a', state: 'APPROVED' }],
+  }));
+  assert.equal(singleTeam.authorized, false);
+  assert.equal(singleTeam.approver, null);
+  assert.equal(
+    singleTeam.reason,
+    'trust-root path is owned by team @acme/platform-team; the ceremony cannot expand teams — name at least one individual owner, or use the protected-base admin path',
+  );
+
+  const multiTeam = classifyTrustRootAuthorization(base({
+    owners: ['@acme/platform-team', 'acme/platform-team', '@acme/sec-team'],
+    reviews: [{ user: 'reviewer-a', state: 'APPROVED' }],
+  }));
+  assert.equal(multiTeam.authorized, false);
+  assert.equal(multiTeam.approver, null);
+  assert.equal(
+    multiTeam.reason,
+    'trust-root path is owned by team @acme/platform-team, @acme/sec-team; the ceremony cannot expand teams — name at least one individual owner, or use the protected-base admin path',
+  );
+});
+
+test('team + individual CODEOWNERS: individual owner approval authorizes; missing approval reports unexpanded team (#1136)', () => {
+  const approvedByIndividual = classifyTrustRootAuthorization(base({
+    owners: ['acme/platform-team', 'reviewer-a'],
+    reviews: [{ user: 'reviewer-a', state: 'APPROVED' }],
+  }));
+  assert.equal(approvedByIndividual.authorized, true);
+  assert.equal(approvedByIndividual.approver, 'reviewer-a');
+
+  const unapproved = classifyTrustRootAuthorization(base({
+    owners: ['acme/platform-team', 'reviewer-a'],
+    reviews: [{ user: 'stranger', state: 'APPROVED' }],
+  }));
+  assert.equal(unapproved.authorized, false);
+  assert.equal(unapproved.approver, null);
+  assert.equal(unapproved.reason, 'trust-root path is owned by team @acme/platform-team; the ceremony cannot expand teams — name at least one individual owner, or use the protected-base admin path');
+});
+
+test('optional teamMembers expansion authorizes a non-author team member and still forbids self-approval (#1136)', () => {
+  const viaPlainObject = classifyTrustRootAuthorization(base({
+    owners: ['@acme/platform-team'],
+    teamMembers: { 'acme/platform-team': ['@Reviewer-A', 'contributor'] },
+    reviews: [{ user: 'reviewer-a', state: 'APPROVED' }],
+    author: 'contributor',
+  }));
+  assert.equal(viaPlainObject.authorized, true);
+  assert.equal(viaPlainObject.approver, 'reviewer-a');
+
+  const viaAtPrefixedObject = classifyTrustRootAuthorization(base({
+    owners: ['acme/platform-team'],
+    teamMembers: { '@acme/platform-team': ['reviewer-a'] },
+    reviews: [{ user: 'reviewer-a', state: 'APPROVED' }],
+    author: 'contributor',
+  }));
+  assert.equal(viaAtPrefixedObject.authorized, true);
+  assert.equal(viaAtPrefixedObject.approver, 'reviewer-a');
+
+  const viaMap = classifyTrustRootAuthorization(base({
+    owners: ['acme/platform-team'],
+    teamMembers: new Map([['acme/platform-team', ['reviewer-a']]]),
+    reviews: [{ user: 'reviewer-a', state: 'APPROVED' }],
+    author: 'contributor',
+  }));
+  assert.equal(viaMap.authorized, true);
+  assert.equal(viaMap.approver, 'reviewer-a');
+
+  const viaAtPrefixedMap = classifyTrustRootAuthorization(base({
+    owners: ['acme/platform-team'],
+    teamMembers: new Map([['@acme/platform-team', ['reviewer-a']]]),
+    reviews: [{ user: 'reviewer-a', state: 'APPROVED' }],
+    author: 'contributor',
+  }));
+  assert.equal(viaAtPrefixedMap.authorized, true);
+  assert.equal(viaAtPrefixedMap.approver, 'reviewer-a');
+
+  // Self-approval by a team member who is also the PR author must still be rejected,
+  // and since the team WAS expanded, the denial reason is the standard individual-owner reason.
+  const selfApproval = classifyTrustRootAuthorization(base({
+    owners: ['acme/platform-team'],
+    teamMembers: { 'acme/platform-team': ['contributor', 'reviewer-a'] },
+    reviews: [{ user: 'contributor', state: 'APPROVED' }],
+    author: 'contributor',
+  }));
+  assert.equal(selfApproval.authorized, false);
+  assert.equal(selfApproval.approver, null);
+  assert.equal(selfApproval.reason, 'no current approving review from a non-author trust-root CODEOWNER');
 });
