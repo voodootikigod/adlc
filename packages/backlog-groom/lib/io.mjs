@@ -6,7 +6,8 @@
  * the cache only when there is no cache, say — passes every suite.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, renameSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, renameSync, statSync, readdirSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 import { parseProfile } from './profile.mjs';
@@ -384,6 +385,7 @@ export function acquireApplyLock(path, io = {}) {
     read = (p) => readFileSync(p, 'utf8'),
     alive = pidAlive,
     rename = renameSync,
+    readdir = readdirSync,
     pid = process.pid,
   } = io;
 
@@ -479,12 +481,22 @@ export function acquireApplyLock(path, io = {}) {
     }
   }
 
-  // Release only while the lock at `path` is still this run's. A lock moved away
-  // and replaced by another run's is that run's to release.
+  // Release only while the lock is still this run's — whether at `path` or
+  // momentarily at `${path}.stale-*` while a losing recoverer is handing it
+  // back (#1039). A lock replaced by another run's is that run's to release.
   const held = mine;
+  const clearIfHeld = (dirPath) => {
+    if (sameLock(dirPath, held, { read, io })) rmdir(dirPath, { recursive: true, force: true });
+  };
   return () => {
     try {
-      if (sameLock(path, held, { read, io })) rmdir(path, { recursive: true, force: true });
+      clearIfHeld(path);
+      const parent = dirname(path);
+      const prefix = `${basename(path)}.stale-`;
+      for (const name of readdir(parent)) {
+        if (name.startsWith(prefix)) clearIfHeld(join(parent, name));
+      }
+      clearIfHeld(path);
     } catch { /* releasing a lock must never mask the run's own error */ }
   };
 }
@@ -492,14 +504,17 @@ export function acquireApplyLock(path, io = {}) {
 /**
  * Return a live lock moved by a lost claim to where its holder expects it.
  *
- * If another run took `path` in between, the moved lock cannot go back, and its
- * holder is now running without a lock at `path`. That is refused loudly and
- * names where the moved lock sits, because it needs an operator.
+ * If the holder released and removed its lock while it sat at `claimed`,
+ * `rename` sees ENOENT and there is nothing left to return. If another run
+ * took `path` in between, the moved lock cannot go back, and its holder is now
+ * running without a lock at `path`. That is refused loudly and names where the
+ * moved lock sits, because it needs an operator.
  */
 function handBack(claimed, path, rename) {
   try {
     rename(claimed, path);
   } catch (err) {
+    if (err?.code === 'ENOENT') return;
     throw Object.assign(
       new Error(
         `backlog-groom: a live apply lock was moved to ${claimed} while recovering ${path}, and could not be returned (${err.code ?? err.message}) — ` +

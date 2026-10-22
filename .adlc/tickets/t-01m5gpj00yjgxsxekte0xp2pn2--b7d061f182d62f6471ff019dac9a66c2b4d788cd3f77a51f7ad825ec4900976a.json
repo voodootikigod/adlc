@@ -1,0 +1,14 @@
+{
+  "body": "## Problem\nIn `acquireApplyLock` (`packages/backlog-groom/lib/io.mjs`), if a recoverer temporarily renames `path` to `${path}.stale-<pid>-<token>` right as the live holder calls its release closure, `sameLock(path, held)` at the canonical `path` returns `false`, so release removes nothing and `handBack()` renames the already-released directory back to `path` (#1039).\n\n## Solution\n1. In `acquireApplyLock` (`packages/backlog-groom/lib/io.mjs`), make the holder release closure ownership-aware across both `path` and any temporary `${basename(path)}.stale-*` claim directory in `dirname(path)` matching `sameLock(candidate, held, { read, io })`, unlinking `owner.json` and removing the directory (and re-checking `path` in case `handBack` just restored it).\n2. In `handBack()`, after `rename(claimed, path)`, verify `sameLock(path, judged, { read, io })` / `readOwner(ownerFile, read)` is still present; if the holder unlinked `owner.json` during handback, remove `path` so no ownerless lock directory remains.\n\n## Acceptance Criteria\n- AC1: Releasing a lock while it is temporarily renamed to `${path}.stale-<pid>-<token>` removes the holder lock and does not leave an orphaned lock at `path` or `claimed` after `handBack()`.\n- AC2: Releasing a lock never removes a lock owned by a different holder.\n- AC3: `packages/backlog-groom/test/apply-lock-ownership.test.mjs` and `packages/backlog-groom/test/io.test.mjs` pass with 0 surviving mutants.",
+  "id": "T-01M5GPJ00YJGXSXEKTE0XP2PN2",
+  "rails": [
+    "packages/backlog-groom/test/io.test.mjs",
+    "packages/backlog-groom/test/ledger-signature.test.mjs"
+  ],
+  "scope": [
+    "packages/backlog-groom/lib/io.mjs",
+    "packages/backlog-groom/test/apply-lock-ownership.test.mjs"
+  ],
+  "title": "backlog-groom: prevent stale-lock handback from restoring a lock released mid-recovery (#1039)",
+  "verify": "node --test packages/backlog-groom/test/apply-lock-ownership.test.mjs packages/backlog-groom/test/io.test.mjs packages/backlog-groom/test/ledger-signature.test.mjs"
+}

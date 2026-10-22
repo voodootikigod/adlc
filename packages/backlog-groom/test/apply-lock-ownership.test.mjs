@@ -12,6 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { basename, dirname } from 'node:path';
 import { acquireApplyLock, pidAlive } from '../lib/io.mjs';
 
 const LOCK = '/virtual/ledger.json.lock';
@@ -47,7 +48,11 @@ function memoryFs() {
         dirs.set(to, dirs.get(from));
         dirs.delete(from);
       },
-      rmdir: (p) => { dirs.delete(p); },
+      rmdir: (p, opts) => {
+        if (!opts?.recursive || !opts?.force) throw new Error('rmdir requires recursive and force');
+        dirs.delete(p);
+      },
+      readdir: (parent) => [...dirs.keys()].filter((k) => dirname(k) === parent).map((k) => basename(k)),
       stat: (p) => {
         const d = dirs.get(p);
         if (!d) throw enoent();
@@ -139,4 +144,75 @@ test('a failed hand-back is fatal and names where the moved lock now sits; the t
   assert.equal(fs.ownerAt(LOCK), 444, 'A\'s release must not delete C\'s live lock');
   releaseC();
   assert.equal(fs.dirs.has(LOCK), false);
+});
+
+test('releasing a lock while a recoverer has moved it to .stale-* removes the moved lock so hand-back cannot restore it (#1039)', () => {
+  const fs = memoryFs();
+  // Dead pid 111 leaves a stale lock.
+  const seed = fs.io(111);
+  seed.mkdir(LOCK);
+  seed.write(`${LOCK}/owner.json`, `${JSON.stringify({ pid: 111, startedAt: 'then' })}\n`);
+
+  let releaseA = null;
+  const bIo = fs.io(333);
+  const realRename = bIo.rename;
+  bIo.rename = (from, to) => {
+    // A recovers first, then B's claim rename moves A's live lock to .stale-333-*,
+    // and A finishes and releases while its lock is sitting at .stale-333-*.
+    if (from === LOCK) {
+      releaseA = acquireApplyLock(LOCK, fs.io(222));
+      realRename(from, to);
+      releaseA();
+      return;
+    }
+    return realRename(from, to);
+  };
+
+  assert.throws(
+    () => acquireApplyLock(LOCK, bIo),
+    (err) => err.isOpError === true && /recovered the stale lock.*first/.test(err.message),
+  );
+  assert.equal(fs.dirs.size, 0, 'neither the canonical lock nor the .stale-* directory may remain');
+
+  // A subsequent run can now acquire the lock cleanly.
+  const releaseD = acquireApplyLock(LOCK, fs.io(555));
+  assert.equal(fs.ownerAt(LOCK), 555);
+  releaseD();
+  assert.equal(fs.dirs.size, 0);
+});
+
+test('releasing a lock as hand-back renames .stale-* back to the canonical path still removes the lock (#1039)', () => {
+  const fs = memoryFs();
+  let stalePath = null;
+  const aIo = fs.io(222, {
+    readdir: () => {
+      // Simulate handBack completing right as release() scans the parent directory.
+      if (stalePath && fs.dirs.has(stalePath)) {
+        fs.dirs.set(LOCK, fs.dirs.get(stalePath));
+        fs.dirs.delete(stalePath);
+      }
+      return [];
+    },
+  });
+  const releaseA = acquireApplyLock(LOCK, aIo);
+  stalePath = `${LOCK}.stale-333-999`;
+  fs.dirs.set(stalePath, fs.dirs.get(LOCK));
+  fs.dirs.delete(LOCK);
+
+  releaseA();
+  assert.equal(fs.dirs.size, 0, 'trailing check at canonical path must remove the restored lock');
+});
+
+test('releasing a lock while absent at the canonical path never deletes another holder\'s .stale-* lock (#1039)', () => {
+  const fs = memoryFs();
+  const releaseA = acquireApplyLock(LOCK, fs.io(222));
+  fs.dirs.delete(LOCK);
+
+  const otherStale = `${LOCK}.stale-333-888`;
+  const other = fs.io(444);
+  other.mkdir(otherStale);
+  other.write(`${otherStale}/owner.json`, `${JSON.stringify({ pid: 444, startedAt: 'now' })}\n`);
+
+  releaseA();
+  assert.equal(fs.ownerAt(otherStale), 444, 'another holder\'s .stale-* directory must remain untouched');
 });
