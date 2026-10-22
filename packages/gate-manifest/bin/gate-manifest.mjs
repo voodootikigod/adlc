@@ -3,7 +3,8 @@
 // Verbs: record | verify | show | attest | repair-chain | generate-key
 
 import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
-import { record, parseData, ticketCompletionReminder } from '../lib/record.mjs';
+import { record, parseData, parseFileList, ticketCompletionReminder } from '../lib/record.mjs';
+import { validateSpecApprovalRecord } from '../lib/spec-approval.mjs';
 import { verify } from '../lib/verify.mjs';
 import { loadFiltered, renderEntries } from '../lib/show.mjs';
 import { buildAttest } from '../lib/attest.mjs';
@@ -18,7 +19,7 @@ import { resolveCeremonyKey, writeKeyHandoffFile, computeKeyFingerprint } from '
 
 const USAGE =
   'usage: gate-manifest <verb> [options]\n' +
-  'verbs: record <gate-name> [--ticket id] [--data \'{json}\'] [--files a,b,c]\n' +
+  'verbs: record <gate-name> [--ticket id] [--data \'{json}\'] [--files a,b,c] [--force]\n' +
   '       verify [--json] [--allow-legacy-unsigned]\n' +
   '       show   [--ticket id] [--json]\n' +
   '       attest [--ticket id]\n' +
@@ -35,6 +36,7 @@ const { values: flags, positionals } = parseArgs({
     ticket: { type: 'string' },
     data:   { type: 'string' },
     files:  { type: 'string' },
+    force:  { type: 'boolean', default: false },
     json:   { type: 'boolean', default: false },
     dir:    { type: 'string', default: ADLC_DIR },
     reason: { type: 'string' },
@@ -62,10 +64,24 @@ if (verb === 'record') {
   }
 
   // Validate --data early so we get opError (exit 1) on bad JSON
+  let parsedData;
   try {
-    parseData(flags.data);
+    parsedData = parseData(flags.data);
   } catch (err) {
     opError(err.message);
+  }
+
+  if (gate === 'spec-approval' && !flags.force) {
+    const { entries: existingEntries } = loadFiltered({ dir: flags.dir });
+    const errors = validateSpecApprovalRecord({
+      ticket: flags.ticket,
+      data: parsedData,
+      files: flags.files,
+      entries: existingEntries,
+    });
+    if (errors.length > 0) {
+      opError(errors.join('; '));
+    }
   }
 
   let entry;

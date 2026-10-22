@@ -1,0 +1,18 @@
+{
+  "body": "## Problem\n`gate-manifest record spec-approval` checks only JSON syntax before appending to `.adlc/manifest.jsonl`, allowing invalid `spec-approval` records (missing/empty `sources`, `rounds < 1`, `questions < 1`, `unresolved !== 0`, wrong `--files` count, mismatched `spec_hash`, or missing/newer `spec-lint` and `premortem` records) that `adlc run p1` later rejects (#1181).\n\n## Solution\n1. Create `packages/gate-manifest/lib/spec-approval.mjs` exporting `validateSpecApprovalRecord({ data, files, entries = [], cwd = process.cwd() })` and `specApprovalIntegrityErrors(entries, { cwd = process.cwd() } = {})` with the exact P1 validation messages.\n2. Re-export `validateSpecApprovalRecord` and `specApprovalIntegrityErrors` from `packages/gate-manifest/index.mjs` and `packages/runner/lib/assertions.mjs`.\n3. In `packages/gate-manifest/bin/gate-manifest.mjs`, add `--force` to `KNOWN_FLAGS` and `BOOLEAN_FLAGS` and, when `verb === \"record\" && gate === \"spec-approval\" && !flags.force`, validate the candidate record against `readManifest(dir)` before calling `record()`, failing with `opError` (exit 1) and leaving `.adlc/manifest.jsonl` untouched on any error.\n\n## Acceptance Criteria\n- AC1: `gate-manifest record spec-approval` rejects empty `sources`, `rounds < 1`, `questions < 1`, `unresolved !== 0`, `files.length !== 1`, mismatched `spec_hash`, or missing/newer `spec-lint`/`premortem` with exit 1 and does not modify `.adlc/manifest.jsonl`.\n- AC2: Passing `--force` bypasses the `spec-approval` pre-record check, and a valid `spec-approval` record succeeds and passes `adlc run p1`.\n- AC3: `@adlc/runner` (`packages/runner/lib/assertions.mjs`) and `@adlc/gate-manifest` share the validator.",
+  "id": "T-01M5GPJ185F1NFE7GBKA9XJMBW",
+  "rails": [
+    "packages/gate-manifest/lib/record.mjs",
+    "packages/runner/test/runner.test.mjs"
+  ],
+  "scope": [
+    "packages/gate-manifest/bin/gate-manifest.mjs",
+    "packages/gate-manifest/lib/spec-approval.mjs",
+    "packages/gate-manifest/index.mjs",
+    "packages/runner/lib/assertions.mjs",
+    "packages/gate-manifest/test/gate-manifest.test.mjs",
+    "packages/runner/test/p0-p1-gates.test.mjs"
+  ],
+  "title": "gate-manifest: validate spec-approval payloads and prerequisites before recording (#1181)",
+  "verify": "node --test packages/gate-manifest/test/gate-manifest.test.mjs packages/runner/test/p0-p1-gates.test.mjs packages/runner/test/runner.test.mjs"
+}

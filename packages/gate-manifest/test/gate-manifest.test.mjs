@@ -14,6 +14,8 @@ import { loadFiltered, renderEntries } from '../lib/show.mjs';
 import { buildAttest } from '../lib/attest.mjs';
 import { canonicalEntryBytes, KEY_ENV, signEntry, verifyEntrySig } from '../lib/sign.mjs';
 import { repairChain as realRepairChain } from '../lib/repair.mjs';
+import { specApprovalIntegrityErrors, validateSpecApprovalRecord } from '../index.mjs';
+import { specApprovalIntegrityErrors as runnerSpecApprovalIntegrityErrors, validateSpecApprovalRecord as runnerValidateSpecApprovalRecord } from '../../runner/lib/assertions.mjs';
 import { sha256, ledgerPath } from '../../core/index.mjs';
 
 // ── key env helper ─────────────────────────────────────────────────────────────
@@ -1023,5 +1025,304 @@ describe('signing: canonicalEntryBytes is deterministic and excludes sig', () =>
     signedThenAnnotated.sig = signEntry(KEY, signedThenAnnotated);
     const asReadFromForest = { ...signedThenAnnotated, segment: 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl' };
     assert.equal(verifyEntrySig(KEY, asReadFromForest), true);
+  });
+});
+
+
+// ── spec-approval pre-record validation (#1181) ──────────────────────────────
+
+describe('spec-approval validation (#1181)', () => {
+  function makeSpec(dir, name = 'spec.md', content = '# Spec\n## Acceptance Criteria\n- ok: `true`\n') {
+    const specPath = join(dir, name);
+    writeFileSync(specPath, content);
+    const hash = sha256(readFileSync(specPath));
+    return { specPath, hash };
+  }
+
+  function validData(hash, overrides = {}) {
+    return {
+      verdict: 'approved',
+      approver: 'alice',
+      spec_hash: hash,
+      rounds: 1,
+      questions: 1,
+      sources: ['premortem'],
+      unresolved: 0,
+      approved_assumptions: [],
+      ...overrides,
+    };
+  }
+
+  function slEntry(ticket, specPath, hash, verified = true) {
+    return {
+      gate: 'spec-lint',
+      ticket,
+      data: verified === null ? {} : { verified },
+      files: specPath ? { [specPath]: hash } : {},
+    };
+  }
+
+  function pmEntry(ticket, specPath, hash) {
+    return {
+      gate: 'premortem',
+      ticket,
+      data: { verdict: 'ok' },
+      files: specPath ? { [specPath]: hash } : {},
+    };
+  }
+
+  function approvalEntry(ticket, specPath, hash, overrides = {}) {
+    return {
+      gate: 'spec-approval',
+      ticket,
+      data: validData(hash, overrides),
+      files: specPath ? { [specPath]: hash } : {},
+    };
+  }
+
+  it('returns [] when no spec-approval entry matches and evaluates only the latest matching entry', (t) => {
+    const dir = tmp(t, 'gate-manifest-spec-');
+    const { specPath, hash } = makeSpec(dir);
+    assert.deepEqual(specApprovalIntegrityErrors([], 'T1', dir), []);
+    assert.deepEqual(specApprovalIntegrityErrors([slEntry('T1', specPath, hash)], 'T1', dir), []);
+    assert.deepEqual(specApprovalIntegrityErrors([approvalEntry('T2', specPath, hash, { verdict: 'rejected' })], 'T1', dir), []);
+
+    // Earlier rejected approval followed by valid latest approval → passes
+    const entriesPass = [
+      slEntry('T1', specPath, hash),
+      pmEntry('T1', specPath, hash),
+      approvalEntry('T1', specPath, hash, { verdict: 'rejected' }),
+      approvalEntry('T1', specPath, hash),
+    ];
+    assert.deepEqual(specApprovalIntegrityErrors(entriesPass, 'T1', dir), []);
+
+    // Earlier valid approval followed by rejected latest approval → fails
+    const entriesFail = [
+      slEntry('T1', specPath, hash),
+      pmEntry('T1', specPath, hash),
+      approvalEntry('T1', specPath, hash),
+      { type: 'spec-approval', ticket: 'T1', data: validData(hash, { verdict: 'rejected' }), files: { [specPath]: hash } },
+    ];
+    const errs = specApprovalIntegrityErrors(entriesFail, 'T1', dir);
+    assert.ok(errs.some((e) => e.includes('Gate 1')));
+  });
+
+  it('validates unscoped entries when ticket is undefined and uses default cwd', (t) => {
+    const dir = tmp(t, 'gate-manifest-spec-');
+    const { specPath, hash } = makeSpec(dir);
+    const entries = [
+      { type: 'spec-lint', data: { verified: true }, files: { [specPath]: hash } },
+      { type: 'premortem', data: { verdict: 'ok' }, files: { [specPath]: hash } },
+      { type: 'spec-approval', data: validData(hash, { approved_assumptions: undefined }), files: { [specPath]: hash } },
+    ];
+    assert.deepEqual(specApprovalIntegrityErrors(entries), []);
+  });
+
+  it('rejects missing, null, primitive, or array data payload', () => {
+    for (const bad of [undefined, null, 'str', 123, []]) {
+      const errs = specApprovalIntegrityErrors([{ gate: 'spec-approval', ticket: 'T1', data: bad }], 'T1');
+      assert.deepEqual(errs, ['P1 evidence is incomplete: spec-approval missing interrogation payload (data)']);
+    }
+  });
+
+  it('validates every interrogation field and file/hash/prerequisite invariant', (t) => {
+    const dir = tmp(t, 'gate-manifest-spec-');
+    const { specPath, hash } = makeSpec(dir);
+    const baseEntries = [slEntry('T1', specPath, hash), pmEntry('T1', specPath, hash)];
+
+    // verdict !== 'approved'
+    let errs = validateSpecApprovalRecord({ ticket: 'T1', data: validData(hash, { verdict: 'pending' }), files: [specPath], entries: baseEntries, cwd: dir });
+    assert.ok(errs.some((e) => e.includes('Gate 1')));
+
+    // approver missing / non-string / whitespace
+    for (const approver of [undefined, 42, '', '   ']) {
+      errs = validateSpecApprovalRecord({ ticket: 'T1', data: validData(hash, { approver }), files: [specPath], entries: baseEntries, cwd: dir });
+      assert.ok(errs.some((e) => e.includes('non-empty approver')));
+    }
+
+    // rounds & questions boundaries (0, negative, float, non-number fail; 1 passes)
+    for (const bad of [0, -1, 1.5, '1', undefined]) {
+      errs = validateSpecApprovalRecord({ ticket: 'T1', data: validData(hash, { rounds: bad }), files: [specPath], entries: baseEntries, cwd: dir });
+      assert.ok(errs.some((e) => e.includes('positive integer rounds')));
+      errs = validateSpecApprovalRecord({ ticket: 'T1', data: validData(hash, { questions: bad }), files: [specPath], entries: baseEntries, cwd: dir });
+      assert.ok(errs.some((e) => e.includes('positive integer questions')));
+    }
+
+    // sources missing / non-array / empty
+    for (const sources of [undefined, 'premortem', []]) {
+      errs = validateSpecApprovalRecord({ ticket: 'T1', data: validData(hash, { sources }), files: [specPath], entries: baseEntries, cwd: dir });
+      assert.ok(errs.some((e) => e.includes('at least one interrogation source')));
+    }
+    // sources with non-string or blank element
+    for (const sources of [[''], ['  '], ['premortem', 123]]) {
+      errs = validateSpecApprovalRecord({ ticket: 'T1', data: validData(hash, { sources }), files: [specPath], entries: baseEntries, cwd: dir });
+      assert.ok(errs.some((e) => e.includes('non-empty strings')));
+    }
+    // 1-char source string is valid
+    errs = validateSpecApprovalRecord({ ticket: 'T1', data: validData(hash, { sources: ['x'] }), files: specPath, entries: baseEntries, cwd: dir });
+    assert.deepEqual(errs, []);
+
+    // unresolved !== 0
+    for (const unresolved of [1, -1, undefined, '0']) {
+      errs = validateSpecApprovalRecord({ ticket: 'T1', data: validData(hash, { unresolved }), files: [specPath], entries: baseEntries, cwd: dir });
+      assert.ok(errs.some((e) => e.includes('unresolved === 0')));
+    }
+
+    // approved_assumptions optional array
+    errs = validateSpecApprovalRecord({ ticket: 'T1', data: validData(hash, { approved_assumptions: 'not-array' }), files: [specPath], entries: baseEntries, cwd: dir });
+    assert.ok(errs.some((e) => e.includes('approved_assumptions must be an array')));
+
+    // files count !== 1 (0 files or 2 files) -> only reports the single file binding error, not audit mismatch
+    errs = validateSpecApprovalRecord({ ticket: 'T1', data: validData(hash), files: [], entries: baseEntries, cwd: dir });
+    assert.deepEqual(errs, ['P1 evidence is incomplete: spec-approval must bind exactly one spec file via --files']);
+    const otherSpec = makeSpec(dir, 'other.md');
+    errs = validateSpecApprovalRecord({ ticket: 'T1', data: validData(hash), files: [specPath, otherSpec.specPath], entries: baseEntries, cwd: dir });
+    assert.deepEqual(errs, ['P1 evidence is incomplete: spec-approval must bind exactly one spec file via --files']);
+    errs = specApprovalIntegrityErrors([...baseEntries, { gate: 'spec-approval', ticket: 'T1', data: validData(hash) }], 'T1', dir);
+    assert.deepEqual(errs, ['P1 evidence is incomplete: spec-approval must bind exactly one spec file via --files']);
+
+    // spec_hash missing / non-string / empty / mismatched
+    for (const spec_hash of [undefined, 123, '']) {
+      errs = validateSpecApprovalRecord({ ticket: 'T1', data: validData(hash, { spec_hash }), files: [specPath], entries: baseEntries, cwd: dir });
+      assert.ok(errs.some((e) => e.includes('missing spec_hash')));
+    }
+    errs = validateSpecApprovalRecord({ ticket: 'T1', data: validData(hash, { spec_hash: 'wrong-hash' }), files: [specPath], entries: baseEntries, cwd: dir });
+    assert.ok(errs.some((e) => e.includes('spec_hash does not match')));
+
+    // stale or unreadable spec file on disk
+    const staleEntries = [...baseEntries, approvalEntry('T1', specPath, hash)];
+    writeFileSync(specPath, '# Spec modified after approval\n');
+    errs = specApprovalIntegrityErrors(staleEntries, 'T1', dir);
+    assert.ok(errs.some((e) => e.includes('spec file changed after approval was recorded')));
+
+    const missingPath = join(dir, 'nonexistent.md');
+    errs = specApprovalIntegrityErrors(
+      [slEntry('T1', missingPath, hash), pmEntry('T1', missingPath, hash), approvalEntry('T1', missingPath, hash)],
+      'T1',
+      dir,
+    );
+    assert.ok(errs.some((e) => e.includes('spec file cannot be read')));
+
+    // restore spec file for audit prerequisite checks
+    writeFileSync(specPath, '# Spec\n## Acceptance Criteria\n- ok: `true`\n');
+
+    // spec-lint ordering, ticket scoping, file binding, hash match, and verified:true
+    errs = specApprovalIntegrityErrors([pmEntry('T1', specPath, hash), approvalEntry('T1', specPath, hash), slEntry('T1', specPath, hash)], 'T1', dir);
+    assert.ok(errs.some((e) => e.includes('before the latest spec-lint')));
+
+    errs = specApprovalIntegrityErrors([slEntry('T2', specPath, hash), pmEntry('T1', specPath, hash), approvalEntry('T1', specPath, hash)], 'T1', dir);
+    assert.ok(errs.some((e) => e.includes('before the latest spec-lint')));
+
+    errs = specApprovalIntegrityErrors([{ gate: 'spec-lint', ticket: 'T1', data: { verified: true } }, pmEntry('T1', specPath, hash), approvalEntry('T1', specPath, hash)], 'T1', dir);
+    assert.ok(errs.some((e) => e.includes('spec-lint evidence for this ticket does not audit')));
+
+    errs = specApprovalIntegrityErrors([
+      { gate: 'spec-lint', ticket: 'T1', data: { verified: true }, files: { [specPath]: hash, [otherSpec.specPath]: otherSpec.hash } },
+      pmEntry('T1', specPath, hash),
+      approvalEntry('T1', specPath, hash),
+    ], 'T1', dir);
+    assert.ok(errs.some((e) => e.includes('spec-lint evidence for this ticket does not audit')));
+
+    errs = specApprovalIntegrityErrors([slEntry('T1', otherSpec.specPath, otherSpec.hash), pmEntry('T1', specPath, hash), approvalEntry('T1', specPath, hash)], 'T1', dir);
+    assert.ok(errs.some((e) => e.includes('spec-lint evidence for this ticket does not audit')));
+
+    errs = specApprovalIntegrityErrors([slEntry('T1', specPath, 'stale-hash'), pmEntry('T1', specPath, hash), approvalEntry('T1', specPath, hash)], 'T1', dir);
+    assert.ok(errs.some((e) => e.includes('spec-lint evidence for this ticket does not audit')));
+
+    for (const verified of [false, null]) {
+      errs = specApprovalIntegrityErrors([slEntry('T1', specPath, hash, verified), pmEntry('T1', specPath, hash), approvalEntry('T1', specPath, hash)], 'T1', dir);
+      assert.ok(errs.some((e) => e.includes('not a verified (passing) result')));
+    }
+
+    // premortem ordering, ticket scoping, file binding, and hash match
+    errs = specApprovalIntegrityErrors([slEntry('T1', specPath, hash), approvalEntry('T1', specPath, hash), pmEntry('T1', specPath, hash)], 'T1', dir);
+    assert.ok(errs.some((e) => e.includes('before the latest premortem')));
+
+    errs = specApprovalIntegrityErrors([slEntry('T1', specPath, hash), pmEntry('T2', specPath, hash), approvalEntry('T1', specPath, hash)], 'T1', dir);
+    assert.ok(errs.some((e) => e.includes('before the latest premortem')));
+
+    errs = specApprovalIntegrityErrors([slEntry('T1', specPath, hash), pmEntry('T1', otherSpec.specPath, otherSpec.hash), approvalEntry('T1', specPath, hash)], 'T1', dir);
+    assert.ok(errs.some((e) => e.includes('premortem evidence for this ticket does not analyze')));
+
+    errs = specApprovalIntegrityErrors([slEntry('T1', specPath, hash), pmEntry('T1', specPath, 'stale-hash'), approvalEntry('T1', specPath, hash)], 'T1', dir);
+    assert.ok(errs.some((e) => e.includes('premortem evidence for this ticket does not analyze')));
+
+    // relative vs absolute path resolution
+    errs = specApprovalIntegrityErrors([slEntry('T1', 'spec.md', hash), pmEntry('T1', 'spec.md', hash), approvalEntry('T1', specPath, hash)], 'T1', dir);
+    assert.deepEqual(errs, []);
+
+    // validateSpecApprovalRecord default args and shared identity with @adlc/runner
+    assert.ok(validateSpecApprovalRecord().length > 0);
+    assert.equal(specApprovalIntegrityErrors, runnerSpecApprovalIntegrityErrors);
+    assert.equal(validateSpecApprovalRecord, runnerValidateSpecApprovalRecord);
+  });
+
+  it('CLI: rejects invalid spec-approval without modifying the manifest, allows --force, and records valid approval (#1181)', (t) => {
+    const dir = tmp(t, 'gate-manifest-cli-spec-');
+    const bin = new URL('../bin/gate-manifest.mjs', import.meta.url).pathname;
+    const { specPath, hash } = makeSpec(dir);
+
+    // Usage string includes --force
+    const noVerb = spawnSync(process.execPath, [bin], { encoding: 'utf8' });
+    assert.equal(noVerb.status, 1);
+    assert.ok(noVerb.stderr.includes("verbs: record <gate-name> [--ticket id] [--data '{json}'] [--files a,b,c] [--force]"));
+
+    // Seed prerequisite spec-lint and premortem for T1 (and unrelated T2)
+    withKey(null, () => {
+      appendManifestEntry(slEntry('T1', specPath, hash), dir);
+      appendManifestEntry(pmEntry('T1', specPath, hash), dir);
+    });
+    const manifestPath = ledgerPath('manifest', dir);
+    const bytesBefore = readFileSync(manifestPath, 'utf8');
+
+    // 1. Empty sources -> exit 1, manifest bytes unchanged
+    const emptySources = spawnSync(
+      process.execPath,
+      [bin, 'record', 'spec-approval', '--ticket', 'T1', '--dir', dir, '--files', specPath, '--data', JSON.stringify(validData(hash, { sources: [] }))],
+      { encoding: 'utf8' },
+    );
+    assert.equal(emptySources.status, 1);
+    assert.match(emptySources.stderr, /at least one interrogation source/);
+    assert.equal(readFileSync(manifestPath, 'utf8'), bytesBefore, 'manifest bytes must remain unchanged after rejected spec-approval');
+
+    // 2. Wrong spec_hash -> exit 1, manifest bytes unchanged
+    const badHash = spawnSync(
+      process.execPath,
+      [bin, 'record', 'spec-approval', '--ticket', 'T1', '--dir', dir, '--files', specPath, '--data', JSON.stringify(validData(hash, { spec_hash: 'wrong-hash' }))],
+      { encoding: 'utf8' },
+    );
+    assert.equal(badHash.status, 1);
+    assert.match(badHash.stderr, /spec_hash does not match/);
+    assert.equal(readFileSync(manifestPath, 'utf8'), bytesBefore, 'manifest bytes must remain unchanged after wrong spec_hash');
+
+    // 3. Cross-ticket prerequisite mismatch (T2 has no spec-lint/premortem) -> exit 1, manifest bytes unchanged
+    const wrongTicket = spawnSync(
+      process.execPath,
+      [bin, 'record', 'spec-approval', '--ticket', 'T2', '--dir', dir, '--files', specPath, '--data', JSON.stringify(validData(hash))],
+      { encoding: 'utf8' },
+    );
+    assert.equal(wrongTicket.status, 1);
+    assert.match(wrongTicket.stderr, /before the latest spec-lint/);
+    assert.equal(readFileSync(manifestPath, 'utf8'), bytesBefore, 'manifest bytes must remain unchanged after cross-ticket rejection');
+
+    // 4. Valid spec-approval for T1 -> exit 0, appends entry
+    const validRes = spawnSync(
+      process.execPath,
+      [bin, 'record', 'spec-approval', '--ticket', 'T1', '--dir', dir, '--files', specPath, '--data', JSON.stringify(validData(hash))],
+      { encoding: 'utf8' },
+    );
+    assert.equal(validRes.status, 0, validRes.stderr);
+    const afterValid = readFileSync(manifestPath, 'utf8');
+    assert.notEqual(afterValid, bytesBefore);
+    assert.equal(afterValid.trim().split('\n').length, 3);
+
+    // 5. --force bypasses validation even with invalid payload -> exit 0, appends entry
+    const forced = spawnSync(
+      process.execPath,
+      [bin, 'record', 'spec-approval', '--ticket', 'T1', '--dir', dir, '--force', '--data', JSON.stringify({ verdict: 'rejected' })],
+      { encoding: 'utf8' },
+    );
+    assert.equal(forced.status, 0, forced.stderr);
+    assert.equal(readFileSync(manifestPath, 'utf8').trim().split('\n').length, 4);
   });
 });
