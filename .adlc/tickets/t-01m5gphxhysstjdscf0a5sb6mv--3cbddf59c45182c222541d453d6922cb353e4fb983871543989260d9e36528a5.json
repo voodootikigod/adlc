@@ -1,0 +1,15 @@
+{
+  "body": "## Problem\n`builderPrompt` in `packages/fleet/lib/charters.mjs` passes `ticket.body` through `fence(\"SPEC\", ticket.body ?? \"\", TICKET_SPEC_MAX_CHARS, { bias: \"head\" })`, silently truncating specs longer than 8000 characters and telling the builder the truncated text is its complete specification (#1033).\n\n## Solution\n1. Export `TICKET_SPEC_MAX_CHARS = 8000` from `packages/fleet/lib/charters.mjs`.\n2. In `builderPrompt(ticket, gate, { addendum = null } = {})`, check `const body = String(ticket?.body ?? \"\")` before fencing: if `body.length > TICKET_SPEC_MAX_CHARS`, throw an Error naming the ticket id, `body.length`, `TICKET_SPEC_MAX_CHARS` (`8000`), and the remedy (`split the ticket`).\n3. In `packages/fleet/bin/fleet.mjs` (`buildQuartermasterPlan`), catch errors thrown by `builderPrompt` during `--dry-run` (and validate selected active tickets in legacy dry-run) and call `refuseFlags(`fleet: ${e.message}`)` so `--dry-run` also fails closed with exit 1.\n\n## Acceptance Criteria\n- AC1: `builderPrompt` (and `fixPrompt`) succeeds when `ticket.body.length === TICKET_SPEC_MAX_CHARS` (`8000`) and throws an Error when `ticket.body.length > TICKET_SPEC_MAX_CHARS` (`8001`), naming the ticket id, body length, `8000` cap, and `split the ticket` remedy.\n- AC2: `runFleet` marks a ticket whose `builderPrompt` throws on an over-cap body as a `pipelineError` so `runExitCode` returns `1`.\n- AC3: `packages/fleet/test/charters.test.mjs` and `packages/fleet/test/exit-code.test.mjs` pass with 0 surviving mutants.",
+  "id": "T-01M5GPHXHYSSTJDSCF0A5SB6MV",
+  "rails": [
+    "packages/fleet/test/charters-addendum.test.mjs",
+    "packages/fleet/test/exit-code.test.mjs"
+  ],
+  "scope": [
+    "packages/fleet/lib/charters.mjs",
+    "packages/fleet/bin/fleet.mjs",
+    "packages/fleet/test/charters.test.mjs"
+  ],
+  "title": "fleet: fail closed when a ticket body exceeds TICKET_SPEC_MAX_CHARS (#1033)",
+  "verify": "node --test packages/fleet/test/charters.test.mjs packages/fleet/test/charters-addendum.test.mjs packages/fleet/test/exit-code.test.mjs"
+}

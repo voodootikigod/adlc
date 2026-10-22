@@ -322,6 +322,12 @@ async function buildQuartermasterPlan({ repo, dir, tickets, onlyIds, config }) {
       getAdapter(config.adapter ?? 'claude-code');
       // (b) --model is not silently dropped by an adapter that cannot carry it.
       assertAdapterCanForceModel({ adapter: config.adapter, model: config.model, adapterArgs: config.adapterArgs });
+      // (c) every selected incomplete ticket's spec fits within TICKET_SPEC_MAX_CHARS (#1033).
+      for (const ticket of tickets) {
+        if (ticket?.completed === true) continue;
+        if (onlyIds && !onlyIds.includes(ticket.id)) continue;
+        builderPrompt(ticket, config.gate);
+      }
     } catch (e) {
       refuseFlags(`fleet: ${e.message}`);
     }
@@ -343,7 +349,12 @@ async function buildQuartermasterPlan({ repo, dir, tickets, onlyIds, config }) {
     const entry = planned.seats.get(ticket.id);
     if (!entry) continue;
     const { job, route, seat } = entry;
-    const prompt = builderPrompt(ticket, config.gate);
+    let prompt;
+    try {
+      prompt = builderPrompt(ticket, config.gate);
+    } catch (e) {
+      refuseFlags(`fleet: ${e.message}`);
+    }
     const argv = await previewArgv({ seat, prompt });
     seats.push({
       id: ticket.id,
