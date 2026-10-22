@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 
 import { actionsFromSet, applyRun as applyRunAtRevision, revalidateAction } from '../lib/apply.mjs';
 import { contentHash } from '../lib/content-hash.mjs';
-import { REVIEW_APPROVE, REVIEW_NEEDS_ATTENTION } from '../lib/gate.mjs';
+import { buildActionArtifact, REVIEW_APPROVE, REVIEW_NEEDS_ATTENTION } from '../lib/gate.mjs';
 import { sealLedgerEntry } from '../lib/ledger-sig.mjs';
 
 // Every run acts at a commit its set was generated for. Tests that are not about
@@ -512,4 +512,64 @@ test('an area relabel may target the declared unit its verified locations sit in
     }
   );
   assert.equal(out.ok, true, out.reason);
+});
+
+test('revalidateAction returns verified issue context from the freshly fetched issue', () => {
+  const body = '**Location** `src/a.mjs:1`\n\n```\ngone\n```\n';
+  const out = revalidateAction(
+    { number: 705, action: 'close', contentHash: HASH[705], updatedAt: 'u705', verdict: 'fixed' },
+    {
+      fetchIssue: () => ({
+        number: 705,
+        title: 'Stale snippet in src/a.mjs',
+        body,
+        labels: [{ name: 'bug' }, 'area:core', null],
+        updatedAt: 'u705',
+      }),
+      profile: { frozenPaths: [] },
+      io: IO,
+    }
+  );
+  assert.equal(out.ok, true);
+  assert.equal(out.title, 'Stale snippet in src/a.mjs');
+  assert.equal(out.body, body);
+  assert.deepEqual(out.labels, ['bug', 'area:core']);
+  assert.deepEqual(out.verifiedPaths, ['src/a.mjs']);
+});
+
+test('applyRun threads verified issue context into the review artifact so a context-checking reviewer approves', () => {
+  const gh = fakeGh();
+  let seenArtifact = '';
+  const out = applyRun({
+    key: TEST_KEY,
+    set: set({
+      issues: [
+        { number: 705, verdict: 'fixed', contentHash: HASH[705], evidence: 'the cited line is gone', updatedAt: 'u705', frozen: false, labels: [], units: [] },
+      ],
+    }),
+    profile: profile(),
+    basePolicy: profile(),
+    baseFloor: [],
+    ledger: {},
+    fetchIssue: (n) => ({
+      number: n,
+      title: 'Remove obsolete helper in src/a.mjs',
+      body: BODIES[n],
+      labels: [{ name: 'P2-medium' }, { name: 'area:review' }],
+      updatedAt: `u${n}`,
+    }),
+    io: IO,
+    runReview: (action) => {
+      seenArtifact = buildActionArtifact(action);
+      const hasContext =
+        seenArtifact.includes('- title: Remove obsolete helper in src/a.mjs') &&
+        seenArtifact.includes('- current labels: P2-medium, area:review') &&
+        seenArtifact.includes('- verified paths: src/a.mjs') &&
+        seenArtifact.includes('## Issue body\n**Location** `src/a.mjs:1`');
+      return { code: hasContext ? REVIEW_APPROVE : REVIEW_NEEDS_ATTENTION };
+    },
+    gh,
+  });
+  assert.equal(out.executed.length, 1);
+  assert.deepEqual(gh.calls.map((c) => c[0]), ['comment', 'apply']);
 });

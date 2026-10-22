@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 
 import {
   MIN_CONFIDENCE,
+  MAX_ARTIFACT_BODY_CHARS,
   makeReviewRunner,
   REVIEW_APPROVE,
   REVIEW_NEEDS_ATTENTION,
@@ -367,4 +368,45 @@ test('an approval for one relabel field does not license another', () => {
   const a = { number: 7, action: 'relabel', field: 'priority', contentHash: 'h' };
   const approvedPriority = { [gateKey(a)]: { verdict: 'approve', contentHash: 'h', number: 7, action: 'relabel', field: 'priority' } };
   assert.equal(ledgerApproves(approvedPriority, { number: 7, action: 'relabel', field: 'area', contentHash: 'h' }, TEST_KEY), false);
+});
+
+test('buildActionArtifact includes issue title, current labels, verified paths, and issue body when present', () => {
+  const art = buildActionArtifact(
+    action({
+      title: 'Fix stale snippet check',
+      labels: [{ name: 'P2-medium' }, 'area:review', null, ''],
+      verifiedPaths: ['src/a.mjs', 'src/b.mjs', ''],
+      body: '  **Location** `src/a.mjs:1`\n\nThe snippet was removed.  ',
+    })
+  );
+  assert.match(art, /^- title: Fix stale snippet check$/m);
+  assert.match(art, /^- current labels: P2-medium, area:review$/m);
+  assert.match(art, /^- verified paths: src\/a\.mjs, src\/b\.mjs$/m);
+  assert.match(art, /## Issue body\n\*\*Location\*\* `src\/a\.mjs:1`\n\nThe snippet was removed\./);
+});
+
+test('buildActionArtifact truncates issue body only when it exceeds MAX_ARTIFACT_BODY_CHARS', () => {
+  assert.equal(MAX_ARTIFACT_BODY_CHARS, 4000);
+  const exactBody = 'a' + 'x'.repeat(MAX_ARTIFACT_BODY_CHARS - 1);
+  const exactArt = buildActionArtifact(action({ body: exactBody }));
+  assert.ok(exactArt.includes(`## Issue body\n${exactBody}\n## Evidence`));
+  assert.ok(!exactArt.includes('...(truncated)'));
+
+  const overBody = 'a' + 'x'.repeat(MAX_ARTIFACT_BODY_CHARS - 1) + 'z';
+  const overArt = buildActionArtifact(action({ body: overBody }));
+  assert.ok(overArt.includes(`## Issue body\n${exactBody}\n...(truncated)\n## Evidence`));
+});
+
+test('artifactDigest binds to title, labels, verifiedPaths, and body', () => {
+  const base = action({
+    title: 'Original title',
+    labels: ['P2-medium'],
+    verifiedPaths: ['src/a.mjs'],
+    body: 'Original body text',
+  });
+  const baseDigest = artifactDigest(base);
+  assert.notEqual(artifactDigest({ ...base, title: 'Changed title' }), baseDigest);
+  assert.notEqual(artifactDigest({ ...base, labels: ['P1-high'] }), baseDigest);
+  assert.notEqual(artifactDigest({ ...base, verifiedPaths: ['src/b.mjs'] }), baseDigest);
+  assert.notEqual(artifactDigest({ ...base, body: 'Changed body text' }), baseDigest);
 });

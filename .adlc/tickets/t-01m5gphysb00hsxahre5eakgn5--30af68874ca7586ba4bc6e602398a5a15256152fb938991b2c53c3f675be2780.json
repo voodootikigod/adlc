@@ -1,0 +1,17 @@
+{
+  "body": "## Problem\n`buildActionArtifact` in `packages/backlog-groom/lib/gate.mjs` omits the issue title, current labels, issue body, and verified paths, so an independent adversarial reviewer has no issue context to verify and demotes every action (#1061).\n\n## Solution\n1. Export `MAX_ARTIFACT_BODY_CHARS = 4000` from `packages/backlog-groom/lib/gate.mjs` and update `buildActionArtifact(action)` so that when `action.title`, `action.labels` (non-empty), `action.verifiedPaths` (non-empty), or `action.body` (non-empty, truncated at `MAX_ARTIFACT_BODY_CHARS` with `\\n...(truncated)`) are present on `action`, they are rendered in the artifact while preserving byte-for-byte identical output when those optional fields are absent.\n2. In `packages/backlog-groom/lib/apply.mjs`, have `revalidateAction` return `title`, `body`, `labels`, and `verifiedPaths` from the freshly fetched `issue` and `recomputed` verification result on `{ ok: true, ... }`, and enrich each `revalidated` action in `applyRun` with those fields before `gateAction` and `executeActions`.\n\n## Acceptance Criteria\n- AC1: `buildActionArtifact` includes `- title:`, `- current labels:`, `- verified paths:`, and `## Issue body` (truncated at `MAX_ARTIFACT_BODY_CHARS`) when present on `action`, and preserves exact golden output when absent.\n- AC2: `revalidateAction` returns the verified `title`, `body`, `labels`, and `verifiedPaths`, and `applyRun` threads them onto each revalidated action so `runReview`, `gateAction`, and `executeActions` all bind to the enriched artifact digest.\n- AC3: All tests in `packages/backlog-groom/test/` pass with 0 surviving mutants.",
+  "id": "T-01M5GPHYSB00HSXAHRE5EAKGN5",
+  "rails": [
+    "packages/backlog-groom/test/tidy-contract.test.mjs",
+    "packages/backlog-groom/test/apply-authority.test.mjs",
+    "packages/backlog-groom/test/apply-e2e.test.mjs"
+  ],
+  "scope": [
+    "packages/backlog-groom/lib/gate.mjs",
+    "packages/backlog-groom/lib/apply.mjs",
+    "packages/backlog-groom/test/gate.test.mjs",
+    "packages/backlog-groom/test/apply.test.mjs"
+  ],
+  "title": "backlog-groom: include issue context in review artifacts so --apply can verify actions (#1061)",
+  "verify": "node --test packages/backlog-groom/test/gate.test.mjs packages/backlog-groom/test/apply.test.mjs packages/backlog-groom/test/tidy-contract.test.mjs packages/backlog-groom/test/apply-authority.test.mjs packages/backlog-groom/test/apply-e2e.test.mjs"
+}

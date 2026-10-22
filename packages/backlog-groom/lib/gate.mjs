@@ -38,6 +38,9 @@ export const REVIEW_NEEDS_ATTENTION = 2;
  */
 export const MIN_CONFIDENCE = 0.3;
 
+/** Maximum issue body characters included in one review artifact. */
+export const MAX_ARTIFACT_BODY_CHARS = 4000;
+
 /**
  * Resolve the decider/reviewer pair, or say why there isn't one.
  *
@@ -319,14 +322,24 @@ export function artifactName(action) {
  * against `(issue, contentHash)` describes the same thing the reviewer read.
  */
 export function buildActionArtifact(action) {
+  const labels = (action.labels ?? []).map((l) => l?.name ?? l).filter(Boolean);
+  const verifiedPaths = (action.verifiedPaths ?? []).filter(Boolean);
+  const rawBody = String(action.body ?? '').trim();
+  const bodyText = rawBody.length > MAX_ARTIFACT_BODY_CHARS
+    ? `${rawBody.slice(0, MAX_ARTIFACT_BODY_CHARS)}\n...(truncated)`
+    : rawBody;
   return [
     `# Proposed ${action.action} — issue #${action.number}`,
     `- issue: #${action.number}`,
+    action.title ? `- title: ${action.title}` : '',
+    labels.length ? `- current labels: ${labels.join(', ')}` : '',
     `- action: ${action.action}`,
     `- revision (contentHash): ${action.contentHash}`,
     action.field ? `- field: ${action.field}` : '',
     action.from ? `- from: ${action.from}` : '',
     action.to ? `- to: ${action.to}` : '',
+    verifiedPaths.length ? `- verified paths: ${verifiedPaths.join(', ')}` : '',
+    bodyText ? `## Issue body\n${bodyText}` : '',
     '## Evidence',
     typeof action.evidence === 'string' ? action.evidence : JSON.stringify(action.evidence ?? null, null, 2),
     '## What is being asked',

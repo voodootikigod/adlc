@@ -163,7 +163,13 @@ export function revalidateAction(action, { fetchIssue, profile, io = {} } = {}) 
     return { ok: false, reason: `a close needs a re-verified 'fixed' verdict; issue #${action.number} re-verifies as ${recomputed.verdict}` };
   }
 
-  return { ok: true };
+  return {
+    ok: true,
+    title: issue.title ?? '',
+    body: issue.body ?? '',
+    labels: (issue.labels ?? []).map((l) => l?.name ?? l).filter(Boolean),
+    verifiedPaths: recomputed.verifiedPaths ?? [],
+  };
 }
 
 /** The two relabel triggers §3.4a defines; nothing else produces a relabel. */
@@ -315,8 +321,17 @@ export function applyRun({ set, profile, baseFloor, basePolicy, ledger = {}, run
     // set was accepted against, or a checkout moving HEAD mid-run has every later
     // action validated against a different tree than the first.
     const check = revalidateAction(action, { fetchIssue, profile, io: pinnedIo });
-    if (check.ok) revalidated.push(action);
-    else stale.push({ number: action.number, action: action.action, reason: check.reason });
+    if (check.ok) {
+      revalidated.push({
+        ...action,
+        title: check.title,
+        labels: check.labels,
+        body: check.body,
+        verifiedPaths: check.verifiedPaths,
+      });
+    } else {
+      stale.push({ number: action.number, action: action.action, reason: check.reason });
+    }
   }
 
   const gated = revalidated.map((action) => {
