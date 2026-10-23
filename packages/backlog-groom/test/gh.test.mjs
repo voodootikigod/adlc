@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { makeGhWriter, issueSelector } from '../lib/gh.mjs';
+import { makeGhWriter, issueSelector, repoSelector, parseRemoteRepo, verifyRepoEnv } from '../lib/gh.mjs';
 
 const ok = (stdout = '') => ({ status: 0, stdout });
 
@@ -154,4 +154,133 @@ test('issue #1 is a real issue number and is accepted', () => {
   // backlog — which is exactly where a grooming sweep starts.
   assert.equal(issueSelector(1), '1');
   assert.throws(() => issueSelector(0), /positive integer/);
+});
+
+// ---- repoSelector + parseRemoteRepo + verifyRepoEnv (#1037) ----------------
+
+test('repoSelector accepts owner/repo and host/owner/repo and rejects malformed or flag-like values', () => {
+  assert.equal(repoSelector('voodootikigod/adlc'), 'voodootikigod/adlc');
+  assert.equal(repoSelector('owner_1/repo.name-2'), 'owner_1/repo.name-2');
+  assert.equal(repoSelector('github.com/voodootikigod/adlc'), 'github.com/voodootikigod/adlc');
+  for (const bad of [
+    '',
+    'onlyone',
+    'a/b/c/d',
+    '-flag/repo',
+    'owner/-repo',
+    '-host.com/owner/repo',
+    './repo',
+    'owner/.',
+    '../repo',
+    'owner/..',
+    'host.com/../repo',
+    'owner/repo --repo evil/one',
+    null,
+    undefined,
+    123,
+  ]) {
+    assert.throws(() => repoSelector(bad), /repo selector must be "\[host\/\]owner\/repo"/, `${JSON.stringify(bad)} must be rejected`);
+  }
+});
+
+test('parseRemoteRepo extracts host and owner/repo from SSH, ssh://, and HTTPS remotes and returns null otherwise', () => {
+  assert.deepEqual(parseRemoteRepo('git@github.com:voodootikigod/adlc.git'), {
+    host: 'github.com',
+    repo: 'voodootikigod/adlc',
+  });
+  assert.deepEqual(parseRemoteRepo('github.com:owner/repo'), {
+    host: 'github.com',
+    repo: 'owner/repo',
+  });
+  assert.deepEqual(parseRemoteRepo('ssh://git@GitHub.COM:2222/Owner/Repo.git/'), {
+    host: 'github.com',
+    repo: 'Owner/Repo',
+  });
+  assert.deepEqual(parseRemoteRepo('  https://GitHub.COM/Owner/Repo.git///  '), {
+    host: 'github.com',
+    repo: 'Owner/Repo',
+  });
+  for (const localOrBad of ['', '   ', '/tmp/remote.git', './remote.git', 'file:///tmp/r.git', 'https://github.com/-bad/repo.git', 'https://github.com/owner/..', null, undefined, 42]) {
+    assert.equal(parseRemoteRepo(localOrBad), null, `${JSON.stringify(localOrBad)} must return null`);
+  }
+});
+
+test('verifyRepoEnv binds GH_REPO and GH_HOST to the checkout origin', () => {
+  assert.deepEqual(verifyRepoEnv(), { ok: true, repo: null, host: null, error: null });
+  assert.deepEqual(verifyRepoEnv({ originUrl: '/tmp/local.git', env: {} }), { ok: true, repo: null, host: null, error: null });
+
+  const originUrl = 'https://github.com/voodootikigod/adlc.git';
+  assert.deepEqual(verifyRepoEnv({ originUrl, env: {} }), {
+    ok: true,
+    repo: 'voodootikigod/adlc',
+    host: 'github.com',
+    error: null,
+  });
+
+  assert.deepEqual(verifyRepoEnv({ originUrl, env: { GH_REPO: '  VoodooTikiGod/ADLC  ', GH_HOST: '  GitHub.COM ' } }), {
+    ok: true,
+    repo: 'voodootikigod/adlc',
+    host: 'github.com',
+    error: null,
+  });
+
+  assert.deepEqual(verifyRepoEnv({ originUrl, env: { GH_REPO: 'GitHub.COM/VoodooTikiGod/ADLC' } }), {
+    ok: true,
+    repo: 'voodootikigod/adlc',
+    host: 'github.com',
+    error: null,
+  });
+
+  const badRepo = verifyRepoEnv({ originUrl, env: { GH_REPO: 'other/repo' } });
+  assert.equal(badRepo.ok, false);
+  assert.equal(badRepo.repo, null);
+  assert.equal(badRepo.host, null);
+  assert.equal(badRepo.error, 'GH_REPO=other/repo disagrees with checkout origin (github.com/voodootikigod/adlc)');
+
+  const badRepoHost = verifyRepoEnv({ originUrl, env: { GH_REPO: 'evil.example/voodootikigod/adlc' } });
+  assert.equal(badRepoHost.ok, false);
+  assert.equal(badRepoHost.error, 'GH_REPO=evil.example/voodootikigod/adlc disagrees with checkout origin (github.com/voodootikigod/adlc)');
+
+  const badRepoNoOrigin = verifyRepoEnv({ originUrl: '/tmp/local.git', env: { GH_REPO: 'voodootikigod/adlc' } });
+  assert.equal(badRepoNoOrigin.ok, false);
+  assert.equal(badRepoNoOrigin.error, 'GH_REPO=voodootikigod/adlc disagrees with checkout origin (no forge remote)');
+
+  const badHost = verifyRepoEnv({ originUrl, env: { GH_HOST: 'evil.example' } });
+  assert.equal(badHost.ok, false);
+  assert.equal(badHost.repo, null);
+  assert.equal(badHost.host, null);
+  assert.equal(badHost.error, 'GH_HOST=evil.example disagrees with checkout origin (github.com)');
+
+  const badHostNoOrigin = verifyRepoEnv({ originUrl: '/tmp/local.git', env: { GH_HOST: 'github.com' } });
+  assert.equal(badHostNoOrigin.ok, false);
+  assert.equal(badHostNoOrigin.error, 'GH_HOST=github.com disagrees with checkout origin (no forge remote)');
+});
+
+test('makeGhWriter with repo pins --repo on every issue read and write, leaves api user alone, and validates repo at construction', () => {
+  assert.throws(() => makeGhWriter({ spawn: () => ok(), repo: "-bad/repo" }), /repo selector must be/);
+  const calls = [];
+  const gh = makeGhWriter({
+    repo: 'owner/name',
+    spawn: (cmd, args) => {
+      calls.push(args);
+      if (args[0] === 'api') return ok('{"login":"me"}');
+      if (args.includes('comments')) return ok('{"comments":[]}');
+      if (args.includes('view')) return ok('{"number":7,"labels":[]}');
+      return ok('ok');
+    },
+  });
+  gh.issue(7);
+  gh.login();
+  gh.comments(7);
+  gh.comment(7, 'evidence');
+  gh.apply(7, 'close');
+  gh.apply(7, 'relabel', { from: 'a', to: 'b' });
+  assert.deepEqual(calls, [
+    ['issue', 'view', '7', '--json', 'number,title,body,labels,updatedAt', '--repo', 'owner/name'],
+    ['api', 'user'],
+    ['issue', 'view', '7', '--json', 'comments', '--repo', 'owner/name'],
+    ['issue', 'comment', '7', '--body-file', '-', '--repo', 'owner/name'],
+    ['issue', 'close', '7', '--repo', 'owner/name'],
+    ['issue', 'edit', '7', '--remove-label', 'a', '--add-label', 'b', '--repo', 'owner/name'],
+  ]);
 });

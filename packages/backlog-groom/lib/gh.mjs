@@ -27,6 +27,74 @@ export function issueSelector(number) {
   return String(number);
 }
 
+const REPO_SELECTOR_RE = /^(?:[A-Za-z0-9.-]+\/)?[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+function validRepoSegment(segment) {
+  return Boolean(segment) && !segment.startsWith("-") && segment !== "." && segment !== "..";
+}
+
+export function repoSelector(repo) {
+  if (
+    typeof repo !== "string" ||
+    !REPO_SELECTOR_RE.test(repo) ||
+    !repo.split("/").every(validRepoSegment)
+  ) {
+    throw new Error(`backlog-groom: repo selector must be "[host/]owner/repo", got ${JSON.stringify(repo)}`);
+  }
+  return repo;
+}
+
+const REMOTE_URL_RE = /^(?:(?:https?|ssh):\/\/(?:[^@\/\s]+@)?([A-Za-z0-9.-]+)(?::\d+)?\/|(?:[^@\/\s]+@)?([A-Za-z0-9.-]+):)([^/\s]+)\/([^/\s]+)$/;
+
+export function parseRemoteRepo(originUrl) {
+  if (typeof originUrl !== "string") return null;
+  const cleaned = originUrl.trim().replace(/\/+$/, "").replace(/\.git$/i, "");
+  const m = REMOTE_URL_RE.exec(cleaned);
+  if (!m) return null;
+  const host = (m[1] || m[2]).toLowerCase();
+  const repo = `${m[3]}/${m[4]}`;
+  try {
+    repoSelector(`${host}/${repo}`);
+  } catch {
+    return null;
+  }
+  return { host, repo };
+}
+
+export function verifyRepoEnv({ originUrl, env = {} } = {}) {
+  const origin = parseRemoteRepo(originUrl);
+  const ghRepo = typeof env?.GH_REPO === "string" ? env.GH_REPO.trim() : "";
+  const ghHost = typeof env?.GH_HOST === "string" ? env.GH_HOST.trim().toLowerCase() : "";
+  if (ghHost && (!origin || origin.host !== ghHost)) {
+    return {
+      ok: false,
+      repo: null,
+      host: null,
+      error: `GH_HOST=${env.GH_HOST} disagrees with checkout origin (${origin ? origin.host : "no forge remote"})`,
+    };
+  }
+  if (ghRepo) {
+    const lower = ghRepo.toLowerCase();
+    const matchesOrigin =
+      origin !== null &&
+      (lower === origin.repo.toLowerCase() || lower === `${origin.host}/${origin.repo}`.toLowerCase());
+    if (!matchesOrigin) {
+      return {
+        ok: false,
+        repo: null,
+        host: null,
+        error: `GH_REPO=${env.GH_REPO} disagrees with checkout origin (${origin ? `${origin.host}/${origin.repo}` : "no forge remote"})`,
+      };
+    }
+  }
+  return {
+    ok: true,
+    repo: origin ? origin.repo : null,
+    host: origin ? origin.host : null,
+    error: null,
+  };
+}
+
 /**
  * How long one `gh` call may take.
  *
@@ -46,7 +114,9 @@ function ghFailure(res, args) {
  * @param {{spawn: Function}} io
  * @returns {{comments: Function, comment: Function, apply: Function}}
  */
-export function makeGhWriter({ spawn } = {}) {
+export function makeGhWriter({ spawn, repo = null } = {}) {
+  const targetRepo = repo === null || repo === undefined ? null : repoSelector(repo);
+  const withRepo = (args) => (targetRepo ? [...args, "--repo", targetRepo] : args);
   const gh = (args, input) => {
     const res = spawn('gh', args, { encoding: 'utf8', input, maxBuffer: 32 * 1024 * 1024, timeout: GH_TIMEOUT_MS, killSignal: 'SIGKILL' });
     // A non-zero status AND a spawn error are both failures. `||` rather than
@@ -61,14 +131,14 @@ export function makeGhWriter({ spawn } = {}) {
   return {
     /** The issue as it is NOW — body and labels included, for re-validation. */
     issue: (number) => {
-      const raw = gh(['issue', 'view', issueSelector(number), '--json', 'number,title,body,labels,updatedAt']);
+      const raw = gh(withRepo(['issue', 'view', issueSelector(number), '--json', 'number,title,body,labels,updatedAt']));
       const parsed = JSON.parse(raw);
       return { ...parsed, labels: (parsed.labels ?? []).map((l) => l.name ?? l) };
     },
     /** The authenticated login, so a comment can be attributed. */
     login: () => JSON.parse(gh(['api', 'user'])).login,
     comments: (number) => {
-      const raw = gh(['issue', 'view', issueSelector(number), '--json', 'comments']);
+      const raw = gh(withRepo(['issue', 'view', issueSelector(number), '--json', 'comments']));
       let parsed;
       try {
         parsed = JSON.parse(raw);
@@ -85,9 +155,9 @@ export function makeGhWriter({ spawn } = {}) {
       // trail exists to inform.
       return (parsed.comments ?? []).map((c) => ({ body: c.body ?? '', author: c.author?.login ?? c.author ?? null }));
     },
-    comment: (number, body) => gh(['issue', 'comment', issueSelector(number), '--body-file', '-'], body),
+    comment: (number, body) => gh(withRepo(['issue', 'comment', issueSelector(number), '--body-file', '-']), body),
     apply: (number, action, detail = {}) => {
-      if (action === 'close') return gh(['issue', 'close', issueSelector(number)]);
+      if (action === 'close') return gh(withRepo(['issue', 'close', issueSelector(number)]));
       if (action === 'relabel') {
         // Remove then add, both in one gh call: two calls could leave the issue
         // with neither label if the second failed, and the comment has already
@@ -96,7 +166,7 @@ export function makeGhWriter({ spawn } = {}) {
         if (detail.from) args.push('--remove-label', detail.from);
         if (detail.to) args.push('--add-label', detail.to);
         if (args.length === 3) throw new Error(`relabel for issue ${number} names neither a from nor a to label`);
-        return gh(args);
+        return gh(withRepo(args));
       }
       throw new Error(`no writer wired for action ${action} — refusing rather than reporting a write that did not happen`);
     },

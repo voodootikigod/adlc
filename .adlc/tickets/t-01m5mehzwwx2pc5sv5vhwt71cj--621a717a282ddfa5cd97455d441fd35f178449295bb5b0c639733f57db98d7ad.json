@@ -1,0 +1,20 @@
+{
+  "body": "Issue #1037: makeGhWriter in packages/backlog-groom/lib/gh.mjs invokes gh issue view|comment|close|edit without --repo.\nAcceptance Criteria:\n1. Add parseRemoteRepo and verifyRepoEnv in packages/backlog-groom/lib/gh.mjs to extract origin host and owner/repo slug and reject mismatched GH_REPO or GH_HOST.\n2. Update makeGhWriter in packages/backlog-groom/lib/gh.mjs to validate repo when supplied and pass --repo on every issue call.\n3. Wire origin repo verification and GH_REPO/GH_HOST scrubbing into --apply in packages/backlog-groom/bin/backlog-groom.mjs.\n4. Add unit and e2e tests in packages/backlog-groom/test/gh.test.mjs and packages/backlog-groom/test/apply-e2e.test.mjs.\nVerify: node --test packages/backlog-groom/test/gh.test.mjs packages/backlog-groom/test/apply-e2e.test.mjs",
+  "category": "bug",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M5MEHZWWX2PC5SV5VHWT71CJ",
+  "rails": [
+    "packages/backlog-groom/test/apply-authority.test.mjs",
+    "packages/backlog-groom/test/write-boundary.test.mjs",
+    "packages/backlog-groom/test/spawn-bounds.test.mjs"
+  ],
+  "risk": "high",
+  "scope": [
+    "packages/backlog-groom/lib/gh.mjs",
+    "packages/backlog-groom/bin/backlog-groom.mjs",
+    "packages/backlog-groom/test/gh.test.mjs",
+    "packages/backlog-groom/test/apply-e2e.test.mjs"
+  ],
+  "title": "backlog-groom: bind gh target to verified checkout and reject mismatched GH_REPO/GH_HOST (#1037)"
+}

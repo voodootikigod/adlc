@@ -630,3 +630,51 @@ test('no child process can read the signing key', (t) => {
   // And the run still worked, so the stripping did not simply break the children.
   assert.ok(ghWrites(box).some((c) => c.startsWith('issue close')));
 });
+
+test('GH_REPO or GH_HOST disagreeing with checkout origin is refused before any gh write, and a forge origin pins --repo and scrubs GH_REPO/GH_HOST (#1037)', (t) => {
+  const box = sandbox(t, {
+    reviewExit: 0,
+    profile: { schemaVersion: 1, autonomyFloor: [], providers: { decider: 'anthropic', reviewer: 'openai' } },
+  });
+  const p = setFile(box);
+
+  const badRepo = run(['--apply', '--set', p], box, { env: { GH_REPO: 'other/owner' } });
+  assert.equal(badRepo.status, 1);
+  assert.match(badRepo.stderr, /GH_REPO=other\/owner disagrees with checkout origin/);
+  assert.deepEqual(ghWrites(box), []);
+  assert.deepEqual(artifactDirs(box), []);
+
+  const badHost = run(['--apply', '--set', p], box, { env: { GH_HOST: 'evil.example' } });
+  assert.equal(badHost.status, 1);
+  assert.match(badHost.stderr, /GH_HOST=evil\.example disagrees with checkout origin/);
+  assert.deepEqual(ghWrites(box), []);
+  assert.deepEqual(artifactDirs(box), []);
+
+  // When git remote get-url origin reports a forge URL, matching GH_REPO/GH_HOST
+  // are accepted, scrubbed from child env, and every gh write is pinned with --repo.
+  const gitShim = readFileSync(join(box.bin, "git"), "utf8");
+  writeFileSync(
+    join(box.bin, "git"),
+    gitShim.replace(
+      "#!/bin/sh\n",
+      "#!/bin/sh\nif [ \"$1\" = \"remote\" ] && [ \"$2\" = \"get-url\" ] && [ \"$3\" = \"origin\" ]; then echo https://github.com/acme/widgets.git; exit 0; fi\n",
+    ),
+  );
+  const ghShim = readFileSync(join(box.bin, "gh"), "utf8");
+  writeFileSync(
+    join(box.bin, "gh"),
+    ghShim.replace(
+      "cat > /dev/null\n",
+      `cat > /dev/null\necho "ghenv:\${GH_REPO:-unset}:\${GH_HOST:-unset}" >> ${join(box.dir, "ghenv.log")}\n`,
+    ),
+  );
+  const okRun = run(['--apply', '--set', p], box, { env: { GH_REPO: 'acme/widgets', GH_HOST: 'github.com' } });
+  assert.equal(okRun.status, 0, okRun.stderr);
+  const writes = ghWrites(box);
+  assert.ok(writes.length >= 2, `expected comment + close writes, got ${JSON.stringify(writes)}`);
+  for (const w of writes) {
+    assert.match(w, /--repo acme\/widgets$/, `every write must pin --repo acme/widgets, got: ${w}`);
+  }
+  const ghenv = readFileSync(join(box.dir, "ghenv.log"), "utf8").trim().split("\n");
+  assert.deepEqual([...new Set(ghenv)], ["ghenv:unset:unset"], "GH_REPO and GH_HOST must be scrubbed before spawning gh");
+});

@@ -23,7 +23,7 @@ import { renderReport } from '../lib/report.mjs';
 import { renderUsage, parseOptions, validateThreshold, validateApplyArgs, describeError } from '../lib/usage.mjs';
 import { loadProfile, loadCache, saveCache, serialiseJson, baseProfileFromGit, loadLedger, saveLedger, acquireApplyLock } from '../lib/io.mjs';
 import { applyRun } from '../lib/apply.mjs';
-import { makeGhWriter } from '../lib/gh.mjs';
+import { makeGhWriter, verifyRepoEnv } from '../lib/gh.mjs';
 import { makeReviewRunner, reviewerPair, buildActionArtifact, artifactName } from '../lib/gate.mjs';
 
 /**
@@ -190,7 +190,17 @@ if (values.apply) {
       reviewer: pair.reviewer,
     })();
 
-  const ghIo = makeGhWriter({ spawn: spawnSync });
+  const originRes = spawnSync('git', ['remote', 'get-url', 'origin'], { encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL' });
+  const originUrl = originRes.status === 0 ? originRes.stdout.trim() : '';
+  const repoCheck = verifyRepoEnv({ originUrl, env: process.env });
+  delete process.env.GH_REPO;
+  delete process.env.GH_HOST;
+  if (!repoCheck.ok) {
+    cleanup();
+    opError(repoCheck.error);
+  }
+
+  const ghIo = makeGhWriter({ spawn: spawnSync, repo: repoCheck.repo });
 
   let applied;
   try {
