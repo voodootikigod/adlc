@@ -1,0 +1,19 @@
+{
+  "body": "Issue #893: gate-manifest record <gate> --ticket <id> succeeds against a malformed store or an unknown ticket id.\nAcceptance Criteria:\n1. Add packages/gate-manifest/lib/ticket-check.mjs exporting nearMissIds and validateRecordTicket and wire it into packages/gate-manifest/bin/gate-manifest.mjs on record.\n2. When a ticket store is present in <dir> and fails to load, exit 1 quoting the loader error without modifying the manifest.\n3. When a ticket store is present in <dir>, --ticket <id> is supplied, and <id> is not in the store, exit 2 listing near-miss ids and pointing to --allow-unknown-ticket; with --allow-unknown-ticket, record as normal (exit 0).\n4. When no ticket store is present in <dir>, record --ticket <id> behaves as today (exit 0).\n5. Add unit and CLI tests in packages/gate-manifest/test/gate-manifest.test.mjs.\nVerify: node --test packages/gate-manifest/test/gate-manifest.test.mjs packages/gate-manifest/test/ticket-completion-reminder.test.mjs",
+  "category": "feature",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M5MEJ5WFRFCN5FYVWM8BJMF7",
+  "rails": [
+    "packages/gate-manifest/lib/record.mjs",
+    "packages/gate-manifest/test/ticket-completion-reminder.test.mjs",
+    "packages/gate-manifest/test/usage-roundtrip.test.mjs"
+  ],
+  "risk": "high",
+  "scope": [
+    "packages/gate-manifest/lib/ticket-check.mjs",
+    "packages/gate-manifest/bin/gate-manifest.mjs",
+    "packages/gate-manifest/test/gate-manifest.test.mjs"
+  ],
+  "title": "gate-manifest: validate --ticket against the ticket store on record with --allow-unknown-ticket escape (#893)"
+}

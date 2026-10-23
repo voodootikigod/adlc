@@ -15,6 +15,7 @@ import { buildAttest } from '../lib/attest.mjs';
 import { canonicalEntryBytes, KEY_ENV, signEntry, verifyEntrySig } from '../lib/sign.mjs';
 import { repairChain as realRepairChain } from '../lib/repair.mjs';
 import { specApprovalIntegrityErrors, validateSpecApprovalRecord } from '../index.mjs';
+import { editDistance, nearMissIds, validateRecordTicket } from '../lib/ticket-check.mjs';
 import { specApprovalIntegrityErrors as runnerSpecApprovalIntegrityErrors, validateSpecApprovalRecord as runnerValidateSpecApprovalRecord } from '../../runner/lib/assertions.mjs';
 import { sha256, ledgerPath } from '../../core/index.mjs';
 
@@ -1324,5 +1325,139 @@ describe('spec-approval validation (#1181)', () => {
     );
     assert.equal(forced.status, 0, forced.stderr);
     assert.equal(readFileSync(manifestPath, 'utf8').trim().split('\n').length, 4);
+  });
+});
+
+
+// ── ticket validation on record (#893) ───────────────────────────────────────
+
+describe('ticket-check (#893)', () => {
+  it('editDistance computes bounded Levenshtein distance and respects cap', () => {
+    assert.equal(editDistance('', '', 2), 0);
+    assert.equal(editDistance('', 'AB', 2), 2);
+    assert.equal(editDistance('AB', '', 2), 2);
+    assert.equal(editDistance('T1', 'T1', 2), 0);
+    assert.equal(editDistance('T1', 'T2', 2), 1);
+    assert.equal(editDistance('ABC', 'AC', 2), 1);
+    assert.equal(editDistance('AC', 'ABC', 2), 1);
+    assert.equal(editDistance('T1', 'T123', 2), 2);
+    assert.equal(editDistance('T1', 'T12345', 2), 3);
+    assert.equal(editDistance('AAAA', 'BBBB', 2), 3);
+    assert.equal(editDistance('T1000', 'T9999'), 3);
+  });
+
+  it('nearMissIds matches case-insensitively within cap, sorts by distance, and slices to limit', () => {
+    assert.deepEqual(nearMissIds('T-000', ['T-001', 'T-999']), ['T-001']);
+    assert.deepEqual(nearMissIds('t-1a', ['T-1B', 'OTHER-ID']), ['T-1B']);
+    assert.deepEqual(nearMissIds('T10', ['T99', 'T11']), ['T11', 'T99']);
+    assert.deepEqual(nearMissIds('T1', ['T2', 'T3', 'T4'], { limit: 2 }), ['T2', 'T3']);
+  });
+
+  it('validateRecordTicket handles missing ticket, absent store, legacy store, sharded store, near misses, and malformed store', (t) => {
+    assert.deepEqual(validateRecordTicket(), { ok: true, status: 0, message: null });
+    const emptyDir = tmp(t, 'gm-ticket-empty-');
+    assert.deepEqual(validateRecordTicket({ ticket: undefined, dir: emptyDir }), { ok: true, status: 0, message: null });
+    assert.deepEqual(validateRecordTicket({ ticket: '', dir: emptyDir }), { ok: true, status: 0, message: null });
+    assert.deepEqual(validateRecordTicket({ ticket: 'T1', dir: emptyDir }), { ok: true, status: 0, message: null });
+
+    // Legacy tickets.json store with T1
+    const legacyDir = tmp(t, 'gm-ticket-legacy-');
+    const validTicket = { id: 'T1', title: 'Valid ticket', body: 'Body', scope: ['src/**'], rails: [] };
+    writeFileSync(join(legacyDir, 'tickets.json'), JSON.stringify({ tickets: [validTicket] }));
+    assert.deepEqual(validateRecordTicket({ ticket: 'T1', dir: legacyDir }), { ok: true, status: 0, message: null });
+
+    // Unknown ticket with 1 near miss -> status 2
+    const missNear = validateRecordTicket({ ticket: 'T2', dir: legacyDir });
+    assert.equal(missNear.ok, false);
+    assert.equal(missNear.status, 2);
+    assert.match(missNear.message, /ticket "T2" not found/);
+    assert.match(missNear.message, /\(near-miss id\(s\): T1\)/);
+    assert.match(missNear.message, /--allow-unknown-ticket/);
+
+    // Unknown ticket with 0 near misses -> status 2 without near-miss suffix
+    const missFar = validateRecordTicket({ ticket: ' COMPLETELY-DIFFERENT-ID ', dir: legacyDir });
+    assert.equal(missFar.ok, false);
+    assert.equal(missFar.status, 2);
+    assert.doesNotMatch(missFar.message, /near-miss/);
+
+    // allowUnknownTicket: true bypasses unknown-id failure
+    assert.deepEqual(
+      validateRecordTicket({ ticket: 'T2', dir: legacyDir, allowUnknownTicket: true }),
+      { ok: true, status: 0, message: null },
+    );
+
+    // Sharded tickets/ directory (no tickets.json file)
+    const shardedDir = tmp(t, 'gm-ticket-sharded-');
+    const shardsPath = join(shardedDir, 'tickets');
+    mkdirSync(shardsPath, { recursive: true });
+    writeFileSync(join(shardsPath, '.store.json'), JSON.stringify({"format":"adlc-ticket-directory","version":1}));
+    const shardBody = JSON.stringify({
+      body: 'Body',
+      id: 'T1',
+      rails: [],
+      scope: ['src/**'],
+      title: 'Sharded',
+    }, null, 2) + '\n';
+    writeFileSync(join(shardsPath, "t1--1f93603db53bfad5c92390f735d0cbb8617b4ab8214ae91c5664a3d1e9b009c8.json"), shardBody);
+    assert.deepEqual(validateRecordTicket({ ticket: 'T1', dir: shardedDir }), { ok: true, status: 0, message: null });
+    assert.equal(validateRecordTicket({ ticket: 'T9', dir: shardedDir }).status, 2);
+
+    // Malformed store (duration: 'M') -> status 1 even when allowUnknownTicket: true
+    const badDir = tmp(t, 'gm-ticket-bad-');
+    writeFileSync(
+      join(badDir, 'tickets.json'),
+      JSON.stringify({ tickets: [{ ...validTicket, duration: 'M' }] }),
+    );
+    const badRes = validateRecordTicket({ ticket: 'T1', dir: badDir, allowUnknownTicket: true });
+    assert.equal(badRes.ok, false);
+    assert.equal(badRes.status, 1);
+    assert.match(badRes.message, /could not load tickets/);
+    assert.match(badRes.message, /duration/);
+  });
+
+  it('CLI: enforces ticket store validation on record (#893)', (t) => {
+    const bin = new URL('../bin/gate-manifest.mjs', import.meta.url).pathname;
+
+    // 1. Store with T1 only; record --ticket T2 -> exit 2, stderr lists T1 as near miss, manifest unchanged
+    const dir1 = tmp(t, 'gm-cli-ticket-1-');
+    const validTicket = { id: 'T1', title: 'Valid ticket', body: 'Body', scope: ['src/**'], rails: [] };
+    writeFileSync(join(dir1, 'tickets.json'), JSON.stringify({ tickets: [validTicket] }));
+    const manifest1 = ledgerPath('manifest', dir1);
+    const r1 = spawnSync(process.execPath, [bin, 'record', 'rails-guard', '--ticket', 'T2', '--dir', dir1], { encoding: 'utf8' });
+    assert.equal(r1.status, 2);
+    assert.match(r1.stderr, /ticket "T2" not found/);
+    assert.match(r1.stderr, /T1/);
+    assert.equal(existsSync(manifest1), false);
+
+    // 2. Same with --allow-unknown-ticket -> exit 0, entry written
+    const r2 = spawnSync(
+      process.execPath,
+      [bin, 'record', 'rails-guard', '--ticket', 'T2', '--allow-unknown-ticket', '--dir', dir1],
+      { encoding: 'utf8' },
+    );
+    assert.equal(r2.status, 0, r2.stderr);
+    assert.equal(existsSync(manifest1), true);
+    assert.equal(JSON.parse(readFileSync(manifest1, 'utf8').trim()).ticket, 'T2');
+
+    // 3. Malformed store (duration: 'M') -> exit 1 quoting loader error, manifest unchanged
+    const dir3 = tmp(t, 'gm-cli-ticket-3-');
+    writeFileSync(
+      join(dir3, 'tickets.json'),
+      JSON.stringify({ tickets: [{ ...validTicket, duration: 'M' }] }),
+    );
+    const manifest3 = ledgerPath('manifest', dir3);
+    const r3 = spawnSync(process.execPath, [bin, 'record', 'rails-guard', '--ticket', 'T1', '--dir', dir3], { encoding: 'utf8' });
+    assert.equal(r3.status, 1);
+    assert.match(r3.stderr, /could not load tickets/);
+    assert.match(r3.stderr, /duration/);
+    assert.equal(existsSync(manifest3), false);
+
+    // 4. No ticket store in dir -> record --ticket X -> exit 0, entry written
+    const dir4 = tmp(t, 'gm-cli-ticket-4-');
+    const manifest4 = ledgerPath('manifest', dir4);
+    const r4 = spawnSync(process.execPath, [bin, 'record', 'rails-guard', '--ticket', 'X', '--dir', dir4], { encoding: 'utf8' });
+    assert.equal(r4.status, 0, r4.stderr);
+    assert.equal(existsSync(manifest4), true);
+    assert.equal(JSON.parse(readFileSync(manifest4, 'utf8').trim()).ticket, 'X');
   });
 });

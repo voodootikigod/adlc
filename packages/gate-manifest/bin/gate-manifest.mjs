@@ -5,6 +5,7 @@
 import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
 import { record, parseData, parseFileList, ticketCompletionReminder } from '../lib/record.mjs';
 import { validateSpecApprovalRecord } from '../lib/spec-approval.mjs';
+import { validateRecordTicket } from '../lib/ticket-check.mjs';
 import { verify } from '../lib/verify.mjs';
 import { loadFiltered, renderEntries } from '../lib/show.mjs';
 import { buildAttest } from '../lib/attest.mjs';
@@ -37,6 +38,7 @@ const { values: flags, positionals } = parseArgs({
     data:   { type: 'string' },
     files:  { type: 'string' },
     force:  { type: 'boolean', default: false },
+    'allow-unknown-ticket': { type: 'boolean', default: false },
     json:   { type: 'boolean', default: false },
     dir:    { type: 'string', default: ADLC_DIR },
     reason: { type: 'string' },
@@ -69,6 +71,16 @@ if (verb === 'record') {
     parsedData = parseData(flags.data);
   } catch (err) {
     opError(err.message);
+  }
+
+  const ticketCheck = validateRecordTicket({
+    ticket: flags.ticket,
+    dir: flags.dir,
+    allowUnknownTicket: flags['allow-unknown-ticket'],
+  });
+  if (!ticketCheck.ok) {
+    if (ticketCheck.status === 2) gateFail(ticketCheck.message);
+    opError(ticketCheck.message);
   }
 
   if (gate === 'spec-approval' && !flags.force) {
