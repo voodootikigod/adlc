@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseArgs } from '@adlc/core';
-import { USAGE, OPTIONS, parseMaxAgeDays } from '../lib/cli-options.mjs';
+import { USAGE, OPTIONS, parseMaxAgeDays, resolveTicketArg } from '../lib/cli-options.mjs';
 
 test('--force defaults to false when omitted (caching stays ON by default)', () => {
   const { values } = parseArgs({ options: OPTIONS, args: ['T1'] });
@@ -96,4 +96,24 @@ test('parseMaxAgeDays: "Infinity" is rejected, not silently treated as "no limit
 test('parseMaxAgeDays: "NaN" and other unparseable text are rejected', () => {
   assert.equal(parseMaxAgeDays('NaN').ok, false);
   assert.equal(parseMaxAgeDays('thirty').ok, false);
+});
+
+// ── --ticket option & resolveTicketArg (issue #894) ─────────────────────────
+
+test('--ticket is accepted as a string option and defaults to undefined when omitted', () => {
+  const omitted = parseArgs({ options: OPTIONS, args: ['T1'] });
+  assert.equal(omitted.values.ticket, undefined);
+  const passed = parseArgs({ options: OPTIONS, args: ['--ticket', 'T1'] });
+  assert.equal(passed.values.ticket, 'T1');
+});
+
+test('resolveTicketArg: positional only, --ticket only, both matching, conflicting, and neither', () => {
+  assert.deepEqual(resolveTicketArg('T1', undefined), { ok: true, ticketId: 'T1', error: null });
+  assert.deepEqual(resolveTicketArg(undefined, 'T1'), { ok: true, ticketId: 'T1', error: null });
+  assert.deepEqual(resolveTicketArg('T1', 'T1'), { ok: true, ticketId: 'T1', error: null });
+  assert.deepEqual(resolveTicketArg(undefined, undefined), { ok: true, ticketId: null, error: null });
+  const conflict = resolveTicketArg('T1', 'T2');
+  assert.equal(conflict.ok, false);
+  assert.equal(conflict.ticketId, null);
+  assert.match(conflict.error, /conflicting ticket ids: positional "T1" vs --ticket "T2"/);
 });

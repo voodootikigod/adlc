@@ -4,9 +4,10 @@
 // load). This is what a mutation gate exercises against: flip `force`'s
 // default to true and a test importing this file must fail.
 
-export const USAGE = 'usage: coldstart <ticket-id> [--tickets path] [--all] [--tier cheap|mid|frontier] [--offline] [--force] [--max-age <days>] [--prompt-only] [--record-verdict <file|->] [--json]';
+export const USAGE = 'usage: coldstart <ticket-id> [--ticket <id>] [--tickets path] [--all] [--tier cheap|mid|frontier] [--offline] [--force] [--max-age <days>] [--prompt-only] [--record-verdict <file|->] [--json]';
 
 export const OPTIONS = {
+  ticket: { type: 'string' },
   tickets: { type: 'string', default: '.adlc/tickets.json' },
   all: { type: 'boolean', default: false },
   tier: { type: 'string', default: 'cheap' },
@@ -17,6 +18,25 @@ export const OPTIONS = {
   'record-verdict': { type: 'string' },
   json: { type: 'boolean', default: false },
 };
+
+/**
+ * Resolve the target ticket id from positional `<ticket-id>` and/or `--ticket <id>`.
+ * Fails closed when both are supplied and disagree.
+ *
+ * @param {string | undefined} positionalId
+ * @param {string | undefined} flagId
+ * @returns {{ok: true, ticketId: string | null, error: null} | {ok: false, ticketId: null, error: string}}
+ */
+export function resolveTicketArg(positionalId, flagId) {
+  if (positionalId && flagId && positionalId !== flagId) {
+    return {
+      ok: false,
+      ticketId: null,
+      error: `conflicting ticket ids: positional "${positionalId}" vs --ticket "${flagId}"`,
+    };
+  }
+  return { ok: true, ticketId: positionalId ?? flagId ?? null, error: null };
+}
 
 /**
  * Validate and convert the `--max-age` flag (days) to milliseconds.

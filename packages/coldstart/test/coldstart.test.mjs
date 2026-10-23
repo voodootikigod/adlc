@@ -922,4 +922,33 @@ describe('--record-verdict (prompt-only verdict capture)', () => {
     assert.equal(result.status, 0);
     assert.match(result.stdout, /user \(T2\)/);
   });
+
+  test('--ticket <id> works as an alias for positional <ticket-id> (#894)', (t) => {
+    const dir = tmp(t, 'coldstart-test-');
+    const ticketsPath = writeTickets(dir, [{ id: 'T1', title: ' Ticket flag test ', body: 'Body.' }]);
+    const byFlag = runCLI(['--ticket', 'T1', '--prompt-only', '--tickets', ticketsPath], { cwd: dir });
+    const byPos = runCLI(['T1', '--prompt-only', '--tickets', ticketsPath], { cwd: dir });
+    assert.equal(byFlag.status, 0, byFlag.stderr);
+    const stripNonce = (s) => s.replaceAll(/<<(UNTRUSTED|END):TICKET:[0-9a-f-]+>>/g, '<<$1:TICKET>>');
+    assert.equal(stripNonce(byFlag.stdout), stripNonce(byPos.stdout));
+  });
+
+  test('passing both positional <ticket-id> and matching --ticket <id> succeeds (#894)', (t) => {
+    const dir = tmp(t, 'coldstart-test-');
+    const ticketsPath = writeTickets(dir, [{ id: 'T1', title: 'Same id', body: 'Body.' }]);
+    const result = runCLI(['T1', '--ticket', 'T1', '--prompt-only', '--tickets', ticketsPath], { cwd: dir });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /user \(T1\)/);
+  });
+
+  test('passing conflicting positional <ticket-id> and --ticket <id> fails closed with exit 1 (#894)', (t) => {
+    const dir = tmp(t, 'coldstart-test-');
+    const ticketsPath = writeTickets(dir, [
+      { id: 'T1', title: 'One', body: 'Body 1.' },
+      { id: 'T2', title: 'Two', body: 'Body 2.' },
+    ]);
+    const result = runCLI(['T1', '--ticket', 'T2', '--prompt-only', '--tickets', ticketsPath], { cwd: dir });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /conflicting ticket ids: positional "T1" vs --ticket "T2"/);
+  });
 });

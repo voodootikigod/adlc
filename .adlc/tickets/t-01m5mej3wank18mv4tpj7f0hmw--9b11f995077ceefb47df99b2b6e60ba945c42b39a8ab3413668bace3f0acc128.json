@@ -1,0 +1,23 @@
+{
+  "body": "Issue #894: Make the ticket argument uniform across ticket-scoped verbs so coldstart and build-gate accept --ticket <id> as an alias for positional <ticket-id>.\nAcceptance Criteria:\n1. Add --ticket <id> to packages/coldstart/lib/cli-options.mjs, packages/coldstart/bin/coldstart.mjs, and packages/build-gate/bin/build-gate.mjs.\n2. When both positional <ticket-id> and --ticket <id> are supplied and differ, fail closed with an operational usage error naming the conflict (exit 1).\n3. Update --help / USAGE in both tools and document in docs/toolkit.md that every ticket-scoped verb accepts --ticket <id>.\n4. Add unit and CLI tests in packages/coldstart/test/cli-options.test.mjs, packages/coldstart/test/coldstart.test.mjs, and packages/build-gate/test/cli.test.mjs.\nVerify: node --test packages/coldstart/test/cli-options.test.mjs packages/coldstart/test/coldstart.test.mjs packages/build-gate/test/cli.test.mjs",
+  "category": "feature",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M5MEJ3WANK18MV4TPJ7F0HMW",
+  "rails": [
+    "packages/coldstart/test/prompt-only-usage.test.mjs",
+    "packages/build-gate/test/decide.test.mjs",
+    "scripts/test/adversarial-review-template.test.mjs"
+  ],
+  "risk": "high",
+  "scope": [
+    "packages/coldstart/lib/cli-options.mjs",
+    "packages/coldstart/bin/coldstart.mjs",
+    "packages/coldstart/test/cli-options.test.mjs",
+    "packages/coldstart/test/coldstart.test.mjs",
+    "packages/build-gate/bin/build-gate.mjs",
+    "packages/build-gate/test/cli.test.mjs",
+    "docs/toolkit.md"
+  ],
+  "title": "cli: accept --ticket <id> in coldstart and build-gate for uniform ticket-scoped arguments (#894)"
+}

@@ -31,6 +31,7 @@ const CLI_DEFAULT_BYTES_THRESHOLD = 8 * 1024 * 1024;
 
 const { values, positionals } = parseArgs({
   options: {
+    ticket: { type: 'string' },
     depth: { type: 'string' },
     'session-bytes': { type: 'string' },
     transcript: { type: 'string' },
@@ -44,7 +45,7 @@ const { values, positionals } = parseArgs({
 });
 
 if (values.help) {
-  console.log(`build-gate <ticket-id> [options]
+  console.log(`build-gate <ticket-id> [--ticket <id>] [options]
 
 Machine-checkable fitness-to-build gate (ADLC C13 / P3→P4 entry gate).
 Denies STARTING a high-risk ticket's build when the executing session's
@@ -55,6 +56,7 @@ Arguments:
   <ticket-id>              Ticket to gate (required)
 
 Options:
+  --ticket <id>            Ticket to gate (alias for positional <ticket-id>)
   --depth <n>              Precomputed tool-call-count depth signal
   --session-bytes <n>      Precomputed transcript byte-size signal
   --transcript <path>      Derive depth/session-bytes from this transcript file
@@ -84,9 +86,12 @@ ADLC phase: P3 → P4 entry gate (C13)
   process.exit(0);
 }
 
-const ticketId = positionals[0];
+if (positionals[0] && values.ticket && positionals[0] !== values.ticket) {
+  opError(`conflicting ticket ids: positional "${positionals[0]}" vs --ticket "${values.ticket}"`);
+}
+const ticketId = positionals[0] ?? values.ticket;
 if (!ticketId) {
-  opError('usage: build-gate <ticket-id> [options] (use --help for details)');
+  opError('usage: build-gate <ticket-id> [--ticket <id>] [options] (use --help for details)');
 }
 
 const ticketsPath = values.tickets ?? `${ADLC_DIR}/tickets.json`;

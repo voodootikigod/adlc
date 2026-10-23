@@ -245,3 +245,34 @@ test('bad --depth-threshold value → operational error, exit 1', () => {
     assert.equal(r.code, 1);
   });
 });
+
+test('--ticket <id> works as an alias for positional <ticket-id> (#894)', () => {
+  withTicketRepo([{ id: 'T1', title: 'x', category: 'contract' }], (dir) => {
+    const byFlag = run(['--ticket', 'T1', '--depth', '1', '--json'], { cwd: dir });
+    const byPos = run(['T1', '--depth', '1', '--json'], { cwd: dir });
+    assert.equal(byFlag.code, 0, byFlag.stderr);
+    assert.deepEqual(JSON.parse(byFlag.stdout), JSON.parse(byPos.stdout));
+  });
+});
+
+test('passing both positional <ticket-id> and matching --ticket <id> succeeds (#894)', () => {
+  withTicketRepo([{ id: 'T1', title: 'x', category: 'contract' }], (dir) => {
+    const r = run(['T1', '--ticket', 'T1', '--depth', '1', '--json'], { cwd: dir });
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(JSON.parse(r.stdout).ticket, 'T1');
+  });
+});
+
+test('passing conflicting positional <ticket-id> and --ticket <id> exits 1 naming the conflict (#894)', () => {
+  withTicketRepo([{ id: 'T1', title: 'x' }, { id: 'T2', title: 'y' }], (dir) => {
+    const r = run(['T1', '--ticket', 'T2', '--json'], { cwd: dir });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /conflicting ticket ids: positional "T1" vs --ticket "T2"/);
+  });
+});
+
+test('--help documents --ticket <id> (#894)', () => {
+  const r = run(['--help']);
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /--ticket <id>/);
+});

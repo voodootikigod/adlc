@@ -16,7 +16,7 @@ import { buildPrompt, SYSTEM_PROMPT } from '../lib/prompt.mjs';
 import { checkAll, resolveExpectedModel, checkAllOffline, oversizeGap, cacheLookupState, isMockSeamActive } from '../lib/gate.mjs';
 import { buildRecordPlan } from '../lib/cache.mjs';
 import { renderReport, buildJsonOutput, allPass } from '../lib/report.mjs';
-import { USAGE, OPTIONS, parseMaxAgeDays } from '../lib/cli-options.mjs';
+import { USAGE, OPTIONS, parseMaxAgeDays, resolveTicketArg } from '../lib/cli-options.mjs';
 import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 
 // lib/verdict.mjs (and the @adlc/gate-manifest package it pulls in) is
@@ -73,7 +73,11 @@ if (runAll) {
     opError('no active tickets found (all tickets are completed)');
   }
 } else {
-  const ticketId = positionals[0];
+  const resolvedTicket = resolveTicketArg(positionals[0], values.ticket);
+  if (!resolvedTicket.ok) {
+    opError(resolvedTicket.error);
+  }
+  const ticketId = resolvedTicket.ticketId;
   if (!ticketId) {
     opError(USAGE);
   }

@@ -180,6 +180,14 @@ which is fixed as of the pinned version, but because `--loop` is incompatible wi
 The package READMEs define each tool's exact schema. Treat these docs as a routing map,
 then follow the linked README for command-specific details.
 
+### Ticket argument convention
+
+Every ticket-scoped verb accepts `--ticket <id>` so scripts and hooks can pass the
+ticket id uniformly across phases without switching between positional and flag forms.
+`adlc coldstart` and `adlc build-gate` accept both `<ticket-id>` positionally and
+`--ticket <id>` as an alias; supplying both with different ids fails closed as a usage
+error (exit `1`).
+
 ## Exit-code convention
 
 The CLIs generally follow the same gate shape:
