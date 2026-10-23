@@ -274,5 +274,5 @@ test('passing conflicting positional <ticket-id> and --ticket <id> exits 1 namin
 test('--help documents --ticket <id> (#894)', () => {
   const r = run(['--help']);
   assert.equal(r.code, 0);
-  assert.match(r.stdout, /--ticket <id>/);
+  assert.match(r.stdout, /--ticket <id>\s+Ticket to gate \(alias for positional <ticket-id>\)/);
 });
