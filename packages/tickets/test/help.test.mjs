@@ -259,3 +259,20 @@ test('the generated schema keeps its published identity', () => {
   assert.equal(schema.$id, 'https://adlc.dev/schemas/ticket-v1.json');
   assert.equal(schema.additionalProperties, true);
 });
+
+test('create --help reconciles with update --help on --authorize and does not claim ADLC_RAILS_BYPASS is required for ticket writes (#892)', () => {
+  const createHelp = renderCommandHelp('create');
+  const updateHelp = renderCommandHelp('update');
+  assert.doesNotMatch(createHelp, /later ticket writes need ADLC_RAILS_BYPASS/i);
+  assert.doesNotMatch(createHelp, /ADLC_RAILS_BYPASS=1/);
+  assert.match(createHelp, /--authorize/);
+  assert.match(updateHelp, /--authorize/);
+  assert.match(createHelp, /not `adlc ticket` writes/);
+});
+
+test('ticket schema descriptions for duration and edges state type and direction (#892)', () => {
+  const schema = ticketJsonSchema();
+  assert.match(schema.properties.duration.description, /positive number/i);
+  assert.match(schema.properties.edges.description, /this ticket completes before `to`/);
+  assert.match(schema.properties.edges.items.properties.to.description, /this ticket completes before `to`/);
+});

@@ -392,3 +392,16 @@ test('an apply failure names the preserved draft, and keeps it', () => {
     rmSync(dirname(preserved), { recursive: true, force: true });
   });
 });
+
+test('CLI create --help, update --help, and schema reflect #892 contract', () => {
+  const createRes = run(['create', '--help']);
+  const updateRes = run(['update', '--help']);
+  const schemaRes = run(['schema']);
+  assert.equal(createRes.status, 0);
+  assert.equal(updateRes.status, 0);
+  assert.equal(schemaRes.status, 0);
+  assert.doesNotMatch(createRes.stdout, /ADLC_RAILS_BYPASS=1/);
+  assert.match(createRes.stdout, /--authorize/);
+  assert.match(updateRes.stdout, /--authorize/);
+  assert.match(schemaRes.stdout, /this ticket completes before `to`/);
+});

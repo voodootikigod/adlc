@@ -1,0 +1,22 @@
+{
+  "body": "Ensure ticket-store validation errors end with a pointer to `adlc ticket schema` and `adlc ticket doctor`, reconcile `create --help` with `update --help` on `--authorize` and `ADLC_RAILS_BYPASS`, clarify `duration` type and `edges` direction in `ticket.schema.json`, and rebuild the Cursor MCP bundle.\n\n## Acceptance Criteria\n1. Loading a store with `duration: \"M\"` produces a validation error batch ending with `see \\`adlc ticket schema\\` and \\`adlc ticket doctor\\`` once per batch. Verify: `node --test packages/tickets/test/store.test.mjs`\n2. `adlc ticket create --help` no longer mentions `ADLC_RAILS_BYPASS` as a requirement for writes and states the `--authorize` rule matching `update --help`. Verify: `node --test packages/tickets/test/help.test.mjs packages/tickets/test/cli-help.test.mjs`\n3. `adlc ticket schema` and `packages/tickets/schemas/ticket.schema.json` show the type on `duration` and the direction sentence (`this ticket completes before \\`to\\``) on `edges`, and the Cursor MCP bundle matches official builder output. Verify: `node --test packages/tickets/test/help.test.mjs scripts/test/ticket-store-boundary.test.mjs`",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M5MFV2Z4WAD1JNMN1WX0AQ13",
+  "rails": [
+    "packages/tickets/test/service.test.mjs",
+    "scripts/test/ticket-help-contract.test.mjs",
+    "scripts/test/ticket-store-boundary.test.mjs"
+  ],
+  "scope": [
+    "packages/tickets/lib/schema.mjs",
+    "packages/tickets/lib/help.mjs",
+    "packages/tickets/schemas/ticket.schema.json",
+    "packages/tickets/test/help.test.mjs",
+    "packages/tickets/test/cli-help.test.mjs",
+    "packages/tickets/test/store.test.mjs",
+    "plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs"
+  ],
+  "title": "tickets: point loader errors at adlc ticket schema and reconcile create/update help (#892)"
+}
