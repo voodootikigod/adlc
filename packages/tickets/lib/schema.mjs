@@ -63,6 +63,10 @@ export function validateTickets(tickets, { archive = false, validateGraph = !arc
     };
     for (const id of [...byId.keys()].sort(compareTicketIds)) visit(id, []);
   }
-  if (errors.length) throw invalid('INVALID_TICKET_STORE', `ticket store validation failed (${errors.length} error(s))`, errors);
+  if (errors.length) {
+    const count = errors.length;
+    errors.push('see `adlc ticket schema` and `adlc ticket doctor`');
+    throw invalid('INVALID_TICKET_STORE', `ticket store validation failed (${count} error(s)): ${errors.join('; ')}`, errors);
+  }
   return tickets;
 }

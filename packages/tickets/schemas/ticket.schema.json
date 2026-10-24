@@ -28,7 +28,7 @@
     "duration": {
       "type": "number",
       "exclusiveMinimum": 0,
-      "description": "Relative build-time estimate used to order the ticket DAG. Defaults to 1."
+      "description": "Positive number (number > 0) giving the relative build-time estimate used to order the ticket DAG. Defaults to 1."
     },
     "budget": {
       "description": "Optional token ceiling. model-router and flail-detector honour a positive number and ignore anything else; the store does not validate it. Omit it to take the tier default."
@@ -45,7 +45,7 @@
       "items": {
         "type": "string"
       },
-      "description": "Path globs frozen for the duration of the build; rails-guard denies edits to them. Each rail must match at least one file in the repository when it is added, or the write is refused (RAIL_MATCHES_NOTHING). Once any ticket declares rails the ticket store itself becomes a frozen trust root, so later ticket writes need ADLC_RAILS_BYPASS=1."
+      "description": "Path globs frozen for the duration of the build; rails-guard denies edits to them. Each rail must match at least one file in the repository when it is added, or the write is refused (RAIL_MATCHES_NOTHING). Narrowing rails, widening scope, or changing `completed` on an existing ticket requires `--authorize` (see `adlc ticket update --help`); `ADLC_RAILS_BYPASS` governs only the `rails-guard` hook/CLI check on direct store-path edits, not `adlc ticket` writes."
     },
     "completed": {
       "description": "Lifecycle state, set by `adlc ticket complete` rather than authored by hand. It is part of the stored document, so an update that omits it REMOVES it — build updates from `show <id> --json`, not from scratch."
@@ -61,7 +61,7 @@
           "to": {
             "type": "string",
             "minLength": 1,
-            "description": "Id of the dependent ticket, which must not start before this one completes."
+            "description": "Id of the dependent ticket (this ticket completes before `to`, which must not start before this one completes)."
           },
           "contract": {
             "description": "Path to the interface this edge guarantees the dependent ticket can consume."
@@ -69,7 +69,7 @@
         },
         "additionalProperties": true
       },
-      "description": "Ordering constraints, prerequisite to dependent. An edge with \"to\": \"TX\" on THIS ticket means this ticket must complete before TX — so making this ticket depend on an existing one is an edge added to that existing ticket, never a reversed edge here. An edge may also carry \"contract\": a path to the interface it guarantees TX can consume, which is what lets the two be built in parallel; ticket-sync recognizes it and nothing else on an edge."
+      "description": "Array of edge objects (each with a non-empty string \"to\" id) giving ordering constraints, prerequisite to dependent: this ticket completes before `to` (an edge with \"to\": \"TX\" on THIS ticket means this ticket must complete before TX — so making this ticket depend on an existing one is an edge added to that existing ticket, never a reversed edge here). An edge may also carry \"contract\": a path to the interface it guarantees TX can consume, which is what lets the two be built in parallel; ticket-sync recognizes it and nothing else on an edge."
     }
   },
   "additionalProperties": true
