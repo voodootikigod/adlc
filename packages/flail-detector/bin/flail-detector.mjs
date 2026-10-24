@@ -4,7 +4,7 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import { relative, resolve, isAbsolute } from 'node:path';
-import { parseArgs, opError, printJson, sha256 } from '@adlc/core';
+import { parseArgs, opError, printJson, sha256, reasonList } from '@adlc/core';
 import { appendManifestEntry } from '@adlc/gate-manifest';
 import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 import { parseLog } from '../lib/parse-log.mjs';
@@ -174,7 +174,7 @@ if (!analyzability.ok) {
   if (values.json) {
     printJson({ verdict: 'could-not-analyze', reasons: analyzability.reasons, bytes, signals: [] });
   } else {
-    console.error(`flail-detector: could not analyze — ${analyzability.reasons.join('; ')}`);
+    console.error(reasonList('flail-detector: could not analyze —', analyzability.reasons));
   }
   process.exit(1);
 }
