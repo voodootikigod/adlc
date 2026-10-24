@@ -94,7 +94,7 @@ export const TICKET_FIELDS = [
     name: 'duration',
     type: 'number > 0',
     required: false,
-    summary: 'Relative build-time estimate used to order the ticket DAG. Defaults to 1.',
+    summary: 'Positive number (number > 0) giving the relative build-time estimate used to order the ticket DAG. Defaults to 1.',
     schema: { type: 'number', exclusiveMinimum: 0 },
   },
   {
@@ -119,7 +119,7 @@ export const TICKET_FIELDS = [
     name: 'rails',
     type: 'string[]',
     required: false,
-    summary: 'Path globs frozen for the duration of the build; rails-guard denies edits to them. Each rail must match at least one file in the repository when it is added, or the write is refused (RAIL_MATCHES_NOTHING). Once any ticket declares rails the ticket store itself becomes a frozen trust root, so later ticket writes need ADLC_RAILS_BYPASS=1.',
+    summary: 'Path globs frozen for the duration of the build; rails-guard denies edits to them. Each rail must match at least one file in the repository when it is added, or the write is refused (RAIL_MATCHES_NOTHING). Narrowing rails, widening scope, or changing `completed` on an existing ticket requires `--authorize` (see `adlc ticket update --help`); `ADLC_RAILS_BYPASS` governs only the `rails-guard` hook/CLI check on direct store-path edits, not `adlc ticket` writes.',
     schema: { type: 'array', items: { type: 'string' } },
   },
   {
@@ -136,14 +136,14 @@ export const TICKET_FIELDS = [
     name: 'edges',
     type: 'array of "to" objects',
     required: false,
-    summary: 'Ordering constraints, prerequisite to dependent. An edge with "to": "TX" on THIS ticket means this ticket must complete before TX — so making this ticket depend on an existing one is an edge added to that existing ticket, never a reversed edge here. An edge may also carry "contract": a path to the interface it guarantees TX can consume, which is what lets the two be built in parallel; ticket-sync recognizes it and nothing else on an edge.',
+    summary: 'Array of edge objects (each with a non-empty string "to" id) giving ordering constraints, prerequisite to dependent: this ticket completes before `to` (an edge with "to": "TX" on THIS ticket means this ticket must complete before TX — so making this ticket depend on an existing one is an edge added to that existing ticket, never a reversed edge here). An edge may also carry "contract": a path to the interface it guarantees TX can consume, which is what lets the two be built in parallel; ticket-sync recognizes it and nothing else on an edge.',
     schema: {
       type: 'array',
       items: {
         type: 'object',
         required: ['to'],
         properties: {
-          to: { type: 'string', minLength: 1, description: 'Id of the dependent ticket, which must not start before this one completes.' },
+          to: { type: 'string', minLength: 1, description: 'Id of the dependent ticket (this ticket completes before `to`, which must not start before this one completes).' },
           // Unconstrained for the same reason as body/category: validateTicket
           // checks only that an edge carries a string `to`.
           contract: { description: 'Path to the interface this edge guarantees the dependent ticket can consume.' },
