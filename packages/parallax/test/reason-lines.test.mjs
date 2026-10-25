@@ -57,6 +57,26 @@ test('route mode, equivalent answers: several warnings print one per indented li
   assert.equal(warningsBlock(r.stderr), '\nwarnings:\n  rate limit\n  timeout');
 });
 
+test('route mode, equivalent answers: one warning stays on the heading line', (t) => {
+  const mock = {
+    fan: [{ ok: true, value: 'PostgreSQL' }, { ok: true, value: 'Postgres' }, failed('rate limit')],
+    judge: { equivalent: true, answer: 'PostgreSQL', variants: [] },
+  };
+  const r = runMocked(t, ['--route', 'Which database?', '--n', '3', '--allow-partial-fan'], mock);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(warningsBlock(r.stderr), '\nwarnings: rate limit');
+});
+
+test('route mode, conflicting answers: one warning stays on the heading line', (t) => {
+  const mock = {
+    fan: [{ ok: true, value: 'PostgreSQL' }, { ok: true, value: 'MySQL' }, failed('rate limit')],
+    judge: { equivalent: false, answer: '', variants: ['PostgreSQL', 'MySQL'] },
+  };
+  const r = runMocked(t, ['--route', 'Which database?', '--n', '3', '--allow-partial-fan'], mock);
+  assert.equal(r.status, 2, r.stderr);
+  assert.ok(warningsBlock(r.stderr).startsWith('\nwarnings: rate limit\n'), r.stderr);
+});
+
 test('route mode, conflicting answers: several warnings print one per indented line', (t) => {
   const mock = {
     fan: [{ ok: true, value: 'PostgreSQL' }, { ok: true, value: 'MySQL' }, failed('rate limit'), failed('timeout')],
@@ -69,6 +89,25 @@ test('route mode, conflicting answers: several warnings print one per indented l
     warningsBlock(r.stderr).startsWith('\nwarnings:\n  rate limit\n  timeout\nroute answers diverge'),
     `unexpected warnings block:\n${r.stderr}`,
   );
+});
+
+function edgeTickets(t) {
+  const dir = tmp(t, 'parallax-reason-lines-edge-');
+  const ticketsFile = join(dir, 'tickets.json');
+  writeFileSync(ticketsFile, JSON.stringify({
+    tickets: [
+      { id: 'T1', title: 'Auth Service', body: 'Build auth', scope: [] },
+      { id: 'T2', title: 'API Gateway', body: 'Route requests', scope: [] },
+    ],
+  }));
+  return ticketsFile;
+}
+
+test('edge mode: one warning stays on the heading line', (t) => {
+  const mock = { fan: [reading('A'), reading('B'), failed('rate limit')], divergence: CONVERGED };
+  const r = runMocked(t, ['--edge', 'T1', 'T2', '--tickets', edgeTickets(t), '--n', '3', '--allow-partial-fan'], mock);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(warningsBlock(r.stderr), '\nwarnings: rate limit');
 });
 
 test('edge mode: several warnings print one per indented line', (t) => {
