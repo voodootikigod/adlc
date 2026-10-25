@@ -1,0 +1,23 @@
+{
+  "body": "Source: GitHub issue #1057. In packages/backlog-groom/lib/classify.mjs, parseReferences attributed every fenced block to the nearest preceding path mention without checking whether the fence is source from that file. Require positive evidence that a fence is source for the cited path: reject fences on non-code documentation files (.md/.mdx/.txt), reject language tags that conflict with the file extension, require a line citation (or matching language tag) rather than attributing untagged fences to bare prose path mentions, and reject shell command blocks, Markdown table rows, diff headers, single-line JSON key fragments on non-JSON files, and sub-line fragments with unbalanced closing delimiters.",
+  "criteria": [
+    "parseReferences does not attach shell transcripts, table rows, diff blocks, incompatible language-tagged fences, untagged fences after bare line-less path mentions, or unbalanced sub-line fragments as cited snippets.",
+    "Two issues citing the same path with different shell fences do not attach those shell fences as snippets and do not verify fixed."
+  ],
+  "id": "T-01M5TMTTQZ7HZWZR1691FH9BRC",
+  "out_of_scope": [
+    "Changing subsequence matching or precedence rules in packages/backlog-groom/lib/verify.mjs."
+  ],
+  "priority": 1,
+  "rails": [
+    "packages/backlog-groom/test/verify.test.mjs"
+  ],
+  "risk_tier": "medium",
+  "scope": [
+    "packages/backlog-groom/lib/classify.mjs",
+    "packages/backlog-groom/test/classify.test.mjs"
+  ],
+  "status": "ready",
+  "title": "backlog-groom: require source-fence evidence before attributing excerpts in classify (#1057)",
+  "verify": "node --test packages/backlog-groom/test/classify.test.mjs packages/backlog-groom/test/verify.test.mjs"
+}

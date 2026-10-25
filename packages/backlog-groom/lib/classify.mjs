@@ -41,8 +41,53 @@ export const MAX_REFERENCES_PER_ISSUE = 50;
  */
 export const MAX_SNIPPETS_PER_ISSUE = 200;
 
-/** A fenced block, with the offset it starts at so it can be attributed. */
-const FENCE = /```[^\n]*\n([\s\S]*?)```/g;
+/** A fenced block, with its info string and the offset it starts at so it can be attributed. */
+const FENCE = /```([^\n]*)\n([\s\S]*?)```/g;
+
+const SHELL_LINE = /^\s*(?:\$\s|(?:git|npm|npx|node|gh|pgrep|ls|cat|ss|ps)\s)/;
+const TABLE_ROW = /^\s*\|.*\|\s*$/;
+const DIFF_LINE = /^(?:diff --git |---\s|\+\+\+\s|@@\s)/;
+const JSON_PROP_ONLY = /^\s*"[^"]+"\s*:/;
+
+function langFamily(token) {
+  if (/^(?:m?js|cjs|javascript|[mc]?tsx?|typescript|jsx)$/.test(token)) return 'js';
+  if (/^jsonc?$/.test(token)) return 'json';
+  if (/^ya?ml$/.test(token)) return 'yaml';
+  if (/^(?:sh|bash|shell|zsh)$/.test(token)) return 'sh';
+  if (/^(?:py|python|go|golang|rs|rust|toml)$/.test(token)) return 'code';
+  return null;
+}
+
+function hasUnbalancedClosingDelimiters(snippet) {
+  let depth = 0;
+  for (const ch of snippet) {
+    if (ch === '(' || ch === '{' || ch === '[') depth += 1;
+    else if (ch === ')' || ch === '}' || ch === ']') {
+      depth -= 1;
+      if (depth < 0) return true;
+    }
+  }
+  return false;
+}
+
+function isPlausibleSourceFence(owner, rawInfo, snippet) {
+  if (!snippet) return true;
+  const ext = owner.path.slice(owner.path.lastIndexOf('.') + 1).toLowerCase();
+  const extFam = langFamily(ext);
+  if (!extFam) return false;
+  const lang = rawInfo.trim().split(/\s+/)[0].toLowerCase();
+  if (lang) {
+    if (langFamily(lang) !== extFam) return false;
+  } else if (owner.line === null) {
+    return false;
+  }
+  const lines = snippet.split('\n');
+  if (lines.some((l) => TABLE_ROW.test(l) || DIFF_LINE.test(l))) return false;
+  if (extFam !== 'sh' && lines.some((l) => SHELL_LINE.test(l))) return false;
+  if (extFam !== 'json' && lines.length === 1 && JSON_PROP_ONLY.test(lines[0])) return false;
+  if (hasUnbalancedClosingDelimiters(snippet)) return false;
+  return true;
+}
 
 /**
  * Signals that an issue makes a claim ABOUT CODE even without a parseable
@@ -123,7 +168,10 @@ export function parseReferences(body) {
     // EVERY excerpt is kept, not just the first. An issue that quotes one
     // location twice — a removed excerpt and a still-live one — would otherwise
     // lose the live excerpt and verify `fixed`, which is a false close.
-    if (owner) (owner.snippets ??= []).push(f[1].trim());
+    const snippet = f[2].trim();
+    if (owner && isPlausibleSourceFence(owner, f[1], snippet)) {
+      (owner.snippets ??= []).push(snippet);
+    }
   }
 
   const seen = new Map();

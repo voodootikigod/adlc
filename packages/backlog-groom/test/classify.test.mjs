@@ -9,6 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { classifyIssue, parseReferences, MAX_REFERENCES_PER_ISSUE, MAX_SNIPPETS_PER_ISSUE } from '../lib/classify.mjs';
+import { verifyIssue } from '../lib/verify.mjs';
 
 const AUDIT_BODY = [
   '**Source:** `/release-audit` for @adlc 1.11.0, class **false-green**.',
@@ -232,4 +233,95 @@ test('AC2: identical excerpts are deduped — repetition is not extra evidence',
   const body = ['`lib/a.mjs:1`', '', '```', 'same', '```', '', '`lib/a.mjs:1`', '', '```', 'same', '```'].join('\n');
   const refs = parseReferences(body);
   assert.deepEqual(refs[0].snippets, ['same']);
+});
+
+test('AC2: non-source fences (shell, table rows, diffs, prose, unbalanced fragments) are not attributed as code excerpts (#1057)', () => {
+  // 1. Untagged fence after a line-less prose path mention is not attributed
+  const noLineBody = 'In `plugins/adlc-claude-code/hooks/adlc-hook-run.mjs` the table is:\n\n```\nrails ENFORCING child-exit-2 -> 2\n```';
+  assert.deepEqual(parseReferences(noLineBody)[0].snippets, []);
+
+  // 2. Tagged fence whose language matches the extension IS attributed even without a line number
+  const taggedNoLine = 'In `plugins/adlc-claude-code/hooks/adlc-hook-run.mjs`:\n\n```js\nconst status = result.status ?? 0;\n```';
+  assert.deepEqual(parseReferences(taggedNoLine)[0].snippets, ['const status = result.status ?? 0;']);
+
+  // 3. Tagged fence whose language conflicts with the file extension is rejected even with a line number
+  const wrongLang = '`plugins/adlc-claude-code/hooks/adlc-hook-run.mjs:152`\n\n```sh\nconst x = 1;\n```';
+  assert.deepEqual(parseReferences(wrongLang)[0].snippets, []);
+
+  // 4. Documentation/prose files (.md) do not attach excerpts for whole-line code closure
+  const mdBody = '**Location** `packages/skill-rot/README.md:27`\n\n```\nWhen **all** claims in a skill are ok\n```';
+  assert.deepEqual(parseReferences(mdBody)[0].snippets, []);
+
+  // 5. Markdown table rows and diff headers are rejected
+  for (const line of ['| `0` | All routes attempted |', 'diff --git a/x.mjs b/x.mjs', '--- a/x.mjs', '+++ b/x.mjs', '@@ -1,3 +1,3 @@']) {
+    const b = '`lib/a.mjs:10`\n\n```\n' + line + '\n```';
+    assert.deepEqual(parseReferences(b)[0].snippets, [], `expected ${line} to be rejected`);
+  }
+
+  // 6. Shell commands are rejected on .mjs files, but accepted on .sh files
+  for (const cmd of ['$ git status', 'git merge-base --is-ancestor a b', 'pgrep -af adlc-hook']) {
+    assert.deepEqual(parseReferences('`lib/a.mjs:10`\n\n```\n' + cmd + '\n```')[0].snippets, []);
+    assert.deepEqual(parseReferences('`scripts/install.sh:10`\n\n```\n' + cmd + '\n```')[0].snippets, [cmd]);
+  }
+
+  // 7. Single-line JSON property fragment is rejected on .mjs, but accepted on .json or multi-line .mjs
+  const jsonProp = '"rails": ["scripts/test/tmp-fixture-boundary.test.mjs"]';
+  assert.deepEqual(parseReferences('`lib/a.mjs:10`\n\n```\n' + jsonProp + '\n```')[0].snippets, []);
+  assert.deepEqual(parseReferences('`packages/x/package.json:10`\n\n```\n' + jsonProp + '\n```')[0].snippets, [jsonProp]);
+  const multiLineObj = 'const cfg = {\n  "rails": ["x"]\n};';
+  assert.deepEqual(parseReferences('`lib/a.mjs:10`\n\n```\n' + multiLineObj + '\n```')[0].snippets, [multiLineObj]);
+
+  // 8. Unbalanced closing delimiters (sub-line fragments) are rejected while balanced delimiters pass
+  for (const frag of ['rawFiles: specPath, dir, key });', 'call(a))', 'arr[0]]', 'obj.x}']) {
+    assert.deepEqual(parseReferences('`lib/a.mjs:69`\n\n```\n' + frag + '\n```')[0].snippets, [], `expected ${frag} to be rejected`);
+  }
+  const balanced = 'return record({ gate: GATE_NAME, items: [1, 2] });';
+  assert.deepEqual(parseReferences('`lib/a.mjs:69`\n\n```\n' + balanced + '\n```')[0].snippets, [balanced]);
+
+  // 9. Empty fence is preserved so verifyCitation can report an empty excerpt
+  assert.deepEqual(parseReferences('`lib/a.mjs:10`\n\n```\n   \n```')[0].snippets, ['']);
+
+  // 10. Supported extension families accept their matching language tags
+  const pairs = [
+    ['src/a.ts:1', 'ts', 'const x: number = 1;'],
+    ['src/a.tsx:1', 'tsx', 'export const A = () => null;'],
+    ['src/a.jsx:1', 'jsx', 'export const B = () => null;'],
+    ['src/a.cjs:1', 'cjs', 'module.exports = 1;'],
+    ['src/a.yml:1', 'yaml', 'name: ci'],
+    ['src/a.yaml:1', 'yml', 'name: ci'],
+    ['src/a.py:1', 'py', 'x = 1'],
+    ['src/a.go:1', 'go', 'package main'],
+    ['src/a.rs:1', 'rs', 'fn main() {}'],
+    ['src/a.toml:1', 'toml', 'name = "x"'],
+  ];
+  for (const [cite, lang, code] of pairs) {
+    assert.deepEqual(parseReferences('`' + cite + '`\n\n```' + lang + '\n' + code + '\n```')[0].snippets, [code]);
+  }
+});
+
+test('AC2: two issues citing the same path with different shell fences do not verify fixed (#1057)', () => {
+  const io = {
+    readFile: () => 'export const live = true;\n',
+    pathKind: () => 'blob',
+    lastCommitFor: () => 'bf7ad9c2',
+    everExisted: () => true,
+  };
+  const issueA = classifyIssue({
+    number: 1051,
+    title: 'merge queue race',
+    body: 'Red on `scripts/test/tmp-fixture-boundary.test.mjs`\n\n```\ngit merge-base --is-ancestor 051c1812 dad19f26\n```',
+    labels: [],
+  });
+  const issueB = classifyIssue({
+    number: 1055,
+    title: 'freeze rail',
+    body: 'Freeze `scripts/test/tmp-fixture-boundary.test.mjs`\n\n```\n"rails": ["scripts/test/tmp-fixture-boundary.test.mjs"]\n```',
+    labels: [],
+  });
+  const vA = verifyIssue(issueA, io);
+  const vB = verifyIssue(issueB, io);
+  assert.equal(vA.verdict, 'unverifiable');
+  assert.equal(vB.verdict, 'unverifiable');
+  assert.equal(vA.evidence, null);
+  assert.equal(vB.evidence, null);
 });
