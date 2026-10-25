@@ -259,3 +259,24 @@ test('the three repaired relative links resolve', () => {
   }
   assert.deepEqual(failures, []);
 });
+
+test('AGENTS.md names plugins/adlc-pi/lib and sibling plugin enforcement cores in the trust-root tier rule', () => {
+  const agents = read('AGENTS.md');
+  const required = [
+    'packages/rails-guard',
+    'prosecute',
+    'gate-manifest',
+    'build-gate',
+    'plugins/adlc-pi/lib',
+    'plugins/adlc-opencode/lib',
+    'plugins/adlc-claude-code/hooks',
+    'plugins/adlc-codex/hooks',
+    'plugins/adlc-copilot/hooks',
+    'plugins/adlc-cursor/hooks',
+    'plugins/adlc-gemini/hooks',
+    'rails-checker.mjs',
+  ];
+  for (const token of required) {
+    assert.ok(agents.includes(token), `AGENTS.md trust-root rule must include ${token}`);
+  }
+});

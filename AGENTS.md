@@ -199,5 +199,10 @@ merge (`/adlc:adlc-prosecute`, P5). Three rules that carry real weight:
   not to delete it. Deleting it removes the evidence of the missing guard.
 
 Changes under `packages/rails-guard`, `prosecute`, `gate-manifest`, or
-`build-gate` are trust-root tier: a same-model P5 is not sufficient, and a
-cross-model review must be recorded before merge.
+`build-gate` — as well as plugin enforcement cores under `plugins/adlc-pi/lib`,
+`plugins/adlc-opencode/lib`, `plugins/adlc-claude-code/hooks`,
+`plugins/adlc-codex/hooks`, `plugins/adlc-copilot/hooks`,
+`plugins/adlc-cursor/hooks`, `plugins/adlc-gemini/hooks`, and
+`plugins/adlc-{cursor,gemini,opencode}/rails-checker.mjs` — are trust-root tier:
+a same-model P5 is not sufficient, and a cross-model review must be recorded
+before merge.

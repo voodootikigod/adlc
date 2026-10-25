@@ -1,0 +1,23 @@
+{
+  "body": "Source: GitHub issue #938. Update the trust-root paragraph in AGENTS.md so that alongside packages/rails-guard, prosecute, gate-manifest, and build-gate, it names plugins/adlc-pi/lib and sibling plugin enforcement cores (plugins/adlc-opencode/lib, plugins/adlc-claude-code/hooks, plugins/adlc-codex/hooks, plugins/adlc-copilot/hooks, plugins/adlc-cursor/hooks, plugins/adlc-gemini/hooks, and plugins/adlc-{cursor,gemini,opencode}/rails-checker.mjs). Add a regression test in scripts/test/docs-truth.test.mjs pinning the AGENTS.md trust-root coverage.",
+  "criteria": [
+    "AGENTS.md names plugins/adlc-pi/lib and sibling plugin enforcement cores in its trust-root tier rule alongside packages/rails-guard, prosecute, gate-manifest, and build-gate.",
+    "scripts/test/docs-truth.test.mjs verifies that AGENTS.md names plugins/adlc-pi/lib and the enforcement packages."
+  ],
+  "id": "T-01M5TMTSZ5S8MR6PHNK4NT8682",
+  "out_of_scope": [
+    "Modifying runtime code under plugins/ or packages/."
+  ],
+  "priority": 1,
+  "rails": [
+    "packages/prosecute/test/tier.test.mjs"
+  ],
+  "risk_tier": "low",
+  "scope": [
+    "AGENTS.md",
+    "scripts/test/docs-truth.test.mjs"
+  ],
+  "status": "ready",
+  "title": "docs(agents): name plugins/adlc-pi/lib and plugin enforcement cores as trust-root tier (#938)",
+  "verify": "node --test scripts/test/docs-truth.test.mjs"
+}
