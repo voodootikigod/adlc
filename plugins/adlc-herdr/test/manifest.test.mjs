@@ -123,3 +123,17 @@ test('validator reports missing identity, malformed entrypoints, unknown section
   assert.ok(errs.some((e) => e.includes('[[events]] requires string on')));
   assert.ok(errs.some((e) => e.includes('unknown section [[mystery]]')));
 });
+
+test('package ships LICENSE matching root MIT license in files allowlist and npm pack (#876)', () => {
+  const pkg = JSON.parse(readFileSync(join(pluginRoot, 'package.json'), 'utf8'));
+  assert.equal(pkg.license, 'MIT');
+  assert.ok(Array.isArray(pkg.files) && pkg.files.includes('LICENSE'), 'package.json files must include LICENSE');
+  const licensePath = join(pluginRoot, 'LICENSE');
+  assert.ok(existsSync(licensePath), 'plugins/adlc-herdr/LICENSE must exist');
+  const rootLicense = readFileSync(resolve(pluginRoot, '../..', 'LICENSE'), 'utf8');
+  assert.equal(readFileSync(licensePath, 'utf8'), rootLicense);
+  const pack = spawnSync('npm', ['pack', '--dry-run', '--json'], { cwd: pluginRoot, encoding: 'utf8' });
+  assert.equal(pack.status, 0, pack.stderr);
+  const packedFiles = JSON.parse(pack.stdout)[0].files.map((f) => f.path);
+  assert.ok(packedFiles.includes('LICENSE'), 'npm tarball must include LICENSE');
+});

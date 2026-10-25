@@ -1,0 +1,26 @@
+{
+  "blocks": [],
+  "body": "Source: GitHub issue #876. plugins/adlc-herdr/package.json declares MIT license but had no LICENSE file in plugins/adlc-herdr and omitted LICENSE from the files array. Add plugins/adlc-herdr/LICENSE matching the repository MIT license, include LICENSE in package.json files, and add a regression test in plugins/adlc-herdr/test/manifest.test.mjs.",
+  "criteria": [
+    "plugins/adlc-herdr/LICENSE exists with the MIT license text.",
+    "plugins/adlc-herdr/package.json files array includes LICENSE and npm pack --dry-run --json includes LICENSE."
+  ],
+  "depends_on": [],
+  "id": "T-01M5T581MK0CVNDZS7WZGRM2B0",
+  "out_of_scope": [
+    "Other plugin packages that already ship LICENSE."
+  ],
+  "priority": 1,
+  "rails": [
+    "plugins/adlc-herdr/herdr-plugin.toml"
+  ],
+  "risk_tier": "medium",
+  "scope": [
+    "plugins/adlc-herdr/LICENSE",
+    "plugins/adlc-herdr/package.json",
+    "plugins/adlc-herdr/test/manifest.test.mjs"
+  ],
+  "status": "ready",
+  "title": "plugin(adlc-herdr): ship LICENSE file in package directory and npm tarball (#876)",
+  "verify": "node --test plugins/adlc-herdr/test/manifest.test.mjs"
+}
