@@ -326,6 +326,11 @@ function readBaseDirTickets(root, base, dir) {
   if (viaHead !== null) candidates.add(viaHead);
   const lexical = relative(root, literal);
   if (!lexical.startsWith('..') && !isAbsolute(lexical)) candidates.add(lexical.split(/[\\/]/).join('/'));
+  if (candidates.size > 0) {
+    for (const { from, to } of renamePairs(commit, root)) {
+      if (candidates.has(to)) candidates.add(from);
+    }
+  }
   const tickets = [];
   const read = new Set();
   for (const candidate of candidates) {
@@ -436,25 +441,29 @@ function printSkippedOwnRails(tier, ticketId, base) {
 // an R/C status carries TWO following paths, every other status carries one.
 // Both the worktree and --cached diffs are read, mirroring changedFiles, so a
 // rename that is merely STAGED is caught too.
-function renamedSources(base, root) {
+function renamePairs(base, root) {
   const collect = (args) => {
     const tokens = splitNulPaths(git(args, { cwd: root, encoding: 'buffer' }));
-    const sources = [];
+    const pairs = [];
     for (let index = 0; index < tokens.length;) {
       const status = tokens[index++];
       if (/^[RC]\d*$/.test(status)) {
-        if (index < tokens.length) sources.push(tokens[index]);
+        if (index + 1 < tokens.length) pairs.push({ from: tokens[index], to: tokens[index + 1] });
         index += 2;
       } else {
         index += 1;
       }
     }
-    return sources;
+    return pairs;
   };
   return [
     ...collect(['diff', '--name-status', '-z', '-M', base, '--']),
     ...collect(['diff', '--cached', '--name-status', '-z', '-M', base, '--']),
   ];
+}
+
+function renamedSources(base, root) {
+  return renamePairs(base, root).map((pair) => pair.from);
 }
 
 // The changed-file set a tier classification runs on: the change's OWN files,

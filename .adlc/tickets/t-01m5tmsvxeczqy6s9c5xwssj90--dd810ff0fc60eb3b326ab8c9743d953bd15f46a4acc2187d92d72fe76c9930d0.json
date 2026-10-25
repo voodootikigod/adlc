@@ -1,0 +1,24 @@
+{
+  "body": "Source: GitHub issue #1267. In packages/prosecute/bin/adlc-prosecute.mjs, readBaseDirTickets(root, base, dir) locates the base copy of a custom --dir tickets.json using only its current path (viaHead, lexical, and base symlinks). When a PR renames or moves a tracked custom tickets.json (e.g. custom/tickets.json -> moved/tickets.json) and runs with --dir moved, no candidate matches at base, so base rails read as empty and pre-existing rails are skipped as own new rails. Include rename/copy source paths from git diff -M --name-status <base> (both worktree and --cached) whose destination matches a candidate in readBaseDirTickets so renamed custom --dir tables preserve their base rails.",
+  "criteria": [
+    "When base has custom/tickets.json with ticket T1 rail docs/secret.md and a branch renames it to moved/tickets.json and edits docs/secret.md, tier-check --dir moved --ticket T1 exits 2 with touches rails deny-path of ticket T1: docs/secret.md and no skipped own new rail line.",
+    "The recorder (adlc-prosecute --input ... --dir moved --ticket T1) likewise exits 2 requiring cross-model review without skipping docs/secret.md as an own new rail."
+  ],
+  "id": "T-01M5TMSVXECZQY6S9C5XWSSJ90",
+  "out_of_scope": [
+    "Changing canonical .adlc/tickets store resolution."
+  ],
+  "priority": 1,
+  "rails": [
+    "packages/prosecute/test/tier-own-ticket-cli.test.mjs",
+    "packages/prosecute/test/tier-own-ticket.test.mjs"
+  ],
+  "risk_tier": "medium",
+  "scope": [
+    "packages/prosecute/bin/adlc-prosecute.mjs",
+    "packages/prosecute/test/tier-own-ticket-rename.test.mjs"
+  ],
+  "status": "ready",
+  "title": "prosecute: resolve renamed custom --dir ticket table at base (#1267)",
+  "verify": "node --test packages/prosecute/test/tier-own-ticket-rename.test.mjs packages/prosecute/test/tier-own-ticket-cli.test.mjs"
+}
