@@ -68,3 +68,42 @@ test('the score is clamped to 0..1 and the band follows it', () => {
     assert.ok(BANDS.includes(r.band));
   }
 });
+
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+test('an unclustered valid issue preserves its priority band instead of auto-promoting P3-low to medium or P2-medium to high (#1058)', () => {
+  const low = rankIssue({ verdict: 'valid', labels: ['P3-low'], priorityMap: MAP });
+  assert.equal(low.band, 'low', `unclustered valid P3-low must stay low (got ${low.band}, score ${low.score})`);
+  assert.equal(low.score, 0.3);
+
+  const medium = rankIssue({ verdict: 'valid', labels: ['P2-medium'], priorityMap: MAP });
+  assert.equal(medium.band, 'medium', `unclustered valid P2-medium must stay medium (got ${medium.band}, score ${medium.score})`);
+  assert.equal(medium.score, 0.45);
+
+  const high = rankIssue({ verdict: 'valid', labels: ['P1-high'], priorityMap: MAP });
+  assert.equal(high.band, 'high', `unclustered valid P1-high must stay high (got ${high.band}, score ${high.score})`);
+  assert.equal(high.score, 0.6);
+
+  const clusteredLow = rankIssue({ verdict: 'valid', labels: ['P3-low'], priorityMap: MAP, clusterSize: 3 });
+  assert.equal(clusteredLow.band, 'medium', 'a clustered P3-low issue can still promote to medium');
+
+  const clusteredMedium = rankIssue({ verdict: 'valid', labels: ['P2-medium'], priorityMap: MAP, clusterSize: 4 });
+  assert.equal(clusteredMedium.band, 'high', 'a clustered P2-medium issue can still promote to high');
+
+  const moved = rankIssue({ verdict: 'moved', labels: ['P3-low'], priorityMap: MAP });
+  assert.equal(moved.inputs.verdict, 0.15);
+  const unverified = rankIssue({ verdict: 'unverified', labels: ['P3-low'], priorityMap: MAP });
+  assert.equal(unverified.inputs.verdict, 0.12);
+  const unverifiable = rankIssue({ verdict: 'unverifiable', labels: ['P3-low'], priorityMap: MAP });
+  assert.equal(unverifiable.inputs.verdict, 0.05);
+  const unknown = rankIssue({ verdict: 'other', labels: ['P3-low'], priorityMap: MAP });
+  assert.equal(unknown.inputs.verdict, 0.05);
+});
+
+test('repository backlog-groom profile floors both close and relabel (#1058)', () => {
+  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+  const profile = JSON.parse(readFileSync(join(repoRoot, '.claude', 'backlog-groom-profile.json'), 'utf8'));
+  assert.deepEqual(profile.autonomyFloor, ['close', 'relabel']);
+});

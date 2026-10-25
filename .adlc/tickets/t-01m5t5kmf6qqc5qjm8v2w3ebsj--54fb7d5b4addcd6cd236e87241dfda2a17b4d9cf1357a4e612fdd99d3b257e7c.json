@@ -1,0 +1,28 @@
+{
+  "blocks": [],
+  "body": "Source: GitHub issue #1058. 1. In packages/backlog-groom/lib/rank.mjs, adjust VERDICT_WEIGHT and LABEL_WEIGHT so a valid verdict does not clear the medium threshold (0.35) on its own: an unclustered valid P3-low issue stays in the low band, an unclustered valid P2-medium issue stays in the medium band, and an unclustered valid P1-high issue stays in the high band, while fixed issues score 0 so a valid issue always outranks a fixed one regardless of label or cluster size. 2. In .claude/backlog-groom-profile.json, add relabel to autonomyFloor ([\"close\", \"relabel\"]).",
+  "criteria": [
+    "Unclustered valid P3-low issues rank low, unclustered valid P2-medium issues rank medium, and unclustered valid P1-high issues rank high.",
+    ".claude/backlog-groom-profile.json includes relabel in autonomyFloor."
+  ],
+  "depends_on": [],
+  "id": "T-01M5T5KMF6QQC5QJM8V2W3EBSJ",
+  "out_of_scope": [
+    "Changing DEFAULT_AUTONOMY_FLOOR in packages/backlog-groom/lib/floor.mjs."
+  ],
+  "priority": 1,
+  "rails": [
+    "packages/backlog-groom/test/floor.test.mjs",
+    "packages/backlog-groom/test/profile.test.mjs"
+  ],
+  "risk_tier": "medium",
+  "scope": [
+    "packages/backlog-groom/lib/rank.mjs",
+    "packages/backlog-groom/test/rank.test.mjs",
+    ".claude/backlog-groom-profile.json",
+    "packages/backlog-groom/test/fixtures/groomed-set.v4.json"
+  ],
+  "status": "ready",
+  "title": "backlog-groom: allow valid issues to rank low and floor relabel in repo profile (#1058)",
+  "verify": "node --test packages/backlog-groom/test/rank.test.mjs packages/backlog-groom/test/floor.test.mjs packages/backlog-groom/test/profile.test.mjs"
+}

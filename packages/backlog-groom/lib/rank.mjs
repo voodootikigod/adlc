@@ -21,14 +21,14 @@ export function bandOfLabel(labels, priorityMap) {
 }
 
 const VERDICT_WEIGHT = {
-  valid: 0.5, // still real: the strongest evidence that it matters
-  moved: 0.3, // real, but needs re-locating before it can be worked
-  unverified: 0.25, // we have not looked; neither promote nor bury
-  unverifiable: 0.15,
-  fixed: 0, // nothing left to do
+  valid: 0.25, // still real: strongest evidence that it matters, without clearing medium on its own
+  moved: 0.15, // real, but needs re-locating before it can be worked
+  unverified: 0.12, // we have not looked; neither promote nor bury
+  unverifiable: 0.05,
+  fixed: -0.35, // nothing left to do: neither label nor cluster can make a fixed issue outrank a live one
 };
 
-const LABEL_WEIGHT = { high: 0.3, medium: 0.18, low: 0.05 };
+const LABEL_WEIGHT = { high: 0.35, medium: 0.2, low: 0.05 };
 
 /** Bands, highest first — exported so callers compare rather than re-derive. */
 export const BANDS = Object.freeze(['high', 'medium', 'low']);
@@ -41,7 +41,7 @@ export const BANDS = Object.freeze(['high', 'medium', 'low']);
 export function rankIssue({ verdict, labels = [], priorityMap, clusterSize = 1, frozen = false }) {
   const labelBand = bandOfLabel(labels, priorityMap);
   const inputs = {
-    verdict: VERDICT_WEIGHT[verdict] ?? 0.15,
+    verdict: VERDICT_WEIGHT[verdict] ?? 0.05,
     // A bigger cluster means more issues share one surface, so fixing one is
     // worth more — capped, so cluster size can never outweigh the verdict.
     cluster: Math.min(0.2, Math.max(0, clusterSize - 1) * 0.05),

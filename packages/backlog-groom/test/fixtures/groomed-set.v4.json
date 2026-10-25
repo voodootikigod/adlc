@@ -37,10 +37,10 @@
       "updatedAt": "2026-09-01T00:00:00Z",
       "frozen": false,
       "rank": {
-        "score": 0.6,
-        "band": "high",
+        "score": 0.35,
+        "band": "medium",
         "inputs": {
-          "verdict": 0.5,
+          "verdict": 0.25,
           "cluster": 0.05,
           "label": 0.05,
           "frozen": 0
@@ -73,12 +73,12 @@
       "updatedAt": "2026-09-02T00:00:00Z",
       "frozen": false,
       "rank": {
-        "score": 0.35,
-        "band": "medium",
+        "score": 0.05,
+        "band": "low",
         "inputs": {
-          "verdict": 0,
+          "verdict": -0.35,
           "cluster": 0.05,
-          "label": 0.3,
+          "label": 0.35,
           "frozen": 0
         },
         "labelBand": "high"
@@ -103,10 +103,10 @@
       "updatedAt": "2026-09-03T00:00:00Z",
       "frozen": false,
       "rank": {
-        "score": 0.25,
+        "score": 0.15,
         "band": "low",
         "inputs": {
-          "verdict": 0.15,
+          "verdict": 0.05,
           "cluster": 0,
           "label": 0.1,
           "frozen": 0
@@ -146,8 +146,8 @@
       "action": "relabel",
       "field": "priority",
       "from": "P3-low",
-      "to": "P1-high",
-      "evidence": "computed rank high (score 0.6) disagrees with the P3-low label; rank inputs: {\"verdict\":0.5,\"cluster\":0.05,\"label\":0.05,\"frozen\":0}"
+      "to": "P2-medium",
+      "evidence": "computed rank medium (score 0.35) disagrees with the P3-low label; rank inputs: {\"verdict\":0.25,\"cluster\":0.05,\"label\":0.05,\"frozen\":0}"
     },
     {
       "number": 705,
