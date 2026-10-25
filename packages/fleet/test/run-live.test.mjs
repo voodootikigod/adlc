@@ -65,7 +65,8 @@ test('the whole-run deadline is anchored at INVOCATION, before preflight: slow p
   assert.equal(seenConfig.deadline, 100_000 + 60_000, 'deadline = invocation + wallClockMinutes, not after-preflight + wallClockMinutes');
 });
 
-import { canaryTimeout } from '../bin/fleet.mjs';
+import { canaryTimeout, CANARY_SYSTEM_ROOTS, canaryReadOnlyPaths } from '../bin/fleet.mjs';
+import { SYSTEM_ROOTS } from '../lib/bounded-model-plane.mjs';
 test('the preflight canary is bounded by the remaining wall clock, and a preflight that consumed the whole budget ends the run with reason wall-clock and no dispatch (codex r3)', async () => {
   assert.equal(canaryTimeout(null, 5), undefined, 'no deadline → no timeout');
   assert.equal(canaryTimeout(10_000, 4_000), 6_000, 'the exact remaining budget');
@@ -107,4 +108,44 @@ test('--json is total for a THROWN preflight (reason preflight, no lock release 
   const ov2 = { ...overrides({}), loadPrior: () => ({ runId: 'r-old' }), reconcile: () => { throw new Error('status corrupt'); }, emit: (d) => { emitted2 = d; }, release: () => { released2++; } };
   const code2 = await runLive({ ...ARGS, json: true }, ov2);
   assert.equal(code2, 1); assert.equal(emitted2?.reason, 'dispatch-refused'); assert.equal(released2, 1, 'the preflight-held lock is released');
+});
+
+test('preflight canary binds existing CANARY_SYSTEM_ROOTS including /bin read-only for bubblewrap (#1266)', async () => {
+  assert.deepEqual([...CANARY_SYSTEM_ROOTS], [...SYSTEM_ROOTS, '/bin']);
+  assert.equal(Object.isFrozen(CANARY_SYSTEM_ROOTS), true);
+  assert.deepEqual(
+    canaryReadOnlyPaths((p) => p === '/usr' || p === '/bin'),
+    ['/usr', '/bin']
+  );
+  assert.ok(Array.isArray(canaryReadOnlyPaths()) && canaryReadOnlyPaths().includes('/usr'));
+
+  let spawnedCmd = null;
+  let spawnedArgs = null;
+  let canaryRes = null;
+  const ov = {
+    ...overrides({ contaminated: false, results: {}, merged: 0, prCount: 0, integrationBranch: 'fleet/run-x' }),
+    io: {
+      git: () => () => 'SHA',
+      env: { PATH: '/usr/bin:/bin' },
+      pathExists: (p) => p === '/usr' || p === '/bin' || p === '/lib',
+      spawnWorker: async (cmd, args) => {
+        spawnedCmd = cmd;
+        spawnedArgs = args;
+        return { status: 0, stdout: '__fleet_canary_ok__\n', stderr: '' };
+      },
+    },
+    preflight: async ({ dispatchCanary }) => {
+      canaryRes = await dispatchCanary({ sandboxSpec: { mode: 'sandbox', backend: { name: 'bubblewrap' } } });
+      return { ok: canaryRes.ok, warnings: [], sandboxSpec: { mode: 'sandbox', backend: { name: 'bubblewrap' } } };
+    },
+  };
+  const code = await runLive(ARGS, ov);
+  assert.equal(code, 0);
+  assert.equal(canaryRes?.ok, true);
+  assert.equal(spawnedCmd, 'bwrap');
+  const joined = spawnedArgs.join(' ');
+  assert.match(joined, /--ro-bind \/usr \/usr/);
+  assert.match(joined, /--ro-bind \/bin \/bin/);
+  assert.match(joined, /--ro-bind \/lib \/lib/);
+  assert.doesNotMatch(joined, /--ro-bind \/lib64 \/lib64/);
 });

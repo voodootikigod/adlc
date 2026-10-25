@@ -5,7 +5,7 @@
 import { parseArgs, gateFail, opError, printJson } from '@adlc/core';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { mkdtempSync, rmSync, mkdirSync, realpathSync, readFileSync, lstatSync, openSync, fstatSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, mkdirSync, realpathSync, readFileSync, lstatSync, openSync, fstatSync, readSync, closeSync, constants as fsConstants } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { loadPlan, activeTickets } from '../lib/plan.mjs';
@@ -29,6 +29,7 @@ import {
 import { builderPrompt, fenceDeadEnd } from '../lib/charters.mjs';
 import { getAdapter } from '../lib/adapters/index.mjs';
 import { Sandbox } from '../lib/sandbox.mjs';
+import { SYSTEM_ROOTS } from '../lib/bounded-model-plane.mjs';
 import { repoCommandEnv } from '../lib/env-scrub.mjs';
 
 const USAGE = `fleet — parallel ADLC ticket orchestration
@@ -447,6 +448,13 @@ export function loadExtensionFiles(config, readFile = (p) => readBoundedFile(p))
 }
 
 /** The canary's timeout: the whole remaining budget, never padded; undefined without a deadline. */
+/** System roots the preflight canary binds read-only — SYSTEM_ROOTS plus /bin so /bin/sh resolves on merged-usr and split-usr hosts (#1266). */
+export const CANARY_SYSTEM_ROOTS = Object.freeze([...SYSTEM_ROOTS, '/bin']);
+
+export function canaryReadOnlyPaths(pathExists = existsSync) {
+  return CANARY_SYSTEM_ROOTS.filter((p) => pathExists(p));
+}
+
 export function canaryTimeout(deadline, nowMs) {
   return deadline == null ? undefined : Math.max(1, deadline - nowMs);
 }
@@ -501,6 +509,7 @@ export async function runLive({ repo, dir, all, config, onlyIds, json = false },
       mkdirSync(join(tmp, '.home'), { recursive: true }); // bwrap bind source must exist (L4)
       const sb = new Sandbox({
         mode: sandboxSpec.mode, backend: sandboxSpec.backend, worktree: tmp, syntheticHome: join(tmp, '.home'),
+        readOnlyPaths: canaryReadOnlyPaths(io.pathExists ?? existsSync),
         exec: async (argv, opts) => { const r = await io.spawnWorker(argv[0], argv.slice(1), { cwd: tmp, killGroup: true, ...opts }); if (r.error) throw r.error; if (typeof r.status === 'number' && r.status !== 0) throw new Error(r.stderr || 'canary command failed'); return `${r.stdout ?? ''}`; },
       });
       const out = await sb.run(['/bin/sh', '-c', 'echo __fleet_canary_ok__'], { env: repoCommandEnv(io.env, { syntheticHome: join(tmp, '.home') }), ...(canaryTimeoutMs() != null ? { timeout: canaryTimeoutMs() } : {}) });

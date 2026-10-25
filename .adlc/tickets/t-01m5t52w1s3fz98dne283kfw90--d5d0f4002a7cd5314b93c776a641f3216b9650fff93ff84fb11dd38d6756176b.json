@@ -1,0 +1,26 @@
+{
+  "blocks": [],
+  "body": "Source: GitHub issue #1266. dispatchCanary in packages/fleet/bin/fleet.mjs instantiated Sandbox without readOnlyPaths, leaving /usr and /bin unbound on bubblewrap hosts so /bin/sh failed with ENOENT. Export CANARY_SYSTEM_ROOTS ([...SYSTEM_ROOTS, \"/bin\"]) and canaryReadOnlyPaths(pathExists) in packages/fleet/bin/fleet.mjs and pass readOnlyPaths to Sandbox in dispatchCanary.",
+  "criteria": [
+    "CANARY_SYSTEM_ROOTS includes all SYSTEM_ROOTS plus /bin, and canaryReadOnlyPaths filters to existing host paths.",
+    "dispatchCanary passes readOnlyPaths from canaryReadOnlyPaths to Sandbox so bubblewrap binds /usr and /bin."
+  ],
+  "depends_on": [],
+  "id": "T-01M5T52W1S3FZ98DNE283KFW90",
+  "out_of_scope": [
+    "Modifying packages/fleet/lib/sandbox.mjs or packages/fleet/lib/bounded-model-plane.mjs."
+  ],
+  "priority": 1,
+  "rails": [
+    "packages/fleet/test/sandbox.test.mjs",
+    "packages/fleet/test/model-plane-read.test.mjs"
+  ],
+  "risk_tier": "medium",
+  "scope": [
+    "packages/fleet/bin/fleet.mjs",
+    "packages/fleet/test/run-live.test.mjs"
+  ],
+  "status": "ready",
+  "title": "fleet: bind read-only system roots including /bin in preflight canary (#1266)",
+  "verify": "node --test packages/fleet/test/run-live.test.mjs"
+}
