@@ -6,7 +6,7 @@
 // (exitCode 1) without touching the manifest.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runProsecution } from '../lib/run.mjs';
@@ -130,5 +130,39 @@ describe('input validation (op-error)', () => {
     assert.equal(missingReason.exitCode, 1);
     assert.ok(missingReason.errors.some((error) => error.includes('reason must be a non-empty string when verified_status is deferred')));
     assert.equal(missingReason.errors.some((error) => error.includes('follow_up must be a non-empty string when verified_status is deferred')), false);
+  });
+
+  it('validates the README example document and example transcript, and rejects prose-only ticket mention (#891)', () => {
+    const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+    const jsonMatch = readme.match(/```json\n([\s\S]*?)\n```/);
+    const textMatch = readme.match(/```text\n([\s\S]*?)\n```/);
+    assert.ok(jsonMatch, 'README must include a json example block');
+    assert.ok(textMatch, 'README must include a text transcript example block');
+
+    const dir = tmpAdlc();
+    const rev = 'git-worktree:0123456789abcdef';
+    const transcriptPath = join(dir, 'readme-transcript.txt');
+    writeFileSync(transcriptPath, textMatch[1]);
+    const pkt = reviewPacket(dir, { revision: rev });
+    const doc = JSON.parse(jsonMatch[1]);
+    doc.provenance.transcript = transcriptPath;
+    doc.review_packet = pkt;
+
+    const okRes = runProsecution(doc, { dir, ticket: 'T1', revision: rev, base: 'HEAD' });
+    assert.equal(okRes.errors, undefined);
+    assert.equal(okRes.exitCode, 2, 'example document records findings and exits 2 (not yet converged)');
+
+    const proseTranscriptPath = join(dir, 'prose-transcript.txt');
+    writeFileSync(
+      proseTranscriptPath,
+      textMatch[1].replace(/^\s*ticket\s*:\s*T1\s*$/m, 'Reviewed ticket T1 in prose without a key-value line.')
+    );
+    const badDoc = { ...doc, provenance: { ...doc.provenance, transcript: proseTranscriptPath } };
+    const badRes = runProsecution(badDoc, { dir, ticket: 'T1', revision: rev, base: 'HEAD' });
+    assert.equal(badRes.exitCode, 1);
+    assert.ok(
+      badRes.errors.some((e) => e.includes('provenance.transcript must reference ticket T1')),
+      `expected provenance.transcript must reference ticket error, got: ${JSON.stringify(badRes.errors)}`
+    );
   });
 });

@@ -69,35 +69,118 @@ adlc-prosecute --input p5-passes.json --ticket T1 --dir .adlc --json
 }
 ```
 
-`verified_status` must be `verified`, `killed`, or `needs-human`. Killed findings must
+`verified_status` must be `verified`, `killed`, `needs-human`, or `deferred` (`deferred` is
+allowed only for `severity: "low"` with `follow_up` and `reason`). Killed findings must
 include `verification.reason`, `verification.method`, and `verification.evidence`.
 Inputs must use the built-in lens names: `security`, `correctness`, `tests`, `behavior`,
-`integration`, or `docs`. Clean reviews with zero finding candidates are accepted when the
-dry passes include evidence. If no finding is marked `verified`, the input must include
-`no_findings_attestation` with
-`reason`, `method`, and `evidence`. Only passes with zero findings count as dry; killed
-findings are recorded but do not advance dry-pass convergence.
+`integration`, or `docs`. Only passes with zero `verified` and zero `needs-human` findings
+count as dry; convergence requires two consecutive dry passes covering at least three
+distinct dry lenses (killed findings are recorded and close open findings, but a pass
+carrying only killed findings does not advance the dry-pass lens count on its own without
+`dry_evidence` when `findings` is empty).
 
-The transcript is not treated as a generic attachment. It must be readable, at least 64
-bytes, and it must reference both the `--ticket` value and the resolved reviewed revision
-string (`git-worktree:<hash>` unless `--revision` is supplied). This binds the recorded
-P5 evidence to the ticket and revision that P6 later checks, but it still does not prove
-that an external reviewer ran. Use the named `provenance.command` and transcript from the
-actual skeptical review run, not a hand-written placeholder.
+### Validator rules enforced by `lib/schema.mjs` and `lib/run.mjs`
 
-The review packet binds the reviewer prompt and reviewed input packet to P5 evidence.
-`prompt` and `inputs` are file paths, their hashes must match the supplied SHA-256 values,
-and `clean_worktree` must equal the exact reviewed revision.
+1. **`ticket:` transcript line (`transcriptReferencesTicket`).** `provenance.transcript` must
+   be a readable file of at least 64 bytes containing a dedicated line matching
+   `^\s*ticket\s*:\s*<id>\s*# @adlc/prosecute
 
-**Evidence file location is enforced, not just convention.** If `provenance.transcript`,
-`review_packet.prompt`, or `review_packet.inputs` resolves to a path *inside* the worktree,
-it must live under `.adlc/` or `.omo/evidence/` -- `lib/run.mjs`'s `isEvidencePath()` rejects
-any other in-worktree location. This is a trust-boundary control: it stops review "evidence"
-from pointing at an arbitrary file elsewhere in the repo that could be edited to fake a
-clean review. `.omo/evidence/` is otherwise-gitignored scratch space, but the three files
-backing the bundled example (`docs/examples/p5-passes.json`) are deliberately carved out
-of that ignore rule and tracked -- see the comment in `.gitignore` before treating anything
-under `.omo/` as safe to delete.
+> **Design decision: this is a recorder, not a reviewer.** `@adlc/prosecute` makes zero
+> model calls and runs no adversarial review of its own. It is a P5 evidence ledger: it
+> validates, hashes, and appends normalized reviewer-produced pass records to
+> `.adlc/manifest.jsonl`. The actual model-judged review is a separate tool -- run
+> `npx adversarial-review` (or `adlc review`, which passes args through to it) -- and feed
+> **its** output into `prosecute` as the `--input` evidence. If you run `adlc prosecute`
+> expecting it to find bugs, it will not; it only proves that a real review already did.
+
+P5 review-evidence recorder. It consumes normalized reviewer-produced pass evidence,
+records ticket- and revision-scoped P5 evidence to `.adlc/manifest.jsonl`, and passes
+only after two consecutive dry passes with at least three distinct dry lenses.
+
+## Usage
+
+```sh
+adlc-prosecute --input p5-passes.json --ticket T1 --dir .adlc --json
+```
+
+## Input shape
+
+```json
+{
+  "target": "feature branch",
+  "provenance": {
+      "reviewer": "local-reviewer",
+      "session": "codex-session-123",
+      "command": "npx adversarial-review --scope working-tree --include-files",
+      "transcript": ".omo/evidence/p5-review.txt"
+  },
+  "review_packet": {
+      "prompt": ".omo/evidence/p5-prompt.txt",
+      "prompt_hash": "sha256-of-prompt-file",
+      "inputs": ".omo/evidence/p5-inputs.txt",
+      "inputs_hash": "sha256-of-reviewed-input-packet",
+      "clean_worktree": "git-worktree:..."
+  },
+  "passes": [
+    {
+      "lens": "security",
+      "findings": [
+        {
+          "id": "F1",
+          "severity": "high",
+          "category": "security",
+          "file": "src/auth.js",
+          "line_start": 10,
+          "line_end": 12,
+          "evidence": "quoted changed code",
+          "claim": "token bypass",
+          "recommendation": "validate issuer",
+          "confidence": 0.8,
+          "verified_status": "verified"
+        }
+      ]
+    },
+    {
+      "lens": "security",
+      "findings": [],
+      "dry_evidence": "review transcript reports no verified security findings"
+    },
+    {
+      "lens": "correctness",
+      "findings": [],
+      "dry_evidence": "review transcript reports no verified correctness findings"
+    }
+  ]
+}
+```
+
+ (case-insensitive on `ticket`) where `<id>` equals the
+   `--ticket` value, and must also contain the resolved reviewed revision string
+   (`git-worktree:<hash>` unless `--revision` is supplied). A prose mention of the ticket ID
+   does **not** satisfy `transcriptReferencesTicket`. Minimal valid transcript example:
+
+```text
+ticket: T1
+reviewed revision: git-worktree:0123456789abcdef
+adversarial-review completed across security and correctness lenses.
+```
+
+2. **`review_packet.clean_worktree == revision`.** `review_packet.clean_worktree` must equal
+   the exact reviewed revision string (the `--revision` value when supplied, or the computed
+   `git-worktree:<hash>` change-set revision). `prompt` and `inputs` must be readable files
+   whose SHA-256 digests match `prompt_hash` and `inputs_hash`.
+
+3. **`no_findings_attestation` whenever nothing is `verified`.** `no_findings_attestation`
+   (`reason`, `method`, and `evidence`) is required whenever **no finding across any pass has
+   `verified_status: "verified"`** — not only on empty/clean reviews, but also on reviews
+   whose only findings are `killed`, `needs-human`, or `deferred`.
+
+4. **Conditional evidence-path rule (`isEvidencePath`).** If `provenance.transcript`,
+   `review_packet.prompt`, or `review_packet.inputs` resolves to a path **inside** the
+   worktree (`cwd`), it must live under `.adlc/` or `.omo/evidence/`; paths that resolve
+   **outside** the worktree (such as an external scratch directory) are allowed. `.omo/evidence/`
+   is otherwise-gitignored scratch space, with the three files backing
+   `docs/examples/p5-passes.json` carved out in `.gitignore`.
 
 ## Trust-root tier — required cross-model review (T39)
 
