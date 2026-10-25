@@ -1,0 +1,25 @@
+{
+  "body": "Source: GitHub issue #956. In packages/merge-forecast/lib/signals.mjs, signalCoChange scores a file pair purely on confidence (pc / minCount * 0.5) with no support floor, so two files that shared a single commit (pc = 1, minCount = 1) saturate at 0.5. Export MIN_COCHANGE_SUPPORT = 3 and require pc >= MIN_COCHANGE_SUPPORT before computing the confidence ratio in signalCoChange, matching model-router priors 3-sample bucket floor.",
+  "criteria": [
+    "signalCoChange exports MIN_COCHANGE_SUPPORT = 3 and returns 0 for file pairs with fewer than 3 shared commits (pc < 3).",
+    "File pairs with pc >= 3 continue to score (pc / minCount) * 0.5 capped at 0.5."
+  ],
+  "id": "T-01M5TMTS62N2PD9KAQYJSFYXQQ",
+  "out_of_scope": [
+    "Changing coChange git log mining in @adlc/core."
+  ],
+  "priority": 1,
+  "rails": [
+    "packages/merge-forecast/test/co-change-floor.test.mjs",
+    "packages/merge-forecast/test/high-risk-concurrent.test.mjs"
+  ],
+  "risk_tier": "medium",
+  "scope": [
+    "packages/merge-forecast/lib/signals.mjs",
+    "packages/merge-forecast/test/forecast.test.mjs",
+    "packages/merge-forecast/README.md"
+  ],
+  "status": "ready",
+  "title": "merge-forecast: require minimum shared-commit support in signalCoChange (#956)",
+  "verify": "node --test packages/merge-forecast/test/forecast.test.mjs packages/merge-forecast/test/co-change-floor.test.mjs packages/merge-forecast/test/high-risk-concurrent.test.mjs"
+}

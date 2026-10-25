@@ -25,6 +25,7 @@ import {
   signalScopeOverlap,
   signalImportRadius,
   signalCoChange,
+  MIN_COCHANGE_SUPPORT,
   signalNamespaceRoutes,
   signalMigrationCollision,
   signalGraphCoupling,
@@ -359,6 +360,46 @@ describe('signalCoChange', () => {
 
     const score = signalCoChange(a, b, { pairCounts, fileCounts }, repoFiles);
     assert.equal(score, 0.5); // capped
+  });
+
+  test('MIN_COCHANGE_SUPPORT is 3', () => {
+    assert.equal(MIN_COCHANGE_SUPPORT, 3);
+  });
+
+  test('single shared commit (pc = 1, minCount = 1) returns 0 instead of saturating at 0.5', () => {
+    const pairCounts = { [pairKey('src/a.js', 'src/b.js')]: 1 };
+    const fileCounts = { 'src/a.js': 1, 'src/b.js': 1 };
+    const a = mkTicket('A', { scope: ['src/a.js'] });
+    const b = mkTicket('B', { scope: ['src/b.js'] });
+    const repoFiles = ['src/a.js', 'src/b.js'];
+    assert.equal(signalCoChange(a, b, { pairCounts, fileCounts }, repoFiles), 0);
+  });
+
+  test('two shared commits (pc = 2, minCount = 2) below support floor returns 0', () => {
+    const pairCounts = { [pairKey('src/a.js', 'src/b.js')]: 2 };
+    const fileCounts = { 'src/a.js': 2, 'src/b.js': 2 };
+    const a = mkTicket('A', { scope: ['src/a.js'] });
+    const b = mkTicket('B', { scope: ['src/b.js'] });
+    const repoFiles = ['src/a.js', 'src/b.js'];
+    assert.equal(signalCoChange(a, b, { pairCounts, fileCounts }, repoFiles), 0);
+  });
+
+  test('three shared commits (pc = 3, minCount = 3) meets support floor and scores 0.5', () => {
+    const pairCounts = { [pairKey('src/a.js', 'src/b.js')]: 3 };
+    const fileCounts = { 'src/a.js': 3, 'src/b.js': 3 };
+    const a = mkTicket('A', { scope: ['src/a.js'] });
+    const b = mkTicket('B', { scope: ['src/b.js'] });
+    const repoFiles = ['src/a.js', 'src/b.js'];
+    assert.equal(signalCoChange(a, b, { pairCounts, fileCounts }, repoFiles), 0.5);
+  });
+
+  test('zero minCount with pc >= 3 returns 0', () => {
+    const pairCounts = { [pairKey('src/a.js', 'src/b.js')]: 3 };
+    const fileCounts = { 'src/a.js': 0, 'src/b.js': 3 };
+    const a = mkTicket('A', { scope: ['src/a.js'] });
+    const b = mkTicket('B', { scope: ['src/b.js'] });
+    const repoFiles = ['src/a.js', 'src/b.js'];
+    assert.equal(signalCoChange(a, b, { pairCounts, fileCounts }, repoFiles), 0);
   });
 });
 

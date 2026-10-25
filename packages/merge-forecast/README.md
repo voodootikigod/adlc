@@ -41,7 +41,7 @@ Each parallel-eligible ticket pair (neither is an ancestor of the other in the D
 | 0.8   | `namespace-collision` | Dynamic route segments conflict (`[pk]` vs `[voteKey]` at same path depth) or migration prefix collision (`drizzle/0005_*` vs `migrations/0005_*`). |
 | 0.7   | `graph-coupling` | Semantic call/symbol graph coupling (e.g. Spanner Graph, `mcp__spannercg`, or exported graph coupling). |
 | 0.6   | `import-radius` | Files matching ticket A's scope import from ticket B's scope or vice versa. |
-| 0–0.5 | `co-change` | Historical co-commit coupling: `pairCount / min(fileCountA, fileCountB) × 0.5`. |
+| 0–0.5 | `co-change` | Historical co-commit coupling: `pairCount / min(fileCountA, fileCountB) × 0.5` (requires `pairCount >= 3`). |
 
 Pairs at or above `--conflict-threshold` get a `SEQUENCE` verdict. Below threshold: `PARALLEL`.
 

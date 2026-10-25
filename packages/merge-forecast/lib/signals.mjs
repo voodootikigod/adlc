@@ -149,6 +149,8 @@ export function signalImportRadius(a, b, repoFiles, root) {
  * max over (fileA from A-matched, fileB from B-matched) of
  * pairCounts[pairKey] / Math.min(fileCounts[fileA], fileCounts[fileB]) × 0.5
  */
+export const MIN_COCHANGE_SUPPORT = 3;
+
 export function signalCoChange(a, b, coChangeData, repoFiles) {
   if (!coChangeData) return 0;
   const { pairCounts, fileCounts } = coChangeData;
@@ -161,7 +163,7 @@ export function signalCoChange(a, b, coChangeData, repoFiles) {
       if (fa === fb) continue;
       const key = pairKey(fa, fb);
       const pc = pairCounts[key] ?? 0;
-      if (pc === 0) continue;
+      if (pc < MIN_COCHANGE_SUPPORT) continue;
       const minCount = Math.min(fileCounts[fa] ?? 0, fileCounts[fb] ?? 0);
       if (minCount === 0) continue;
       const score = (pc / minCount) * 0.5;
