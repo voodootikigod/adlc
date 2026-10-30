@@ -1,6 +1,7 @@
 {
   "blocks": [],
   "body": "Source: GitHub issue #891. Update packages/prosecute/README.md Input shape section to state all four validator rules: (1) provenance.transcript must contain a line matching /^\\s*ticket\\s*:\\s*<id>\\s*$/i (prose mention does not satisfy transcriptReferencesTicket) with a minimal valid transcript example; (2) review_packet.clean_worktree must equal the reviewed revision string (the --revision value when supplied); (3) no_findings_attestation is required whenever nothing is verified (including reviews whose only findings are killed or needs-human); (4) evidence paths that resolve inside the worktree must live under .adlc/ or .omo/evidence/ while external paths are allowed. Add positive and negative doc tests in packages/prosecute/test/prosecute-schema-validation.test.mjs.",
+  "completed": true,
   "criteria": [
     "packages/prosecute/README.md states all four validator rules and includes a minimal valid transcript example.",
     "Doc test validates the README example transcript and document through runProsecution and verifies replacing the ticket: line with prose fails with provenance.transcript must reference ticket."

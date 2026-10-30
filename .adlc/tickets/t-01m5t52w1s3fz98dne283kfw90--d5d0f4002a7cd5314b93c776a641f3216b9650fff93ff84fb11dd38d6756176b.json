@@ -1,6 +1,7 @@
 {
   "blocks": [],
   "body": "Source: GitHub issue #1266. dispatchCanary in packages/fleet/bin/fleet.mjs instantiated Sandbox without readOnlyPaths, leaving /usr and /bin unbound on bubblewrap hosts so /bin/sh failed with ENOENT. Export CANARY_SYSTEM_ROOTS ([...SYSTEM_ROOTS, \"/bin\"]) and canaryReadOnlyPaths(pathExists) in packages/fleet/bin/fleet.mjs and pass readOnlyPaths to Sandbox in dispatchCanary.",
+  "completed": true,
   "criteria": [
     "CANARY_SYSTEM_ROOTS includes all SYSTEM_ROOTS plus /bin, and canaryReadOnlyPaths filters to existing host paths.",
     "dispatchCanary passes readOnlyPaths from canaryReadOnlyPaths to Sandbox so bubblewrap binds /usr and /bin."
