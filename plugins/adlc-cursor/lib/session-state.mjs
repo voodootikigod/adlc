@@ -73,11 +73,14 @@ function atomicWrite(path, value) {
 /**
  * Leased lock around a state file. Fencing: commit only if ownership still matches.
  */
+const LOCK_WAIT_BUF = new Int32Array(new SharedArrayBuffer(4));
+
 export function withStateLock(lockPath, fn, {
   now = Date.now(),
   leaseMs = 5_000,
   retries = 40,
   backoffMs = 25,
+  wait = Atomics.wait,
 } = {}) {
   ensureDir(dirname(lockPath));
   const owner = `${process.pid}.${now}.${Math.random().toString(16).slice(2)}`;
@@ -104,10 +107,12 @@ export function withStateLock(lockPath, fn, {
       }
     } catch (err) {
       if (err?.code === 'EEXIST' || err?.message === 'STATE_LOCK_LOST') {
-        Atomics.wait?.(new Int32Array(new SharedArrayBuffer(4)), 0, 0, backoffMs);
-        // fallback busy sleep without Atomics.wait in all envs
-        const end = Date.now() + backoffMs;
-        while (Date.now() < end) { /* spin */ }
+        if (typeof wait === 'function') {
+          wait(LOCK_WAIT_BUF, 0, 0, backoffMs);
+        } else {
+          const end = Date.now() + backoffMs;
+          while (Date.now() < end) { /* spin */ }
+        }
         now = Date.now();
         continue;
       }
