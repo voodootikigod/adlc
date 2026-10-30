@@ -1,7 +1,7 @@
 // format.mjs — human-readable + JSON rendering for a runTicketPrune() result.
 
 export function renderReport(result) {
-  const { baseRef, write, inferScope = false, stale, active, tombstoned = [], archived = [], needsCeremony = [], blocked = [] } = result;
+  const { baseRef, write, inferScope = false, storeKind = 'legacy', stale, active, tombstoned = [], archived = [], needsCeremony = [], blocked = [] } = result;
   const lines = [];
   // `--ceremony` is deprecated (#208) and returns before rendering, so the only
   // in-place write this tool reports is tombstoning under --write.
@@ -32,7 +32,8 @@ export function renderReport(result) {
   } else if (stale.length === 0) {
     lines.push('No stale tickets found.');
   } else {
-    lines.push(`Stale tickets (${stale.length}) — re-run with --write to tombstone them:`);
+    const action = storeKind === 'directory' ? 'archive them out of the active store' : 'tombstone them';
+    lines.push(`Stale tickets (${stale.length}) — re-run with --write to ${action}:`);
     for (const r of stale) lines.push(`  - ${r.id}: ${r.reason}`);
   }
 

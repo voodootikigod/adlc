@@ -3,6 +3,7 @@
 // around this (CONVENTIONS layout rule).
 
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { loadTickets } from '@adlc/core';
 import { classifyTicket, classifyTickets, ceremonyDisposition, listTrackedFiles } from './detect.mjs';
@@ -132,6 +133,7 @@ export function runTicketPrune(options = {}) {
       write,
       ceremony,
       inferScope,
+      storeKind: existsSync(resolve(cwd, '.adlc/tickets/.store.json')) ? 'directory' : 'legacy',
       stale,
       active,
       tombstoned: [],

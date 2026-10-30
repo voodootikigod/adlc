@@ -126,7 +126,7 @@ matching, and is exactly the check the issue's worked example did by hand.
 
 | Code | Meaning |
 |------|---------|
-| `0` | Report or tombstone succeeded — regardless of how many stale tickets were found. This is advisory (like `model-ratchet`), not a pass/fail gate: stale tickets are clutter, not a merge blocker. |
+| `0` | Report, archive, or tombstone succeeded — regardless of how many stale tickets were found. This is advisory (like `model-ratchet`), not a pass/fail gate: stale tickets are clutter, not a merge blocker. |
 | `1` | Operational error — bad/missing ticket file, invalid JSON, unresolvable `--base-ref`, the write lock could not be acquired, or the deprecated `--ceremony` was invoked (it redirects). |
 
 ## Examples
