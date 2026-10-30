@@ -190,3 +190,16 @@ test('an unknown event does nothing', () => {
   assert.equal(res.status, 0);
   assert.equal(calls().trim(), '');
 });
+
+test('a malformed ADLC_HERDR_NUDGE_WINDOW_MS logs a warning and falls back to deduplicating flaps (#835)', () => {
+  writeFileSync(join(repo, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 't-active', ticketHash: 'x' }));
+  const payload = JSON.stringify({ event: 'pane_agent_status_changed', data: { pane_id: 'w4:p9', agent_status: 'idle' } });
+  const first = runEvent('pane.agent_status_changed', payload, { ADLC_HERDR_NUDGE_WINDOW_MS: '30s' });
+  assert.equal(first.status, 0);
+  assert.match(first.stderr, /invalid ADLC_HERDR_NUDGE_WINDOW_MS="30s"; falling back to 30000ms/);
+  const before = (calls().match(/notification show/g) || []).length;
+  const second = runEvent('pane.agent_status_changed', payload, { ADLC_HERDR_NUDGE_WINDOW_MS: '30s' });
+  assert.equal(second.status, 0);
+  const after = (calls().match(/notification show/g) || []).length;
+  assert.equal(after, before, 'malformed window must fall back to 30s dedupe, not disable it');
+});

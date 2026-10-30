@@ -32,3 +32,16 @@ export function isStaleMarker(name, currentBucket) {
   const b = markerBucket(name);
   return b !== null && b < currentBucket;
 }
+
+export const DEFAULT_NUDGE_WINDOW_MS = 30_000;
+
+/** Parse ADLC_HERDR_NUDGE_WINDOW_MS, warning and falling back to 30s on malformed values (#835). */
+export function resolveNudgeWindowMs(raw, warn = console.error) {
+  if (raw === undefined) return DEFAULT_NUDGE_WINDOW_MS;
+  const parsed = /^\s*$/.test(raw) ? Number.NaN : Number(raw);
+  if (!Number.isFinite(parsed)) {
+    warn(`adlc-herdr: invalid ADLC_HERDR_NUDGE_WINDOW_MS="${raw}"; falling back to ${DEFAULT_NUDGE_WINDOW_MS}ms`);
+    return DEFAULT_NUDGE_WINDOW_MS;
+  }
+  return parsed;
+}

@@ -101,6 +101,10 @@ Without it, a ticket title full of ambiguous characters can still exceed the
 pane on such a terminal. Everything the board itself draws — separators, key
 hints, the elision marker — is ASCII, so the chrome is exact either way.
 
+## Event nudge deduplication
+
+`bin/on-event.mjs` deduplicates agent-status nudges within a rolling window controlled by `ADLC_HERDR_NUDGE_WINDOW_MS` (default `30000` ms). Set `ADLC_HERDR_NUDGE_WINDOW_MS=0` (or a negative number) to disable deduplication explicitly; non-numeric or empty values log a warning to `stderr` and fall back to the `30000` ms default.
+
 ## Layout
 
 - `herdr-plugin.toml` — manifest (v0.2.0): identity plus the shipped

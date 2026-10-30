@@ -12,7 +12,7 @@ import { readActiveTicket, ticketIdsFromStore, readdirBounded } from '../lib/adl
 import { notifyArgs } from '../lib/actions.mjs';
 import { buildPaneClearArgs } from '../lib/tokens.mjs';
 import { planEvent } from '../lib/event-plan.mjs';
-import { bucketFor, markerName, isStaleMarker } from '../lib/nudge.mjs';
+import { bucketFor, markerName, isStaleMarker, resolveNudgeWindowMs } from '../lib/nudge.mjs';
 
 async function resolveRepoForPane(paneId) {
   const res = await runHerdrJson(paneInfoArgs(paneId));
@@ -42,7 +42,7 @@ const hasCurrentTicket = (repoRoot) => readActiveTicket(repoRoot).state !== 'abs
 // and suppress the flap. When the window advances, the bucket (and marker name)
 // changes, so a genuine later idle re-nudges — the point is a window, not a
 // permanent marker. windowMs<=0 disables dedupe entirely (always nudge).
-const NUDGE_WINDOW_MS = Number(process.env.ADLC_HERDR_NUDGE_WINDOW_MS ?? 30_000);
+const NUDGE_WINDOW_MS = resolveNudgeWindowMs(process.env.ADLC_HERDR_NUDGE_WINDOW_MS);
 const nudgeDir = process.env.HERDR_PLUGIN_STATE_DIR
   ? join(process.env.HERDR_PLUGIN_STATE_DIR, 'nudged')
   : null;

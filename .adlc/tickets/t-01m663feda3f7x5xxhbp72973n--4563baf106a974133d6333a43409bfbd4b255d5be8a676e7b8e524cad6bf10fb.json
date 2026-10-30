@@ -1,0 +1,19 @@
+{
+  "category": "bugfix",
+  "description": "## Context\nIssue #835: `plugins/adlc-herdr/bin/on-event.mjs:45` parses `ADLC_HERDR_NUDGE_WINDOW_MS` with a bare `Number(process.env.ADLC_HERDR_NUDGE_WINDOW_MS ?? 30_000)`. Non-numeric strings (`\"30s\"`, `\"abc\"`) yield `NaN` and empty/whitespace strings (`\"\"`) yield `0`, both of which cause `bucketFor` to return `null` and silently disable nudge deduplication on every agent status flap.\n\n## Normative Decisions\n1. In `plugins/adlc-herdr/lib/nudge.mjs`, export `DEFAULT_NUDGE_WINDOW_MS = 30_000` and `resolveNudgeWindowMs(raw, warn = console.error)`.\n2. When `raw === undefined`, `resolveNudgeWindowMs` returns `DEFAULT_NUDGE_WINDOW_MS` with no warning. When `raw` trims to an empty string or `Number(trimmed)` is not finite (`!Number.isFinite(parsed)`), call `warn` with a diagnostic naming `ADLC_HERDR_NUDGE_WINDOW_MS` and the fallback `30000` ms, and return `DEFAULT_NUDGE_WINDOW_MS`. When `parsed` is a finite number (including `<= 0` for explicit opt-out), return `parsed`.\n3. Wire `resolveNudgeWindowMs(process.env.ADLC_HERDR_NUDGE_WINDOW_MS)` in `plugins/adlc-herdr/bin/on-event.mjs` and document `ADLC_HERDR_NUDGE_WINDOW_MS` in `plugins/adlc-herdr/README.md`.\n\n## Acceptance Criteria\n- AC1: `resolveNudgeWindowMs` returns `30_000` and logs a warning for non-numeric or empty values (`\"30s\"`, `\"\"`, `\"   \"`, `\"NaN\"`, `\"Infinity\"`), while honoring explicit `<= 0` disable values (`\"0\"`, `\"-5\"`) and positive numbers without warning (`verify: node --test plugins/adlc-herdr/test/nudge.test.mjs`).\n- AC2: `bin/on-event.mjs` deduplicates rapid flaps when `ADLC_HERDR_NUDGE_WINDOW_MS` is malformed (`\"30s\"`) and emits a warning on stderr (`verify: node --test plugins/adlc-herdr/test/on-event-e2e.test.mjs`).",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M663FEDA3F7X5XXHBP72973N",
+  "rails": [
+    "plugins/adlc-herdr/test/sanitize.test.mjs",
+    "plugins/adlc-herdr/test/herdr-shim.test.mjs"
+  ],
+  "scope": [
+    "plugins/adlc-herdr/lib/nudge.mjs",
+    "plugins/adlc-herdr/bin/on-event.mjs",
+    "plugins/adlc-herdr/README.md",
+    "plugins/adlc-herdr/test/nudge.test.mjs",
+    "plugins/adlc-herdr/test/on-event-e2e.test.mjs"
+  ],
+  "title": "plugin(adlc-herdr): validate ADLC_HERDR_NUDGE_WINDOW_MS and fall back to 30s on malformed values (#835)"
+}
