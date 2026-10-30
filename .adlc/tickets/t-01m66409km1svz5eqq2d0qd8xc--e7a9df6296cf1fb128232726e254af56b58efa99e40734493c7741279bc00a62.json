@@ -1,0 +1,16 @@
+{
+  "category": "bugfix",
+  "description": "## Context\nIssue #814: `plugins/adlc-copilot/package.json:36` defines `\"test\": \"node --test test/*.test.mjs hooks/test/*.test.mjs\"`, omitting `lib/test/*.test.mjs` and `mcp/test/*.test.mjs` that `scripts/run-tests.mjs` runs in CI. Running `npm test` inside `plugins/adlc-copilot` skips the prosecutor delegation and MCP stdio protocol suites.\n\n## Normative Decisions\n1. Update `scripts.test` in `plugins/adlc-copilot/package.json` to `\"node --test test/*.test.mjs hooks/test/*.test.mjs lib/test/*.test.mjs mcp/test/*.test.mjs\"`.\n2. Add a contract test in `plugins/adlc-copilot/test/contract.test.mjs` verifying that `package.json` `scripts.test` includes all four test suite globs (`test/*.test.mjs`, `hooks/test/*.test.mjs`, `lib/test/*.test.mjs`, `mcp/test/*.test.mjs`).\n\n## Acceptance Criteria\n- AC1: `plugins/adlc-copilot/package.json` `scripts.test` includes `lib/test/*.test.mjs` and `mcp/test/*.test.mjs` (`verify: node --test plugins/adlc-copilot/test/contract.test.mjs`).\n- AC2: All four test globs pass when executed via the package test command (`verify: node --test plugins/adlc-copilot/test/*.test.mjs plugins/adlc-copilot/hooks/test/*.test.mjs plugins/adlc-copilot/lib/test/*.test.mjs plugins/adlc-copilot/mcp/test/*.test.mjs`).",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M66409KM1SVZ5EQQ2D0QD8XC",
+  "rails": [
+    "plugins/adlc-copilot/lib/test/prosecutor-delegation.test.mjs",
+    "plugins/adlc-copilot/mcp/test/protocol.test.mjs"
+  ],
+  "scope": [
+    "plugins/adlc-copilot/package.json",
+    "plugins/adlc-copilot/test/contract.test.mjs"
+  ],
+  "title": "plugin(adlc-copilot): include lib/test and mcp/test in package npm test script (#814)"
+}
