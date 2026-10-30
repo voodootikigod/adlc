@@ -1,0 +1,15 @@
+{
+  "body": "GitHub issue #769.\n\nPROBLEM\npackages/skill-rot/lib/extract-claims.mjs SCRIPT_REF_RE makes `run` optional for pnpm/yarn, so package-manager subcommands like `pnpm install`, `pnpm dlx`, `yarn add`, and `yarn why` are extracted as package.json script claims and reported stale.\n\nBUILD\n1. In packages/skill-rot/lib/extract-claims.mjs, distinguish explicit `pnpm/yarn run <script>` from shorthand `pnpm/yarn <token>`, and exclude known package-manager subcommands (install, add, remove, dlx, exec, why, up, upgrade, link, dedupe, create, init, etc.) when `run` is omitted.\n2. Add unit and integration tests in packages/skill-rot/test/skill-rot.test.mjs verifying that `pnpm install`, `yarn add`, `pnpm dlx`, `yarn why`, etc. are not extracted as script claims while `pnpm test`, `pnpm run build`, and `yarn run build` still are.\n\nACCEPTANCE CRITERIA\n- AC1: `pnpm install`, `yarn add`, `pnpm dlx`, and `yarn why` are not extracted as script claims and do not fail checkSkill. verify: `node --test packages/skill-rot/test/skill-rot.test.mjs`\n- AC2: All skill-rot tests pass. verify: `node --test packages/skill-rot/test/*.test.mjs`",
+  "id": "T-01M666BMMY1W8Y0EYY9R5MCMQ2",
+  "rails": [
+    "packages/skill-rot/test/frontmatter-preserve.test.mjs",
+    "packages/skill-rot/test/zero-claims.test.mjs"
+  ],
+  "riskTier": "standard",
+  "scope": [
+    "packages/skill-rot/lib/extract-claims.mjs",
+    "packages/skill-rot/test/skill-rot.test.mjs"
+  ],
+  "title": "skill-rot: do not treat pnpm/yarn CLI subcommands as package.json script references (#769)",
+  "verifyCmd": "node --test packages/skill-rot/test/skill-rot.test.mjs packages/skill-rot/test/frontmatter-preserve.test.mjs packages/skill-rot/test/zero-claims.test.mjs"
+}

@@ -585,3 +585,37 @@ describe('checkSkill', () => {
     assert.equal(result.allOk, true);
   });
 });
+
+describe("pnpm/yarn subcommands vs script references (#769)", () => {
+  test("does not extract pnpm/yarn CLI subcommands as package.json script claims", () => {
+    const content = [
+      "Run `pnpm install` or `yarn add zod` to install dependencies.",
+      "Use `pnpm dlx create-next-app`, `pnpm exec vitest`, `yarn why lodash`, `pnpm remove foo`, `yarn upgrade`, `pnpm link`, `yarn dedupe`, `pnpm create vite`, `yarn init`.",
+    ].join("\n");
+    const claims = extractClaims(content);
+    const scripts = claims.filter((c) => c.type === "script");
+    assert.deepEqual(scripts, []);
+  });
+
+  test("still extracts explicit pnpm/yarn run <script> and non-subcommand shorthand scripts", () => {
+    const content = "Use `pnpm run build`, `yarn run lint`, `pnpm test`, and `yarn typecheck`.";
+    const claims = extractClaims(content);
+    const scripts = claims.filter((c) => c.type === "script").map((c) => c.value);
+    assert.deepEqual(scripts, ["build", "lint", "test", "typecheck"]);
+  });
+
+  test("checkSkill passes when a skill documents pnpm install and yarn add (#769)", (t) => {
+    const dir = tmp(t, "skill-rot-769-");
+    mkdirSync(join(dir, "node_modules", ".bin"), { recursive: true });
+    writeFileSync(join(dir, "node_modules", ".bin", "pnpm"), "", "utf8");
+    writeFileSync(join(dir, "node_modules", ".bin", "yarn"), "", "utf8");
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { build: "tsc" } }), "utf8");
+    const skillPath = writeSkill(dir, "skills/install-doc/SKILL.md", [
+      "# Install Doc",
+      "Run `npm run build` after `pnpm install` or `yarn add pkg`.",
+    ].join("\n"));
+    const result = checkSkill(skillPath, dir);
+    assert.equal(result.stale, 0);
+    assert.equal(result.allOk, true);
+  });
+});
