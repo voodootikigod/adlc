@@ -33,7 +33,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test test/*.test.mjs hooks/test/*.test.mjs"
+    "test": "node --test test/*.test.mjs hooks/test/*.test.mjs lib/test/*.test.mjs mcp/test/*.test.mjs"
   },
   "dependencies": {
     "@adlc/cli": "1.12.0",
