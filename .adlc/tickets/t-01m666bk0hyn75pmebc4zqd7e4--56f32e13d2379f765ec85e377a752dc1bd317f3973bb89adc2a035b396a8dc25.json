@@ -1,0 +1,15 @@
+{
+  "body": "GitHub issue #778.\n\nPROBLEM\npackages/spec-lint/lib/report.mjs buildHumanReport prints `WARNING: no criteria found in spec.` when classified.length === 0, contradicting the exit-2 hard gate failure introduced in #494.\n\nBUILD\n1. In packages/spec-lint/lib/report.mjs buildHumanReport, replace the stale `WARNING: no criteria found in spec.` line with `FAIL: no acceptance criteria found in spec.`.\n2. Add unit and CLI assertions in packages/spec-lint/test/spec-lint.test.mjs verifying buildHumanReport and CLI stdout on a zero-criteria spec.\n\nACCEPTANCE CRITERIA\n- AC1: buildHumanReport([], \"spec.md\") emits `FAIL: no acceptance criteria found in spec.` and never `WARNING: no criteria found`. verify: `node --test packages/spec-lint/test/spec-lint.test.mjs`\n- AC2: All spec-lint tests pass. verify: `node --test packages/spec-lint/test/*.test.mjs`",
+  "id": "T-01M666BK0HYN75PMEBC4ZQD7E4",
+  "rails": [
+    "packages/spec-lint/test/zero-criteria.test.mjs",
+    "packages/spec-lint/test/readme-exit-codes.test.mjs"
+  ],
+  "riskTier": "standard",
+  "scope": [
+    "packages/spec-lint/lib/report.mjs",
+    "packages/spec-lint/test/spec-lint.test.mjs"
+  ],
+  "title": "spec-lint: report FAIL instead of WARNING on zero-criteria human report (#778)",
+  "verifyCmd": "node --test packages/spec-lint/test/spec-lint.test.mjs packages/spec-lint/test/zero-criteria.test.mjs"
+}

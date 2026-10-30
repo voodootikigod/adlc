@@ -660,9 +660,9 @@ describe('buildJsonResult', () => {
 });
 
 describe('buildHumanReport', () => {
-  it('shows WARNING on empty criteria list', () => {
+  it('shows FAIL on empty criteria list (#778)', () => {
     const lines = buildHumanReport([], 'spec.md');
-    assert.ok(lines.some(l => /WARNING/i.test(l)));
+    assert.ok(lines.some(l => l === 'FAIL: no acceptance criteria found in spec.'));
   });
 
   it('lists wishes section when wishes are present', () => {
@@ -884,5 +884,23 @@ describe('CLI: temp dir cleanup', () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+describe("buildHumanReport zero-criteria FAIL wording (#778)", () => {
+  it("prints FAIL: no acceptance criteria found in spec. when classified is empty", () => {
+    const lines = buildHumanReport([], "empty-spec.md");
+    assert.deepEqual(lines, [
+      "spec-lint: empty-spec.md",
+      "",
+      "FAIL: no acceptance criteria found in spec.",
+    ]);
+  });
+
+  it("CLI human output states FAIL (never WARNING) on a zero-criteria spec", () => {
+    const { code, stdout } = runCli([fixture("no-criteria.md")]);
+    assert.equal(code, 2);
+    assert.match(stdout, /FAIL: no acceptance criteria found in spec\./);
+    assert.doesNotMatch(stdout, /WARNING: no criteria found/);
   });
 });
