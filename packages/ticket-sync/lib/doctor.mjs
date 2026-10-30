@@ -69,14 +69,18 @@ export function doctor({ dir = '.', now = Date.now(), lockMaxAgeMs = DEFAULT_LOC
   const sidecarPath = join(dir, '.adlc', 'ticket-sync.state.json');
   if (existsSync(sidecarPath)) {
     let parsed = null;
+    let parseOk = false;
     try {
       parsed = JSON.parse(readFileSync(sidecarPath, 'utf8'));
+      parseOk = true;
     } catch (e) {
       add('sidecar-valid', false, `unparseable: ${e.message}`);
     }
-    if (parsed) {
+    if (parseOk) {
       const errs = validateSyncState(parsed);
       add('sidecar-valid', errs.length === 0, errs.join('; '));
+    }
+    if (parsed) {
 
       const entries = Object.entries(parsed.tickets ?? {});
       // no two ids may map to one nodeId (a transfer/renumber corruption signal).

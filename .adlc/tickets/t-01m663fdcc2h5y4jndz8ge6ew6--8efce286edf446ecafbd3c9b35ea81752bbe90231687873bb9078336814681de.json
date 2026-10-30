@@ -1,0 +1,16 @@
+{
+  "category": "bugfix",
+  "description": "## Context\nIssue #791: `packages/ticket-sync/lib/doctor.mjs:77` gates sidecar validation on `if (parsed)` after `JSON.parse`. When `.adlc/ticket-sync.state.json` contains a valid JSON falsy scalar (`null`, `0`, `false`, `\"\"`), `JSON.parse` does not throw and `if (parsed)` is false, so all four sidecar checks are skipped and `doctor` exits 0 (\"All checks passed\").\n\n## Normative Decisions\n1. In `packages/ticket-sync/lib/doctor.mjs`, track `let parseOk = false` separately from the parsed value in the `JSON.parse` `try` block.\n2. When `parseOk` is true, always validate `parsed` with `validateSyncState(parsed)` and record `sidecar-valid`; run the object-property checks (`sidecar-nodeid-unique`, `sidecar-syncedhash`, `sidecar-no-stale-pending`) only when `parsed !== null && typeof parsed === \"object\" && !Array.isArray(parsed)`.\n3. Add tests in `packages/ticket-sync/test/doctor.test.mjs` covering `null`, `false`, `0`, `\"\"`, and `[]` sidecar files, proving `sidecar-valid` fails (`ok: false`, `exitCode: 2`) with `root: expected object`.\n\n## Acceptance Criteria\n- AC1: `doctor` fails with `exitCode: 2` and `sidecar-valid` `ok: false` (`root: expected object`) when `.adlc/ticket-sync.state.json` contains `null`, `false`, `0`, `\"\"`, or `[]` (`verify: node --test packages/ticket-sync/test/doctor.test.mjs`).\n- AC2: Existing `doctor` checks on absent, unparseable, schema-invalid, and valid sidecars pass unchanged (`verify: node --test packages/ticket-sync/test/doctor.test.mjs`).",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M663FDCC2H5Y4JNDZ8GE6EW6",
+  "rails": [
+    "packages/ticket-sync/test/validate.test.mjs",
+    "packages/ticket-sync/test/config.test.mjs"
+  ],
+  "scope": [
+    "packages/ticket-sync/lib/doctor.mjs",
+    "packages/ticket-sync/test/doctor.test.mjs"
+  ],
+  "title": "ticket-sync: fail sidecar-valid in doctor when sidecar parses to a falsy or non-object JSON value (#791)"
+}

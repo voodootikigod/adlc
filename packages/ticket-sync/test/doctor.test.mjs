@@ -131,6 +131,7 @@ test('sidecar-valid fails on unparseable sidecar JSON', () => {
     const r = doctor({ dir });
     assert.equal(r.exitCode, 2);
     assert.equal(check(r, 'sidecar-valid').ok, false);
+    assert.equal(r.checks.filter((c) => c.name === 'sidecar-valid').length, 1);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -255,4 +256,19 @@ test('doctor inspects the ARCHIVE: a malformed archive store fails a store:archi
     assert.ok(archiveCheck, `doctor must surface an archive check; got: ${r.checks.map((c) => c.name).join(', ')}`);
     assert.equal(archiveCheck.ok, false, 'a malformed archive must fail its check');
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('sidecar-valid fails when the sidecar parses to a falsy JSON scalar (null, false, 0, empty string) (#791)', () => {
+  for (const raw of ['null', 'false', '0', '""']) {
+    const dir = mk({ sidecar: raw });
+    try {
+      const r = doctor({ dir });
+      assert.equal(r.exitCode, 2, `falsy sidecar ${raw} must fail doctor`);
+      assert.equal(r.ok, false);
+      const sc = check(r, 'sidecar-valid');
+      assert.ok(sc, `sidecar-valid check must be recorded for ${raw}`);
+      assert.equal(sc.ok, false);
+      assert.match(sc.detail, /value: expected object/);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
 });
