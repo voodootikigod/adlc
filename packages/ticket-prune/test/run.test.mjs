@@ -1125,3 +1125,21 @@ test('#208/T75: bin --write --json exits 0 and surfaces the blocked set on a par
     assert.deepEqual(parsed.blocked.map((b) => b.id), ['BBB']);
   });
 });
+
+test('dry-run sets storeKind to directory on a sharded store and legacy on a flat-file store (#780)', () => {
+  withScratchRepo((dir) => {
+    writeTickets(dir, [{ id: 'T1', title: 'Ship', status: 'done' }]);
+    const legacyRes = runTicketPrune({ cwd: dir });
+    assert.equal(legacyRes.ok, true);
+    assert.equal(legacyRes.storeKind, 'legacy');
+    assert.match(renderReport(legacyRes), /re-run with --write to tombstone them:/);
+  });
+  withScratchRepo((dir) => {
+    rmSync(join(dir, '.adlc', 'tickets.json'), { force: true });
+    writeDirectoryStore(dir, [{ id: 'T1', title: 'Ship', status: 'done', scope: ['plugins/adlc-widget/**'] }]);
+    const dirRes = runTicketPrune({ cwd: dir });
+    assert.equal(dirRes.ok, true);
+    assert.equal(dirRes.storeKind, 'directory');
+    assert.match(renderReport(dirRes), /re-run with --write to archive them out of the active store:/);
+  });
+});

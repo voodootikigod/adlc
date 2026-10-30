@@ -110,3 +110,19 @@ test('#198 renderReport (dry-run): a railed shipped ticket is listed under the c
   assert.match(text, /complete each per-ticket on the protected-base path with `adlc ticket complete <id> --write --authorize --json` \(1\):/);
   assert.match(text, /- T7: shipped scope \[freezes: test\/codec\/\*\*\]/);
 });
+
+test('renderReport (dry-run, directory store): stale tickets advertise archiving out of the active store (#780)', () => {
+  const text = renderReport({
+    baseRef: 'HEAD',
+    write: false,
+    storeKind: 'directory',
+    stale: [{ id: 'T1', reason: 'shipped scope' }],
+    active: [],
+    tombstoned: [],
+    needsCeremony: [],
+  });
+
+  assert.match(text, /Stale tickets \(1\) — re-run with --write to archive them out of the active store:/);
+  assert.match(text, /- T1: shipped scope/);
+  assert.doesNotMatch(text, /tombstone/i);
+});

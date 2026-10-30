@@ -55,11 +55,11 @@ adlc ticket-prune --json
   way; exit `1` only on an operational error such as a missing/invalid
   `.adlc/tickets.json`).
 - List the stale tickets it finds and recommend confirming them by hand, then
-  re-running with `adlc ticket-prune --write` to tombstone the **rails-less**
-  ones (`completed: true` in place — never deletes outright, and the exact
-  add-only diff an ordinary PR's rails-guard gate accepts). Treat `--write` as
-  a human-confirmed action, not something this command should run unattended —
-  `.adlc/tickets.json` is a shared, hand-edited file.
+  re-running with `adlc ticket-prune --write` to archive the **rails-less**
+  ones out of the active directory store (`.adlc/tickets/` → `.adlc/ticket-archive/`),
+  or tombstone them (`completed: true` in place — never deletes outright) on a
+  legacy `.adlc/tickets.json` store. Treat `--write` as a human-confirmed
+  action, not something this command should run unattended.
 - **Rail-cleanup drift (issue #198).** The `--json` output's `needsCeremony`
   array now surfaces, in dry-run, the shipped tickets that **still freeze rails**
   (`blocker: "rails-freeze"`). These are the drift: a shipped ticket that was
