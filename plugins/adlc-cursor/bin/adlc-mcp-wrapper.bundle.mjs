@@ -2233,6 +2233,9 @@ var SESSION_TTL_MS = 30 * 60 * 1e3;
 var PAYLOAD_SESSION_KEYS = Object.freeze(["session_id", "sessionId", "conversation_id", "conversationId"]);
 var REJECTED_AS_SESSION_KEYS = Object.freeze(["thread_id", "threadId", "generation_id", "generationId"]);
 
+// plugins/adlc-cursor/lib/session-state.mjs
+var LOCK_WAIT_BUF = new Int32Array(new SharedArrayBuffer(4));
+
 // plugins/adlc-cursor/lib/workspace-resolve.mjs
 function normalizeRootPath(raw) {
   if (typeof raw !== "string") return null;

@@ -1,0 +1,16 @@
+{
+  "body": "GitHub issue #821.\n\nPROBLEM\nplugins/adlc-cursor/lib/session-state.mjs withStateLock calls Atomics.wait for backoffMs and then unconditionally runs a busy-spin loop for another backoffMs on every contended retry.\n\nBUILD\n1. In plugins/adlc-cursor/lib/session-state.mjs, accept an optional `wait = Atomics.wait` parameter in withStateLock and only run the fallback Date.now() busy-spin loop when `typeof wait !== \"function\"`.\n2. Rebuild plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs via `npm run build:cursor-mcp`.\n3. Add unit tests in plugins/adlc-cursor/test/session-state-dir.test.mjs verifying that contended retries use `wait` without double-sleeping when available and fall back to the busy-spin when `wait` is not a function.\n\nACCEPTANCE CRITERIA\n- AC1: withStateLock calls `wait` without running the busy-spin fallback when `wait` is a function, and falls back to spinning when `wait` is not a function. verify: `node --test plugins/adlc-cursor/test/session-state-dir.test.mjs`\n- AC2: Packaging bundle check and session-state tests pass. verify: `node --test plugins/adlc-cursor/test/session-state-dir.test.mjs plugins/adlc-cursor/test/packaging.test.mjs`",
+  "id": "T-01M666Q5HDKX7ER6D0RPQ97B9A",
+  "rails": [
+    "plugins/adlc-cursor/test/session-start.test.mjs",
+    "plugins/adlc-cursor/test/subagent.test.mjs"
+  ],
+  "riskTier": "standard",
+  "scope": [
+    "plugins/adlc-cursor/lib/session-state.mjs",
+    "plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs",
+    "plugins/adlc-cursor/test/session-state-dir.test.mjs"
+  ],
+  "title": "plugin(adlc-cursor): avoid unconditional busy-spin after Atomics.wait in withStateLock (#821)",
+  "verifyCmd": "node --test plugins/adlc-cursor/test/session-state-dir.test.mjs plugins/adlc-cursor/test/packaging.test.mjs"
+}
