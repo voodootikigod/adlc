@@ -38,8 +38,7 @@ export function buildHumanReport(classified, filePath) {
   lines.push('');
 
   if (classified.length === 0) {
-    lines.push('WARNING: no criteria found in spec.');
-    return lines;
+    return [...lines, 'FAIL: no acceptance criteria found in spec.'];
   }
 
   // Column widths.
