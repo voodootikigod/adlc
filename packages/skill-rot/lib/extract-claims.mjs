@@ -14,7 +14,12 @@ const PLACEHOLDER_RE = /^<[^>]*>$|^[A-Z][A-Z0-9_]{2,}$/;
 const PATH_RE = /^(?:\.\/|\.\.\/|[a-zA-Z0-9_.-]+\/)[^\s'"`,]+\.[a-zA-Z0-9]{1,10}$/;
 
 /** Regex for npm/pnpm/yarn script references. npx is intentionally excluded — it runs registry packages, not package.json scripts. */
-const SCRIPT_REF_RE = /\bnpm\s+run\s+([a-zA-Z0-9_:.-]+)|(?:pnpm|yarn)\s+(?:run\s+)?([a-zA-Z0-9_:.-]+)/g;
+const SCRIPT_REF_RE = /\bnpm\s+run\s+([a-zA-Z0-9_:.-]+)|\b(?:pnpm|yarn)\s+run\s+([a-zA-Z0-9_:.-]+)|\b(?:pnpm|yarn)\s+([a-zA-Z0-9_:.-]+)/g;
+
+/** Built-in pnpm/yarn CLI subcommands that are not package.json scripts when invoked without `run`. */
+const PM_SUBCOMMANDS = new Set(
+  'add approve-builds audit autoclean bin cache cat-file cat-index check config create dedupe deploy dlx doctor env exec explain fetch find-hash generate-lock-entry global help i ignored-builds import info init install la licenses link list ll ln login logout ls node outdated owner pack patch patch-commit patch-remove policies prune publish rb rebuild remove rm root search server set setup stage store tag team uninstall unlink unplug up update upgrade upgrade-interactive version versions why workspace workspaces'.split(' ')
+);
 
 /**
  * Extract all claims from a SKILL.md content string.
@@ -56,8 +61,9 @@ export function extractClaims(content) {
   // --- Script refs anywhere in content ---
   SCRIPT_REF_RE.lastIndex = 0;
   while ((m = SCRIPT_REF_RE.exec(content)) !== null) {
-    // group 1 = npm run X, group 2 = pnpm/yarn X
-    const scriptName = m[1] || m[2];
+    const explicitScript = m[1] || m[2];
+    const shorthandScript = m[3] && !PM_SUBCOMMANDS.has(m[3]) ? m[3] : null;
+    const scriptName = explicitScript || shorthandScript;
     if (scriptName && !PLACEHOLDER_RE.test(scriptName)) {
       add({ type: 'script', value: scriptName, raw: m[0].trim() });
     }
