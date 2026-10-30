@@ -318,8 +318,7 @@ async function setup(ctx = {}) {
   // The enforcing hook is registered FIRST and awaited, so no tool call can run
   // before the deny path exists.
   await ctx.tool.hook('execute.before', async (e) => {
-    const tool = e?.tool;
-    if (!tool) return;
+    const tool = e?.tool ?? '';
     tracker.recordToolCall(e?.sessionID);
     const args = e?.input ?? {};
 
