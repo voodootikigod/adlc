@@ -1359,3 +1359,23 @@ test('v2: the code-running `execute` tool carries no vettable target → fails c
   const r = checkToolCall({ tool: 'execute', args: { code: "require('fs').writeFileSync('src/frozen.mjs', 'x')" }, root: dir, env: envT1 });
   assert.equal(r.decision, 'deny');
 });
+
+// ---- (#839) falsy / missing tool name in execute.before is gated ----
+test("execute.before denies empty or missing tool name while rails are in force (#839)", async (t) => {
+  const dir = repo(t, { tickets: T1_RAILED });
+  const saved = { ...process.env };
+  t.after(() => { Object.assign(process.env, saved); });
+  process.env.ADLC_P4_ENFORCEMENT = "1";
+  process.env.ADLC_TICKET = "T1";
+  delete process.env.ADLC_ALLOW_ADVISORY_HOOKS;
+  const plugin = await loadPlugin({ root: dir });
+  await assert.rejects(
+    () => captureStderr(() => plugin.before("", {})),
+    /ADLC rails-guard: blocked  — mutating\/unknown tool "" carries no extractable target path/
+  );
+  await assert.rejects(
+    () => captureStderr(() => plugin.before(undefined, { path: "test/x.mjs" })),
+    /ADLC rails-guard: blocked  — frozen rail "test\/\*\*"/
+  );
+  await plugin.before("read", { path: "test/x.mjs" });
+});

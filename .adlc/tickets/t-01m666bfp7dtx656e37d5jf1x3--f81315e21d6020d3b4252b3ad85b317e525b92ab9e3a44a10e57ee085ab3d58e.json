@@ -1,0 +1,15 @@
+{
+  "body": "GitHub issue #839.\n\nPROBLEM\nplugins/adlc-opencode/index.mjs returns early in tool.execute.before when e?.tool is falsy (`if (!tool) return;`), allowing a call with an empty or missing tool name before tracker.recordToolCall, checkHandoff, checkToolCall, and checkBuildGate run.\n\nBUILD\n1. In plugins/adlc-opencode/index.mjs execute.before, normalize `const tool = e?.tool ?? \"\";` and remove the early `if (!tool) return;` guard so missing/empty tool names fall through to tracker.recordToolCall, checkHandoff, checkToolCall, and checkBuildGate.\n2. Add regression tests in plugins/adlc-opencode/test/rails-checker.test.mjs verifying that execute.before with an empty or missing tool name denies when rails are in force and no target path is extractable (or when targeting a frozen rail), and allows when rails are not in force.\n\nACCEPTANCE CRITERIA\n- AC1: execute.before with an empty or missing tool name is denied by checkToolCall while rails are in force. verify: `node --test plugins/adlc-opencode/test/rails-checker.test.mjs`\n- AC2: All adlc-opencode tests pass. verify: `node --test plugins/adlc-opencode/test/*.test.mjs`",
+  "id": "T-01M666BFP7DTX656E37D5JF1X3",
+  "rails": [
+    "plugins/adlc-opencode/test/v2-registration.test.mjs",
+    "plugins/adlc-opencode/test/handoff-deny.test.mjs"
+  ],
+  "riskTier": "standard",
+  "scope": [
+    "plugins/adlc-opencode/index.mjs",
+    "plugins/adlc-opencode/test/rails-checker.test.mjs"
+  ],
+  "title": "plugin(adlc-opencode): gate tool.execute.before calls with missing or empty tool names (#839)",
+  "verifyCmd": "node --test plugins/adlc-opencode/test/rails-checker.test.mjs plugins/adlc-opencode/test/v2-registration.test.mjs"
+}
