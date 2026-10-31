@@ -12,6 +12,7 @@ import {
   readStdin,
   promptOnly,
   loadTickets,
+  reasonList,
 } from '@adlc/core';
 import {
   buildSpecReaderPrompt,
@@ -211,7 +212,7 @@ if (values.edge) {
   } else {
     console.log(`# Edge contract: ${idA} ↔ ${idB}\n`);
     console.log(report);
-    if (errors.length > 0) console.error('\nwarnings:', errors.join('; '));
+    if (errors.length > 0) console.error(`\n${reasonList('warnings:', errors)}`);
   }
 
   if (score <= threshold) {
@@ -270,10 +271,10 @@ if (values.route) {
     printJson({ mode: 'route', question, equivalent, answer, variants, requested, used, warnings: errors });
   } else if (equivalent) {
     console.log(answer);
-    if (errors.length > 0) console.error('\nwarnings:', errors.join('; '));
+    if (errors.length > 0) console.error(`\n${reasonList('warnings:', errors)}`);
   } else {
     console.log(renderRouteConflict(question, variants));
-    if (errors.length > 0) console.error('\nwarnings:', errors.join('; '));
+    if (errors.length > 0) console.error(`\n${reasonList('warnings:', errors)}`);
   }
 
   if (equivalent) {
@@ -368,7 +369,7 @@ if (values['questions-json']) {
 } else {
   console.log('# Parallax spec analysis\n');
   console.log(report);
-  if (errors.length > 0) console.error('\nwarnings:', errors.join('; '));
+  if (errors.length > 0) console.error(`\n${reasonList('warnings:', errors)}`);
 }
 
 if (score <= threshold) {

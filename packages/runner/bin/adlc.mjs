@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { parseArgs, printJson, opError } from '@adlc/core';
+import { parseArgs, printJson, opError, reasonList } from '@adlc/core';
 import { assertPhase, requirementsForPhase, allPhases, requiresTicket } from '../lib/assertions.mjs';
 import { recordAcceptancePacket } from '../lib/acceptance.mjs';
 import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
@@ -59,7 +59,7 @@ if (verb === 'accept') {
   } else if (result.ok) {
     console.log(`adlc accept: recorded P6 acceptance packet for ${result.ticket}`);
   } else {
-    opError(result.errors.join('; '));
+    opError(reasonList('P6 acceptance refused:', result.errors));
   }
   process.exit(result.exitCode);
 }
@@ -73,7 +73,7 @@ if (requirementsForPhase(phase) === null) {
 }
 
 const result = assertPhase(phase, { dir: values.dir, ticket: values.ticket, revision: values.revision });
-if (result.operational) opError(result.errors.join('; '));
+if (result.operational) opError(reasonList(`adlc ${phase}: cannot check evidence:`, result.errors));
 
 if (values.json) {
   printJson(result);

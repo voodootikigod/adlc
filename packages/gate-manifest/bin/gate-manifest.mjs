@@ -2,7 +2,7 @@
 // gate-manifest — ADLC C11 hash-chained agentic provenance ledger.
 // Verbs: record | verify | show | attest | repair-chain | generate-key
 
-import { parseArgs, pass, gateFail, opError, printJson } from '@adlc/core';
+import { parseArgs, pass, gateFail, opError, printJson, reasonList } from '@adlc/core';
 import { record, parseData, parseFileList, ticketCompletionReminder } from '../lib/record.mjs';
 import { validateSpecApprovalRecord } from '../lib/spec-approval.mjs';
 import { validateRecordTicket } from '../lib/ticket-check.mjs';
@@ -92,7 +92,7 @@ if (verb === 'record') {
       entries: existingEntries,
     });
     if (errors.length > 0) {
-      opError(errors.join('; '));
+      opError(reasonList('spec-approval record refused:', errors));
     }
   }
 

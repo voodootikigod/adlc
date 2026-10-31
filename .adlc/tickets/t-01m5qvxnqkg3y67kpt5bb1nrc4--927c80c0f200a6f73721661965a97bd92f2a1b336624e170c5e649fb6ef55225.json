@@ -1,0 +1,35 @@
+{
+  "body": "Tier: bounded. Display change to human-readable error text. Full spec: .adlc/specs/readable-error-lists.md\n\nPROBLEM. Some error paths join a list of reasons with '; ' on one line. `gate-manifest record spec-approval` with `--data '{}'` prints one 1000-character line with 9 reasons; `adlc accept` with no arguments prints 160 characters; `spec-lint` on a spec with no criteria prints one 197-character line. coldstart (`ticket file errors:`), `adlc run` (`evidence rejected:`) and review-calibration (`plants file problems:`) already print a heading, then one reason per line indented with two spaces. Copy that format.\n\nBEHAVIOUR.\n1. @adlc/core exports `reasonList(heading, reasons)` from packages/core/lib/text.mjs (already re-exported by packages/core/index.mjs via `export * from './lib/text.mjs'`), declared in packages/core/index.d.ts as `export function reasonList(heading: string, reasons: readonly string[]): string;` and listed in packages/core/README.md next to tail/fence. No reasons: returns heading. One reason: `${heading} ${reason}` on one line. Two or more: heading, then each reason on its own line prefixed with two spaces, joined with '\\n', no trailing newline. Reason text is never changed.\n2. Call sites:\n   - packages/runner/bin/adlc.mjs, `adlc accept` failure: opError(reasonList('P6 acceptance refused:', result.errors)).\n   - packages/runner/bin/adlc.mjs, `adlc run` operational errors: opError(reasonList(`adlc ${phase}: cannot check evidence:`, result.errors)).\n   - packages/gate-manifest/bin/gate-manifest.mjs, spec-approval refusal: opError(reasonList('spec-approval record refused:', errors)).\n   - packages/flail-detector/bin/flail-detector.mjs, could-not-analyze: reasonList('flail-detector: could not analyze —', reasons).\n   - packages/parallax/bin/parallax.mjs, the four `warnings:` lines: console.error('\\n' + reasonList('warnings:', errors)).\n   - packages/hollow-test/bin/hollow-test.mjs, diff-derived zero mutants: reasonList('diff-derived file(s) produced zero mutants —', parts). One part: byte-identical to today. Several parts: the closing sentence 'The changed code was never actually verified; refusing to report a pass.' goes on its own line after the list.\n3. packages/spec-lint/bin/spec-lint.mjs, no acceptance criteria, becomes three lines: 'spec-lint: no acceptance criteria found.' / 'State at least one criterion under a recognized heading (Acceptance Criteria / Requirements).' / 'Give each criterion a verification method. Zero criteria fails the gate.'\n4. Unchanged: --json output, exit codes, --prompt-only prompts, join('; ') calls under packages/*/lib, the wording of every reason. If core exports change the Cursor MCP bundle, regenerate it with `node scripts/build-cursor-mcp.mjs`.\n\nACCEPTANCE CRITERIA (tests run the real binaries with runBin from packages/core/lib/test-kit.mjs, offline, in mkdtempSync dirs).\n- AC1 reasonList: none -> heading; one -> inline; many -> one per line, two-space indent; text unchanged. verify: `node --test packages/core/test/reason-list.test.mjs`\n- AC2 `adlc accept` (packages/cli/bin/adlc.mjs) with no arguments exits 1; stderr line 1 is 'error: P6 acceptance refused:', every other line starts with two spaces and contains no '; '. verify: `node --test packages/runner/test/reason-lines.test.mjs`\n- AC3 `gate-manifest record spec-approval --ticket T1 --files spec.md --data '{}'` exits 1; stderr line 1 is 'error: spec-approval record refused:', then one indented reason per line. verify: `node --test packages/gate-manifest/test/reason-lines.test.mjs`\n- AC4 spec-lint on a spec with no criteria exits 2, prints the three lines, every stderr line <= 120 characters. verify: `node --test packages/spec-lint/test/no-criteria-lines.test.mjs`\n- AC5 The AC2-AC4 tests fail on main and pass on the branch.\n- AC6 `npm test` green. AC7 `npm run preflight` exits 0.\n\nOUT OF SCOPE: --json, exit codes, --prompt-only prompts, lib/ join('; ') calls, reason wording, reasons still longer than 120 characters, a readability check in test-kit.",
+  "category": "bug",
+  "duration": 2,
+  "edges": [],
+  "id": "T-01M5QVXNQKG3Y67KPT5BB1NRC4",
+  "rails": [
+    "packages/core/test/reason-list.test.mjs",
+    "packages/runner/test/reason-lines.test.mjs",
+    "packages/gate-manifest/test/reason-lines.test.mjs",
+    "packages/spec-lint/test/no-criteria-lines.test.mjs"
+  ],
+  "scope": [
+    "packages/core/lib/text.mjs",
+    "packages/core/index.d.ts",
+    "packages/core/README.md",
+    "packages/core/test/**",
+    "packages/runner/bin/adlc.mjs",
+    "packages/runner/test/**",
+    "packages/gate-manifest/bin/gate-manifest.mjs",
+    "packages/gate-manifest/test/**",
+    "packages/flail-detector/bin/flail-detector.mjs",
+    "packages/flail-detector/test/**",
+    "packages/parallax/bin/parallax.mjs",
+    "packages/parallax/test/**",
+    "packages/hollow-test/bin/hollow-test.mjs",
+    "packages/hollow-test/test/**",
+    "packages/spec-lint/bin/spec-lint.mjs",
+    "packages/spec-lint/test/**",
+    "plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs",
+    ".adlc/specs/readable-error-lists.md",
+    ".adlc/tickets/**"
+  ],
+  "title": "Print one error reason per line instead of joining reasons with '; '"
+}

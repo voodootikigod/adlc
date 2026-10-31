@@ -19,6 +19,25 @@ export function tail(str, maxChars = 4000) {
   return str.slice(str.length - maxChars);
 }
 
+/**
+ * Format a heading and its reasons for a person to read: one reason stays on
+ * the heading line, and two or more go one per line, indented two spaces —
+ * the shape coldstart's "ticket file errors:" and `adlc run`'s "evidence
+ * rejected:" already print. Joining many reasons with '; ' made one line of up
+ * to 1000 characters. The reason text itself is never changed.
+ *
+ * For human-readable output only; --json output keeps the array.
+ *
+ * @param {string} heading
+ * @param {readonly string[]} reasons
+ * @returns {string}
+ */
+export function reasonList(heading, reasons) {
+  if (reasons.length === 0) return heading;
+  if (reasons.length === 1) return `${heading} ${reasons[0]}`;
+  return `${heading}\n  ${reasons.join('\n  ')}`;
+}
+
 const FENCE_OPTION_KEYS = new Set(['bias']);
 
 // Fail closed on a malformed options argument for the same reason as on a bad

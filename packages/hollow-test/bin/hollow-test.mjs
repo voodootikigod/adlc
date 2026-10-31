@@ -8,7 +8,7 @@
 import { readFileSync, realpathSync, existsSync } from 'node:fs';
 import { resolve, relative, isAbsolute, sep } from 'node:path';
 import {
-  parseArgs, pass, gateFail, opError, printJson, checkSyntaxDetail,
+  parseArgs, pass, gateFail, opError, printJson, checkSyntaxDetail, reasonList,
   resolveTypeScript, syntaxCheckProblem, syntaxLanguage,
 } from '@adlc/core';
 import { gitDiff, isDirty, isGitRepo, resolveBase, mutate, git, repoRoot } from '@adlc/core';
@@ -886,10 +886,12 @@ if (diffEligibleFiles.length > 0 && results.length === 0) {
   if (unreadableFiles.length > 0) {
     parts.push(`${unreadableFiles.join(', ')}: could not be read`);
   }
+  // One reason keeps today's single line; several go one per line, and the
+  // closing sentence then gets its own line after the list.
   opError(
-    'diff-derived file(s) produced zero mutants — ' +
-    parts.join('; ') +
-    '. The changed code was never actually verified; refusing to report a pass.'
+    reasonList('diff-derived file(s) produced zero mutants —', parts) +
+    (parts.length > 1 ? '\n' : '. ') +
+    'The changed code was never actually verified; refusing to report a pass.'
   );
 }
 
