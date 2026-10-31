@@ -501,7 +501,8 @@ function checkModelProviders(table, { catalog, channels, reviewerGroups, violati
   // resolve the author into the wrong family and could admit a same-family
   // reviewer that §6's exclusion is meant to keep out.
   for (const [label, seat] of concreteSeats(channels, reviewerGroups, catalog)) {
-    const mapped = isPlainObject(table[seat.adapter]) ? table[seat.adapter][seat.model] : undefined;
+    const adapterTable = table[seat.adapter];
+    const mapped = isPlainObject(adapterTable) && Object.hasOwn(adapterTable, seat.model) ? adapterTable[seat.model] : undefined;
     if (mapped === undefined) {
       violations.push({
         rule: RULE.MODEL_PROVIDERS,
