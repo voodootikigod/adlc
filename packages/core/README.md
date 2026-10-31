@@ -93,6 +93,12 @@ TypeScript is resolved from the repository under test and is not a dependency of
 - `tail(str, maxChars = 4000)` → the last `maxChars` characters of `str`, unchanged if already within limit. Hoisted here (was duplicated in consensus-fix) so every caller capping a prompt payload shares one implementation.
 - `fence(label, content, maxChars, opts?)` → wraps `content` in `<<UNTRUSTED:...>>`/`<<END:...>>` markers declaring it inert data, capped to `maxChars` (`maxChars` is required, not optional; there is no uncapped call). Truncation keeps the tail by default; pass `{ bias: 'head' }` to keep the opening (spec-shaped content). `opts` must be a plain object whose only key is `bias`, and `bias` must be `'head'` or `'tail'`; anything else throws. Used by `packages/fleet` to fence prior build/gate/prosecution logs into a fix charter.
 
+## diff-mask (removed-line credential masking)
+
+- `maskRemovedSecrets(diff)` → `diff` with credentials masked on its **removed** (`-`) lines only, for a diff a review model is about to read. A change that deletes a secret still carries it on its `-` lines; added and context lines are at HEAD and stay visible so a reviewer can flag a secret the change adds. Masks the known provider shapes the findings ledger refuses, credential assignments (any case and identifier style — `password`, `API_TOKEN`, `clientSecret`, `"apiKey"` — quoted or not, with `=`, `:`, `:=` or `=>`), URL userinfo passwords, Basic auth, high-entropy tokens, and private key blocks (tracked on the old side of the file, back-filled from an END line whose BEGIN is outside the context). The function-context text after a `@@` header is masked too, since git copies it from the file. `---`/`+++` headers are never touched; the line count is kept. Feed it plain `git diff --no-color --no-ext-diff` output: a colored or external-driver diff is not recognised. A removed line over `MAX_MASKED_LINE` (2000) characters is masked whole, which also bounds the regex work per line. Best-effort: a value under 8 characters, an unquoted value with spaces, or a low-entropy password with no credential-like name, is not caught.
+- `maskSecretText(text)` → the same masking for one line of text.
+- `MASKED_SECRET` (`[redacted]`), `MASKED_PRIVATE_KEY` (`[redacted private key]`), `MASKED_LONG_LINE` (`[redacted long line]`) — the placeholders; `MAX_MASKED_LINE` — the per-line length cap.
+
 ## test-kit (`@adlc/core/test-kit`)
 
 Fixture helpers for `node:test` suites; typed by `lib/test-kit.d.mts`.

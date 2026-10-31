@@ -1851,6 +1851,23 @@ var PROVIDER_NAMES = PROVIDERS.map((p) => p.name);
 // packages/core/lib/git.mjs
 var GIT_MAX_BUFFER2 = 64 * 1024 * 1024;
 
+// packages/core/lib/secret-shapes.mjs
+var INLINE_ASSIGNMENT = /\b((?:api[-_]?key|secret|passwd|password|token|access[-_]?key)\b\s*[:=]\s*)\S{8,}/i;
+var SECRET_PATTERNS = [
+  [/\bAKIA[0-9A-Z]{16}\b/, "an AWS access key id"],
+  [/\bASIA[0-9A-Z]{16}\b/, "an AWS temporary access key id"],
+  [/\bgh[pousr]_[A-Za-z0-9]{20,}\b/, "a GitHub token"],
+  [/\bgithub_pat_[A-Za-z0-9_]{20,}\b/, "a GitHub fine-grained token"],
+  [/\bglpat-[A-Za-z0-9_-]{20,}\b/, "a GitLab token"],
+  [/\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/, "an OpenAI API key"],
+  [/\bxox[abprs]-[A-Za-z0-9-]{10,}\b/, "a Slack token"],
+  [/\bAIza[0-9A-Za-z_-]{35}\b/, "a Google API key"],
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, "a private key block"],
+  [/\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i, "a bearer token"],
+  [INLINE_ASSIGNMENT, "an inline credential assignment"],
+  [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\./, "a JWT"]
+];
+
 // packages/core/lib/tickets.mjs
 import { existsSync as existsSync11, lstatSync as lstatSync6 } from "node:fs";
 import { dirname as dirname9, isAbsolute as isAbsolute3, join as join9 } from "node:path";
@@ -2056,6 +2073,24 @@ var BASE_STOPWORDS = Object.freeze(/* @__PURE__ */ new Set([
   "after",
   "before"
 ]));
+
+// packages/core/lib/diff-mask.mjs
+var MASKED_SECRET = "[redacted]";
+var NAME = String.raw`(?<![A-Za-z0-9])[A-Za-z0-9_.-]{0,48}?(?:secret|token|passw(?:or)?d|pwd|credentials?|api[-_]?key|access[-_]?key|private[-_]?key|auth[-_]?key)[A-Za-z0-9_.-]{0,48}["']?\s*(?::=|=>|[:=])\s*`;
+var ASSIGNMENT_RULES = [
+  // `name = "value with anything"` — the quoted value, escapes included, up to
+  // its closing quote or the end of the line (a multi-line string, a trailing
+  // line-continuation backslash, or a hunk header git cut short).
+  [new RegExp(`(${NAME})(["'\`])((?:\\\\[^]|\\\\$|(?!\\2)[^\\\\]){8,}?)(\\2|$)`, "gi"), (_m, prefix, quote, _value, close) => `${prefix}${quote}${MASKED_SECRET}${close}`],
+  // `name = value` — an unquoted value up to whitespace or a quote.
+  [new RegExp(`(${NAME})(?!["'\`])[^\\s"'\`]{8,}`, "gi"), (_m, prefix) => `${prefix}${MASKED_SECRET}`],
+  // `scheme://user:password@host` — the password in URL userinfo.
+  [/(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]*:)[^\s@/]+(?=@)/gi, (_m, prefix) => `${prefix}${MASKED_SECRET}`],
+  // `Authorization: Basic <base64 user:pass>`.
+  [/(\bBasic\s+)[A-Za-z0-9+/]{8,}={0,2}/g, (_m, prefix) => `${prefix}${MASKED_SECRET}`]
+];
+var SHAPE_RULES = SECRET_PATTERNS.filter(([pattern]) => pattern !== INLINE_ASSIGNMENT).map(([pattern]) => [new RegExp(pattern.source, `${pattern.flags}g`), () => MASKED_SECRET]);
+var MASK_RULES = [...ASSIGNMENT_RULES, ...SHAPE_RULES];
 
 // plugins/adlc-cursor/generated-active-ticket.mjs
 import { lstatSync as lstatSync7, openSync as openSync4, fstatSync, readSync as readSync2, closeSync as closeSync4, constants as fsConstants2 } from "node:fs";

@@ -1,0 +1,39 @@
+{
+  "body": "Source: mentimeter/adlc#713 (fixed downstream in mentimeter/adlc#721), checked against upstream. The OpenCode `adlc_prosecute` tool (plugins/adlc-opencode/lib/prosecute-tool.mjs captureDiff, `git diff <base>...HEAD`) and the pi `adlc_prosecute` tool (plugins/adlc-pi/lib/prosecute-tool.mjs collectDiff, `git diff <base> HEAD --`) pass the raw diff into every lens and verifier prompt. When a change deletes a hardcoded credential, the value is on a `-` line, so it is sent to each lens model's provider even though the change exists to remove it. Nothing masks it (autopilot's scanAddedLinesForSecrets checks added lines only, by design).\n\nFix: add `maskRemovedSecrets(diff)` (and `maskSecretText`, `MASKED_SECRET`, `MASKED_PRIVATE_KEY`) to @adlc/core in packages/core/lib/diff-mask.mjs, built on the same credential shapes the findings ledger refuses. Move those shapes (SECRET_PATTERNS, the high-entropy token check) out of ledger.mjs into an internal packages/core/lib/secret-shapes.mjs that both import, with no change to assertPublishableFinding behaviour. Mask only removed lines inside hunks: known provider shapes, `name = value` credential assignments (keep the name), env-style names such as `API_TOKEN=`, high-entropy tokens (git shas exempt), and private key blocks tracked on the old side of the file (removed + context lines), so an added END line cannot close a block still being removed, a block carries across hunks of one file and ends at the next `diff --git`, and an END whose BEGIN is outside the context back-fills the base64 run above it. Never touch `---`/`+++` headers, added lines, or context lines; keep the line count. Call it in both captureDiff and collectDiff. Document it in packages/core/README.md, plugins/adlc-pi/README.md and docs/integrations/opencode.md.\n\nAcceptance criteria:\n1. `node --test packages/core/test/diff-mask.test.mjs` passes: removed shapes are masked, added/context/header lines are unchanged, private-key spans behave as above.\n2. `node --test plugins/adlc-opencode/test/prosecute-diff-mask.test.mjs` passes: against the real git binary, captureDiff output and every lens/verifier prompt lack a token the change removes and contain `-export const token = [redacted]`.\n3. `node --test plugins/adlc-pi/test/prosecute-diff-mask.test.mjs` passes: with pi.exec backed by real git, no lens prompt contains the removed token and the masked removal is present.\n4. `node --test packages/core/test/prosecutor-record-finding.test.mjs` still passes (the ledger secret refusal is unchanged).",
+  "category": "bug",
+  "criteria": [
+    "node --test packages/core/test/diff-mask.test.mjs passes: removed credential shapes are masked; added, context and header lines are unchanged; private-key spans are tracked on the old side.",
+    "node --test plugins/adlc-opencode/test/prosecute-diff-mask.test.mjs passes: real-git captureDiff output and every lens/verifier prompt lack a removed token and show the masked removal.",
+    "node --test plugins/adlc-pi/test/prosecute-diff-mask.test.mjs passes: with real git behind pi.exec, no lens prompt contains a removed token.",
+    "node --test packages/core/test/prosecutor-record-finding.test.mjs still passes: the findings-ledger secret refusal is unchanged."
+  ],
+  "id": "T-01M5X0GAE2S2VPKAZBSFCQ8537",
+  "out_of_scope": [
+    "Exact-value (hash-listed) secret matching for generic passwords with no credential-like shape.",
+    "Masking added or context lines.",
+    "Changing the .gitignore lines adlc init writes for .omo/evidence."
+  ],
+  "priority": 1,
+  "rails": [
+    "packages/core/test/prosecutor-record-finding.test.mjs"
+  ],
+  "risk_tier": "high",
+  "scope": [
+    "packages/core/lib/diff-mask.mjs",
+    "packages/core/lib/secret-shapes.mjs",
+    "packages/core/lib/ledger.mjs",
+    "packages/core/index.mjs",
+    "packages/core/index.d.ts",
+    "packages/core/README.md",
+    "packages/core/test/diff-mask.test.mjs",
+    "plugins/adlc-opencode/lib/prosecute-tool.mjs",
+    "plugins/adlc-opencode/test/prosecute-diff-mask.test.mjs",
+    "plugins/adlc-pi/lib/prosecute-tool.mjs",
+    "plugins/adlc-pi/test/prosecute-diff-mask.test.mjs",
+    "plugins/adlc-pi/README.md",
+    "docs/integrations/opencode.md"
+  ],
+  "status": "ready",
+  "title": "prosecute tools: mask credentials on removed diff lines before lens prompts",
+  "verify": "node --test packages/core/test/diff-mask.test.mjs packages/core/test/prosecutor-record-finding.test.mjs plugins/adlc-opencode/test/prosecute-diff-mask.test.mjs plugins/adlc-pi/test/prosecute-diff-mask.test.mjs"
+}

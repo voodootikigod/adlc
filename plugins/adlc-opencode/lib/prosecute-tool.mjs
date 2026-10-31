@@ -7,6 +7,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { maskRemovedSecrets } from '@adlc/core';
 import { LENSES, VERIFIER } from './prosecutor.mjs';
 import { runProsecution, makeLensAsk } from './prosecute-runner.mjs';
 import { toToolResult, DIRECT_TOOL_OPTIONS } from './gate-tool.mjs';
@@ -75,7 +76,11 @@ function modelLines({ models, unregisteredAgents, agentListUnavailable, singleMo
 }
 
 /**
- * The change under prosecution: `git diff <base>...HEAD`.
+ * The change under prosecution: `git diff <base>...HEAD`, with credentials on
+ * its removed lines masked (maskRemovedSecrets) — every lens and verifier
+ * prompt carries this text to a model provider, and a change that deletes a
+ * secret must not send it there. `--no-color --no-ext-diff` keep the output in
+ * the plain format the mask parses, whatever the user's git config says.
  * Returns { diff, error }. A git FAILURE (bad base ref, non-git cwd, buffer
  * overflow) sets error — the caller must NOT treat that as an empty diff (which
  * would falsely SHIP); a genuine clean tree returns { diff: '', error: null }.
@@ -88,7 +93,7 @@ export function captureDiff({ base = 'main', cwd = process.cwd(), spawnImpl = ex
     return { diff: '', error: `invalid base ref ${JSON.stringify(base)}: must not start with "-"` };
   }
   try {
-    return { diff: String(spawnImpl('git', ['diff', `${base}...HEAD`], { cwd, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }) || ''), error: null };
+    return { diff: maskRemovedSecrets(String(spawnImpl('git', ['diff', `${base}...HEAD`, '--no-color', '--no-ext-diff'], { cwd, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }) || '')), error: null };
   } catch (err) {
     return { diff: '', error: String(err?.message ?? err) };
   }

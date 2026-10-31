@@ -19,6 +19,7 @@ export * from './lib/inflight.mjs';
 export * from './lib/cluster.mjs';
 export * from './lib/proc.mjs';
 export * from './lib/trusted-binary.mjs';
+export * from './lib/diff-mask.mjs';
 
 // Promoted shared helpers
 export { activeTickets } from './lib/tickets.mjs';

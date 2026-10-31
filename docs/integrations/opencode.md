@@ -321,7 +321,9 @@ model to a session a plugin creates — so each lens can run on a different mode
 diversity; trust-root cross-model review still requires distinct providers and
 a signed attestation). v2's `prompt` has no per-call `system` field, so the
 authoritative packaged charter always leads the prompt text, ahead of the
-diff; repo-local agent files or version drift cannot weaken the reviewer
+diff (whose removed lines have their credentials masked by `@adlc/core`'s
+`maskRemovedSecrets`, so a change that deletes a secret does not send it to
+the lens provider); repo-local agent files or version drift cannot weaken the reviewer
 instructions. A lens agent that is not registered is never named: its call
 runs on the session model with the charter. The registered set comes from
 `ctx.agent.list()` once per run (bounded at 5 s); a host that cannot list
