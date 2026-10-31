@@ -1,0 +1,17 @@
+{
+  "body": "Source: GitHub issues #728 and #732.\n1. (#728) In packages/prosecute/bin/adlc-prosecute.mjs, tier-check calls resolveProsecutionRevision({ dir: values.dir, base: values.base, revision: values.revision }) without passing input / inputPath: values.input, whereas record-cross-model reads values.input and passes { input, inputPath: values.input }. When a tracked evidence packet (e.g. .adlc/passes.json) is modified in the working tree and passed via --input, record-cross-model excludes it from the revision digest while tier-check includes it, so tier-check can never match the recorded attestation.\n2. (#732) In packages/prosecute/bin/adlc-prosecute.mjs, the non-JSON failure exit branch prints console.error(result.message) unconditionally even when runProsecution returns an op-error object with no message field, emitting a literal \"undefined\" line to stderr before result.errors.\n\nACCEPTANCE CRITERIA:\n- AC1: When --input <path> is passed to tier-check, read and parse the JSON file (calling opError on read/parse failure just like record-cross-model) and pass input and inputPath: values.input to resolveProsecutionRevision so tier-check resolves the identical git-change:<base>:<digest> revision as record-cross-model.\n- AC2: Guard console.error(result.message) on the failure exit path in packages/prosecute/bin/adlc-prosecute.mjs so unset result.message does not print \"undefined\" to stderr.\n- AC3: Unit/CLI tests in packages/prosecute/test/prosecute-tier-check-cli.test.mjs and packages/prosecute/test/prosecute-cli.test.mjs verify both behaviors and kill all mutants.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M68GADYSQXY8MBY4Y96PKVR1",
+  "rails": [
+    "packages/prosecute/test/cross-model.test.mjs",
+    "packages/prosecute/test/tier.test.mjs"
+  ],
+  "scope": [
+    "packages/prosecute/bin/adlc-prosecute.mjs",
+    "packages/prosecute/test/prosecute-tier-check-cli.test.mjs",
+    "packages/prosecute/test/prosecute-cli.test.mjs"
+  ],
+  "title": "prosecute: thread --input into tier-check revision resolution and guard unset result.message on op-error exits (#728, #732)"
+}

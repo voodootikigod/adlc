@@ -602,4 +602,37 @@ describe('adlc-prosecute mirror-attestations + tier-check --attestation-store (#
     assert.equal(secondMirror.status, 1, 'mirror-attestations must also refuse to write onto a store it cannot fully verify');
     assert.match(secondMirror.stderr, /signature does not verify/);
   });
+
+  it('threads --input into tier-check revision resolution so a tracked packet matches record-cross-model (#728)', (t) => {
+    const { dir } = scratchRepo(t, { baseTickets: [T({ rails: [] })], mutate: tierChange });
+    const packetRel = '.adlc/passes.json';
+    const packetAbs = join(dir, packetRel);
+    writeFileSync(packetAbs, JSON.stringify({ passes: [] }));
+    execFileSync('git', ['add', packetRel], { cwd: dir });
+    execFileSync('git', ['commit', '-qm', 'track packet'], {
+      cwd: dir,
+      env: { ...process.env, GIT_AUTHOR_DATE: PINNED_GIT_DATE, GIT_COMMITTER_DATE: PINNED_GIT_DATE },
+    });
+    // Modify the tracked packet in the working tree before recording and checking
+    writeFileSync(packetAbs, JSON.stringify({ passes: [{ lens: 'security', findings: [] }] }));
+
+    const rec = runBin([
+      'record-cross-model', '--ticket', 'T1', '--provider', 'openai', '--author-provider', 'anthropic',
+      '--verdict', 'approve', '--base', 'main', '--dir', '.adlc', '--input', packetRel, '--json',
+    ], dir);
+    assert.equal(rec.status, 0, rec.stderr);
+
+    const check = runBin([
+      'tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--input', packetRel, '--json',
+    ], dir);
+    assert.equal(check.status, 0, check.stderr);
+    const parsed = JSON.parse(check.stdout);
+    assert.equal(parsed.satisfied, true);
+
+    const badInput = runBin([
+      'tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--input', '.adlc/no-such-packet.json',
+    ], dir);
+    assert.equal(badInput.status, 1);
+    assert.match(badInput.stderr, /could not read --input/);
+  });
 });
