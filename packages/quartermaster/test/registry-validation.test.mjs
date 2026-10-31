@@ -668,3 +668,14 @@ test('every adapter in the REAL catalog declares at least one transport class', 
   const undeclared = Object.keys(adapters).filter((a) => Object.keys(adapters[a].transports ?? {}).length === 0);
   assert.deepEqual(undeclared, [], `these adapters would reject every seat bound to them: ${undeclared.join(', ')}`);
 });
+
+
+test('rule 7: a concrete model named after an Object.prototype member is rejected when absent from modelProviders (#736)', () => {
+  assertRejected(
+    withMutation((r) => {
+      r.channels.mid.model = 'toString';
+    }),
+    RULE.MODEL_PROVIDERS,
+    { messageMatch: /names concrete model "toString" on adapter "opencode", but modelProviders\.opencode has no entry for it/ }
+  );
+});
