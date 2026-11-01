@@ -5,6 +5,7 @@ import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, un
 import { createHash, randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
+import { SECRET_PATTERNS, looksLikeRandomSecret } from './secret-shapes.mjs';
 
 export const ADLC_DIR = '.adlc';
 
@@ -97,54 +98,6 @@ function countEntryNewlines(value) {
   if (value && typeof value === 'object') return Object.values(value).reduce((n, v) => n + countEntryNewlines(v), 0);
   return 0;
 }
-// KNOWN provider credential shapes. This list is necessarily incomplete — new formats
-// appear constantly — so it is a best-effort filter, NOT a proof of secret-freedom.
-// The high-entropy catch below covers unlabelled random secrets the list misses, and
-// the durable guarantee remains that findings are CURATED PROSE (ADR 0014), not a
-// claim that this function catches every possible secret.
-const SECRET_PATTERNS = [
-  [/\bAKIA[0-9A-Z]{16}\b/, 'an AWS access key id'],
-  [/\bASIA[0-9A-Z]{16}\b/, 'an AWS temporary access key id'],
-  [/\bgh[pousr]_[A-Za-z0-9]{20,}\b/, 'a GitHub token'],
-  [/\bgithub_pat_[A-Za-z0-9_]{20,}\b/, 'a GitHub fine-grained token'],
-  [/\bglpat-[A-Za-z0-9_-]{20,}\b/, 'a GitLab token'],
-  [/\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/, 'an OpenAI API key'],
-  [/\bxox[abprs]-[A-Za-z0-9-]{10,}\b/, 'a Slack token'],
-  [/\bAIza[0-9A-Za-z_-]{35}\b/, 'a Google API key'],
-  [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, 'a private key block'],
-  [/\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i, 'a bearer token'],
-  [/\b(?:api[-_]?key|secret|passwd|password|token|access[-_]?key)\b\s*[:=]\s*\S{8,}/i, 'an inline credential assignment'],
-  [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\./, 'a JWT'],
-];
-
-// Shannon entropy (bits/char) of a token — high for random secrets, low for prose.
-function tokenEntropy(s) {
-  const freq = new Map();
-  for (const ch of s) freq.set(ch, (freq.get(ch) ?? 0) + 1);
-  let bits = 0;
-  for (const n of freq.values()) { const p = n / s.length; bits -= p * Math.log2(p); }
-  return bits;
-}
-
-// A long, high-entropy, mixed-case+digit run with no whitespace is almost certainly a
-// key/token, not curated prose. Deliberately conservative — hex-only runs (git shas,
-// hashes findings legitimately cite) are EXEMPT, so this does not fire on the ledger's
-// own member keys or on quoted commit ids.
-function looksLikeRandomSecret(text) {
-  for (const token of String(text).split(/[\s"'`(){}\[\],:]+/)) {
-    if (token.length < 32) continue;
-    // Pure hex up to a git-sha's 40 chars is exempt (a sha, a member key, a cluster
-    // id — things findings legitimately cite). A LONGER pure-hex run is NOT a git sha;
-    // treat it as a hex-encoded key or hash that belongs described, not quoted — the
-    // exact 64-char-hex-in-`evidence` bypass an unbounded hex exemption allowed.
-    if (/^[0-9a-f]{1,40}$/i.test(token)) continue;
-    if (/^[0-9a-f]{41,}$/i.test(token)) return true;
-    if (!/[a-z]/.test(token) || !/[A-Z0-9]/.test(token)) continue; // needs real mixing
-    if (tokenEntropy(token) >= 4.0) return true;
-  }
-  return false;
-}
-
 /**
  * Fail CLOSED on anything unfit for a committed ledger. Both boundaries — the secret scan
  * AND the raw-dump size/line bounds — apply to the WHOLE serialized entry, not just `desc`:

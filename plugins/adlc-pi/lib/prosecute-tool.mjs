@@ -13,7 +13,7 @@
 // callability end-to-end.
 
 import { isAbsolute, join } from 'node:path';
-import { loadTickets } from '@adlc/core';
+import { loadTickets, maskRemovedSecrets } from '@adlc/core';
 import { prosecute, defaultRunLens, renderSummary } from './prosecutor.mjs';
 import { resolvePiPeer } from './pi-resolve.mjs';
 
@@ -84,17 +84,25 @@ export async function validateBaseRef(pi, root, base) {
   throw new Error(`adlc_prosecute: base ref "${base}" does not resolve to a commit`);
 }
 
+// Keep `git diff` output plain whatever the user's git config says: a colored or
+// external-driver diff is not the format maskRemovedSecrets parses.
+const PLAIN_DIFF = ['--no-color', '--no-ext-diff'];
+
 /**
  * The diff under prosecution: `git diff <base> HEAD --`. Empty when no base.
+ * Credentials on its removed lines are masked (maskRemovedSecrets): every lens
+ * and verifier prompt carries this text to a model provider, and a change that
+ * deletes a secret must not send it there. PLAIN_DIFF keeps the output in the
+ * plain format the mask parses, whatever the user's git config says.
  * `base` here is already validated by validateBaseRef (a bare sha), and the
  * trailing `--` pathspec terminator is defense-in-depth so nothing downstream
  * can be misread as an option.
  */
 async function collectDiff(pi, root, base) {
-  const args = base ? ['diff', base, 'HEAD', '--'] : ['diff', 'HEAD', '--'];
+  const args = base ? ['diff', base, 'HEAD', ...PLAIN_DIFF, '--'] : ['diff', 'HEAD', ...PLAIN_DIFF, '--'];
   try {
     const res = await pi.exec('git', args, { cwd: root });
-    return res?.stdout ?? '';
+    return maskRemovedSecrets(res?.stdout ?? '');
   } catch (err) {
     throw new Error(`could not collect the diff (git ${args.join(' ')}): ${err.message}`);
   }

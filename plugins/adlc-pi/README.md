@@ -63,7 +63,9 @@ than in a version range.
   out, or replied with anything other than a findings array — returns the verdict
   **`INCONCLUSIVE`**, never `CLEAN`: no lens result was obtained, which is not the same
   as no findings. Lens and verifier prompts carry the diff, the ticket title and each
-  finding inside nonce-tagged untrusted-data fences.
+  finding inside nonce-tagged untrusted-data fences. Credentials on the diff's removed
+  lines are masked first (`maskRemovedSecrets` from `@adlc/core`), so a change that
+  deletes a secret does not send it to the lens provider.
 - **Commands + footer pill** — `/ticket`, `/adlc-init`, `/adlc-accept`, and a live
   widget (ticket, context %, degraded flag, plus hints) in the footer pill.
 - **Completion hints** — when a session ends with a claimed-done ticket but
