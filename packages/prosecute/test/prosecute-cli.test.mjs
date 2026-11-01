@@ -163,4 +163,46 @@ describe('adlc-prosecute cli', () => {
       assert.equal(status, 1);
     });
   });
+
+  it('does not print a bare "undefined" line to stderr on an op-error exit when result.message is unset (#732)', () => {
+    const dir = tmpAdlc();
+    const inputPath = join(dir, 'passes.json');
+    const reviewTranscript = transcript(dir);
+    writeFileSync(inputPath, JSON.stringify({
+      provenance: {
+        reviewer: 'fixture-reviewer',
+        session: 'fixture-session',
+        command: 'fixture review command',
+        transcript: reviewTranscript,
+      },
+      review_packet: reviewPacket(dir),
+      passes: [
+        { lens: 'security', findings: [killedFinding()] },
+        { lens: 'correctness', findings: [], dry_evidence: 'ok' },
+        { lens: 'tests', findings: [], dry_evidence: 'ok' },
+        { lens: 'behavior', findings: [], dry_evidence: 'ok' },
+      ],
+    }));
+    const repo = gitRepo();
+    try {
+      writeFileSync(join(repo.dir, '.gitkeep'), '');
+      repo.g('add', '-A');
+      repo.g('commit', '-qm', 'base');
+      let stderr = '';
+      let status = 0;
+      try {
+        execFileSync(process.execPath, [
+          BIN, '--input', inputPath, '--ticket', 'T_NONEXISTENT', '--revision', FIXTURE_REVISION, '--base', 'HEAD', '--dir', dir,
+        ], { cwd: repo.dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      } catch (err) {
+        status = err.status;
+        stderr = err.stderr ?? '';
+      }
+      assert.equal(status, 1);
+      assert.doesNotMatch(stderr, /^undefined$/m);
+      assert.match(stderr, /ticket definition not found for T_NONEXISTENT/);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
 });

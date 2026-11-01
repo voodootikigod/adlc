@@ -966,7 +966,22 @@ if (positionals[0] === 'tier-check') {
   if (!authorProvider) {
     opError('tier-check: trust-root tier but no --author-provider / ADLC_AUTHOR_PROVIDER — distinctness cannot be proven; failing closed');
   }
-  const revision = resolveProsecutionRevision({ dir: values.dir, base: values.base, revision: values.revision });
+  const tierInputPath = values.input;
+  let tierInput;
+  if (tierInputPath !== undefined) {
+    try {
+      tierInput = JSON.parse(readFileSync(tierInputPath, 'utf8'));
+    } catch (err) {
+      opError(`could not read --input: ${err.message}`);
+    }
+  }
+  const revision = resolveProsecutionRevision({
+    dir: values.dir,
+    base: values.base,
+    revision: values.revision,
+    input: tierInput,
+    inputPath: tierInputPath,
+  });
   if (!revision) opError('tier-check: revision could not be resolved; run inside a git worktree or pass --revision');
 
   // #326 hardening — the attestation is trusted ONLY via its HMAC signature, verified with
@@ -1188,7 +1203,7 @@ if (values.json) {
 } else if (result.exitCode === 0) {
   console.log(result.message);
 } else {
-  console.error(result.message);
+  if (result.message !== undefined) console.error(result.message);
   if (result.errors) console.error(result.errors.join('\n'));
 }
 
