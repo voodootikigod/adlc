@@ -198,3 +198,23 @@ test('a caller-claimed channel that disagrees with §5 throws for non-build jobs
   assert.throws(() => routeJob({ job: 'review.cross-model.routine', channel: 'frontier' }), /not channel "frontier"/);
   assert.doesNotThrow(() => routeJob({ job: 'prosecute.lens', channel: 'mid' }));
 });
+
+
+test('Object.prototype key names throw unknown job or unknown tier rather than resolving inherited properties (#735)', () => {
+  for (const protoKey of ['constructor', 'toString', '__proto__', 'valueOf', 'hasOwnProperty']) {
+    assert.throws(
+      () => routeJob({ job: protoKey }),
+      /routeJob: unknown job/,
+      `Object.prototype key ${JSON.stringify(protoKey)} must throw unknown job`
+    );
+    assert.throws(
+      () => routeJob({
+        job: 'build.ladder-start',
+        assignment: { tier: protoKey, float: 2, mode: 'single', budget: {} },
+        ticket: { id: 'T1', category: 'bugfix' },
+      }),
+      /has no channel/,
+      `Object.prototype tier ${JSON.stringify(protoKey)} must throw unknown tier`
+    );
+  }
+});

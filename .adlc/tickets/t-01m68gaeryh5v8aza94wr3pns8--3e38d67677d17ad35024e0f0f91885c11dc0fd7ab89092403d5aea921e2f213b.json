@@ -1,0 +1,18 @@
+{
+  "body": "Source: GitHub issues #735 and #736.\n1. (#735) In packages/quartermaster/lib/route-job.mjs, routeJob reads NON_BUILD_JOB_ROUTES[job] and ladderChannel reads LADDER_TIER_CHANNELS[assignment.tier] with bare bracket lookups. Passing an Object.prototype key name (e.g. \"constructor\", \"toString\", \"__proto__\", \"valueOf\", \"hasOwnProperty\") resolves to the inherited prototype property instead of throwing unknown job / unknown tier.\n2. (#736) In packages/quartermaster/lib/registry.mjs, the rule-7 concrete seat check reads table[seat.adapter][seat.model] with a bare bracket lookup. When seat.model collides with an Object.prototype member, mapped is the inherited function rather than undefined, bypassing both the missing-entry and contradictory-binding rule-7 checks.\n\nACCEPTANCE CRITERIA:\n- AC1: In packages/quartermaster/lib/route-job.mjs, guard NON_BUILD_JOB_ROUTES[job] and LADDER_TIER_CHANNELS[assignment.tier] with Object.hasOwn(...) so inherited Object.prototype keys throw the unknown-job / unknown-tier error.\n- AC2: In packages/quartermaster/lib/registry.mjs, guard table[seat.adapter][seat.model] with Object.hasOwn(table[seat.adapter], seat.model) so concrete seat models named after Object.prototype keys are flagged as missing rule-7 entries unless explicitly defined as own properties.\n- AC3: Unit tests in packages/quartermaster/test/route-job.test.mjs and packages/quartermaster/test/registry-validation.test.mjs verify Object.prototype keys are rejected and kill all mutants.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M68GAERYH5V8AZA94WR3PNS8",
+  "rails": [
+    "packages/quartermaster/test/escalate.test.mjs",
+    "packages/quartermaster/test/provider-normalization.test.mjs"
+  ],
+  "scope": [
+    "packages/quartermaster/lib/route-job.mjs",
+    "packages/quartermaster/lib/registry.mjs",
+    "packages/quartermaster/test/route-job.test.mjs",
+    "packages/quartermaster/test/registry-validation.test.mjs"
+  ],
+  "title": "quartermaster: guard Object.prototype key lookups in routeJob, ladderChannel, and rule-7 modelProviders check (#735, #736)"
+}

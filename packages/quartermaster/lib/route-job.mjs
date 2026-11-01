@@ -50,7 +50,7 @@ export function deriveBuildJob({ assignment, ticket }) {
 }
 
 function ladderChannel(assignment) {
-  const channel = LADDER_TIER_CHANNELS[assignment.tier];
+  const channel = Object.hasOwn(LADDER_TIER_CHANNELS, assignment.tier) ? LADDER_TIER_CHANNELS[assignment.tier] : undefined;
   if (!channel) {
     throw new Error(
       `routeJob: assignment.tier "${assignment.tier}" has no channel (known tiers: ${Object.keys(LADDER_TIER_CHANNELS).join(', ')}).`
@@ -96,7 +96,7 @@ export function routeJob({ job, assignment, ticket, channel } = {}) {
     return { channel: routed };
   }
 
-  const route = NON_BUILD_JOB_ROUTES[job];
+  const route = Object.hasOwn(NON_BUILD_JOB_ROUTES, job) ? NON_BUILD_JOB_ROUTES[job] : undefined;
   if (!route) {
     throw new Error(
       `routeJob: unknown job "${job}". Known jobs: ${[...BUILD_JOBS, ...Object.keys(NON_BUILD_JOB_ROUTES)].join(', ')}, gate.deterministic.*`
