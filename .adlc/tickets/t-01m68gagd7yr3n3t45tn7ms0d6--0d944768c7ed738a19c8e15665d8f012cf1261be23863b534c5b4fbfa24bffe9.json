@@ -1,0 +1,16 @@
+{
+  "body": "Source: GitHub issue #678.\nIn packages/lesson-foundry/bin/lesson-foundry.mjs, --prompt-only checks malformed lines under --gate (lines 90-95) and then calls promptOnly(prompts) (exiting 0) before findUnbankedClusters is evaluated, so passing --gate --prompt-only exits 0 when unbanked recurring clusters exist.\n\nACCEPTANCE CRITERIA:\n- AC1: In packages/lesson-foundry/bin/lesson-foundry.mjs, when both --gate and --prompt-only are passed, evaluate findUnbankedClusters(clusters, outDir, existsSync, undefined, undefined, minSize, findings, 0.5) and call gateFail(...) with exit 2 if unbanked.length > 0 before calling promptOnly.\n- AC2: CLI tests in packages/lesson-foundry/test/cli.test.mjs verify that --gate --prompt-only exits 2 when unbanked recurring clusters exist and exits 0 when all clusters are banked.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M68GAGD7YR3N3T45TN7MS0D6",
+  "rails": [
+    "packages/lesson-foundry/test/cluster.test.mjs",
+    "packages/lesson-foundry/test/foundry.test.mjs"
+  ],
+  "scope": [
+    "packages/lesson-foundry/bin/lesson-foundry.mjs",
+    "packages/lesson-foundry/test/cli.test.mjs"
+  ],
+  "title": "lesson-foundry: evaluate --gate unbanked-cluster check before --prompt-only short-circuits (#678)"
+}

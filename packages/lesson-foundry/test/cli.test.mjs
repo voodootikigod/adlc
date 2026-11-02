@@ -298,3 +298,23 @@ test('CLI --json --gate: exit 0 with valid JSON when all banked', (t) => {
   assert.strictEqual(parsed.gate.pass, true);
   assert.deepStrictEqual(parsed.gate.unbanked, []);
 });
+
+
+test('CLI --gate --prompt-only: exits 2 when unbanked recurring clusters exist and exits 0 once banked (#678)', (t) => {
+  const dir = tmp(t, 'lesson-foundry-cli-test-');
+  const outDir = join(dir, '.adlc', 'lessons');
+  writeLedger(dir, [
+    { ts: '2025-01-01', tool: 'test', file: 'a.mjs', line: 1, category: 'security', severity: 'high', desc: 'missing null check in database query' },
+    { ts: '2025-01-02', tool: 'test', file: 'b.mjs', line: '2', category: 'security', severity: 'high', desc: 'missing null check in database query' },
+  ]);
+  const unbankedRes = runCli(['--gate', '--prompt-only', '--out-dir', outDir], dir);
+  assert.strictEqual(unbankedRes.code, 2, `expected exit 2 on unbanked --gate --prompt-only, got ${unbankedRes.code}: ${unbankedRes.stderr}`);
+  assert.match(unbankedRes.stderr, /1 recurring lesson\(s\) unbanked: missing-null-check-in-database-query/);
+
+  const writeRes = runCli(['--write', '--out-dir', outDir], dir);
+  assert.strictEqual(writeRes.code, 0, `--write should succeed: ${writeRes.stderr}`);
+
+  const bankedRes = runCli(['--gate', '--prompt-only', '--out-dir', outDir], dir);
+  assert.strictEqual(bankedRes.code, 0, `expected exit 0 on banked --gate --prompt-only, got ${bankedRes.code}: ${bankedRes.stderr}`);
+  assert.match(bankedRes.stdout, /missing-null-check-in-database-query/);
+});
