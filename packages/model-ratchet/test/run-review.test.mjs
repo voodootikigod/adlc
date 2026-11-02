@@ -14,6 +14,7 @@ import {
   isFindingLine,
   parseFindingLine,
   runReviewCmd,
+  reviewRunError,
   parseFindingsFromOutput,
   tokenizeCommand,
   substituteToken,
@@ -241,5 +242,37 @@ describe('runReviewCmd — command injection regression', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('runReviewCmd / reviewRunError — spawnError and stderr propagation (#695)', () => {
+  it('captures spawnError when the review binary does not exist (ENOENT)', () => {
+    const result = runReviewCmd('definitely-not-a-real-binary-695 {file}', 'src/foo.mjs');
+    assert.equal(result.timedOut, false);
+    assert.equal(result.signal, null);
+    assert.equal(typeof result.spawnError, 'string');
+    assert.match(result.spawnError, /ENOENT/);
+    const errMsg = reviewRunError(result, 5000);
+    assert.match(errMsg, /review-cmd failed to run: .*ENOENT/);
+  });
+
+  it('includes trimmed stderr in reviewRunError when command exits with code 1', () => {
+    const errWithStderr = reviewRunError({
+      exitCode: 1,
+      timedOut: false,
+      signal: null,
+      spawnError: null,
+      stderr: '  fatal: missing API key\n',
+    }, 5000);
+    assert.equal(errWithStderr, 'review-cmd exited with code 1: fatal: missing API key');
+
+    const errEmptyStderr = reviewRunError({
+      exitCode: 1,
+      timedOut: false,
+      signal: null,
+      spawnError: null,
+      stderr: '   ',
+    }, 5000);
+    assert.equal(errEmptyStderr, 'review-cmd exited with code 1');
   });
 });

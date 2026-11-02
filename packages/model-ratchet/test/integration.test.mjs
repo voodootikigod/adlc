@@ -381,3 +381,41 @@ describe('integration: --top flag', () => {
     assert.equal(out.files.length, 2, 'should return exactly 2 files');
   });
 });
+
+describe('integration: stderr findings and ENOENT error reporting (#695)', () => {
+  let tmp;
+  before(() => {
+    tmp = makeRepo([
+      [['src/hot.mjs', 'export const h = 1;']],
+      [['src/hot.mjs', 'export const h = 2;']],
+    ]);
+  });
+  after(() => rmSync(tmp, { recursive: true, force: true }));
+
+  it('parses findings written to stderr when review-cmd exits 0 or 2', () => {
+    const bin = resolve(__dirname, '../bin/model-ratchet.mjs');
+    const script = join(tmp, 'stderr-reviewer.mjs');
+    writeFileSync(script, 'process.stderr.write(process.argv[2] + ":9: stderr finding here\\n"); process.exit(2);\n');
+    const result = spawnSync('node', [bin, '--top', '1', '--review-cmd', `node ${script} {file}`, '--json'], {
+      cwd: tmp,
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, `stderr: ${result.stderr}`);
+    const out = JSON.parse(result.stdout);
+    assert.equal(out.totalFindings, 1);
+    assert.equal(out.results[0].findings[0].line, 9);
+    assert.match(out.results[0].findings[0].desc, /stderr finding here/);
+  });
+
+  it('surfaces ENOENT spawn failure instead of generic exited with code 1', () => {
+    const bin = resolve(__dirname, '../bin/model-ratchet.mjs');
+    const result = spawnSync('node', [bin, '--top', '1', '--review-cmd', 'nonexistent-review-binary-695 {file}', '--json'], {
+      cwd: tmp,
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 1);
+    const out = JSON.parse(result.stdout);
+    assert.equal(out.operationalError, true);
+    assert.match(out.results[0].error, /review-cmd failed to run: .*ENOENT/);
+  });
+});
