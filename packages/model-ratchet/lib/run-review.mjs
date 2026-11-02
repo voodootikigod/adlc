@@ -20,7 +20,8 @@ export { tokenizeCommand };
  * @returns {string[]}
  */
 export function substituteToken(tokens, placeholder, value) {
-  return tokens.map((tok) => tok.split(placeholder).join(value));
+  const safeValue = value.startsWith('-') ? `./${value}` : value;
+  return tokens.map((tok) => tok.split(placeholder).join(safeValue));
 }
 
 // A finding line is either:

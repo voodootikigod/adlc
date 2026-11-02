@@ -1,0 +1,16 @@
+{
+  "body": "Source: GitHub issue #694.\nIn packages/model-ratchet/lib/run-review.mjs, substituteToken(tokens, placeholder, value) replaces {file} directly with value. When a repo-root file starts with \"-\" (e.g. \"-c.mjs\" or \"--fix.mjs\"), walkSourceFiles returns a bare relative path \"-c.mjs\", which substituteToken passes as a standalone argv token \"-c.mjs\" that downstream review tools parse as a CLI option/flag.\n\nACCEPTANCE CRITERIA:\n- AC1: In packages/model-ratchet/lib/run-review.mjs, normalize substitution values starting with \"-\" by prefixing \"./\" (e.g. const safeValue = value.startsWith(\"-\") ? `./${value}` : value) before substituting into tokens.\n- AC2: Unit tests in packages/model-ratchet/test/run-review.test.mjs verify that leading-dash filenames (like \"-c.mjs\" and \"--fix.mjs\") become \"./-c.mjs\" and \"./--fix.mjs\" in both bare \"{file}\" and \"--file={file}\" tokens while normal paths remain unchanged.",
+  "category": "bugfix",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M68GAFK20VYQ4WZCVBMZ5W6C",
+  "rails": [
+    "packages/model-ratchet/test/walk.test.mjs",
+    "packages/model-ratchet/test/score.test.mjs"
+  ],
+  "scope": [
+    "packages/model-ratchet/lib/run-review.mjs",
+    "packages/model-ratchet/test/run-review.test.mjs"
+  ],
+  "title": "model-ratchet: prefix leading-dash file paths with ./ in substituteToken to prevent flag injection (#694)"
+}

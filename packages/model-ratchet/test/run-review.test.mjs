@@ -186,6 +186,13 @@ describe('substituteToken', () => {
       ['cmd', '--file=a b.mjs'],
     );
   });
+
+  it('prefixes a leading-dash substitution value with ./ to prevent flag injection (#694)', () => {
+    assert.deepEqual(substituteToken(['eslint', '{file}'], '{file}', '-c.mjs'), ['eslint', './-c.mjs']);
+    assert.deepEqual(substituteToken(['mytool', '--file={file}'], '{file}', '--fix.mjs'), ['mytool', '--file=./--fix.mjs']);
+    assert.deepEqual(substituteToken(['eslint', '{file}'], '{file}', 'src/-c.mjs'), ['eslint', 'src/-c.mjs']);
+  });
+
 });
 
 // ---------------------------------------------------------------------------
