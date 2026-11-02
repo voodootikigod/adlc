@@ -4,7 +4,7 @@
 // and divergence scoring from fixture readings.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseFanResults, parseFanAnswers } from '../lib/modes.mjs';
+import { parseFanResults, parseFanAnswers, runDivergenceAnalysis } from '../lib/modes.mjs';
 import { buildSpecReaderPrompt, buildEdgePrompt, buildDivergencePrompt } from '../lib/prompts.mjs';
 import { computeScore, renderReport } from '../lib/scoring.mjs';
 
@@ -349,4 +349,49 @@ test('full pipeline from fixture: parseFanResults → computeScore → renderRep
   assert.ok(report.includes('Q1: API style'));
   assert.ok(report.includes('Q2: token storage'));
   assert.ok(report.includes('FAILS'));
+});
+
+test('runDivergenceAnalysis: repairs missing options to [] so optionless divergences still count toward score (#711)', async () => {
+  const rA = JSON.stringify({ spec: "A", assumptions: [], decisions: [] });
+  const rB = JSON.stringify({ spec: "B", assumptions: [], decisions: [] });
+  const deps = {
+    async fan() {
+      return [{ ok: true, value: rA }, { ok: true, value: rB }];
+    },
+    async complete() {
+      return JSON.stringify({
+        agreements: ["a1", "a2"],
+        divergences: [
+          { point: "" },
+          { point: "Divergence without options" },
+          { point: "Valid divergence", options: [{ label: "A", reading: "R1" }, { label: "B", reading: "R2" }] },
+        ],
+      });
+    },
+  };
+  const res = await runDivergenceAnalysis("prompt", { n: 2, deps });
+  assert.equal(res.divergences.length, 2);
+  assert.deepEqual(res.divergences[0], { point: "Divergence without options", options: [] });
+  assert.equal(res.divergences[1].point, "Valid divergence");
+  assert.equal(res.score, 0.5);
+});
+
+test('runDivergenceAnalysis: throws when all divergence entries lack a valid point string (#711)', async () => {
+  const rA = JSON.stringify({ spec: "A", assumptions: [], decisions: [] });
+  const rB = JSON.stringify({ spec: "B", assumptions: [], decisions: [] });
+  const deps = {
+    async fan() {
+      return [{ ok: true, value: rA }, { ok: true, value: rB }];
+    },
+    async complete() {
+      return JSON.stringify({
+        agreements: ["a1"],
+        divergences: [{ point: "" }],
+      });
+    },
+  };
+  await assert.rejects(
+    () => runDivergenceAnalysis("prompt", { n: 2, deps }),
+    /divergences entries must carry a non-empty point string/
+  );
 });

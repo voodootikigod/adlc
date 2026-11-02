@@ -1,7 +1,7 @@
 // Tests for lib/scoring.mjs — pure functions, no network.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeScore, renderReport, renderRouteConflict } from '../lib/scoring.mjs';
+import { computeScore, normalizeDivergences, renderReport, renderRouteConflict } from '../lib/scoring.mjs';
 
 test('computeScore: no agreements no divergences → 0', () => {
   assert.equal(computeScore(0, 0), 0);
@@ -98,4 +98,58 @@ test('renderRouteConflict: renders question and labelled variants', () => {
   assert.ok(output.includes('A) PostgreSQL'));
   assert.ok(output.includes('B) MySQL'));
   assert.ok(output.includes('C) SQLite'));
+});
+
+test('normalizeDivergences: repairs missing or malformed options to [] and drops entries without a non-empty point (#711)', () => {
+  assert.deepEqual(normalizeDivergences(null), []);
+  assert.deepEqual(normalizeDivergences(undefined), []);
+  assert.deepEqual(normalizeDivergences("bad"), []);
+  const raw = [
+    null,
+    "string-entry",
+    [],
+    { point: "" },
+    { point: "   ", options: [{ label: "A", reading: "x" }] },
+    { point: 123, options: [{ label: "A", reading: "x" }] },
+    { point: "Missing options" },
+    { point: "Null options", options: null },
+    { point: "All invalid options", options: [null, "bad", [], { label: "", reading: "x" }, { label: "A", reading: "   " }, { label: 1, reading: "x" }, { label: "A", reading: 2 }] },
+    {
+      point: "Valid with one bad option",
+      options: [
+        null,
+        { label: "A", reading: "First reading" },
+        { label: "", reading: "Dropped" },
+        { label: "B", reading: "Second reading" },
+      ],
+    },
+  ];
+  assert.deepEqual(normalizeDivergences(raw), [
+    { point: "Missing options", options: [] },
+    { point: "Null options", options: [] },
+    { point: "All invalid options", options: [] },
+    {
+      point: "Valid with one bad option",
+      options: [
+        { label: "A", reading: "First reading" },
+        { label: "B", reading: "Second reading" },
+      ],
+    },
+  ]);
+});
+
+test('renderReport: renders divergence with missing options array without throwing (#711)', () => {
+  const report = renderReport({
+    agreements: ["Agreed item"],
+    divergences: [
+      { point: "" },
+      { point: "Optionless divergence" },
+      { point: "Well-formed divergence", options: [{ label: "A", reading: "Opt A" }] },
+    ],
+    score: 0.67,
+    threshold: 0.25,
+  });
+  assert.ok(report.includes("Q1: Optionless divergence"));
+  assert.ok(report.includes("Q2: Well-formed divergence"));
+  assert.ok(report.includes("A) Opt A"));
 });
