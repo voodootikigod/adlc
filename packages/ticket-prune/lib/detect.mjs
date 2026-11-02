@@ -44,7 +44,7 @@
 // A ticket that declares no scope can never be inferred stale this way — it
 // is reported as active until an explicit status settles the question.
 
-import { git, globMatch } from '@adlc/core';
+import { git, globMatch, splitNulPaths } from '@adlc/core';
 
 const DONE_STATUSES = new Set(['done', 'closed', 'complete', 'completed', 'archived', 'shipped']);
 
@@ -61,13 +61,14 @@ export function isExplicitlyDone(ticket) {
 
 /** Files tracked at `ref` (default HEAD) — the "base ref" existence check. */
 export function listTrackedFiles(ref = 'HEAD', cwd = process.cwd()) {
-  let out;
+  let raw;
   try {
-    out = git(['ls-tree', '-r', '--name-only', ref], { cwd });
+    const args = ['ls-tree', '-r', '-z', '--name-only', ref];
+    raw = git(args, { cwd, encoding: 'buffer' });
   } catch (err) {
     throw new Error(`could not list files at ref "${ref}": ${err.message}`);
   }
-  return out.split('\n').filter(Boolean);
+  return splitNulPaths(raw);
 }
 
 /**
