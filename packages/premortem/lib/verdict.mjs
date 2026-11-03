@@ -9,17 +9,17 @@
 // alongside the prompt.
 //
 // This file intentionally does NOT reimplement gate-manifest's hash-chain /
-// signing logic — it imports and calls gate-manifest's own record() so that
-// logic stays centralized in exactly one place.
+// signing logic — it imports and calls gate-manifest's own appendManifestEntry()
+// so that logic stays centralized in exactly one place.
 
-import { readVerdictSource, recordPromptOnlyVerdict } from '@adlc/core';
-import { record } from '@adlc/gate-manifest/lib/record.mjs';
+import { hashFiles, readVerdictSource, recordPromptOnlyVerdict } from '@adlc/core';
+import { appendManifestEntry, parseData } from '@adlc/gate-manifest/lib/record.mjs';
 
 export { readVerdictSource };
 
 /**
  * Record the operator's prompt-only verdict into .adlc/manifest.jsonl via
- * gate-manifest's record() function delegated through @adlc/core.
+ * gate-manifest's appendManifestEntry() function delegated through @adlc/core.
  *
  * @param {object} opts
  * @param {string} [opts.ticket]  ticket id this premortem belongs to
@@ -36,9 +36,15 @@ export function recordVerdict({
   verdict,
   extra = {},
   dir = '.adlc',
-  key,
+  key = null,
 } = {}) {
-  const recordFn = ({ gate, ticket: t, rawData, dir: d }) =>
-    record({ gate, ticket: t, rawData, rawFiles: specPath, dir: d, key });
+  const recordFn = ({ gate, ticket: t, rawData, dir: d }) => {
+    const files = specPath ? hashFiles([specPath]) : {};
+    if (specPath && !files[specPath]) {
+      throw new Error(`cannot hash spec file '${specPath}'`);
+    }
+    const payload = { gate, ticket: t, data: parseData(rawData), files };
+    return appendManifestEntry(payload, d, { key });
+  };
   return recordPromptOnlyVerdict({ gate: 'premortem', ticket, verdict, extra, dir, recordFn });
 }
