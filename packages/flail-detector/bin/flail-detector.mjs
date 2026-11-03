@@ -214,4 +214,4 @@ if (values.json) {
 // Exit
 // ---------------------------------------------------------------------------
 
-process.exit(result.verdict === 'flail' ? 2 : 0);
+process.exitCode = result.verdict === 'flail' ? 2 : 0;

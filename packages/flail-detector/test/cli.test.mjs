@@ -399,3 +399,29 @@ test("#630: CLI accepts --max-repeat 1 (minimum positive integer) and flails on 
   assert.equal(r.status, 2, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
   assert.match(r.stdout, /repeated-error/);
 });
+
+test('#625: large piped --json output flushes completely without truncation', () => {
+  const f = join(tmpDir, 'large-piped-flail.log');
+  const lines = [];
+  for (let i = 0; i < 4000; i++) {
+    lines.push(`Writing out-of-scope/dir-${i}/module-${i}-with-long-filename-for-pipe-buffer.mjs`);
+  }
+  writeFileSync(f, lines.join('\n'));
+
+  const r = spawnSync(
+    process.execPath,
+    [CLI, f, '--scope', 'allowed/**', '--json'],
+    {
+      cwd: tmpDir,
+      encoding: 'utf8',
+      maxBuffer: 16 * 1024 * 1024,
+    },
+  );
+  assert.equal(r.status, 2, `expected exit 2 on flail, got ${r.status}`);
+  assert.ok(r.stdout.length > 256 * 1024, `expected stdout > 256 KiB to exceed OS pipe buffer, got ${r.stdout.length}`);
+  const parsed = JSON.parse(r.stdout);
+  assert.equal(parsed.verdict, 'flail');
+  assert.equal(parsed.signals.length, 1);
+  assert.equal(parsed.signals[0].type, 'scope-violation');
+  assert.equal(parsed.signals[0].entries.length, 4000);
+});
