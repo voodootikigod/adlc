@@ -119,3 +119,23 @@ test('recordResult: keyed entry has the same shape and signature version as gate
   assert.equal(ours.gate, theirs.gate);
   assert.equal(ours.ticket, theirs.ticket);
 });
+
+test('CLI: --record warns on stderr when signing key is unset and stays quiet when set (#776)', (t) => {
+  const dir = tmp(t, 'spec-lint-record-warn-');
+  const specPath = join(dir, 'spec.md');
+  writeFileSync(specPath, VERIFIED_SPEC);
+  const envNoKey = { ...process.env };
+  delete envNoKey['ADLC_MANIFEST_KEY'];
+  const rUnsigned = spawnSync(NODE, [BIN, specPath, '--record', '--ticket', 'T1', '--dir', join(dir, '.adlc-unsigned')], {
+    encoding: 'utf8', cwd: dir, env: envNoKey,
+  });
+  assert.equal(rUnsigned.status, 0, rUnsigned.stderr);
+  assert.match(rUnsigned.stderr, /spec-lint: warning: recording UNSIGNED manifest entry/);
+
+  const envWithKey = { ...process.env, 'ADLC_MANIFEST_KEY': 'test-signing-key-776' };
+  const rSigned = spawnSync(NODE, [BIN, specPath, '--record', '--ticket', 'T1', '--dir', join(dir, '.adlc-signed')], {
+    encoding: 'utf8', cwd: dir, env: envWithKey,
+  });
+  assert.equal(rSigned.status, 0, rSigned.stderr);
+  assert.doesNotMatch(rSigned.stderr, /recording UNSIGNED manifest entry/);
+});

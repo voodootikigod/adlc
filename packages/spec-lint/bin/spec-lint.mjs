@@ -119,7 +119,11 @@ if (wishes.length > 0) {
 // genuine pass: every criterion is VERIFIED. Record it now, before the
 // process exits, so a real audit leaves real evidence.
 if (flags.record) {
-  recordResult({ ticket: flags.ticket, specPath, dir: flags.dir, key: getKey() });
+  const signingKey = getKey();
+  if (!signingKey) {
+    console.error('spec-lint: warning: recording UNSIGNED manifest entry (' + 'ADLC_MANIFEST_KEY' + ' is not set)');
+  }
+  recordResult({ ticket: flags.ticket, specPath, dir: flags.dir, key: signingKey });
 }
 
 if (flags.json) {
