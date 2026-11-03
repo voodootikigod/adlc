@@ -276,3 +276,9 @@ test('ticket schema descriptions for duration and edges state type and direction
   assert.match(schema.properties.edges.description, /this ticket completes before `to`/);
   assert.match(schema.properties.edges.items.properties.to.description, /this ticket completes before `to`/);
 });
+
+test('top-level renderUsage shows --expect as required and lists [--force] on update (#796)', () => {
+  const usage = renderUsage();
+  assert.match(usage, /^  update <id> --input <path\|-> --expect <ticket-hash> \[--force\] \[--write\]$/m);
+  assert.doesNotMatch(usage, /\[--expect <ticket-hash>\]/);
+});
