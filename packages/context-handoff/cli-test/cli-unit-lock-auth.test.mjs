@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { constants, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +15,7 @@ import {
   writeLock,
 } from '../lib/lock.mjs';
 import {
+  MAX_RESUME_AUTH_BYTES,
   SCHEMA,
   buildResumeAuthDoc,
   verifyResumeAuthSig,
@@ -449,4 +450,117 @@ test('write and resume --help state the exit code a locked session actually gets
 
   const resume = execFileSync(process.execPath, [BIN, 'resume', '--help'], { encoding: 'utf8' });
   assert.match(resume, /session lock: a second resume racing the first\nexits 2/);
+});
+
+test('readResumeAuth hardens against symlinks, non-regular files, oversized files, and wrong schema (#610)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'handoff-ra-hardened-'));
+  try {
+    const key = 'hardened-key';
+    assert.equal(MAX_RESUME_AUTH_BYTES, 4096);
+    const wrote = writeResumeAuth(
+      root,
+      'consumer-ok',
+      { ticketId: 'T155', contentHash: 'hash-1', denySessionId: 'denier' },
+      { key },
+    );
+    assert.equal(wrote.ok, true);
+    assert.equal(readResumeAuth(root, 'consumer-ok', { key })?.verified, true);
+
+    // 1. Symlink at resume-auth path pointing to a valid resume-auth file is refused (O_NOFOLLOW)
+    const realFile = join(root, 'real-resume.json');
+    const symDoc = buildResumeAuthDoc({
+      ticketId: 'T155',
+      contentHash: 'hash-1',
+      denySessionId: 'denier',
+      consumerSessionId: 'consumer-sym',
+      key,
+    });
+    writeFileSync(realFile, JSON.stringify(symDoc, null, 2) + '\n', 'utf8');
+    symlinkSync(realFile, resumeAuthPath(root, 'consumer-sym'));
+    assert.equal(readResumeAuth(root, 'consumer-sym', { key }), null);
+
+    // 2. Verify open flags include O_RDONLY | O_NOFOLLOW | O_NONBLOCK and close is called in finally
+    let seenFlags = 0;
+    let closedFd = null;
+    assert.equal(
+      readResumeAuth(root, 'consumer-ok', {
+        key,
+        open: (_p, flags) => {
+          seenFlags = flags;
+          return 77;
+        },
+        fstat: () => ({ isFile: () => false, size: 100 }),
+        close: (fd) => {
+          closedFd = fd;
+        },
+      }),
+      null,
+    );
+    assert.equal(
+      seenFlags,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+    assert.equal(closedFd, 77);
+
+    // 3. Exact size-cap boundary: MAX_RESUME_AUTH_BYTES accepted, MAX_RESUME_AUTH_BYTES + 1 rejected
+    const validRaw = JSON.stringify(wrote.doc);
+    assert.equal(
+      readResumeAuth(root, 'consumer-ok', {
+        key,
+        open: () => 88,
+        fstat: () => ({ isFile: () => true, size: MAX_RESUME_AUTH_BYTES }),
+        readFile: () => validRaw,
+        close: () => {},
+      })?.verified,
+      true,
+    );
+    assert.equal(
+      readResumeAuth(root, 'consumer-ok', {
+        key,
+        open: () => 88,
+        fstat: () => ({ isFile: () => true, size: MAX_RESUME_AUTH_BYTES + 1 }),
+        readFile: () => validRaw,
+        close: () => {},
+      }),
+      null,
+    );
+
+    // 4. Non-object JSON (null, array, corrupt) and wrong schema return null
+    for (const badRaw of ['null', '[1,2]', '{corrupt', JSON.stringify({ ...wrote.doc, schema: 2 })]) {
+      assert.equal(
+        readResumeAuth(root, 'consumer-ok', {
+          key,
+          open: () => 99,
+          fstat: () => ({ isFile: () => true, size: badRaw.length }),
+          readFile: () => badRaw,
+          close: () => {},
+        }),
+        null,
+      );
+    }
+
+    // 5. Injected { fs } path still works and enforces schema === SCHEMA
+    assert.equal(
+      readResumeAuth(root, 'consumer-ok', {
+        key,
+        fs: {
+          existsSync: () => true,
+          readFileSync: () => validRaw,
+        },
+      })?.verified,
+      true,
+    );
+    assert.equal(
+      readResumeAuth(root, 'consumer-ok', {
+        key,
+        fs: {
+          existsSync: () => true,
+          readFileSync: () => JSON.stringify({ ...wrote.doc, schema: 99 }),
+        },
+      }),
+      null,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

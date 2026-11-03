@@ -584,12 +584,18 @@ export function evaluateHandoffPreToolUse({
     // this point (incomplete-scan lower bound, protected-path) denies
     // regardless of bypass, so claiming here would spend the one-shot grant
     // on a mutation that was going to be denied anyway — the exact "consumed
-    // despite the final decision" gap the same round found. A reason pushed
-    // LATER (the bash-shell protected-path check below) is a narrower,
-    // disclosed residual: an active grant for a Bash call that ALSO touches a
-    // protected path is already a suspicious combination, not the ordinary
-    // recovery flow this mechanism exists for.
+    // despite the final decision" gap the same round found. When a verified
+    // grant is withheld for that reason (#612), emit an explicit
+    // `bypass_grant_withheld:non_bypassable_reason` diagnostic so the operator
+    // knows their valid grant was preserved on disk rather than absent or
+    // expired. A reason pushed LATER (the bash-shell protected-path check
+    // below) is a narrower, disclosed residual: an active grant for a Bash
+    // call that ALSO touches a protected path is already a suspicious
+    // combination, not the ordinary recovery flow this mechanism exists for.
     const bypassActive = bypassVerified && reasons.length === 0 && removeBypassGrant(root, sessionId) === true;
+    if (bypassVerified && reasons.length > 0) {
+      reasons.push('bypass_grant_withheld:non_bypassable_reason');
+    }
     const bypassForSession = bypassActive
       ? bypassGrant.unbound_reason
         ? { sessionId, unboundReason: bypassGrant.unbound_reason }

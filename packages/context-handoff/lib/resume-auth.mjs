@@ -6,12 +6,21 @@
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { existsSync, unlinkSync } from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, openSync, readFileSync, unlinkSync } from 'node:fs';
 import { canonicalJson } from '@adlc/core';
 import { resumeAuthPath } from './paths.mjs';
 import { readJsonFile, writeJsonAtomic, writeTextExclusive } from './atomic-json.mjs';
 
 export const SCHEMA = 1;
+
+/**
+ * Hard ceiling on the byte size of a resume-auth file before we read/parse it.
+ * A legitimate document (schema, 3 session/ticket ids, sha256 content_hash,
+ * ISO timestamp, 64-hex HMAC) is ~300 bytes; 4 KiB leaves 10x headroom while
+ * keeping a repository-planted multi-hundred-MB file at the resume-auth path
+ * from stalling a synchronous PreToolUse hook.
+ */
+export const MAX_RESUME_AUTH_BYTES = 4096;
 
 function payloadBytes({ ticket_id, content_hash, deny_session_id, consumer_session_id }) {
   return canonicalJson({
@@ -78,10 +87,45 @@ export function buildResumeAuthDoc({
  * session's fields must not authorize this one, so a mismatch reads as absent.
  * @returns {{ ticket_id: string, content_hash: string, deny_session_id: string, consumer_session_id: string, verified: boolean } | null}
  */
-export function readResumeAuth(root, sessionId, { key = null, fs } = {}) {
-  const got = readJsonFile(resumeAuthPath(root, sessionId), fs ? { fs } : {});
-  if (!got.ok) return null;
-  const doc = got.value;
+export function readResumeAuth(
+  root,
+  sessionId,
+  { key = null, fs, open = openSync, fstat = fstatSync, close = closeSync, readFile = readFileSync } = {},
+) {
+  const path = resumeAuthPath(root, sessionId);
+  let doc;
+  if (fs) {
+    const got = readJsonFile(path, { fs });
+    if (!got.ok) return null;
+    doc = got.value;
+  } else {
+    // Open ONCE with O_RDONLY | O_NOFOLLOW | O_NONBLOCK and fstat + size-cap
+    // against that same fd (matching readBypassGrant in bypass-grant.mjs, #610)
+    // so a symlink, FIFO, or oversized file planted at the resume-auth path
+    // cannot redirect, stall, or OOM a synchronous PreToolUse hook.
+    let fd;
+    try {
+      fd = open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    } catch {
+      return null;
+    }
+    try {
+      const stat = fstat(fd);
+      if (!stat.isFile() || stat.size > MAX_RESUME_AUTH_BYTES) return null;
+      const raw = readFile(fd, 'utf8');
+      doc = JSON.parse(raw);
+      if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return null;
+    } catch {
+      return null;
+    } finally {
+      try {
+        close(fd);
+      } catch {
+        // best-effort
+      }
+    }
+  }
+  if (doc.schema !== SCHEMA) return null;
   const ticket_id = doc.ticket_id;
   const content_hash = doc.content_hash;
   const deny_session_id = doc.deny_session_id;
