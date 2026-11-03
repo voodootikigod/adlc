@@ -146,3 +146,51 @@ test('#724: recordVerdict throws when specPath cannot be hashed (nonexistent fil
     /cannot hash spec file/,
   );
 });
+
+test('#723: --record-verdict warns on stderr when signing key is unset and stays quiet when set', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'premortem-warn-'));
+  fixtureDirs.add(dir);
+  const specPath = join(dir, 'spec.md');
+  writeFileSync(specPath, SPEC, 'utf8');
+  const envNoKey = { ...process.env };
+  delete envNoKey['ADLC_MANIFEST_KEY'];
+  const rUnsigned = spawnSync(process.execPath, [CLI, specPath, '--prompt-only', '--record-verdict', '-', '--ticket', 'T1'], {
+    cwd: dir, input: 'No failure modes found.\n', encoding: 'utf8', env: envNoKey,
+  });
+  assert.equal(rUnsigned.status, 0, rUnsigned.stderr);
+  assert.match(rUnsigned.stderr, /premortem: warning: recording UNSIGNED manifest entry/);
+
+  const dir2 = mkdtempSync(join(tmpdir(), 'premortem-signed-'));
+  fixtureDirs.add(dir2);
+  const specPath2 = join(dir2, 'spec.md');
+  writeFileSync(specPath2, SPEC, 'utf8');
+  const envWithKey = { ...process.env, 'ADLC_MANIFEST_KEY': 'test-signing-key-723' };
+  const rSigned = spawnSync(process.execPath, [CLI, specPath2, '--prompt-only', '--record-verdict', '-', '--ticket', 'T1'], {
+    cwd: dir2, input: 'No failure modes found.\n', encoding: 'utf8', env: envWithKey,
+  });
+  assert.equal(rSigned.status, 0, rSigned.stderr);
+  assert.doesNotMatch(rSigned.stderr, /recording UNSIGNED manifest entry/);
+});
+
+test('#723: --record-verdict routes ledger errors through opError (exit 1, no stack trace)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'premortem-broken-chain-'));
+  fixtureDirs.add(dir);
+  const specPath = join(dir, 'spec.md');
+  writeFileSync(specPath, SPEC, 'utf8');
+  const envWithKey = { ...process.env, 'ADLC_MANIFEST_KEY': 'test-signing-key-723' };
+  const envNoKey = { ...process.env };
+  delete envNoKey['ADLC_MANIFEST_KEY'];
+  // Record #1 signed, Record #2 unsigned, Record #3 signed -> chain validation error
+  spawnSync(process.execPath, [CLI, specPath, '--prompt-only', '--record-verdict', '-', '--ticket', 'T1'], {
+    cwd: dir, input: 'First verdict.\n', encoding: 'utf8', env: envWithKey,
+  });
+  spawnSync(process.execPath, [CLI, specPath, '--prompt-only', '--record-verdict', '-', '--ticket', 'T1'], {
+    cwd: dir, input: 'Second unsigned verdict.\n', encoding: 'utf8', env: envNoKey,
+  });
+  const res3 = spawnSync(process.execPath, [CLI, specPath, '--prompt-only', '--record-verdict', '-', '--ticket', 'T1'], {
+    cwd: dir, input: 'Third signed verdict.\n', encoding: 'utf8', env: envWithKey,
+  });
+  assert.equal(res3.status, 1);
+  assert.match(res3.stderr, /^error: could not record verdict to manifest ledger: /m);
+  assert.doesNotMatch(res3.stderr, /\n\s+at /);
+});
