@@ -623,19 +623,25 @@ test('a staging failure is reported as a failed sweep, not a silent no-op', () =
     // The store lives in its own read-only directory, so the staged temp file
     // cannot be created while the lock (which lives under cwd/.adlc) still can.
     const readOnly = mkdtempSync(join(tmpdir(), 'ticket-prune-ro-'));
-    const ticketsPath = join(readOnly, 'tickets.json');
+    const adlcSub = join(readOnly, '.adlc');
+    mkdirSync(adlcSub, { recursive: true });
+    const ticketsPath = join(adlcSub, 'tickets.json');
     writeFileSync(ticketsPath, JSON.stringify({
       tickets: [{ id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'], rails: [] }],
     }, null, 2));
     const before = readFileSync(ticketsPath, 'utf8');
-    chmodSync(readOnly, 0o555);
     try {
-      const result = runTicketPrune({ inferScope: true, cwd: dir, ticketsPath, write: true });
+      const result = runTicketPrune({
+        inferScope: true,
+        cwd: dir,
+        ticketsPath,
+        write: true,
+        stageJson: () => { throw new Error('EACCES: simulated staging failure'); },
+      });
       assert.equal(result.ok, false, 'the sweep failed and says so');
       assert.match(result.error, /failed to write completions/);
       assert.equal(readFileSync(ticketsPath, 'utf8'), before);
     } finally {
-      chmodSync(readOnly, 0o755);
       rmSync(readOnly, { recursive: true, force: true });
     }
   });
@@ -1141,5 +1147,64 @@ test('dry-run sets storeKind to directory on a sharded store and legacy on a fla
     assert.equal(dirRes.ok, true);
     assert.equal(dirRes.storeKind, 'directory');
     assert.match(renderReport(dirRes), /re-run with --write to archive them out of the active store:/);
+  });
+});
+
+test('#784: legacy --write with --tickets pointing to an external <root>/.adlc/tickets.json locks <root>/.adlc/tickets.lock instead of cwd', () => {
+  withScratchRepo((dir) => {
+    const externalRepo = mkdtempSync(join(tmpdir(), 'ticket-prune-ext-repo-'));
+    try {
+      writeTickets(externalRepo, [
+        { id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'], rails: [] },
+      ]);
+      const extTicketsPath = join(externalRepo, '.adlc', 'tickets.json');
+      let lockHeldAtExternalDuringStage = false;
+      let lockHeldAtCwdDuringStage = false;
+      const result = runTicketPrune({
+        inferScope: true,
+        cwd: dir,
+        ticketsPath: extTicketsPath,
+        write: true,
+        stageJson: (path, payload) => {
+          lockHeldAtExternalDuringStage = existsSync(join(externalRepo, '.adlc', 'tickets.lock'));
+          lockHeldAtCwdDuringStage = existsSync(join(dir, '.adlc', 'tickets.lock'));
+          return { commit: () => writeFileSync(path, JSON.stringify(payload, null, 2) + '\n'), discard: () => {} };
+        },
+      });
+      assert.equal(result.ok, true, result.error);
+      assert.equal(lockHeldAtExternalDuringStage, true, 'lock must be held on the external store root during write');
+      assert.equal(lockHeldAtCwdDuringStage, false, 'cwd lock must not be acquired when writing an external store');
+      assert.equal(existsSync(join(externalRepo, '.adlc', 'tickets.lock')), false, 'external lock must be released after runTicketPrune finishes');
+    } finally {
+      rmSync(externalRepo, { recursive: true, force: true });
+    }
+  });
+});
+
+test('#784: legacy --write rejects an override --tickets path outside cwd whose parent is not a canonical .adlc/tickets.json store', () => {
+  withScratchRepo((dir) => {
+    const externalDir = mkdtempSync(join(tmpdir(), 'ticket-prune-noncanon-'));
+    try {
+      const payload = JSON.stringify({
+        tickets: [{ id: 'T1', title: 'Ship the widget', scope: ['plugins/adlc-widget/**'], rails: [] }],
+      }, null, 2);
+      // Case 1: basename is tickets.json, but parent directory is NOT .adlc
+      const nonAdlcParentPath = join(externalDir, 'tickets.json');
+      writeFileSync(nonAdlcParentPath, payload);
+      const res1 = runTicketPrune({ inferScope: true, cwd: dir, ticketsPath: nonAdlcParentPath, write: true });
+      assert.equal(res1.ok, false);
+      assert.match(res1.error, /refusing to --write legacy ticket file outside a canonical/);
+
+      // Case 2: parent directory IS .adlc, but filename is NOT tickets.json
+      const adlcParent = join(externalDir, '.adlc');
+      mkdirSync(adlcParent, { recursive: true });
+      const nonTicketsFilename = join(adlcParent, 'custom-tickets.json');
+      writeFileSync(nonTicketsFilename, payload);
+      const res2 = runTicketPrune({ inferScope: true, cwd: dir, ticketsPath: nonTicketsFilename, write: true });
+      assert.equal(res2.ok, false);
+      assert.match(res2.error, /refusing to --write legacy ticket file outside a canonical/);
+    } finally {
+      rmSync(externalDir, { recursive: true, force: true });
+    }
   });
 });
