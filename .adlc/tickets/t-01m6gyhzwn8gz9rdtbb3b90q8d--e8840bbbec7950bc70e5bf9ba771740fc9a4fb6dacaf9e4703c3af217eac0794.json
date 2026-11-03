@@ -1,5 +1,7 @@
 {
   "body": "## Problem\nIn `packages/preflight/lib/checks.mjs`, `checkBash()` calls `runCmd(\"echo\", [\"preflight-ok\"])`, which spawns `/bin/echo` directly without a shell (`shell: false`), never exercising `sh` or `bash`.\n\n## Acceptance Criteria\n1. `checkBash` in `packages/preflight/lib/checks.mjs` invokes a shell via `runCmd(\"sh\", [\"-c\", \"echo preflight-ok\"], { env })` (accepting an optional `env` override for testability) and reports failure if the shell exits non-zero or does not output `preflight-ok`. Verify: `node --test packages/preflight/test/unit.test.mjs`.\n2. Existing preflight integration and empty-test-cmd suites pass unchanged. Verify: `node --test packages/preflight/test/integration.test.mjs packages/preflight/test/empty-test-cmd.test.mjs`.",
+  "completed": true,
+  "completed_at": "2026-11-03T15:52:29.442Z",
   "duration": 2,
   "id": "T-01M6GYHZWN8GZ9RDTBB3B90Q8D",
   "rails": [

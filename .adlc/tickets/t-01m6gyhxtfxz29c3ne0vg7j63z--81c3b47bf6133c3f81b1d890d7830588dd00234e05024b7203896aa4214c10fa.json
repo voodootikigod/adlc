@@ -1,5 +1,7 @@
 {
   "body": "## Problem\nIn `packages/gate-manifest/bin/gate-manifest.mjs`, the fall-through unknown-verb error message (`unknown verb: ${verb}. Expected: record | verify | show | attest | repair-chain | generate-key | enable | adopt`) omits the implemented `migrate` and `migrate-branch` verbs that are listed in `USAGE`.\n\n## Acceptance Criteria\n1. `packages/gate-manifest/bin/gate-manifest.mjs` includes `migrate` and `migrate-branch` in the `Expected:` list on unknown-verb errors (`record | verify | show | attest | repair-chain | generate-key | enable | migrate | migrate-branch | adopt`). Verify: `node --test packages/gate-manifest/test/gate-manifest.test.mjs`.\n2. Existing `migrate` and `migrate-branch` behavior is unchanged. Verify: `node --test packages/gate-manifest/test/migrate.test.mjs packages/gate-manifest/test/migrate-branch.test.mjs`.",
+  "completed": true,
+  "completed_at": "2026-11-03T15:52:29.442Z",
   "duration": 2,
   "id": "T-01M6GYHXTFXZ29C3NE0VG7J63Z",
   "rails": [

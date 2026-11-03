@@ -1,5 +1,7 @@
 {
   "body": "## Problem\nIn `packages/flail-detector/bin/flail-detector.mjs`, `appendManifestEntry` under `--record` is called bare (no `try/catch`) after the clean verdict has already been printed to stdout, so a corrupt or unwritable ledger prints `CLEAN` on stdout and then crashes with an unhandled exception stack trace.\n\n## Acceptance Criteria\n1. When `--record` is set and the verdict is not `flail`, `packages/flail-detector/bin/flail-detector.mjs` appends the manifest entry inside a `try/catch` before printing the verdict; if `appendManifestEntry` throws, it exits 1 via `opError` naming the manifest ledger (`could not record to manifest ledger: ${err.message}`) with nothing printed to stdout. Verify: `node --test packages/flail-detector/test/record.test.mjs`.\n2. The `--help` exit-code table documents ledger-write failure under exit code `1`. Verify: `node --test packages/flail-detector/test/record.test.mjs`.",
+  "completed": true,
+  "completed_at": "2026-11-03T15:52:29.442Z",
   "duration": 2,
   "id": "T-01M6GYHYVJPXQ5987HDA9MKKEM",
   "rails": [

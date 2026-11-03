@@ -1,5 +1,7 @@
 {
   "body": "## Problem\nIn `packages/quartermaster/lib/registry.mjs`, `validateRegistry` returns `Object.freeze(raw)` — a shallow freeze that leaves `registry.channels`, each channel seat, `registry.reviewerGroups`, each group and member object, and `registry.modelProviders` mutable after validation and after the §8a `registryDigest` is computed (#737).\n\n## Acceptance Criteria\n1. `validateRegistry` recursively freezes the validated registry document (`channels`, each channel seat, `reviewerGroups`, each group, `members` array, each member object, and `modelProviders` / adapter maps) before returning it, so mutating any nested property (such as `registry.channels.frontier.model`, `registry.reviewerGroups.crossModel.members[0].model`, or `registry.modelProviders.opencode`) throws `TypeError` in strict mode. Verify: `node --test packages/quartermaster/test/registry-validation.test.mjs`.\n2. Existing quartermaster routing and provider normalization tests pass unchanged. Verify: `node --test packages/quartermaster/test/route-job.test.mjs packages/quartermaster/test/provider-normalization.test.mjs`.",
+  "completed": true,
+  "completed_at": "2026-11-03T15:52:29.442Z",
   "duration": 2,
   "id": "T-01M6GYZ2GE5GZ8S2YST6VMJGGY",
   "rails": [
