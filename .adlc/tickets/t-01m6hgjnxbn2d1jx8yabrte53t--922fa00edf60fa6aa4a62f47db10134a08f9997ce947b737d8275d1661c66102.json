@@ -1,0 +1,14 @@
+{
+  "body": "## Context\nIssue #645: `packages/gate-fuzzing/bin/gate-fuzzing.mjs` and `packages/gate-fuzzing/README.md` document and accept `--canary-budget`, `--behavioral-witness`, and `--triage`, but all three flags are completely inert (parsed into `values` and never read again; `--canary-budget` is not even validated as a number). Operators who pass these flags in CI believe canary potency rounds, behavioral witnessing, or triage annotations are active when nothing runs.\n\n## Scope\n- `packages/gate-fuzzing/bin/gate-fuzzing.mjs`\n- `packages/gate-fuzzing/README.md`\n- `packages/gate-fuzzing/test/bin.test.mjs`\n\n## Changes Required\n1. Remove `--canary-budget`, `--behavioral-witness`, and `--triage` from the `--help` usage/options text in `packages/gate-fuzzing/bin/gate-fuzzing.mjs` and from the usage/options table in `packages/gate-fuzzing/README.md`.\n2. In `packages/gate-fuzzing/bin/gate-fuzzing.mjs`, omit the default on `canary-budget` and fail closed via `opError` (exit 1) with an explicit message if `--canary-budget`, `--behavioral-witness`, or `--triage` is passed.\n3. Add CLI tests in `packages/gate-fuzzing/test/bin.test.mjs` verifying that passing `--canary-budget`, `--behavioral-witness`, or `--triage` exits 1 with a clear error message and that `--help` no longer advertises them.\n\n## Acceptance Criteria\n- Passing `--canary-budget`, `--behavioral-witness`, or `--triage` to `gate-fuzzing` exits 1 with an explicit error.\n- `--help` and `README.md` no longer advertise the inert flags.\n- Verify: `node --test packages/gate-fuzzing/test/bin.test.mjs`",
+  "id": "T-01M6HGJNXBN2D1JX8YABRTE53T",
+  "rails": [
+    "packages/gate-fuzzing/test/verdict.test.mjs",
+    "packages/gate-fuzzing/test/controls.test.mjs"
+  ],
+  "scope": [
+    "packages/gate-fuzzing/bin/gate-fuzzing.mjs",
+    "packages/gate-fuzzing/README.md",
+    "packages/gate-fuzzing/test/bin.test.mjs"
+  ],
+  "title": "gate-fuzzing: reject unimplemented --canary-budget, --behavioral-witness, and --triage flags (#645)"
+}

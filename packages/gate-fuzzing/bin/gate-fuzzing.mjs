@@ -26,7 +26,7 @@ const { values } = parseArgs({
     'token-budget':     { type: 'string', default: '200000' },
     'witness-trials':   { type: 'string', default: '3' },
     'max-fail-rate':    { type: 'string', default: '0.5' },
-    'canary-budget':    { type: 'string', default: '2' },
+    'canary-budget':    { type: 'string' },
     'behavioral-witness': { type: 'boolean', default: false },
     'allow-cmd':        { type: 'string', multiple: true },
     'allow-empty':      { type: 'boolean', default: false },
@@ -51,10 +51,10 @@ Usage:
   gate-fuzzing [--suite <path>] [--n <int>] [--tier cheap|mid]
                [--provider <name> | --providers <a,b,c>]
                [--max-rounds <int>] [--dry-rounds <int>] [--token-budget <int>]
-               [--witness-trials <int>] [--max-fail-rate <float>] [--canary-budget <int>]
-               [--behavioral-witness] [--allow-cmd <name>...] [--unsafe-no-sandbox]
+               [--witness-trials <int>] [--max-fail-rate <float>]
+               [--allow-cmd <name>...] [--unsafe-no-sandbox]
                [--allow-empty] [--strict-budget] [--fail-on-behavioral]
-               [--record] [--triage] [--json] [--prompt-only] [--help]
+               [--record] [--json] [--prompt-only] [--help]
 
 Options:
   --suite <path>          Gate suite JSON (default: .adlc/gate-suite.json)
@@ -74,15 +74,12 @@ Options:
   --token-budget <int>    Estimated token ceiling (default: 200000)
   --witness-trials <int>  N witness runs per side, must be unanimous (default: 3)
   --max-fail-rate <float> Fan-failure fraction for inconclusive round (default: 0.5)
-  --canary-budget <int>   Rounds to beat potency canary (default: 2)
-  --behavioral-witness    Enable independent witness approval for behavioral defeats
   --allow-cmd <name>      Extend interpreter allowlist (default: node,git,npm,npx)
   --allow-empty           Allow run to exit 0 when zero candidates are evaluated
   --unsafe-no-sandbox     Run without OS sandbox (ONLY inside disposable VM)
   --strict-budget         Any inconclusive stop → exit 1 (default: CI mode)
   --fail-on-behavioral    Behavioral defeats → exit 2 (default: REPORT only)
   --record                Write repro artifacts + findings (default: dry-run)
-  --triage                Cheap-model root-cause annotation (never affects verdict)
   --json                  Machine-readable JSON output
   --prompt-only           Print adversary prompts and exit 0 (zero API keys needed)
   --help                  Show this help
@@ -103,6 +100,16 @@ ADLC Phase: C-tool (continuous calibration, scheduled/nightly)
 }
 
 // ── validate args ─────────────────────────────────────────────────────────────
+
+if (values['canary-budget'] !== undefined) {
+  opError('--canary-budget is not yet implemented and has been retired so CI does not run an inert potency canary');
+}
+if (values['behavioral-witness']) {
+  opError('--behavioral-witness is not yet implemented and has been retired so CI does not assume an unconfigured approval lens');
+}
+if (values.triage) {
+  opError('--triage is not yet implemented and has been retired so CI does not assume root-cause annotation is active');
+}
 
 const n = parseInt(values.n, 10);
 const maxRounds = parseInt(values['max-rounds'], 10);

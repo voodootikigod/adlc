@@ -42,15 +42,12 @@ gate-fuzzing [--suite <path>] [--n <int>] [--tier cheap|mid]
 | `--token-budget <int>` | `200000` | Estimated token ceiling (chars/4) |
 | `--witness-trials <int>` | `3` | N witness runs per side (unanimous) |
 | `--max-fail-rate <float>` | `0.5` | Fan-failure fraction → inconclusive round |
-| `--canary-budget <int>` | `2` | Rounds to beat potency canary |
-| `--behavioral-witness` | off | Use independent-context lens for behavioral gates |
 | `--allow-cmd <name>` | node,git,npm,npx | Extend interpreter allowlist |
 | `--allow-empty` | off | Allow run to exit 0 when zero candidates are evaluated |
 | `--unsafe-no-sandbox` | off | Skip OS sandbox (ONLY inside disposable VM) |
 | `--strict-budget` | off | Any inconclusive stop → exit 1 (CI recommended) |
 | `--fail-on-behavioral` | off | Behavioral defeats → exit 2 (default: REPORT only) |
 | `--record` | off | Write repro artifacts + cluster findings |
-| `--triage` | off | Cheap-model root-cause annotation (never affects verdict) |
 | `--json` | off | Machine-readable JSON report |
 | `--prompt-only` | off | Print adversary prompts and exit 0 (zero API keys) |
 
