@@ -60,7 +60,7 @@ describe('--record: bin writes a flail-check manifest entry on a clean verdict',
     assert.equal(entry.ticket, 'T1');
     assert.equal(entry.verdict, 'clean');
     assert.ok(typeof entry.ts === 'string', 'ts must be a string');
-    assert.equal(entry.logFile, logFile);
+    assert.equal(entry.logFile, 'clean.log');
     assert.equal(entry.logHash, sha256(readFileSync(logFile)), 'logHash must be the sha256 of the analyzed log content');
   });
 
@@ -123,5 +123,59 @@ test('#628: a failed --record ledger append exits 1 via opError without printing
     assert.doesNotMatch(result.stderr, /\n\s+at /);
   } finally {
     rmSync(brokenDir, { recursive: true, force: true });
+  }
+});
+
+test('#629: --record normalizes inside-repo logFile to relative path and omits outside-repo logFile', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'flail-detector-rel-'));
+  const outsideDir = mkdtempSync(join(tmpdir(), 'flail-detector-outside-'));
+  try {
+    const insideLog = join(repoDir, 'inside.log');
+    writeFileSync(insideLog, 'Build started\nAll good.\n');
+    const r1 = runBin([insideLog, '--record', '--ticket', 'T1'], repoDir);
+    assert.equal(r1.status, 0, r1.stderr);
+    const entries1 = readEntries('manifest', join(repoDir, ADLC_DIR)).entries;
+    assert.equal(entries1[entries1.length - 1].logFile, 'inside.log');
+
+    const outsideLog = join(outsideDir, 'outside.log');
+    writeFileSync(outsideLog, 'Build started\nAll good.\n');
+    const r2 = runBin([outsideLog, '--record', '--ticket', 'T2'], repoDir);
+    assert.equal(r2.status, 0, r2.stderr);
+    const entries2 = readEntries('manifest', join(repoDir, ADLC_DIR)).entries;
+    assert.equal('logFile' in entries2[entries2.length - 1], false, 'outside-repo logFile must be omitted');
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+    rmSync(outsideDir, { recursive: true, force: true });
+  }
+});
+
+test('#627: --record warns on stderr when signing key is unset and stays quiet when set', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'flail-detector-keywarn-'));
+  try {
+    const logFile = join(repoDir, 'clean.log');
+    writeFileSync(logFile, 'Build started\nAll good.\n');
+    const envNoKey = { ...process.env };
+    delete envNoKey['ADLC_MANIFEST_KEY'];
+    const rUnsigned = spawnSync(process.execPath, [BIN, logFile, '--record', '--ticket', 'T1'], {
+      cwd: repoDir, encoding: 'utf8', env: envNoKey,
+    });
+    assert.equal(rUnsigned.status, 0, rUnsigned.stderr);
+    assert.match(rUnsigned.stderr, /flail-detector: warning: recording UNSIGNED manifest entry/);
+
+    const repoDir2 = mkdtempSync(join(tmpdir(), 'flail-detector-keysigned-'));
+    try {
+      const logFile2 = join(repoDir2, 'clean.log');
+      writeFileSync(logFile2, 'Build started\nAll good.\n');
+      const envWithKey = { ...process.env, 'ADLC_MANIFEST_KEY': 'test-signing-key-627' };
+      const rSigned = spawnSync(process.execPath, [BIN, logFile2, '--record', '--ticket', 'T1'], {
+        cwd: repoDir2, encoding: 'utf8', env: envWithKey,
+      });
+      assert.equal(rSigned.status, 0, rSigned.stderr);
+      assert.doesNotMatch(rSigned.stderr, /recording UNSIGNED manifest entry/);
+    } finally {
+      rmSync(repoDir2, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
   }
 });
