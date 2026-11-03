@@ -1,0 +1,26 @@
+{
+  "acceptance": [
+    "unit tests in packages/flail-detector/test/signals.test.mjs and adlc-gemini flail.test.mjs cover the sig.length < 5 filter (4-char suppressed, 5-char retained)",
+    "unit tests cover exact created at / completed at suppression (with and without trailing colon) and verify substring occurrences are still detected"
+  ],
+  "category": "bug",
+  "context": "Closes #456.",
+  "id": "T-01M6HS4VBR1BE9ZK66872DT187",
+  "rails": [
+    "packages/flail-detector/test/analyze.test.mjs",
+    "plugins/adlc-gemini/test/manifest.test.mjs"
+  ],
+  "scope": [
+    "packages/flail-detector/test/signals.test.mjs",
+    "plugins/adlc-gemini/test/flail.test.mjs"
+  ],
+  "title": "flail-detector: add unit tests for short-signature and created/completed-at signal filters (#456)",
+  "verify": [
+    "node",
+    "--test",
+    "packages/flail-detector/test/signals.test.mjs",
+    "plugins/adlc-gemini/test/flail.test.mjs",
+    "packages/flail-detector/test/analyze.test.mjs",
+    "plugins/adlc-gemini/test/manifest.test.mjs"
+  ]
+}
