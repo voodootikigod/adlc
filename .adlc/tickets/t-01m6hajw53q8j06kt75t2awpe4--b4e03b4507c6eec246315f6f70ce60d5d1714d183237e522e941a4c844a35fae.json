@@ -1,0 +1,20 @@
+{
+  "criteria": [
+    "Given a spec file whose path contains a comma (e.g. specs/a,b.md), when recordVerdict is called with specPath, then the manifest entry records a single non-null SHA-256 hash under files[\"specs/a,b.md\"] and does not split the path on commas.",
+    "Given a specPath that does not exist or cannot be read (hashes to null), when recordVerdict is called, then it throws an error instead of recording a null hash in the manifest."
+  ],
+  "id": "T-01M6HAJW53Q8J06KT75T2AWPE4",
+  "intent": "Resolve #724: packages/premortem/lib/verdict.mjs passes specPath as rawFiles to GateManifest.record, which splits on commas and ignores null hashes when recording premortem verdict evidence. Hash [specPath] directly via hashFiles and appendManifestEntry (matching packages/spec-lint/lib/record.mjs) and fail closed when specPath hashes to null.",
+  "rails": [
+    "packages/premortem/test/premortem.test.mjs",
+    "packages/premortem/test/cli.test.mjs"
+  ],
+  "scope": [
+    "packages/premortem/lib/verdict.mjs",
+    "packages/premortem/test/prompt-only-usage.test.mjs"
+  ],
+  "status": "ready",
+  "tier": "standard",
+  "title": "fix(premortem): hash specPath directly without comma-splitting and reject unreadable spec files",
+  "verify": "node --test packages/premortem/test/prompt-only-usage.test.mjs packages/premortem/test/premortem.test.mjs packages/premortem/test/cli.test.mjs"
+}

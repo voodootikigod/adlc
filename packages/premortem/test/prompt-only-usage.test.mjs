@@ -113,3 +113,36 @@ test('recordVerdict and readVerdictSource unit contract: re-exports core and enf
   assert.equal(diskEntry.data.customField, 'preserved', 'customField is preserved');
   assert.equal('usage' in diskEntry.data, false);
 });
+
+test('#724: spec path containing a comma is hashed as a single file entry without comma-splitting', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'premortem-comma-spec-'));
+  fixtureDirs.add(dir);
+  const specPath = join(dir, 'a,b.md');
+  writeFileSync(specPath, SPEC, 'utf8');
+  const res = spawnSync(process.execPath, [CLI, specPath, '--prompt-only', '--record-verdict', '-', '--ticket', 'T-COMMA'], {
+    cwd: dir, input: 'No failure modes found.\n', encoding: 'utf8',
+  });
+  assert.equal(res.status, 0, `expected exit 0, got ${res.status}\n${res.stderr}`);
+  const entries = readFileSync(join(dir, '.adlc', 'manifest.jsonl'), 'utf8')
+    .trim().split('\n').map((l) => JSON.parse(l));
+  assert.equal(entries.length, 1);
+  const [entry] = entries;
+  assert.deepEqual(Object.keys(entry.files), [specPath]);
+  assert.match(entry.files[specPath], /^[0-9a-f]{64}$/);
+});
+
+test('#724: recordVerdict throws when specPath cannot be hashed (nonexistent file)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'premortem-missing-spec-'));
+  fixtureDirs.add(dir);
+  const missingSpec = join(dir, 'does-not-exist,either.md');
+  assert.throws(
+    () => recordVerdict({
+      ticket: 'T-MISSING',
+      specPath: missingSpec,
+      verdict: 'verdict text',
+      dir: join(dir, '.adlc'),
+      key: null,
+    }),
+    /cannot hash spec file/,
+  );
+});
