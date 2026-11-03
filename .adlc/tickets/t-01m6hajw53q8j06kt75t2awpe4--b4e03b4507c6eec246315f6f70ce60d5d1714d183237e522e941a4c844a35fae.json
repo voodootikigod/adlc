@@ -1,4 +1,5 @@
 {
+  "completed": true,
   "criteria": [
     "Given a spec file whose path contains a comma (e.g. specs/a,b.md), when recordVerdict is called with specPath, then the manifest entry records a single non-null SHA-256 hash under files[\"specs/a,b.md\"] and does not split the path on commas.",
     "Given a specPath that does not exist or cannot be read (hashes to null), when recordVerdict is called, then it throws an error instead of recording a null hash in the manifest."

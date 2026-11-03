@@ -1,4 +1,5 @@
 {
+  "completed": true,
   "criteria": [
     "Given --write and --tickets pointing to <externalRoot>/.adlc/tickets.json outside cwd, when runPrune executes, then acquireLock and releaseLock are called with <externalRoot> so <externalRoot>/.adlc/tickets.lock guards the file being written.",
     "Given --write and --tickets pointing to a legacy JSON file that is not named tickets.json inside a .adlc directory, when runPrune executes, then it returns ok: false with an error refusing to lock outside a canonical .adlc/tickets.json store."

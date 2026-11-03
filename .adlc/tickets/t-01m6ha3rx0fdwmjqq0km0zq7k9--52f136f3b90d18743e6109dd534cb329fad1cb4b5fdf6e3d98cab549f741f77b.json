@@ -1,4 +1,5 @@
 {
+  "completed": true,
   "criteria": [
     "Given a repository where .adlc/manifest.d exists with segment files and .adlc/manifest.jsonl does not exist, when the Claude Code Stop hook runs manifest(), then it invokes gate-manifest verify --json --allow-legacy-unsigned instead of returning early.",
     "Given a repository where neither .adlc/manifest.jsonl nor .adlc/manifest.d exists, when the Claude Code Stop hook runs manifest(), then it returns early without invoking gate-manifest."

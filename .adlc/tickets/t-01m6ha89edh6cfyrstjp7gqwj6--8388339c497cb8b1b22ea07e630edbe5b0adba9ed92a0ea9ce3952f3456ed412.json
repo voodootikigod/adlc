@@ -1,4 +1,5 @@
 {
+  "completed": true,
   "criteria": [
     "Given ADLC_MANIFEST_KEY is set, when parallax --prompt-only --record-verdict records an entry, then stdout ends with \"(signed)\".",
     "Given ADLC_MANIFEST_KEY is unset, when parallax --prompt-only --record-verdict records an entry, then stdout ends with \"(unsigned)\"."
