@@ -97,15 +97,17 @@ export async function checkWrite(cwd = process.cwd(), options = {}) {
   }
 }
 
-/** REQUIRED: branch — create and delete a test branch (finally cleanup). */
-export async function checkBranch(cwd = process.cwd()) {
+/** REQUIRED: branch — create and delete a test branch (reaps stale branch and verifies cleanup). */
+export async function checkBranch(cwd = process.cwd(), { gitFn = git } = {}) {
   const name = 'branch';
   const branchName = 'preflight-test-branch';
-  let created = false;
   try {
-    git(['branch', branchName], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
-    created = true;
-    return { name, status: 'pass', detail: `branch '${branchName}' created and removed` };
+    gitFn(['branch', '-D', branchName], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch {
+    // no leftover branch to reap
+  }
+  try {
+    gitFn(['branch', branchName], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (err) {
     const msg = String(err.message ?? err);
     if (msg.includes(`already exists`)) {
@@ -118,45 +120,57 @@ export async function checkBranch(cwd = process.cwd()) {
     // Preserve the full fatal message (may span multiple lines) up to 3 lines for readability
     const detail = msg.split('\n').filter((l) => l.trim()).slice(0, 3).join(' | ');
     return { name, status: 'fail', detail };
-  } finally {
-    if (created) {
-      try {
-        git(['branch', '-D', branchName], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
-      } catch {
-        // best-effort cleanup
-      }
+  }
+  let cleanupErr;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      gitFn(['branch', '-D', branchName], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+      return { name, status: 'pass', detail: `branch '${branchName}' created and removed` };
+    } catch (err) {
+      cleanupErr = err;
     }
   }
+  const msg = String(cleanupErr.message ?? cleanupErr).split('\n')[0];
+  return {
+    name,
+    status: 'fail',
+    detail: `branch '${branchName}' created; cleanup failed: ${msg}`,
+  };
 }
 
 // ── optional checks ──────────────────────────────────────────────────────────
 
-/** OPTIONAL (--worktrees): add/remove a detached worktree. */
-export async function checkWorktrees(cwd = process.cwd()) {
+/** OPTIONAL (--worktrees): add/remove a detached worktree (reaps stale worktree and verifies cleanup). */
+export async function checkWorktrees(cwd = process.cwd(), { gitFn = git } = {}) {
   const name = 'worktrees';
   const worktreePath = join(cwd, '.worktrees', 'preflight-test');
-  let added = false;
   try {
-    git(
+    gitFn(['worktree', 'remove', '--force', worktreePath], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch {
+    // no leftover worktree to reap
+  }
+  try {
+    gitFn(
       ['-c', 'core.hooksPath=/dev/null', 'worktree', 'add', '--detach', worktreePath],
       { cwd, stdio: ['ignore', 'pipe', 'pipe'] }
     );
-    added = true;
-    return { name, status: 'pass', detail: 'worktree add/remove succeeded' };
   } catch (err) {
     return { name, status: 'fail', detail: String(err.message ?? err).split('\n')[0] };
-  } finally {
-    if (added) {
-      try {
-        git(
-          ['worktree', 'remove', '--force', worktreePath],
-          { cwd, stdio: ['ignore', 'pipe', 'pipe'] }
-        );
-      } catch {
-        // best-effort cleanup
-      }
+  }
+  let cleanupErr;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      gitFn(
+        ['worktree', 'remove', '--force', worktreePath],
+        { cwd, stdio: ['ignore', 'pipe', 'pipe'] }
+      );
+      return { name, status: 'pass', detail: 'worktree add/remove succeeded' };
+    } catch (err) {
+      cleanupErr = err;
     }
   }
+  const msg = String(cleanupErr.message ?? cleanupErr).split('\n')[0];
+  return { name, status: 'fail', detail: `worktree added; cleanup failed: ${msg}` };
 }
 
 /** OPTIONAL (--test-cmd "..."): run the given command and expect exit 0. */

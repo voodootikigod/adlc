@@ -5,6 +5,7 @@
     "unit tests verify duplicate build entries are deduplicated while distinct build entries are counted separately"
   ],
   "category": "bug",
+  "completed": true,
   "context": "Closes #702.",
   "id": "T-01M6HS4S9VEMYEM5AK10SZTRSD",
   "rails": [
@@ -21,6 +22,5 @@
     "--test",
     "packages/model-router/test/model-router.test.mjs",
     "packages/model-router/test/floor-zero.test.mjs"
-  ],
-  "completed": true
+  ]
 }

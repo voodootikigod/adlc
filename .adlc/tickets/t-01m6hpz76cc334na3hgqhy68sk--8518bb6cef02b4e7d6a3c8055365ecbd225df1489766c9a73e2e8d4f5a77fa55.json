@@ -3,6 +3,7 @@
     "When premortem --prompt-only --record-verdict runs without a signing key, it warns on stderr that the recorded entry is unsigned.",
     "When recordVerdict throws (e.g. broken or signed-then-unsigned manifest chain), premortem exits 1 via opError with a clean error message rather than an unhandled exception stack trace."
   ],
+  "completed": true,
   "description": "In packages/premortem/lib/run.mjs, warn on stderr when --record-verdict runs without ADLC_MANIFEST_KEY and route recordVerdict/readVerdictSource errors through opError with repair-chain guidance instead of throwing a raw stack trace.",
   "id": "T-01M6HPZ76CC334NA3HGQHY68SK",
   "rails": [
@@ -13,6 +14,5 @@
     "packages/premortem/test/prompt-only-usage.test.mjs"
   ],
   "title": "premortem: wrap recordVerdict in opError and warn on unsigned record (#723)",
-  "verify": "node --test packages/premortem/test/prompt-only-usage.test.mjs packages/premortem/test/cli.test.mjs",
-  "completed": true
+  "verify": "node --test packages/premortem/test/prompt-only-usage.test.mjs packages/premortem/test/cli.test.mjs"
 }

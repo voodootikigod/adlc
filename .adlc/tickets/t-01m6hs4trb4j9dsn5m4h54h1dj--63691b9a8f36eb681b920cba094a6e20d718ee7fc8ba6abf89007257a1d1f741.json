@@ -6,6 +6,7 @@
     "unit tests verify detectBinary resolves executable stubs on PATH and skips node_modules/.bin and fails closed when missing (#455, #633)"
   ],
   "category": "bug",
+  "completed": true,
   "context": "Closes #454. Closes #455. Closes #633.",
   "id": "T-01M6HS4TRB4J9DSN5M4H54H1DJ",
   "rails": [
@@ -25,6 +26,5 @@
     "packages/fleet/test/adapter-print-argv.test.mjs",
     "packages/fleet/test/adapter-registry.test.mjs",
     "packages/quartermaster/test/reference-registry.test.mjs"
-  ],
-  "completed": true
+  ]
 }

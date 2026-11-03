@@ -1,5 +1,6 @@
 {
   "body": "## Context\nIssue #829: In `plugins/adlc-gemini/hooks/adlc-rails-guard.mjs`, when a tool call carries no file paths (such as `run_command`), `runFromStdin` resolves the tracking root via `resolveWorkspaceRoot(payload, env)` and `findAdlcRoot(transcriptPath, env)`. In `--print`/headless mode, `workspacePaths` is empty, the hook process `cwd` is the plugin directory outside the repo, and `transcriptPath` lives under `~/.gemini/antigravity-cli/brain/<id>/...` outside the repo, so `findAdlcRoot(transcriptPath)` returns `null`. `runFromStdin` then falls back to `process.cwd()` (the non-ADLC plugin directory), so pathless calls never increment the repository session depth counter in `.adlc/sessions.json`. Meanwhile `preInvocation` and `onStop` already fall back to `discoverRootFromTranscriptRecords(parseTranscriptRecords(transcriptPath))`.\n\n## Scope\n- `plugins/adlc-gemini/hooks/adlc-rails-guard.mjs`\n- `plugins/adlc-gemini/test/build-gate.test.mjs`\n\n## Changes Required\n1. In `plugins/adlc-gemini/hooks/adlc-rails-guard.mjs`:\n   - Check `env?.WORKSPACE_ROOT` alongside `AGY_WORKSPACE`, `ANTIGRAVITY_WORKSPACE`, `GEMINI_WORKSPACE`, `PROJECT_ROOT`, `INIT_CWD`, and `PWD` in `resolveWorkspaceRoot`.\n   - Extract absolute path tokens from `cmd` in `runFromStdin` when `distinctRoots.size === 0 && isShell && cmd` and resolve their ADLC root via `findAdlcRoot`.\n   - In `runFromStdin` and `postToolUse`, when `distinctRoots.size === 0 && transcriptPath`, if `findAdlcRoot(transcriptPath, env)` is `null`, fall back to `discoverRootFromTranscriptRecords(parseTranscriptRecords(transcriptPath, { readFull: true }), env)`.\n   - Avoid adding a non-ADLC `process.cwd()` fallback to `distinctRoots` when `findAdlcRoot(repoRoot, env)` is null.\n2. Add unit tests in `plugins/adlc-gemini/test/build-gate.test.mjs` covering pathless `run_command` depth tracking with empty `workspacePaths` and a non-repo `process.cwd()` via `WORKSPACE_ROOT`, command path extraction, and transcript record discovery.\n\n## Acceptance Criteria\n- Pathless `run_command` tool calls advance the repository persistent depth counter in `--print`/headless mode when `workspacePaths` is absent/empty.\n- Verify: `node --test plugins/adlc-gemini/test/build-gate.test.mjs`",
+  "completed": true,
   "id": "T-01M6HGK5SB9A9PHQNRMYT5F3F2",
   "rails": [
     "plugins/adlc-gemini/test/case-sensitivity.test.mjs",
@@ -9,6 +10,5 @@
     "plugins/adlc-gemini/hooks/adlc-rails-guard.mjs",
     "plugins/adlc-gemini/test/build-gate.test.mjs"
   ],
-  "title": "plugin(adlc-gemini): resolve pathless tool call tracking root in headless/--print mode (#829)",
-  "completed": true
+  "title": "plugin(adlc-gemini): resolve pathless tool call tracking root in headless/--print mode (#829)"
 }
