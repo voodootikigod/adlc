@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -546,3 +546,24 @@ test('prosecutor-verifier agent files across harnesses contain F9 untrusted-data
   }
 });
 
+
+test("#668: ensureGitignore and writeOrReconcileConfig replace existing files atomically (inode changes, no in-place O_TRUNC)", () => {
+  fixture((root) => {
+    mkdirSync(root, { recursive: true });
+    const gitignorePath = join(root, ".gitignore");
+    writeFileSync(gitignorePath, "node_modules/\n");
+    const inoBefore = lstatSync(gitignorePath).ino;
+    scaffold({ root, harness: "codex", codexAgents: false });
+    const inoAfter = lstatSync(gitignorePath).ino;
+    assert.notEqual(inoAfter, inoBefore, "existing .gitignore must be replaced via atomic rename (new inode), not truncated in-place");
+    const content = readFileSync(gitignorePath, "utf8");
+    assert.match(content, /^node_modules\/$/m);
+    assert.match(content, /^\.adlc\/\*$/m);
+
+    const configPath = join(root, ".adlc/config.json");
+    const cfgInoBefore = lstatSync(configPath).ino;
+    scaffold({ root, harness: "pi", codexAgents: false });
+    const cfgInoAfter = lstatSync(configPath).ino;
+    assert.notEqual(cfgInoAfter, cfgInoBefore, "existing .adlc/config.json must be replaced via atomic rename (new inode)");
+  });
+});
