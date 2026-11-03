@@ -1,0 +1,25 @@
+{
+  "acceptance": [
+    "buildPriors deduplicates identical build entries using canonicalJson so repeated identical lines count as one sample",
+    "packages/model-router/README.md states that priors are advisory, unverified input that affects tier choice but never the P3 gate verdict",
+    "unit tests verify duplicate build entries are deduplicated while distinct build entries are counted separately"
+  ],
+  "category": "bug",
+  "context": "Closes #702.",
+  "id": "T-01M6HS4S9VEMYEM5AK10SZTRSD",
+  "rails": [
+    "packages/model-router/test/floor-zero.test.mjs"
+  ],
+  "scope": [
+    "packages/model-router/lib/priors.mjs",
+    "packages/model-router/README.md",
+    "packages/model-router/test/model-router.test.mjs"
+  ],
+  "title": "model-router: deduplicate identical build entries in buildPriors and document advisory priors (#702)",
+  "verify": [
+    "node",
+    "--test",
+    "packages/model-router/test/model-router.test.mjs",
+    "packages/model-router/test/floor-zero.test.mjs"
+  ]
+}

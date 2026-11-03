@@ -118,6 +118,8 @@ rate = (passes + 1) / (n + 2)
 
 For critical-path tickets (Rule 2), the model name in the ledger is matched against the tier names `cheap`, `mid`, `frontier` to produce a tier recommendation. If no tier-named model has enough data, defaults to `mid`.
 
+Priors are advisory, unverified input read from the repository ledger (`buildPriors` deduplicates identical entries by canonical JSON so repeated identical lines count as one sample). They affect critical-path tier choice when `>= 3` distinct samples exist, but never feed `p3Findings` or alter the P3 gate verdict.
+
 ## ADLC phase
 
 D1 — The cost dial: model routing.
