@@ -4,13 +4,15 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, readFileSync, lstatSync, existsSync, readdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { tmp } from '@adlc/core/test-kit';
 
 import { diffJson, diffRoute, routeKey } from '../lib/diff.mjs';
-import { validateConfig, runCapture, reachableCount } from '../lib/capture.mjs';
+import { validateConfig, runCapture, reachableCount, writeSnapshot } from '../lib/capture.mjs';
 import { compareSnapshots, loadSnapshot } from '../lib/compare.mjs';
 import { renderReport } from '../lib/report.mjs';
 
@@ -738,5 +740,48 @@ describe('round-trip: capture → compare', () => {
       totalChanged !== 0 || result.unreachable.length !== 0,
       'dead-in-both must not yield an exit-0 all-clear'
     );
+  });
+});
+
+describe("atomic writeSnapshot & reachability gate (#586)", () => {
+  const cliBin = fileURLToPath(new URL("../bin/behavior-diff.mjs", import.meta.url));
+
+  test("writeSnapshot replaces an existing file atomically via temp file + rename (new inode) and leaves no temp litter", (t) => {
+    const dir = tmp(t, "behavior-diff-atomic-");
+    const out = join(dir, "snap.json");
+    writeFileSync(out, JSON.stringify({ old: true }));
+    const inoBefore = lstatSync(out).ino;
+    const snap = { baseUrl: "http://localhost", capturedAt: "2026-01-01T00:00:00.000Z", routes: [{ method: "GET", path: "/ok", status: 200, contentType: "application/json", body: { ok: true } }] };
+    writeSnapshot(snap, out);
+    const inoAfter = lstatSync(out).ino;
+    assert.notEqual(inoAfter, inoBefore, "writeSnapshot must replace target via atomic rename (new inode), not O_TRUNC in-place");
+    assert.equal(readFileSync(out, "utf8"), JSON.stringify(snap, null, 2));
+    assert.deepEqual(readdirSync(dir), ["snap.json"], "no .tmp files may remain");
+  });
+
+  test("CLI capture against an unreachable target (0 reachable) exits 1 BEFORE writing --out, preserving an existing baseline intact", (t) => {
+    const dir = tmp(t, "behavior-diff-preserve-");
+    const cfgPath = join(dir, "behavior.json");
+    const outPath = join(dir, "before.json");
+    const goodBaseline = {
+      baseUrl: "http://127.0.0.1:1",
+      capturedAt: "2026-01-01T00:00:00.000Z",
+      routes: [{ method: "GET", path: "/health", status: 200, contentType: "application/json", body: { ok: true } }],
+    };
+    writeFileSync(outPath, JSON.stringify(goodBaseline, null, 2));
+    writeFileSync(cfgPath, JSON.stringify({
+      baseUrl: "http://127.0.0.1:1",
+      routes: [{ method: "GET", path: "/health" }],
+    }));
+
+    const r = spawnSync(process.execPath, [cliBin, "capture", "--config", cfgPath, "--out", outPath], { encoding: "utf8" });
+    assert.equal(r.status, 1, `expected exit 1 on 0 reachable routes, got ${r.status}`);
+    assert.match(r.stderr, /0\/1 routes reachable/);
+    assert.deepEqual(JSON.parse(readFileSync(outPath, "utf8")), goodBaseline, "existing baseline must NOT be overwritten when 0 routes are reachable");
+
+    const freshOut = join(dir, "fresh.json");
+    const r2 = spawnSync(process.execPath, [cliBin, "capture", "--config", cfgPath, "--out", freshOut], { encoding: "utf8" });
+    assert.equal(r2.status, 1);
+    assert.equal(existsSync(freshOut), false, "no all-errored snapshot file may be written when 0 routes are reachable");
   });
 });
