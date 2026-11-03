@@ -1,9 +1,21 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { getAdapter, ADAPTERS, adapterCatalog } from '../lib/adapters/index.mjs';
+import { detectBinary } from '../lib/adapters/gemini.mjs';
+
+const STUB_BIN = mkdtempSync(join(tmpdir(), "fleet-adapters-all-bin-"));
+for (const bin of ["agy", "jetski"]) {
+  const p = join(STUB_BIN, bin);
+  writeFileSync(p, "#!/bin/sh\nexit 0\n");
+  chmodSync(p, 0o755);
+}
+after(() => { rmSync(STUB_BIN, { recursive: true, force: true }); });
 
 const PROMPT = 'build ticket T1 as specified';
-const ENV = { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1', ANTHROPIC_API_KEY: 'sk' };
+const ENV = { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1', ANTHROPIC_API_KEY: 'sk', PATH: STUB_BIN };
 
 // Each entry: adapter name → expected default { cmd, args } and whether it pipes
 // the prompt on stdin (agy).
@@ -206,4 +218,117 @@ test('claude-code declares at least the aliases its harness documents', () => {
   const declared = new Set(getAdapter('claude-code').aliases);
   const missing = documented.filter((a) => !declared.has(a));
   assert.deepEqual(missing, [], `claude-code dropped documented alias(es): ${missing.join(', ')}`);
+});
+
+// ---- #454 / #455 / #633: gemini aliases, detectBinary PATH hardening, and fail-closed dispatch ----
+
+test('gemini, agy, and jetski declare only the default sentinel in aliases — no CLI binary names (#454)', () => {
+  for (const name of ["gemini", "agy", "jetski"]) {
+    assert.deepEqual(getAdapter(name).aliases, ["default"], `${name} aliases must not include CLI binary names`);
+  }
+});
+
+test('detectBinary resolves executable agy and jetski stubs on PATH and dispatch invokes the resolved absolute path (#455)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), "fleet-detect-bin-"));
+  try {
+    const agyStub = join(dir, "agy");
+    writeFileSync(agyStub, "#!/bin/sh\nexit 0\n");
+    chmodSync(agyStub, 0o755);
+    assert.equal(detectBinary(undefined, { PATH: dir }, "linux"), agyStub);
+
+    const recAgy = [];
+    await getAdapter("gemini").dispatch({
+      worktree: "/wt", prompt: PROMPT, timeoutMs: 1, env: { PATH: dir }, exec: stubExec(recAgy),
+    });
+    assert.equal(recAgy[0].cmd, agyStub, "gemini dispatch must execute the resolved agy path");
+
+    // When jetski is also present, default target order ["jetski", "agy"] prefers jetski; explicit agy/jetski adapters resolve their own binary
+    const jetskiStub = join(dir, "jetski");
+    writeFileSync(jetskiStub, "#!/bin/sh\nexit 0\n");
+    chmodSync(jetskiStub, 0o755);
+    assert.equal(detectBinary(undefined, { PATH: dir }, "linux"), jetskiStub);
+    assert.equal(detectBinary(["agy"], { PATH: dir }, "linux"), agyStub);
+    assert.equal(detectBinary(["jetski"], { PATH: dir }, "linux"), jetskiStub);
+
+    const recGem = [];
+    await getAdapter("gemini").dispatch({
+      worktree: "/wt", prompt: PROMPT, timeoutMs: 1, env: { PATH: dir }, exec: stubExec(recGem),
+    });
+    assert.equal(recGem[0].cmd, jetskiStub);
+
+    const recExplicitAgy = [];
+    await getAdapter("agy").dispatch({
+      worktree: "/wt", prompt: PROMPT, timeoutMs: 1, env: { PATH: dir }, exec: stubExec(recExplicitAgy),
+    });
+    assert.equal(recExplicitAgy[0].cmd, agyStub);
+
+    const recExplicitJetski = [];
+    await getAdapter("jetski").dispatch({
+      worktree: "/wt", prompt: PROMPT, timeoutMs: 1, env: { PATH: dir }, exec: stubExec(recExplicitJetski),
+    });
+    assert.equal(recExplicitJetski[0].cmd, jetskiStub);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('detectBinary supports Windows PATHEXT and semicolon-delimited PATH entries (#455)', () => {
+  const dir = mkdtempSync(join(tmpdir(), "fleet-detect-win-"));
+  try {
+    const cmdStub = join(dir, "agy.cmd");
+    writeFileSync(cmdStub, "@echo off\r\n");
+    chmodSync(cmdStub, 0o755);
+    const resolved = detectBinary(["agy"], { PATH: `/nonexistent;${dir}`, PATHEXT: ".EXE;.CMD" }, "win32");
+    assert.equal(resolved, cmdStub);
+    // Default PATHEXT fallback when PATHEXT is unset
+    const savedPathExt = process.env.PATHEXT;
+    delete process.env.PATHEXT;
+    try {
+      assert.equal(detectBinary(["agy"], { PATH: dir }, "win32"), cmdStub);
+    } finally {
+      if (savedPathExt !== undefined) process.env.PATHEXT = savedPathExt;
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('detectBinary skips relative PATH entries, node_modules/.bin, node-gyp-bin, directories, and non-executable files, and dispatch fails closed (#633)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), "fleet-detect-hardening-"));
+  try {
+    const nmBin = join(dir, "node_modules", ".bin");
+    const gypBin = join(dir, "node-gyp-bin");
+    const dirAsBin = join(dir, "dir-entry");
+    const nonExecDir = join(dir, "non-exec");
+    mkdirSync(nmBin, { recursive: true });
+    mkdirSync(gypBin, { recursive: true });
+    mkdirSync(join(dirAsBin, "agy"), { recursive: true });
+    mkdirSync(nonExecDir, { recursive: true });
+
+    for (const d of [nmBin, gypBin]) {
+      const planted = join(d, "agy");
+      writeFileSync(planted, "#!/bin/sh\nexit 0\n");
+      chmodSync(planted, 0o755);
+    }
+    const nonExecFile = join(nonExecDir, "agy");
+    writeFileSync(nonExecFile, "#!/bin/sh\nexit 0\n");
+    chmodSync(nonExecFile, 0o644);
+
+    const hostilePath = ["relative/bin", `${nmBin}/`, gypBin, dirAsBin, nonExecDir].join(":");
+    assert.equal(detectBinary(["jetski", "agy"], { PATH: hostilePath }, "linux"), null);
+
+    // Even when a custom exec is injected (as live-deps does in production), gemini/agy/jetski MUST throw rather than falling back to bare "agy" or "jetski" (#633)
+    for (const adapterName of ["gemini", "agy", "jetski"]) {
+      const rec = [];
+      await assert.rejects(
+        () => getAdapter(adapterName).dispatch({
+          worktree: "/wt", prompt: PROMPT, timeoutMs: 1, env: { PATH: hostilePath }, exec: stubExec(rec),
+        }),
+        /Google Gemini integration: safe agent binary not found in PATH\./,
+      );
+      assert.equal(rec.length, 0, `${adapterName} must not invoke exec when detectBinary returns null`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

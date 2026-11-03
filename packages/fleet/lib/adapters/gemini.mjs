@@ -23,7 +23,7 @@ export const homeState = Object.freeze({
 });
 
 /** Run-time aliases this harness resolves for itself (operating-stack §4b rule 6). */
-export const aliases = Object.freeze(['default', 'agy', 'jetski']);
+export const aliases = Object.freeze(['default']);
 
 /** `--model` accepts an explicit model, so this adapter can serve a registry seat (§4c). */
 export const forcesModel = true;
@@ -46,13 +46,15 @@ export const transports = Object.freeze({
   subscription: Object.freeze({}),
 });
 
-function detectBinary(targets = ['jetski', 'agy']) {
-  const delimiter = process.platform === 'win32' ? ';' : ':';
-  const extensions = process.platform === 'win32'
-    ? (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean).map(e => e.toLowerCase())
+export function detectBinary(targets = ['jetski', 'agy'], env = process.env, platform = process.platform) {
+  const delimiter = platform === 'win32' ? ';' : ':';
+  const pathExtRaw = env?.PATHEXT ?? process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD';
+  const extensions = platform === 'win32'
+    ? pathExtRaw.split(';').filter(Boolean).map((e) => e.toLowerCase())
     : [''];
+  const pathValue = env?.PATH ?? process.env.PATH ?? '';
 
-  for (const dir of (process.env.PATH ?? '').split(delimiter).filter(Boolean)) {
+  for (const dir of pathValue.split(delimiter).filter(Boolean)) {
     const normalized = dir.replace(/[\\/]+$/, '').replace(/\\/g, '/');
     if (!isAbsolute(dir)) continue;
     if (normalized.endsWith('node_modules/.bin') || normalized.endsWith('node-gyp-bin')) continue;
@@ -74,18 +76,12 @@ function detectBinary(targets = ['jetski', 'agy']) {
   return null;
 }
 
-export async function dispatch({ worktree, prompt, timeoutMs, env, exec = defaultExec, command, args, model, useStdin = false }) {
+export async function dispatch({ worktree, prompt, timeoutMs, env, exec = defaultExec, command, args, model, useStdin = false, resolveBinary = detectBinary }) {
   let resolvedCommand = command;
   if (!resolvedCommand) {
-    resolvedCommand = detectBinary();
-    if (!resolvedCommand && exec !== defaultExec) {
-      resolvedCommand = 'agy';
-    }
+    resolvedCommand = resolveBinary(undefined, env);
   } else if (resolvedCommand === 'agy' || resolvedCommand === 'jetski') {
-    resolvedCommand = detectBinary([resolvedCommand]);
-    if (!resolvedCommand && exec !== defaultExec) {
-      resolvedCommand = command;
-    }
+    resolvedCommand = resolveBinary([resolvedCommand], env);
   }
   if (!resolvedCommand) {
     throw new Error('Google Gemini integration: safe agent binary not found in PATH.');
