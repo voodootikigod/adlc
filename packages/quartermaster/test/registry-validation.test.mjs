@@ -679,3 +679,20 @@ test('rule 7: a concrete model named after an Object.prototype member is rejecte
     { messageMatch: /names concrete model "toString" on adapter "opencode", but modelProviders\.opencode has no entry for it/ }
   );
 });
+
+test('#737: validateRegistry deep-freezes channels, seats, reviewerGroups, members, and modelProviders so post-validation mutation throws', () => {
+  const reg = validateRegistry(baseRegistry(), { adapters });
+  assert.equal(Object.isFrozen(reg), true);
+  assert.equal(Object.isFrozen(reg.channels), true);
+  assert.equal(Object.isFrozen(reg.channels.frontier), true);
+  assert.equal(Object.isFrozen(reg.reviewerGroups), true);
+  assert.equal(Object.isFrozen(reg.reviewerGroups['cross-model-routine']), true);
+  assert.equal(Object.isFrozen(reg.reviewerGroups['cross-model-routine'].members), true);
+  assert.equal(Object.isFrozen(reg.reviewerGroups['cross-model-routine'].members[0]), true);
+  assert.equal(Object.isFrozen(reg.modelProviders), true);
+  assert.equal(Object.isFrozen(reg.modelProviders.opencode), true);
+  assert.throws(() => { reg.channels.frontier.model = 'tampered'; }, TypeError);
+  assert.throws(() => { reg.reviewerGroups['cross-model-routine'].members[0].model = 'tampered'; }, TypeError);
+  assert.throws(() => { reg.reviewerGroups['cross-model-routine'].members.push({}); }, TypeError);
+  assert.throws(() => { reg.modelProviders.opencode['gpt-5.4'] = 'anthropic'; }, TypeError);
+});
