@@ -45,7 +45,7 @@ This is mutation testing aimed at the *reviewer* instead of the code (ADLC C8).
    `configuredJudgeBounded` and `configuredJudgeEchoRecall` are `null` — it
    contributed nothing to the score, so there was nothing to bound.
 5. **Apply all plants**, **run `--review-cmd`** (`{base}` → commit ref), **restore**
-   (atomically, via `finally` + SIGINT handler; a killed run is restored by
+   (atomically, via `finally` + `SIGINT`/`SIGTERM`/`SIGHUP` handlers; a killed run is restored by
    the next one — see Safety).
 6. **Parse findings**: the reviewer's output is parsed as structured findings
    (adversarial-review `--json` shape, or a weak prose fallback).
@@ -77,7 +77,7 @@ See `REDESIGN.md` for the full design and the rationale for each decision.
 - Plants are written and restored **atomically** (temp file + rename), so no
   source file is ever left truncated.
 - On a normal exit, an error or Ctrl-C, files are restored by the runner's
-  `finally` block (and the CLI's SIGINT handler).
+  `finally` block (and the CLI's `SIGINT`/`SIGTERM`/`SIGHUP` handlers).
 - A run **killed** mid-review (SIGTERM from a CI cancel, `docker stop`, SIGKILL)
   cannot restore anything itself — the review runs inside `spawnSync`, where no
   signal handler runs. Before planting, the CLI writes an in-flight record of
@@ -101,7 +101,7 @@ review-calibration --review-cmd "cmd with {base} placeholder" [options]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--review-cmd <cmd>` | (required) | Shell command to run the reviewer. `{base}` is substituted with the commit ref. |
+| `--review-cmd <cmd>` | (required) | Command template to run the reviewer (tokenized, `shell: false`). `{base}` is substituted with the commit ref. |
 | `--commit <ref>` | `HEAD` | Commit whose changed files are used as plant targets. |
 | `--plants <n>` | `8` | Number of bugs to plant. |
 | `--min-recall <f>` | `0.5` | Minimum recall fraction required to pass (0–1). |
