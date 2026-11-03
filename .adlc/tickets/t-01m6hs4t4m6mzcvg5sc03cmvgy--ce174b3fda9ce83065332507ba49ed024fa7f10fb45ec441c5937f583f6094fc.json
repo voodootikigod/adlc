@@ -1,25 +1,26 @@
 {
-    "acceptance": [
-        "createWorktree validates ticketId against /^[A-Za-z0-9._-]+$/ before constructing worktree paths or branch names so unsafe characters (quotes, parens, spaces, slashes) cannot enter the Seatbelt profile",
-        "unit tests cover invalid ticket ids in createWorktree and verify valid charset characters succeed"
-    ],
-    "category": "bug",
-    "context": "Closes #638.",
-    "id": "T-01M6HS4T4M6MZCVG5SC03CMVGY",
-    "rails": [
-        "packages/fleet/test/integration-worktree.test.mjs",
-        "packages/fleet/test/sandbox.test.mjs"
-    ],
-    "scope": [
-        "packages/fleet/lib/worktrees.mjs",
-        "packages/fleet/test/linked-worktree.test.mjs"
-    ],
-    "title": "fleet: validate ticket ids in createWorktree against conservative charset (#638)",
-    "verify": [
-        "node",
-        "--test",
-        "packages/fleet/test/linked-worktree.test.mjs",
-        "packages/fleet/test/integration-worktree.test.mjs",
-        "packages/fleet/test/sandbox.test.mjs"
-    ]
+  "acceptance": [
+    "createWorktree validates ticketId against /^[A-Za-z0-9._-]+$/ before constructing worktree paths or branch names so unsafe characters (quotes, parens, spaces, slashes) cannot enter the Seatbelt profile",
+    "unit tests cover invalid ticket ids in createWorktree and verify valid charset characters succeed"
+  ],
+  "category": "bug",
+  "context": "Closes #638.",
+  "id": "T-01M6HS4T4M6MZCVG5SC03CMVGY",
+  "rails": [
+    "packages/fleet/test/integration-worktree.test.mjs",
+    "packages/fleet/test/sandbox.test.mjs"
+  ],
+  "scope": [
+    "packages/fleet/lib/worktrees.mjs",
+    "packages/fleet/test/linked-worktree.test.mjs"
+  ],
+  "title": "fleet: validate ticket ids in createWorktree against conservative charset (#638)",
+  "verify": [
+    "node",
+    "--test",
+    "packages/fleet/test/linked-worktree.test.mjs",
+    "packages/fleet/test/integration-worktree.test.mjs",
+    "packages/fleet/test/sandbox.test.mjs"
+  ],
+  "completed": true
 }

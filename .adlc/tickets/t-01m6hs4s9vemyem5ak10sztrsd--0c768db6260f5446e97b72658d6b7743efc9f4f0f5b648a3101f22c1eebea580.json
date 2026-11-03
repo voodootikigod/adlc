@@ -21,5 +21,6 @@
     "--test",
     "packages/model-router/test/model-router.test.mjs",
     "packages/model-router/test/floor-zero.test.mjs"
-  ]
+  ],
+  "completed": true
 }

@@ -25,5 +25,6 @@
     "packages/fleet/test/adapter-print-argv.test.mjs",
     "packages/fleet/test/adapter-registry.test.mjs",
     "packages/quartermaster/test/reference-registry.test.mjs"
-  ]
+  ],
+  "completed": true
 }

@@ -22,5 +22,6 @@
     "plugins/adlc-gemini/test/flail.test.mjs",
     "packages/flail-detector/test/analyze.test.mjs",
     "plugins/adlc-gemini/test/manifest.test.mjs"
-  ]
+  ],
+  "completed": true
 }
