@@ -1,0 +1,15 @@
+{
+  "duration": 2,
+  "edges": [],
+  "id": "T-01M6H2ERG72FWJBRYSX80AF9AC",
+  "rails": [
+    "packages/fleet/test/lock-recovery.test.mjs"
+  ],
+  "scope": [
+    "packages/fleet/bin/fleet.mjs",
+    "packages/fleet/test/lock-recovery.test.mjs"
+  ],
+  "spec": "Guard the fleet unlock subcommand in packages/fleet/bin/fleet.mjs with isLockLive(owner, lockProbes()) so a live run lock is refused (exit 1) unless --force is passed, while stale locks release cleanly.",
+  "title": "fix(fleet): guard fleet unlock against releasing a live run lock without --force (#636)",
+  "verify": "node --test packages/fleet/test/lock-recovery.test.mjs packages/fleet/test/fleet-entry.test.mjs"
+}

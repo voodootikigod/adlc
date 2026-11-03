@@ -12,7 +12,7 @@ import { loadPlan, activeTickets } from '../lib/plan.mjs';
 import { planRound, REASON_CODES } from '../lib/scheduler.mjs';
 import { loadConfig, resolveRunConfig, validateExtensionFlags, parsePreStrike } from '../lib/config.mjs';
 import { loadStatus } from '../lib/status.mjs';
-import { readLockOwner, forceUnlock, releaseLock } from '../lib/lock.mjs';
+import { readLockOwner, forceUnlock, releaseLock, isLockLive } from '../lib/lock.mjs';
 import { runPreflight } from '../lib/preflight.mjs';
 import { reconcileRun } from '../lib/resume.mjs';
 import { buildLiveDeps, defaultIo } from '../lib/live-deps.mjs';
@@ -45,7 +45,7 @@ Usage:
             [--model-plane-git shared|mirror] [--model-plane-git-mirror ABS_BARE_REPO]
             [--model-plane-egress open|allowlist] [--worker-deps ABS_NODE_MODULES]
   fleet status [--json]
-  fleet unlock
+  fleet unlock [--force]
 
 Exit codes: 0 ok · 1 operational error · 2 a ticket failed/blocked/paused (see --json "reason").`;
 
@@ -61,6 +61,7 @@ export function parseFlags(args) {
       tickets: { type: 'string' },
       base: { type: 'string' },
       json: { type: 'boolean' },
+      force: { type: 'boolean' },
       'i-am-in-a-disposable-container': { type: 'boolean' },
       adapter: { type: 'string' },
       model: { type: 'string' },
@@ -159,8 +160,14 @@ if (sub === 'status') {
 }
 
 if (sub === 'unlock') {
+  let flags;
+  try { flags = parseFlags(raw.slice(1)); } catch (e) { refuseFlags(e.message); }
   const owner = readLockOwner(dir);
   if (!owner) { console.log('no lock held'); process.exit(0); }
+  if (!flags.force && isLockLive(owner, lockProbes())) {
+    console.error(`fleet: refusing to unlock live run (pid ${owner.pid} on ${owner.host}, run ${owner.runId ?? '?'}); pass --force to override`);
+    process.exit(1);
+  }
   forceUnlock(dir);
   console.log(`released lock (was pid ${owner.pid} on ${owner.host}, run ${owner.runId ?? '?'})`);
   process.exit(0);

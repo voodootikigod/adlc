@@ -1,9 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { tmp as makeTmp } from '@adlc/core/test-kit';
 import { acquireLock, readLockOwner, isLockLive, releaseLock, LOCK_DIR } from '../lib/lock.mjs';
+import { selfIdentity } from '../lib/proc.mjs';
+
+const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'fleet.mjs');
 
 function tmp(t) {
   return makeTmp(t, 'fleet-lock-');
@@ -81,4 +86,31 @@ test('releaseLock removes the lock', (t) => {
   acquireLock(dir, self(), { host: HOST, pidAlive: () => false, procStartTimeOf: () => null });
   releaseLock(dir);
   assert.equal(existsSync(join(dir, LOCK_DIR)), false);
+});
+
+test('#636: fleet unlock refuses to remove a live lock unless --force is given, and removes a stale lock without --force', (t) => {
+  const repo = tmp(t);
+  const adlcDir = join(repo, '.adlc');
+  mkdirSync(adlcDir, { recursive: true });
+  const liveOwner = { ...selfIdentity(), runId: 'run-live' };
+  mkdirSync(join(adlcDir, LOCK_DIR));
+  writeFileSync(join(adlcDir, LOCK_DIR, 'owner.json'), JSON.stringify(liveOwner));
+
+  const refused = spawnSync(process.execPath, [BIN, 'unlock'], { cwd: repo, encoding: 'utf8' });
+  assert.equal(refused.status, 1, 'live lock must be refused without --force');
+  assert.match(refused.stderr, /refusing to unlock live run/);
+  assert.equal(existsSync(join(adlcDir, LOCK_DIR)), true, 'live lock remains on disk');
+
+  const forced = spawnSync(process.execPath, [BIN, 'unlock', '--force'], { cwd: repo, encoding: 'utf8' });
+  assert.equal(forced.status, 0, forced.stderr);
+  assert.match(forced.stdout, /released lock/);
+  assert.equal(existsSync(join(adlcDir, LOCK_DIR)), false, '--force removes the lock');
+
+  // Stale lock (dead pid on same host) is released without --force.
+  mkdirSync(join(adlcDir, LOCK_DIR));
+  writeFileSync(join(adlcDir, LOCK_DIR, 'owner.json'), JSON.stringify({ pid: 99999999, host: liveOwner.host, runId: 'run-stale', procStartTime: 'dead' }));
+  const staleRes = spawnSync(process.execPath, [BIN, 'unlock'], { cwd: repo, encoding: 'utf8' });
+  assert.equal(staleRes.status, 0, staleRes.stderr);
+  assert.match(staleRes.stdout, /released lock/);
+  assert.equal(existsSync(join(adlcDir, LOCK_DIR)), false, 'stale lock is removed without --force');
 });
