@@ -1,9 +1,20 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { getAdapter } from '../lib/adapters/index.mjs';
 
+const STUB_BIN = mkdtempSync(join(tmpdir(), "fleet-print-argv-bin-"));
+for (const bin of ["agy", "jetski"]) {
+  const p = join(STUB_BIN, bin);
+  writeFileSync(p, "#!/bin/sh\nexit 0\n");
+  chmodSync(p, 0o755);
+}
+after(() => { rmSync(STUB_BIN, { recursive: true, force: true }); });
+
 const PROMPT = 'build ticket T1 as specified';
-const ENV = { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' };
+const ENV = { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1', PATH: STUB_BIN };
 
 function stubExec(rec, result = { status: 0, stdout: 'ok', stderr: '' }) {
   return (cmd, args, opts) => { rec.push({ cmd, args, opts }); return result; };

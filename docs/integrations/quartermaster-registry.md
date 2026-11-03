@@ -354,7 +354,7 @@ Each adapter module exports the alias set its harness resolves at run time:
 | `claude-code` | `default`, `fable`, `opus`, `sonnet`, `haiku`, `opusplan` | `--model` | yes | **no** (§9.3) |
 | `codex` | `default` | `-m` | yes | **no** (§9.3) |
 | `opencode` | `default` | `-m` | yes | **no** (§9.3) |
-| `agy` | `default` | `--model` | yes | **no** (§9.3) |
+| `gemini`, `agy`, `jetski` | `default` | `--model` | yes | **no** (§9.3) |
 | `pi`, `cursor`, `copilot` | `default` | — | **no** | **no** |
 
 Because nothing attests yet, `pi`, `cursor`, and `copilot` can serve no channel
