@@ -11,5 +11,6 @@
   ],
   "spec": "Plumb envPassthrough, adlcBin, and canary through resolveRunConfig in packages/fleet/lib/config.mjs: validate envPassthrough as an array of strings (dropping NEVER_EXEMPT keys such as ADLC_MANIFEST_KEY with a warning, and warning/falling back to [] on non-string-array values), preserve non-empty string adlcBin (defaulting to null), and preserve boolean canary (defaulting to true). Add unit tests in packages/fleet/test/config.test.mjs.",
   "title": "fleet: plumb envPassthrough, adlcBin, and canary through resolveRunConfig (#639)",
-  "verify": "node --test packages/fleet/test/config.test.mjs packages/fleet/test/flail-contract.test.mjs packages/fleet/test/preflight.test.mjs"
+  "verify": "node --test packages/fleet/test/config.test.mjs packages/fleet/test/flail-contract.test.mjs packages/fleet/test/preflight.test.mjs",
+  "completed": true
 }
