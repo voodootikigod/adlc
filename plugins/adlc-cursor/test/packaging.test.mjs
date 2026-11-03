@@ -13,7 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, readdirSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -242,5 +242,27 @@ test('AC4: packed tarball extracted outside the repo runs adlc-cursor-scaffold s
   } finally {
     rmSync(work, { recursive: true, force: true });
     rmSync(targetRepo, { recursive: true, force: true });
+  }
+});
+
+test('suite-wide invariant: every workspace package.json declares engines.node and ships LICENSE on disk (#788, #817, #824)', () => {
+  for (const group of ['packages', 'plugins']) {
+    const groupDir = join(repoRoot, group);
+    for (const entry of readdirSync(groupDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const pkgPath = join(groupDir, entry.name, 'package.json');
+      if (!existsSync(pkgPath)) continue;
+      const manifest = JSON.parse(readFileSync(pkgPath, 'utf8'));
+      assert.ok(
+        typeof manifest.engines?.node === 'string' && manifest.engines.node.length > 0,
+        `${group}/${entry.name}/package.json must declare engines.node`
+      );
+      if (manifest.license || (manifest.files ?? []).includes('LICENSE')) {
+        assert.ok(
+          existsSync(join(groupDir, entry.name, 'LICENSE')),
+          `${group}/${entry.name}/LICENSE must exist on disk`
+        );
+      }
+    }
   }
 });

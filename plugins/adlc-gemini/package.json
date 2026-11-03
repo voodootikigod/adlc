@@ -69,5 +69,8 @@
     "plugin.json",
     "README.md",
     "LICENSE"
-  ]
+  ],
+  "engines": {
+    "node": ">=18"
+  }
 }
