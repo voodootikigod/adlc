@@ -1,0 +1,16 @@
+{
+  "duration": 2,
+  "edges": [],
+  "id": "T-01M6H2EPG6K4445BBGGJ2KGMZG",
+  "rails": [
+    "packages/core/test/diff-lines-and-gemini-usage.test.mjs"
+  ],
+  "scope": [
+    "packages/core/lib/llm.mjs",
+    "packages/core/test/diff-lines-and-gemini-usage.test.mjs",
+    "plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs"
+  ],
+  "spec": "Update the gemini provider in packages/core/lib/llm.mjs to send GEMINI_API_KEY via the x-goog-api-key request header instead of interpolating ?key=${apiKey} into the URL query string, and add unit tests asserting the URL has no key parameter and the x-goog-api-key header carries the key.",
+  "title": "fix(core): send GEMINI_API_KEY in x-goog-api-key header instead of URL query string (#618)",
+  "verify": "node --test packages/core/test/diff-lines-and-gemini-usage.test.mjs packages/core/test/core.test.mjs"
+}
