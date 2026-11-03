@@ -1,0 +1,20 @@
+{
+  "acceptance": [
+    "writeSnapshot writes via a sibling temporary file and renames atomically into outPath, cleaning up the temp file on failure",
+    "behavior-diff capture refuses to overwrite an existing valid snapshot that has reachableCount > 0 when the new capture has 0 reachable routes"
+  ],
+  "dependsOn": [],
+  "duration": 15,
+  "id": "T-01M6GR2ZTB6WEDCKGHW5CJ0FE4",
+  "rails": [
+    "packages/behavior-diff/test/compare.test.mjs"
+  ],
+  "scope": [
+    "packages/behavior-diff/lib/capture.mjs",
+    "packages/behavior-diff/bin/behavior-diff.mjs",
+    "packages/behavior-diff/test/behavior-diff.test.mjs",
+    "packages/behavior-diff/test/compare.test.mjs"
+  ],
+  "title": "behavior-diff: write capture snapshot atomically and refuse to clobber reachable baseline on 0-reachable run (#586)",
+  "verify": "node --test packages/behavior-diff/test/behavior-diff.test.mjs packages/behavior-diff/test/compare.test.mjs"
+}

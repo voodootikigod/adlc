@@ -1,8 +1,8 @@
 // lib/capture.mjs — HTTP fixture capture logic
 // Hits each route in the config and records observable HTTP behavior.
 
-import { createHash } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { openSync, closeSync, writeFileSync, renameSync } from 'node:fs';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -146,9 +146,15 @@ export function reachableCount(snapshot) {
  * Write a capture snapshot to a file.
  */
 export function writeSnapshot(snapshot, outPath) {
-  writeFileSync(outPath, JSON.stringify(snapshot, null, 2), 'utf8');
+  const tmpPath = `${outPath}.tmp-${process.pid}-${randomUUID()}`;
+  const fd = openSync(tmpPath, 'wx');
+  try {
+    writeFileSync(fd, JSON.stringify(snapshot, null, 2), 'utf8');
+  } finally {
+    closeSync(fd);
+  }
+  renameSync(tmpPath, outPath);
 }
-
 function sha256hex(text) {
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }

@@ -56,32 +56,31 @@ if (verb === 'capture') {
     opError(`capture failed: ${err.message}`);
   }
 
+  const total = snapshot.routes.length;
+  const ok = reachableCount(snapshot);
+  // Reachability gate: if no route returned a real HTTP response, the target
+  // was unreachable (e.g. server never started). Refuse BEFORE writing --out
+  // so a re-run against a dead target never overwrites an existing baseline
+  // snapshot (#586).
+  if (ok === 0) {
+    opError(
+      `0/${total} routes reachable — target appears down (refusing to write "${flags.out}"). ` +
+      `Refusing to emit a usable capture: an all-errored snapshot cannot be meaningfully diffed.`
+    );
+  }
+
   try {
     writeSnapshot(snapshot, flags.out);
   } catch (err) {
     opError(`cannot write output file "${flags.out}": ${err.message}`);
   }
 
-  const total = snapshot.routes.length;
-  const ok = reachableCount(snapshot);
   const errored = total - ok;
 
   if (flags.json) {
     printJson({ out: flags.out, total, ok, errored });
   } else {
     console.log(`captured ${ok}/${total} routes (${errored} error${errored !== 1 ? 's' : ''}) → ${flags.out}`);
-  }
-
-  // Reachability gate: if no route returned a real HTTP response, the target
-  // was unreachable (e.g. server never started). An all-errored snapshot is an
-  // operational failure, not a clean capture — there is nothing meaningful to
-  // diff, and emitting a "green" snapshot would let a dead service slip through
-  // the P6 human gate. The snapshot is still written above for inspection.
-  if (ok === 0) {
-    opError(
-      `0/${total} routes reachable — target appears down (snapshot written to "${flags.out}" for inspection). ` +
-      `Refusing to emit a usable capture: an all-errored snapshot cannot be meaningfully diffed.`
-    );
   }
 
   pass();
