@@ -128,7 +128,8 @@ consensus-fix --test-cmd "node --test test/math.test.mjs" \
     "discarded": 0,
     "groups": 1,
     "allDivergent": false,
-    "railsChecked": true
+    "railsChecked": true,
+    "dirtyCheckSkipped": false
   },
   "groups": [
     { "groupIndex": 0, "size": 2, "candidateIndices": [0, 2] }
@@ -148,7 +149,7 @@ consensus-fix --test-cmd "node --test test/math.test.mjs" \
 
 ## Safety guarantees
 
-- **Dirty-tree guard**: refuses to run against a dirty git tree unless `--allow-dirty`. Prevents accidental loss of unstaged work.
+- **Dirty-tree guard**: refuses to run against a dirty git tree unless `--allow-dirty`. Prevents accidental loss of unstaged work. Outside a git work tree or when `git` is unavailable, prints a loud `WARNING` on stderr and surfaces `summary.dirtyCheckSkipped: true` in `--json` output.
 - **Snapshot + restore in `finally`**: every candidate evaluation restores all `--files` to their original content, even if the test crashes or the LLM returns garbage.
 - **Termination signal restore**: SIGINT, SIGTERM or SIGHUP at any point before the report (including while a candidate's test or rails command is running) stops the run: the in-flight command's process group gets SIGTERM, then SIGKILL after 2 s, the original files are restored from the snapshot, no winner is applied, and the process exits 1. SIGKILL sent to consensus-fix itself cannot be handled, so it can leave a candidate's hunks on disk; recover with `git checkout -- <files>`.
 - **Atomic writes**: file restoration, candidate hunk application, and winning candidate --apply writes are atomic (write temp file in same directory, then renameSync) to guard against partial writes or truncation.

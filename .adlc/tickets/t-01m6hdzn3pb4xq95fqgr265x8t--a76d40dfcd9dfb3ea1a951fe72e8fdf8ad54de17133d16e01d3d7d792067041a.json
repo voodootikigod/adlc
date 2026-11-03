@@ -1,0 +1,19 @@
+{
+  "dependsOn": [],
+  "id": "T-01M6HDZN3PB4XQ95FQGR265X8T",
+  "rails": [
+    "packages/consensus-fix/test/runner.test.mjs",
+    "packages/consensus-fix/test/signal-docs.test.mjs"
+  ],
+  "scope": [
+    "apps/docs/content/docs/toolkit/consensus-fix.mdx",
+    "packages/consensus-fix/README.md",
+    "packages/consensus-fix/bin/consensus-fix.mjs",
+    "packages/consensus-fix/lib/format.mjs",
+    "packages/consensus-fix/test/bin.test.mjs",
+    "packages/consensus-fix/test/format.test.mjs"
+  ],
+  "spec": "When isDirty() throws in packages/consensus-fix/bin/consensus-fix.mjs (outside a git repo or when git is unavailable) and --allow-dirty was not passed, set dirtyCheckSkipped = true, emit a loud WARNING to stderr (and in formatReport), and surface summary.dirtyCheckSkipped in formatJson (--json). Update packages/consensus-fix/README.md to document dirtyCheckSkipped and qualify the Dirty-tree guard safety guarantee. Add unit and CLI tests in packages/consensus-fix/test/format.test.mjs and packages/consensus-fix/test/bin.test.mjs.",
+  "title": "consensus-fix: warn and surface dirtyCheckSkipped when dirty-tree guard cannot run (#601)",
+  "verify": "node --test packages/consensus-fix/test/bin.test.mjs packages/consensus-fix/test/format.test.mjs packages/consensus-fix/test/runner.test.mjs packages/consensus-fix/test/signal-docs.test.mjs"
+}
