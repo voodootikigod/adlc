@@ -386,7 +386,7 @@ export function renderUsage() {
     'Commands:',
     '  list | show <id>',
     '  create --input <path|-> [--write]',
-    '  update <id> --input <path|-> [--expect <ticket-hash>] [--write]',
+    '  update <id> --input <path|-> --expect <ticket-hash> [--force] [--write]',
     '  edit <id> [--write]',
     '  discard <id> [--write]',
     '  complete <id> [--write --authorize]',

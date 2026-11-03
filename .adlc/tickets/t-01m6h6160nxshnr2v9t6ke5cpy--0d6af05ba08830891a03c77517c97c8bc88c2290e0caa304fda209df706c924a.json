@@ -1,0 +1,13 @@
+{
+  "body": "Resolves #796.\n\n## Acceptance Criteria\n1. `renderUsage()` in `packages/tickets/lib/help.mjs` displays `  update <id> --input <path|-> --expect <ticket-hash> [--force] [--write]` so `--expect` is not shown as optional and `--force` is discoverable from top-level usage.\n2. Unit tests in `packages/tickets/test/help.test.mjs` verify that `renderUsage()` includes `update <id> --input <path|-> --expect <ticket-hash> [--force] [--write]`.",
+  "id": "T-01M6H6160NXSHNR2V9T6KE5CPY",
+  "rails": [
+    "packages/tickets/test/help.test.mjs"
+  ],
+  "scope": [
+    "packages/tickets/lib/help.mjs",
+    "packages/tickets/test/help.test.mjs"
+  ],
+  "title": "tickets: align top-level update usage line with --expect requirement and --force override (#796)",
+  "verify": "node --test packages/tickets/test/help.test.mjs packages/tickets/test/cli-help.test.mjs"
+}
