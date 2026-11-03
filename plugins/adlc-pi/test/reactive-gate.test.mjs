@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
 import {
   snapshotFile, restoreSnapshot, diffAddedLines, scanAddedLines,
-  parsePorcelain, listRailFiles,
+  parsePorcelain, unquoteGitPath, listRailFiles,
 } from '../lib/reactive-gate.mjs';
 import { createExtension } from '../lib/extension.mjs';
 
@@ -85,6 +85,78 @@ test('diffAddedLines: multiset difference with 1-based line numbers', () => {
 test('parsePorcelain: modified, untracked, renamed entries', () => {
   const files = parsePorcelain(' M src/a.ts\n?? new.txt\nR  old.txt -> renamed.txt\n');
   assert.deepEqual(files, ['src/a.ts', 'new.txt', 'renamed.txt']);
+});
+
+test("parsePorcelain & unquoteGitPath: decodes git C-escaped paths and quoted renames (#845)", () => {
+  // Non-quoted and boundary inputs pass through untouched
+  assert.equal(unquoteGitPath(null), "");
+  assert.equal(unquoteGitPath(""), "");
+  assert.equal(unquoteGitPath('"'), '"');
+  assert.equal(unquoteGitPath('""'), "");
+  assert.equal(unquoteGitPath("plain/path.ts"), "plain/path.ts");
+  assert.equal(unquoteGitPath('"unterminated'), '"unterminated');
+  assert.equal(unquoteGitPath('unstarted"'), 'unstarted"');
+
+  // Octal UTF-8 byte escapes: caf\303\251 -> café, \360\237\232\200 -> 🚀
+  assert.equal(unquoteGitPath('"test/contracts/caf\\303\\251.test.ts"'), "test/contracts/café.test.ts");
+  assert.equal(unquoteGitPath('"src/\\360\\237\\232\\200.ts"'), "src/🚀.ts");
+  // Octal boundary digits 0 and 7 (\060 = "0", \067 = "7", \177 = DEL)
+  assert.equal(unquoteGitPath('"src/\\060\\067\\177.ts"'), "src/07\x7f.ts");
+  // Non-octal digit after backslash (e.g. \8 or short \07) stays literal
+  assert.equal(unquoteGitPath('"src/\\800.ts"'), "src/\\800.ts");
+  assert.equal(unquoteGitPath('"src/\\080.ts"'), "src/\\080.ts");
+  assert.equal(unquoteGitPath('"src/\\008.ts"'), "src/\\008.ts");
+  assert.equal(unquoteGitPath('"src/\\07"'), "src/\\07");
+
+  // Standard single-char C escapes: \a, \b, \t, \n, \v, \f, \r, \", \\
+  assert.equal(
+    unquoteGitPath('"a\\ab\\bt\\tn\\nv\\vf\\fr\\r\\"q\\"\\\\end"'),
+    'a\x07b\x08t\tn\nv\x0bf\x0cr\r"q"\\end'
+  );
+  assert.equal(unquoteGitPath('"trailing\\n"'), "trailing\n");
+  assert.equal(unquoteGitPath('"trailing\\\\"'), "trailing\\"
+  );
+
+  // Porcelain lines with quoted paths and quoted rename source containing " -> "
+  const porcelain = [
+    ' M "test/contracts/caf\\303\\251.test.ts"',
+    '?? "src/has \\"quote\\" and \\\\slash.ts"',
+    'R  "old -> decoy/\\"arrow\\".ts" -> "test/contracts/new -> target\\303\\251.ts"',
+    'R  "old\\303\\251.ts" -> plain-new.ts',
+  ].join("\n");
+  assert.deepEqual(parsePorcelain(porcelain), [
+    "test/contracts/café.test.ts",
+    'src/has "quote" and \\slash.ts',
+    "test/contracts/new -> targeté.ts",
+    "plain-new.ts",
+  ]);
+});
+
+test("bash rail revert catches C-quoted non-ASCII rail filenames (#845)", async (t) => {
+  const root = makeRepo(t);
+  const nonAsciiRel = "test/contracts/café.test.ts";
+  const quotedRel = '"test/contracts/caf\\303\\251.test.ts"';
+  const railPath = join(root, "test", "contracts", "café.test.ts");
+  writeFileSync(railPath, "original non-ascii contract\n");
+
+  let mutated = false;
+  const { pi, ctx } = await boot(root, {
+    "git ls-files": `${quotedRel}\n`,
+    "git status --porcelain": () => (mutated ? ` M ${quotedRel}\n` : ""),
+  });
+
+  assert.deepEqual(
+    listRailFiles(root, TICKET, `${quotedRel}\n`, ""),
+    [nonAsciiRel, ".adlc/tickets.json", ".adlc/current-ticket.json"]
+  );
+
+  await pi.handlers.tool_call(bashCall("cp src/a.ts src/b.ts"), ctx);
+  writeFileSync(railPath, "clobbered non-ascii contract\n");
+  mutated = true;
+
+  const result = await pi.handlers.tool_result(bashResult(), ctx);
+  assert.equal(result.isError, true);
+  assert.equal(readFileSync(railPath, "utf8"), "original non-ascii contract\n");
 });
 
 test('snapshot/restore round-trip preserves exact pre-tool state', (t) => {

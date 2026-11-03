@@ -1,0 +1,13 @@
+{
+  "body": "Resolves #845.\n\n## Acceptance Criteria\n1. `parsePorcelain` in `plugins/adlc-pi/lib/reactive-gate.mjs` decodes git C-style quoted paths (octal UTF-8 byte escapes `\\ooo` and standard C escapes `\\\\`, `\\\"`, `\\t`, `\\n`, `\\r`, `\\a`, `\\b`, `\\f`, `\\v`) and handles quoted rename sources (`\"old\" -> \"new\"`) when `core.quotePath` is enabled.\n2. Unit tests in `plugins/adlc-pi/test/reactive-gate.test.mjs` verify C-escaped paths (including octal UTF-8 sequences, escaped quotes/backslashes/tabs, and quoted renames) are decoded accurately so rail and suppression checks match the real filesystem path.",
+  "id": "T-01M6H6176BGCF73MT9BMMVH4W1",
+  "rails": [
+    "plugins/adlc-pi/test/reactive-gate.test.mjs"
+  ],
+  "scope": [
+    "plugins/adlc-pi/lib/reactive-gate.mjs",
+    "plugins/adlc-pi/test/reactive-gate.test.mjs"
+  ],
+  "title": "plugin(adlc-pi): decode C-escaped git status --porcelain paths in parsePorcelain (#845)",
+  "verify": "node --test plugins/adlc-pi/test/reactive-gate.test.mjs"
+}
