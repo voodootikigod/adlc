@@ -161,16 +161,70 @@ export function mergeViolations(...lists) {
   return out;
 }
 
+const GIT_C_ESCAPES = {
+  a: 0x07,
+  b: 0x08,
+  t: 0x09,
+  n: 0x0a,
+  v: 0x0b,
+  f: 0x0c,
+  r: 0x0d,
+  '"': 0x22,
+  '\\': 0x5c,
+};
+
+/** Decode a git C-quoted path (when `core.quotePath` wraps non-ASCII/special paths in `"..."`). */
+export function unquoteGitPath(rawPath) {
+  const str = String(rawPath ?? "");
+  if (str.length < 2 || !str.startsWith('"') || !str.endsWith('"')) return str;
+  const inner = str.slice(1, -1);
+  const bytes = [];
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch === "\\" && i + 1 < inner.length) {
+      const next = inner[i + 1];
+      if (next >= "0" && next <= "7" && i + 3 < inner.length) {
+        const d2 = inner[i + 2];
+        const d3 = inner[i + 3];
+        if (d2 >= "0" && d2 <= "7" && d3 >= "0" && d3 <= "7") {
+          bytes.push(parseInt(next + d2 + d3, 8));
+          i += 3;
+          continue;
+        }
+      }
+      if (Object.hasOwn(GIT_C_ESCAPES, next)) {
+        bytes.push(GIT_C_ESCAPES[next]);
+        i += 1;
+        continue;
+      }
+    }
+    bytes.push(...Buffer.from(ch, "utf8"));
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
+function extractPorcelainTarget(entry) {
+  if (entry.startsWith('"')) {
+    for (let i = 1; i < entry.length; i++) {
+      if (entry[i] === "\\") { i += 1; continue; }
+      if (entry[i] === '"') {
+        if (entry.slice(i + 1, i + 5) === " -> ") return entry.slice(i + 5);
+        return entry;
+      }
+    }
+  }
+  const arrow = entry.indexOf(" -> ");
+  return arrow === -1 ? entry : entry.slice(arrow + 4);
+}
+
 /** Parse `git status --porcelain` output into repo-relative paths. */
 export function parsePorcelain(stdout) {
   const files = [];
-  for (const raw of String(stdout ?? '').split(/\r?\n/)) {
+  for (const raw of String(stdout ?? "").split(/\r?\n/)) {
     if (!raw.trim()) continue;
     // Format: XY <path> (or XY <old> -> <new> for renames — take the new side).
     const entry = raw.slice(3);
-    const arrow = entry.indexOf(' -> ');
-    const path = arrow === -1 ? entry : entry.slice(arrow + 4);
-    files.push(path.replace(/^"|"$/g, ''));
+    files.push(unquoteGitPath(extractPorcelainTarget(entry)));
   }
   return files;
 }
@@ -179,7 +233,7 @@ export function parsePorcelain(stdout) {
 export function fileStamp(root, path) {
   const abs = absPath(root, path);
   if (!existsSync(abs)) return null;
-  try { return sha256(readFileSync(abs)); } catch { return 'unreadable'; }
+  try { return sha256(readFileSync(abs)); } catch { return "unreadable"; }
 }
 
 /**
@@ -189,7 +243,7 @@ export function fileStamp(root, path) {
  */
 export function listRailFiles(root, ticket, lsFilesOut, statusOut) {
   const candidates = new Set([
-    ...String(lsFilesOut ?? '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
+    ...String(lsFilesOut ?? "").split(/\r?\n/).map((s) => unquoteGitPath(s.trim())).filter(Boolean),
     ...parsePorcelain(statusOut),
   ]);
   const rails = ticket?.rails ?? [];
