@@ -604,5 +604,15 @@ export function validateRegistry(raw, { adapters, path } = {}) {
   });
 
   if (violations.length > 0) throw new RegistryValidationError(violations, { path });
-  return Object.freeze(raw);
+  return deepFreeze(raw);
+}
+
+function deepFreeze(node) {
+  Object.freeze(node);
+  for (const value of Object.values(node)) {
+    if (isPlainObject(value) || Array.isArray(value)) {
+      deepFreeze(value);
+    }
+  }
+  return node;
 }
