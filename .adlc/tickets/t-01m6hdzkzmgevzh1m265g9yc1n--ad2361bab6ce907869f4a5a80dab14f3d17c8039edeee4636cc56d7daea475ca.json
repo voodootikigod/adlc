@@ -1,0 +1,15 @@
+{
+  "dependsOn": [],
+  "id": "T-01M6HDZKZMGEVZH1M265G9YC1N",
+  "rails": [
+    "packages/flail-detector/test/analyze.test.mjs",
+    "packages/flail-detector/test/record.test.mjs"
+  ],
+  "scope": [
+    "packages/flail-detector/bin/flail-detector.mjs",
+    "packages/flail-detector/test/cli.test.mjs"
+  ],
+  "spec": "In packages/flail-detector/bin/flail-detector.mjs, set process.exitCode = result.verdict === \"flail\" ? 2 : 0 at the end of the CLI instead of calling process.exit() immediately after printing so large piped --json output flushes completely without truncation (#625). Add a regression test in packages/flail-detector/test/cli.test.mjs.",
+  "title": "flail-detector: use process.exitCode so large piped --json output is not truncated (#625)",
+  "verify": "node --test packages/flail-detector/test/cli.test.mjs packages/flail-detector/test/analyze.test.mjs packages/flail-detector/test/record.test.mjs"
+}
