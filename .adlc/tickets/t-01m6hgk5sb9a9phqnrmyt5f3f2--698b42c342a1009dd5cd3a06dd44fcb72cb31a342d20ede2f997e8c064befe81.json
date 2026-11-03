@@ -9,5 +9,6 @@
     "plugins/adlc-gemini/hooks/adlc-rails-guard.mjs",
     "plugins/adlc-gemini/test/build-gate.test.mjs"
   ],
-  "title": "plugin(adlc-gemini): resolve pathless tool call tracking root in headless/--print mode (#829)"
+  "title": "plugin(adlc-gemini): resolve pathless tool call tracking root in headless/--print mode (#829)",
+  "completed": true
 }

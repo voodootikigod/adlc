@@ -10,5 +10,6 @@
     "packages/runner/test/runner.test.mjs",
     "packages/runner/test/cli-exit-codes.test.mjs"
   ],
-  "title": "runner: treat P4/P5/P6 content rejections as exit-2 gate rejections (operational: false) (#764)"
+  "title": "runner: treat P4/P5/P6 content rejections as exit-2 gate rejections (operational: false) (#764)",
+  "completed": true
 }

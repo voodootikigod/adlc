@@ -10,5 +10,6 @@
     "packages/gate-fuzzing/README.md",
     "packages/gate-fuzzing/test/bin.test.mjs"
   ],
-  "title": "gate-fuzzing: reject unimplemented --canary-budget, --behavioral-witness, and --triage flags (#645)"
+  "title": "gate-fuzzing: reject unimplemented --canary-budget, --behavioral-witness, and --triage flags (#645)",
+  "completed": true
 }

@@ -11,5 +11,6 @@
     "packages/context-handoff/cli-test/cli-unit-lock-auth.test.mjs",
     "packages/context-handoff/adapter-test/adapter-core.test.mjs"
   ],
-  "title": "context-handoff: harden readResumeAuth with fd-based O_NOFOLLOW/O_NONBLOCK/size-cap and surface bypass_grant_withheld (#610, #612)"
+  "title": "context-handoff: harden readResumeAuth with fd-based O_NOFOLLOW/O_NONBLOCK/size-cap and surface bypass_grant_withheld (#610, #612)",
+  "completed": true
 }
