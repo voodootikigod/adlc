@@ -1,0 +1,20 @@
+{
+  "criteria": [
+    "Given --write and --tickets pointing to <externalRoot>/.adlc/tickets.json outside cwd, when runPrune executes, then acquireLock and releaseLock are called with <externalRoot> so <externalRoot>/.adlc/tickets.lock guards the file being written.",
+    "Given --write and --tickets pointing to a legacy JSON file that is not named tickets.json inside a .adlc directory, when runPrune executes, then it returns ok: false with an error refusing to lock outside a canonical .adlc/tickets.json store."
+  ],
+  "id": "T-01M6HA3QPHEZBSA05GQQC6MJY4",
+  "intent": "Resolve #784: packages/ticket-prune/lib/run.mjs acquires and releases <cwd>/.adlc/tickets.lock even when --tickets points to an external legacy tickets.json file. Derive the legacy store root from absTicketsPath when it resides at <root>/.adlc/tickets.json, reject --write on legacy override paths outside a .adlc/tickets.json layout, and lock the target store root.",
+  "rails": [
+    "packages/ticket-prune/test/detect.test.mjs",
+    "packages/ticket-prune/test/store.test.mjs"
+  ],
+  "scope": [
+    "packages/ticket-prune/lib/run.mjs",
+    "packages/ticket-prune/test/run.test.mjs"
+  ],
+  "status": "ready",
+  "tier": "standard",
+  "title": "fix(ticket-prune): derive legacy --write lock root from absTicketsPath and reject non-canonical override paths",
+  "verify": "node --test packages/ticket-prune/test/run.test.mjs packages/ticket-prune/test/detect.test.mjs packages/ticket-prune/test/store.test.mjs"
+}

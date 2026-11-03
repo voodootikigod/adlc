@@ -4,7 +4,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { loadTickets } from '@adlc/core';
 import { classifyTicket, classifyTickets, ceremonyDisposition, listTrackedFiles } from './detect.mjs';
 import { acquireLock, releaseLock, readJson, stageJsonAtomic } from './store.mjs';
@@ -232,7 +232,16 @@ export function runTicketPrune(options = {}) {
     return { ok: true, baseRef, write, ceremony, inferScope, stale, active, archived: archivedEntries, needsCeremony, blocked };
   }
 
-  const locked = acquireLock(cwd);
+  const parentDir = dirname(absTicketsPath);
+  const isCanonicalStore = basename(absTicketsPath) === 'tickets.json' && basename(parentDir) === '.adlc';
+  const lockRoot = isCanonicalStore ? dirname(parentDir) : cwd;
+  if (!isCanonicalStore && lockRoot !== parentDir) {
+    return {
+      ok: false,
+      error: `refusing to --write legacy ticket file outside a canonical .adlc/tickets.json store: ${absTicketsPath}`,
+    };
+  }
+  const locked = acquireLock(lockRoot);
   if (!locked) {
     return {
       ok: false,
@@ -428,6 +437,6 @@ export function runTicketPrune(options = {}) {
 
     return { ok: true, baseRef, write, ceremony, inferScope, stale, active, tombstoned, ceremonyCompleted, needsCeremony };
   } finally {
-    releaseLock(cwd);
+    releaseLock(lockRoot);
   }
 }
