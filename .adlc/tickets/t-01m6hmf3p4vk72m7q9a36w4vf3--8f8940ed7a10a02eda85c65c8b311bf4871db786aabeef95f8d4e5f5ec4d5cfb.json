@@ -12,5 +12,6 @@
     "packages/model-ratchet/test/integration.test.mjs"
   ],
   "title": "model-ratchet: add --findings-exit-code and update eslint README example (#693)",
-  "verify": "node --test packages/model-ratchet/test/run-review.test.mjs packages/model-ratchet/test/integration.test.mjs packages/model-ratchet/test/score.test.mjs packages/model-ratchet/test/walk.test.mjs"
+  "verify": "node --test packages/model-ratchet/test/run-review.test.mjs packages/model-ratchet/test/integration.test.mjs packages/model-ratchet/test/score.test.mjs packages/model-ratchet/test/walk.test.mjs",
+  "completed": true
 }

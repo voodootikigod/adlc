@@ -9,5 +9,6 @@
     "packages/lesson-foundry/test/emit.test.mjs"
   ],
   "title": "lesson-foundry: fail closed in generated check script when grep errors or emits stderr (#675)",
-  "verify": "node --test packages/lesson-foundry/test/emit.test.mjs packages/lesson-foundry/test/route.test.mjs packages/lesson-foundry/test/cluster.test.mjs"
+  "verify": "node --test packages/lesson-foundry/test/emit.test.mjs packages/lesson-foundry/test/route.test.mjs packages/lesson-foundry/test/cluster.test.mjs",
+  "completed": true
 }
