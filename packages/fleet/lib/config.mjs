@@ -12,6 +12,7 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
+import { NEVER_EXEMPT } from './env-scrub.mjs';
 
 export const DEFAULTS = Object.freeze({
   concurrency: 2,
@@ -206,10 +207,39 @@ export function resolveRunConfig(config = {}, flags = {}) {
     else if (isPosInt(config.reviewMaxBytes)) warnings.push(`warning: .adlc/config.json fleet.reviewMaxBytes ${config.reviewMaxBytes} exceeds the maximum ${DEFAULTS.reviewMaxBytes} — using ${DEFAULTS.reviewMaxBytes}.`);
     else warnings.push(`warning: .adlc/config.json fleet.reviewMaxBytes is not a positive integer — using ${DEFAULTS.reviewMaxBytes}.`);
   }
+  let envPassthrough = [];
+  if (config.envPassthrough != null) {
+    if (Array.isArray(config.envPassthrough) && config.envPassthrough.every((v) => typeof v === 'string' && v.length > 0)) {
+      const kept = [];
+      for (const name of config.envPassthrough) {
+        if (NEVER_EXEMPT.has(name)) {
+          warnings.push(`SECURITY: .adlc/config.json fleet.envPassthrough included ${name}; never-exempt trust-root keys cannot be passed through — ignored.`);
+        } else {
+          kept.push(name);
+        }
+      }
+      envPassthrough = kept;
+    } else {
+      warnings.push('warning: .adlc/config.json fleet.envPassthrough must be an array of non-empty strings — ignored.');
+    }
+  }
+  let adlcBin = null;
+  if (config.adlcBin != null) {
+    if (typeof config.adlcBin === 'string' && config.adlcBin.length > 0) adlcBin = config.adlcBin;
+    else warnings.push('warning: .adlc/config.json fleet.adlcBin must be a non-empty string — ignored.');
+  }
+  let canary = true;
+  if (config.canary != null) {
+    if (typeof config.canary === 'boolean') canary = config.canary;
+    else warnings.push('warning: .adlc/config.json fleet.canary must be a boolean — using true.');
+  }
   return {
     gate: config.gate ?? null,
     init: config.init ?? null,
     allowedCommands: config.allowedCommands ?? [],
+    envPassthrough,
+    adlcBin,
+    canary,
     concurrency: flags.concurrency ?? config.concurrency ?? DEFAULTS.concurrency,
     base: flags.base ?? config.base ?? DEFAULTS.base,
     timeoutMinutes: config.timeoutMinutes ?? DEFAULTS.timeoutMinutes,
