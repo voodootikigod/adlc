@@ -160,3 +160,10 @@ test('different target or claimKind produces different hash (same diff)', () => 
   const h2 = normalizeAndHash({ target: 'gate-b', claimKind: 'kind-x', diff });
   assert.notEqual(h1, h2);
 });
+
+test('#642: validateCandidate and parseCandidates reject adversary-supplied witnessSource', () => {
+  const selfAttested = { ...VALID, witnessSource: 'contract-derived' };
+  const result = validateCandidate(selfAttested);
+  assert.equal(result.valid, false);
+  assert.equal(result.reason, 'invalid:malformed');
+});

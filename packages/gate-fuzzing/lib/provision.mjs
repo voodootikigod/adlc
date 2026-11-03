@@ -13,7 +13,7 @@ import {
   runGateSandboxed,
 } from './clone.mjs';
 import { substituteTokens } from './gate-adapter.mjs';
-import { checkOracle } from './oracle.mjs';
+import { checkOracle, deriveContractWitness } from './oracle.mjs';
 
 /**
  * Build a provisionFn bound to a repo root, sandbox type, and suite.
@@ -92,7 +92,9 @@ export function makeProvisionFn(opts) {
       // Oracle: contract-derived by default for contract gates; behavioral lens (b)
       // only when an approval fn is supplied.
       const oracleFn = (cand) => {
-        const witnessSource = cand.witnessSource ?? 'proposed';
+        const targetGate = suite.find((g) => g.name === cand.target);
+        const derived = targetGate ? deriveContractWitness(targetGate, cand, repoRoot, cloneDir) : null;
+        const witnessSource = derived ? derived.source : 'proposed';
         return checkOracle({
           candidate: cand,
           witnessSource,

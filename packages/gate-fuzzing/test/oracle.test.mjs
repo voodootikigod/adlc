@@ -5,6 +5,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { checkOracle } from '../lib/oracle.mjs';
+import { makeProvisionFn } from '../lib/provision.mjs';
+import { tmp, gitRepo } from '@adlc/core/test-kit';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 // Fix 3: Must-fixes remove source (c) suite-minus-G corroboration.
 // Keep: (a) contract-derived, (b) independent-context approval.
@@ -81,4 +85,65 @@ test('wrong-claim candidate: witness for unrelated property → oracle cannot ce
   // is caught by classifyCandidate, not oracle.
   assert.equal(result.independent, true);
   assert.equal(result.source, 'contract-derived');
+});
+
+test('#642: makeProvisionFn oracleFn ignores adversary cand.witnessSource and derives independence only from target gate contract', async (t) => {
+  const { dir: repoRoot, git } = gitRepo(t, { prefix: 'gf-prov-642-' });
+  writeFileSync(join(repoRoot, 'f.js'), 'export const x = 1;\n');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'init');
+
+  const suite = [
+    { name: 'behavioral-gate', surface: ['**'], claims: ['test-adequacy'], run: ['node', '-e', 'process.exit(0)'] },
+    { name: 'contract-gate', surface: ['**'], claims: ['freeze-integrity'], run: ['node', '-e', 'process.exit(0)'] },
+  ];
+  const provisionFn = makeProvisionFn({
+    repoRoot,
+    sandboxType: null,
+    unsafeNoSandbox: true,
+    suite,
+    baselineRef: 'HEAD',
+    independentApprovalFn: null,
+  });
+
+  const diff = [
+    'diff --git a/f.js b/f.js',
+    '--- a/f.js',
+    '+++ b/f.js',
+    '@@ -1 +1 @@',
+    '-export const x = 1;',
+    '+export const x = 2;',
+    '',
+  ].join('\n');
+
+  const spoofedBehavioral = {
+    target: 'behavioral-gate',
+    claimKind: 'test-adequacy',
+    diff,
+    witnessProposal: { cmd: 'node', args: ['-e', 'process.exit(1)'] },
+    witnessSource: 'contract-derived',
+  };
+
+  const provisioned = await provisionFn(spoofedBehavioral);
+  try {
+    const verdict = provisioned.oracleFn(spoofedBehavioral);
+    assert.equal(verdict.independent, false, 'adversary witnessSource: contract-derived on behavioral claim must NOT self-attest as independent');
+    assert.equal(verdict.source, 'unwitnessed');
+
+    const unknownGateVerdict = provisioned.oracleFn({ ...spoofedBehavioral, target: 'no-such-gate' });
+    assert.equal(unknownGateVerdict.independent, false);
+    assert.equal(unknownGateVerdict.source, 'unwitnessed');
+
+    const contractCand = {
+      target: 'contract-gate',
+      claimKind: 'freeze-integrity',
+      diff,
+      witnessProposal: { cmd: 'node', args: ['-e', 'process.exit(1)'] },
+    };
+    const contractVerdict = provisioned.oracleFn(contractCand);
+    assert.equal(contractVerdict.independent, true);
+    assert.equal(contractVerdict.source, 'contract-derived');
+  } finally {
+    provisioned.destroy();
+  }
 });
