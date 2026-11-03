@@ -9,7 +9,7 @@
 // mapped to a process exit code.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -94,4 +94,89 @@ test('CLI: --help lists every phase and every ticket-required phase, matching th
   for (const phase of ['p7']) {
     assert.doesNotMatch(r.stdout, new RegExp(`Ticket required:.*\\b${phase}\\b`), `--help must NOT list ${phase} as ticket-required`);
   }
+});
+
+test('CLI: a REJECTED p4 gate (missing railFiles hash snapshot) exits 2, not 1 (#764)', (t) => {
+  const dir = tmpAdlc(t);
+  appendManifestEntry({ gate: 'p4-build', ticket: 'T1' }, dir, { key: null });
+  appendManifestEntry({ gate: 'rails-check', ticket: 'T1', data: { railsDiffEmpty: true, suppressionsClean: true } }, dir, { key: null });
+  appendManifestEntry({ gate: 'flail-check', ticket: 'T1' }, dir, { key: null });
+  const r = spawnSync(process.execPath, [BIN, 'run', 'p4', '--dir', dir, '--ticket', 'T1'], { encoding: 'utf8' });
+  assert.equal(r.status, 2, `expected exit 2 (gate fails with reasons), got ${r.status}\n${r.stdout}${r.stderr}`);
+  assert.match(r.stderr, /evidence rejected/);
+  assert.match(r.stderr, /missing railFiles hash snapshot/);
+});
+
+test('CLI: a REJECTED p5 gate (stale worktree revision, stale ticket, transcript error, or incomplete p5-complete) exits 2, not 1 (#764)', (t) => {
+  const dir = tmpAdlc(t);
+  writeTicketDefinition(dir, 'T1');
+  appendManifestEntry({
+    gate: 'p5-complete',
+    ticket: 'T1',
+    revision: 'git-worktree:0000000000000000000000000000000000000000000000000000000000000000',
+  }, dir, { key: null });
+  const r = spawnSync(process.execPath, [BIN, 'run', 'p5', '--dir', dir, '--ticket', 'T1', '--json'], { encoding: 'utf8' });
+  assert.equal(r.status, 2, `expected exit 2, got ${r.status}\n${r.stdout}${r.stderr}`);
+  const parsed = JSON.parse(r.stdout);
+  assert.equal(parsed.operational, false);
+  assert.equal(parsed.ok, false);
+  assert.ok(parsed.errors.some((e) => e.includes('P5 evidence is stale')));
+
+  const rPinned = spawnSync(process.execPath, [
+    BIN, 'run', 'p5', '--dir', dir, '--ticket', 'T1',
+    '--revision', 'git-worktree:0000000000000000000000000000000000000000000000000000000000000000',
+  ], { encoding: 'utf8' });
+  assert.equal(rPinned.status, 2, `expected exit 2, got ${rPinned.status}\n${rPinned.stdout}${rPinned.stderr}`);
+  assert.match(rPinned.stderr, /evidence rejected/);
+});
+
+test('CLI: a REJECTED p6 gate (incomplete p6-acceptance-packet) exits 2, not 1 (#764)', async (t) => {
+  const dir = tmpAdlc(t);
+  const rev = 'git-worktree:1111111111111111111111111111111111111111111111111111111111111111';
+  const { sha256 } = await import('@adlc/core');
+  const { ticketHash: domainTicketHash } = await import('@adlc/tickets');
+  const tDef = { id: 'T1', title: 'T1 fixture', scope: ['src/**'], rails: ['test/**'], edges: [] };
+  writeFileSync(join(dir, 'tickets.json'), JSON.stringify({ tickets: [tDef] }));
+  const transcriptPath = join(dir, 'T1-p5-review.txt');
+  const promptPath = join(dir, 'T1-p5-prompt.txt');
+  const inputsPath = join(dir, 'T1-p5-inputs.txt');
+  writeFileSync(transcriptPath, [
+    'ticket: T1',
+    `reviewed revision: ${rev}`,
+    'review transcript fixture with enough detail to be accepted as evidence',
+    'review transcript fixture with enough detail to be accepted as evidence',
+  ].join('\n'));
+  writeFileSync(promptPath, `review prompt for T1 at ${rev}\n`);
+  writeFileSync(inputsPath, `reviewed inputs for T1 at ${rev}\n`);
+  const dryLenses = ['security', 'correctness', 'tests'];
+  dryLenses.forEach((lens, index) => {
+    const pass = index + 1;
+    appendManifestEntry({ type: 'p5-dry-pass', ticket: 'T1', revision: rev, pass, lens, consecutiveDry: pass }, dir, { key: null });
+    appendManifestEntry({ type: 'p5-pass-completed', ticket: 'T1', revision: rev, pass, lens, dry: true, verified: 0, killed: 0, needsHuman: 0, consecutiveDry: pass }, dir, { key: null });
+  });
+  appendManifestEntry({
+    type: 'p5-complete',
+    ticket: 'T1',
+    revision: rev,
+    pass: dryLenses.length,
+    consecutiveDry: dryLenses.length,
+    provenance: { reviewer: 'fixture-reviewer', command: 'fixture review command', transcript: transcriptPath },
+    transcript: { path: transcriptPath, hash: sha256(readFileSync(transcriptPath)) },
+    reviewPacket: {
+      prompt: { path: promptPath, hash: sha256(readFileSync(promptPath)) },
+      inputs: { path: inputsPath, hash: sha256(readFileSync(inputsPath)) },
+      cleanWorktree: rev,
+    },
+    dryLenses,
+    ticketHash: domainTicketHash(tDef),
+  }, dir, { key: null });
+  appendManifestEntry({
+    type: 'p6-acceptance-packet',
+    ticket: 'T1',
+    revision: rev,
+  }, dir, { key: null });
+  const r = spawnSync(process.execPath, [BIN, 'run', 'p6', '--dir', dir, '--ticket', 'T1', '--revision', rev], { encoding: 'utf8' });
+  assert.equal(r.status, 2, `expected exit 2, got ${r.status}\n${r.stdout}${r.stderr}`);
+  assert.match(r.stderr, /evidence rejected/);
+  assert.match(r.stderr, /missing packet path/);
 });

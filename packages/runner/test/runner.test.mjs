@@ -291,7 +291,7 @@ describe('assertPhase', () => {
     ]);
     const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
     assert.equal(result.ok, false);
-    assert.equal(result.operational, true);
+    assert.equal(result.operational, false);
     assert.ok(result.errors.some((error) => error.includes('missing railFiles hash snapshot')));
   });
 
@@ -301,7 +301,7 @@ describe('assertPhase', () => {
     writeFileSync(railPath, 'test("rail", () => { throw new Error("changed"); });\n');
     const result = assertPhase('p4', { dir, ticket: 'T1', cwd });
     assert.equal(result.ok, false);
-    assert.equal(result.operational, true);
+    assert.equal(result.operational, false);
     assert.ok(result.errors.some((error) => error.includes('rail file hash changed')));
   });
 
@@ -341,7 +341,7 @@ describe('assertPhase', () => {
     }]);
     const result = assertPhase('p5', { dir, ticket: 'T1' });
     assert.equal(result.ok, false);
-    assert.equal(result.operational, true);
+    assert.equal(result.operational, false);
     assert.ok(result.errors.some((error) => error.includes('missing provenance')));
     assert.ok(result.errors.some((error) => error.includes('missing transcript')));
     assert.ok(result.errors.some((error) => error.includes('missing reviewPacket')));
@@ -354,7 +354,7 @@ describe('assertPhase', () => {
     writeP5Evidence(dir, { revision });
     const result = assertPhase('p5', { dir, ticket: 'T1' });
     assert.equal(result.ok, false);
-    assert.equal(result.operational, true);
+    assert.equal(result.operational, false);
     assert.ok(result.errors.some((error) => error.includes('unresolved p5-finding-verified F1')));
   });
 
@@ -394,7 +394,7 @@ describe('assertPhase', () => {
     writeP5Evidence(dir, { revision });
     const result = assertPhase('p5', { dir, ticket: 'T1' });
     assert.equal(result.ok, false);
-    assert.equal(result.operational, true);
+    assert.equal(result.operational, false);
     assert.ok(result.errors.some((error) => error.includes('unresolved p5-finding-verified F1')));
   });
 
@@ -406,7 +406,7 @@ describe('assertPhase', () => {
     writeP5Finding(dir, { type: 'p5-finding-killed', revision, id: 'F1' });
     const result = assertPhase('p5', { dir, ticket: 'T1' });
     assert.equal(result.ok, false);
-    assert.equal(result.operational, true);
+    assert.equal(result.operational, false);
     assert.ok(result.errors.some((error) => error.includes('unresolved p5-finding-verified F1')));
   });
 
@@ -495,7 +495,7 @@ describe('assertPhase', () => {
 
     const result = assertPhase('p6', { dir, ticket: 'T1', revision });
     assert.equal(result.ok, false);
-    assert.equal(result.operational, true);
+    assert.equal(result.operational, false);
     assert.ok(result.errors.some((error) => error.includes('missing packet path')));
     assert.ok(result.errors.some((error) => error.includes('missing packetHash')));
   });
@@ -778,11 +778,11 @@ describe('assertPhase', () => {
     assert.ok(pinnedRecorded.errors.some((error) => error.includes('ticket definition changed')));
     const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
     assert.equal(result.ok, false);
-    assert.equal(result.operational, true);
+    assert.equal(result.operational, false);
     assert.ok(result.errors.some((error) => error.includes('ticket definition changed')));
     const pinned = assertPhase('p6', { dir, ticket: 'T1', revision, cwd: repo.dir });
     assert.equal(pinned.ok, false);
-    assert.equal(pinned.operational, true);
+    assert.equal(pinned.operational, false);
     assert.ok(pinned.errors.some((error) => error.includes('ticket definition changed')));
   });
 
@@ -806,11 +806,11 @@ describe('assertPhase', () => {
     rmSync(packet, { force: true });
     const p5 = assertPhase('p5', { dir, ticket: 'T1', cwd: repo.dir });
     assert.equal(p5.ok, false);
-    assert.equal(p5.operational, true);
+    assert.equal(p5.operational, false);
     assert.ok(p5.errors.some((error) => error.includes('ticket definition was not bound')));
     const p6 = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
     assert.equal(p6.ok, false);
-    assert.equal(p6.operational, true);
+    assert.equal(p6.operational, false);
     assert.ok(p6.errors.some((error) => error.includes('ticket definition was not bound')));
   });
 
@@ -845,11 +845,11 @@ describe('assertPhase', () => {
     assert.ok(recorded.errors.some((error) => error.includes('transcript hash changed')));
     const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
     assert.equal(result.ok, false);
-    assert.equal(result.operational, true);
+    assert.equal(result.operational, false);
     assert.ok(result.errors.some((error) => error.includes('transcript hash changed')));
     const pinned = assertPhase('p6', { dir, ticket: 'T1', revision, cwd: repo.dir });
     assert.equal(pinned.ok, false);
-    assert.equal(pinned.operational, true);
+    assert.equal(pinned.operational, false);
     assert.ok(pinned.errors.some((error) => error.includes('transcript hash changed')));
   });
 
@@ -948,7 +948,7 @@ describe('assertPhase', () => {
     assert.ok(staleRecorded.errors.some((error) => error.includes('transcript hash changed')));
     const stalePhase = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
     assert.equal(stalePhase.ok, false);
-    assert.equal(stalePhase.operational, true);
+    assert.equal(stalePhase.operational, false);
     assert.ok(stalePhase.errors.some((error) => error.includes('transcript hash changed')));
   });
 
@@ -992,7 +992,7 @@ describe('assertPhase', () => {
 
     const result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
     assert.equal(result.ok, false);
-    assert.equal(result.operational, true);
+    assert.equal(result.operational, false);
     assert.ok(result.errors.some((error) => error.includes('P5 evidence is stale')));
     const pinned = assertPhase('p6', { dir, ticket: 'T1', revision, cwd: repo.dir });
     assert.equal(pinned.ok, true);
@@ -1010,7 +1010,7 @@ describe('assertPhase', () => {
 
     const implicit = assertPhase('p5', { dir, ticket: 'T1', cwd: repo.dir });
     assert.equal(implicit.ok, false);
-    assert.equal(implicit.operational, true);
+    assert.equal(implicit.operational, false);
     assert.ok(implicit.errors.some((error) => error.includes('P5 evidence is stale')));
 
     const pinned = assertPhase('p5', { dir, ticket: 'T1', revision, cwd: repo.dir });
@@ -1168,7 +1168,7 @@ describe('assertPhase', () => {
     // assertPhase p5 should fail without explicit revision
     const p5Result = assertPhase('p5', { dir, ticket: 'T1', cwd: repo.dir });
     assert.equal(p5Result.ok, false);
-    assert.equal(p5Result.operational, true);
+    assert.equal(p5Result.operational, false);
     assert.ok(p5Result.errors.some((error) => error.includes('P5 evidence is stale')));
 
     // Explicit revision still acts as an offline selector
@@ -1184,7 +1184,7 @@ describe('assertPhase', () => {
     // assertPhase p6 should fail without explicit revision
     const p6Result = assertPhase('p6', { dir, ticket: 'T1', cwd: repo.dir });
     assert.equal(p6Result.ok, false);
-    assert.equal(p6Result.operational, true);
+    assert.equal(p6Result.operational, false);
     assert.ok(p6Result.errors.some((error) => error.includes('P5 evidence is stale')));
   });
 });

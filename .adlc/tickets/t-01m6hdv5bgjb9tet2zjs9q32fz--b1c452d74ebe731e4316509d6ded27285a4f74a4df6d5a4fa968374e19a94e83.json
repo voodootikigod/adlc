@@ -1,4 +1,5 @@
 {
+  "completed": true,
   "dependsOn": [],
   "id": "T-01M6HDV5BGJB9TET2ZJS9Q32FZ",
   "rails": [
@@ -11,6 +12,5 @@
   ],
   "spec": "Add sanitizeCandidateEnv(baseEnv = process.env) in packages/gate-fuzzing/lib/sandbox.mjs that returns a scrubbed copy of baseEnv omitting ADLC_* control variables and secret-bearing variable names (*_API_KEY, *_KEY, *_SECRET, *SECRET, *_TOKEN, *TOKEN, *PASSWORD*, AWS_*, GOOGLE_*, GCP_*, AZURE_*, GH_*, GITHUB_TOKEN, *CREDENTIAL*, NPM_TOKEN). Default both spawnSandboxed and spawnCandidateCmd (--unsafe-no-sandbox branch) to sanitizeCandidateEnv() when no explicit env option is passed. Add unit tests in packages/gate-fuzzing/test/sandbox.test.mjs.",
   "title": "gate-fuzzing: scrub ADLC_* and secret env vars before spawning candidate setup/witness commands (#648)",
-  "verify": "node --test packages/gate-fuzzing/test/sandbox.test.mjs packages/gate-fuzzing/test/controls.test.mjs packages/gate-fuzzing/test/isolation.test.mjs",
-  "completed": true
+  "verify": "node --test packages/gate-fuzzing/test/sandbox.test.mjs packages/gate-fuzzing/test/controls.test.mjs packages/gate-fuzzing/test/isolation.test.mjs"
 }

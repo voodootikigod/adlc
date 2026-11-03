@@ -483,7 +483,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
   if (requiresRevision(phase) && assertedRevisionForLiveCheck && liveWorktreeRevision && assertedRevisionForLiveCheck !== liveWorktreeRevision) {
     return {
       ok: false,
-      operational: true,
+      operational: false,
       phase,
       ticket,
       revision: assertedRevisionForLiveCheck,
@@ -494,7 +494,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
   if (requiresRevision(phase) && ticketStaleError) {
     return {
       ok: false,
-      operational: true,
+      operational: false,
       phase,
       ticket,
       revision: p5Revision ?? currentRevision,
@@ -505,7 +505,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
   if (requiresRevision(phase) && transcriptErrors.length > 0) {
     return {
       ok: false,
-      operational: true,
+      operational: false,
       phase,
       ticket,
       revision: p5Revision ?? currentRevision,
@@ -516,7 +516,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
   if (requiresRevision(phase) && p5CompletionErrors.length > 0) {
     return {
       ok: false,
-      operational: true,
+      operational: false,
       phase,
       ticket,
       revision: p5Revision ?? currentRevision,
@@ -538,7 +538,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
   // operational: false — an unresolved gap, a rejected verdict, or stale
   // evidence is a normal, expected GATE rejection with concrete reasons
   // (exit 2), not an infrastructure failure that couldn't be evaluated at
-  // all (exit 1). Codex cross-model review, round 4: the CLI's opError-on-
+  // all (exit 1). Codex cross-model review, round 4 + #764: the CLI's opError-on-
   // operational path exits 1 for these, which misreports a fixable content
   // problem as an outage to any automation branching on exit code.
   const p1Errors = phase === 'p1'
@@ -568,7 +568,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
   if (p6Errors.length > 0) {
     return {
       ok: false,
-      operational: true,
+      operational: false,
       phase,
       ticket,
       revision: resolvedRevision,
@@ -579,7 +579,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
   if (p4Errors.length > 0) {
     return {
       ok: false,
-      operational: true,
+      operational: false,
       phase,
       ticket,
       revision: resolvedRevision,
