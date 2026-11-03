@@ -140,6 +140,9 @@ export function validateCandidate(parsed, allowedPaths) {
   }
   const allowedSet = new Set(allowedPaths);
   for (const change of parsed.changes) {
+    if (!change || typeof change !== 'object') {
+      return { valid: false, reason: 'each change must be an object' };
+    }
     if (typeof change.file !== 'string' || !Array.isArray(change.hunks)) {
       return { valid: false, reason: 'each change must have a string "file" and an array "hunks"' };
     }
