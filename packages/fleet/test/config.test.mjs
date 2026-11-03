@@ -86,3 +86,51 @@ test('gate/init/allowedCommands pass through from config', () => {
   assert.equal(c.init, 'npm ci');
   assert.deepEqual(c.allowedCommands, ['node x']);
 });
+
+test('envPassthrough, adlcBin, and canary plumb through resolveRunConfig with validation (#639)', () => {
+  const defaults = resolveRunConfig({}, {});
+  assert.deepEqual(defaults.envPassthrough, []);
+  assert.equal(defaults.adlcBin, null);
+  assert.equal(defaults.canary, true);
+
+  const configured = resolveRunConfig({
+    envPassthrough: ['X', 'CUSTOM_VAR'],
+    adlcBin: 'a',
+    canary: false,
+  }, {});
+  assert.deepEqual(configured.envPassthrough, ['X', 'CUSTOM_VAR']);
+  assert.equal(configured.adlcBin, 'a');
+  assert.equal(configured.canary, false);
+  assert.deepEqual(configured.warnings, []);
+
+  // Explicit canary: true
+  assert.equal(resolveRunConfig({ canary: true }, {}).canary, true);
+
+  // NEVER_EXEMPT keys (ADLC_MANIFEST_KEY) in envPassthrough are stripped with a SECURITY warning
+  const withNeverExempt = resolveRunConfig({
+    envPassthrough: ['SAFE_VAR', 'ADLC_MANIFEST_KEY'],
+  }, {});
+  assert.deepEqual(withNeverExempt.envPassthrough, ['SAFE_VAR']);
+  assert.ok(withNeverExempt.warnings.some((w) => /SECURITY:.*fleet\.envPassthrough.*ADLC_MANIFEST_KEY/.test(w)));
+
+  // Malformed envPassthrough warns and falls back to []
+  for (const bad of ['NOT_AN_ARRAY', [123], ['']]) {
+    const r = resolveRunConfig({ envPassthrough: bad }, {});
+    assert.deepEqual(r.envPassthrough, []);
+    assert.ok(r.warnings.some((w) => /fleet\.envPassthrough must be an array of non-empty strings/.test(w)));
+  }
+
+  // Malformed adlcBin warns and falls back to null
+  for (const bad of ['', 42, false]) {
+    const r = resolveRunConfig({ adlcBin: bad }, {});
+    assert.equal(r.adlcBin, null);
+    assert.ok(r.warnings.some((w) => /fleet\.adlcBin must be a non-empty string/.test(w)));
+  }
+
+  // Malformed canary warns and falls back to true
+  for (const bad of ['false', 0, {}]) {
+    const r = resolveRunConfig({ canary: bad }, {});
+    assert.equal(r.canary, true);
+    assert.ok(r.warnings.some((w) => /fleet\.canary must be a boolean/.test(w)));
+  }
+});
