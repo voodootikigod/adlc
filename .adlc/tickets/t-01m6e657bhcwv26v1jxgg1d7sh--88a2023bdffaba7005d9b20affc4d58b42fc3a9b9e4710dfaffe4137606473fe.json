@@ -1,0 +1,16 @@
+{
+  "body": "## Context\nResolves #695.\n`runReviewCmd` in `packages/model-ratchet/lib/run-review.mjs` drops `result.error` (such as `ENOENT` or `maxBuffer` exceeded) so `reviewRunError` collapses spawn failures into `review-cmd exited with code 1`, and `packages/model-ratchet/bin/model-ratchet.mjs` ignores `result.stderr` when parsing findings and reporting operational errors.\n\n## Acceptance Criteria\n- Propagate non-timeout spawn errors (`spawnError`) from `runReviewCmd` and distinguish them in `reviewRunError` (`review-cmd failed to run: <error>`) and include trimmed `stderr` detail when a review command exits with a non-0/non-2 code.\n- Scan both `stdout` and `stderr` for findings in `packages/model-ratchet/bin/model-ratchet.mjs` when `review-cmd` succeeds (exit 0 or 2).\n\n## Verify\n`node --test packages/model-ratchet/test/run-review.test.mjs packages/model-ratchet/test/integration.test.mjs`",
+  "duration": 15,
+  "id": "T-01M6E657BHCWV26V1JXGG1D7SH",
+  "rails": [
+    "packages/model-ratchet/test/review-timeout.test.mjs",
+    "packages/model-ratchet/test/empty-selection.test.mjs"
+  ],
+  "scope": [
+    "packages/model-ratchet/lib/run-review.mjs",
+    "packages/model-ratchet/bin/model-ratchet.mjs",
+    "packages/model-ratchet/test/run-review.test.mjs",
+    "packages/model-ratchet/test/integration.test.mjs"
+  ],
+  "title": "model-ratchet: surface review-cmd spawn errors and stderr findings (#695)"
+}

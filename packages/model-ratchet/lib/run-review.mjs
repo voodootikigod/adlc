@@ -107,12 +107,15 @@ export function runReviewCmd(reviewCmd, file, cwd, { timeoutMs = DEFAULT_REVIEW_
     killSignal: 'SIGKILL',
     ...(cwd ? { cwd } : {}),
   });
+  const timedOut = result.error?.code === 'ETIMEDOUT';
+  const spawnError = (!timedOut && result.error !== undefined) ? result.error.message : null;
   return {
     stdout: result.stdout ?? '',
     stderr: result.stderr ?? '',
     exitCode: result.status ?? 1,
-    timedOut: result.error?.code === 'ETIMEDOUT',
+    timedOut,
     signal: result.signal ?? null,
+    ...(spawnError !== null ? { spawnError } : {}),
   };
 }
 
@@ -126,8 +129,12 @@ export function runReviewCmd(reviewCmd, file, cwd, { timeoutMs = DEFAULT_REVIEW_
  */
 export function reviewRunError(result, timeoutMs) {
   if (result.timedOut) return `review-cmd timed out after ${timeoutMs}ms`;
+  if (result.spawnError !== undefined && result.spawnError !== null) return `review-cmd failed to run: ${result.spawnError}`;
   if (result.signal) return `review-cmd was killed by ${result.signal}`;
-  if (result.exitCode !== 0 && result.exitCode !== 2) return `review-cmd exited with code ${result.exitCode}`;
+  if (result.exitCode !== 0 && result.exitCode !== 2) {
+    const errDetail = (result.stderr ?? "").trim();
+    return errDetail !== "" ? `review-cmd exited with code ${result.exitCode}: ${errDetail}` : `review-cmd exited with code ${result.exitCode}`;
+  }
   return null;
 }
 
