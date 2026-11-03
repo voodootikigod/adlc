@@ -113,13 +113,16 @@ export function readOwnManifestChain(dir = ADLC_DIR, { cwd = process.cwd() } = {
     };
   };
 
-  const segments = discoverSegments(dir).valid;
+  const discovered = discoverSegments(dir);
+  const segments = discovered.valid;
 
   // Checked BEFORE recoverOpenSegment, because that function answers this case
   // with `null` — the same value it uses for the genuinely benign "this branch
   // simply has no segment yet". A catch cannot tell them apart, so the
-  // distinction has to be drawn here.
-  if (segments.length > 0 && currentBranch(cwd) === null) {
+  // distinction has to be drawn here. Include discovered.invalid (#654) so a
+  // detached checkout where manifest.d/ holds only non-conforming or renamed
+  // objects refuses instead of returning root-only with identityError: null.
+  if ((segments.length > 0 || discovered.invalid.length > 0) && currentBranch(cwd) === null) {
     return refuse(
       'detached HEAD has no branch identity to recover by, and committed segments exist '
       + '— refusing to treat them as absent'

@@ -1,0 +1,15 @@
+{
+  "duration": 2,
+  "edges": [],
+  "id": "T-01M6H2ENGVZKEHZK84H3XVRPKR",
+  "rails": [
+    "packages/gate-manifest/test/own-chain.test.mjs"
+  ],
+  "scope": [
+    "packages/gate-manifest/lib/own-chain.mjs",
+    "packages/gate-manifest/test/own-chain.test.mjs"
+  ],
+  "spec": "Include discoverSegments(dir).invalid.length in the detached-HEAD refusal condition in readOwnManifestChain (packages/gate-manifest/lib/own-chain.mjs) so a detached checkout where manifest.d/ contains only invalid/renamed objects refuses with identityError instead of falling back to root-only.",
+  "title": "fix(gate-manifest): refuse detached HEAD when manifest.d holds only invalid segment objects (#654)",
+  "verify": "node --test packages/gate-manifest/test/own-chain.test.mjs"
+}

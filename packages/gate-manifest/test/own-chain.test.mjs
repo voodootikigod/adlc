@@ -242,6 +242,22 @@ describe('readOwnManifestChain: a detached HEAD cannot be read as "no segment"',
       assert.deepEqual(gates(result), ['r1', 'r2']);
     } finally { clean(root); }
   });
+
+  it('refuses when HEAD is detached and manifest.d holds only invalid segment objects (#654)', () => {
+    const { root, dir } = repo();
+    try {
+      writeRoot(dir, [{ gate: 'r1' }]);
+      activateSegments(dir);
+      writeFileSync(join(dir, 'manifest.d', 'renamed-segment.jsonl'), JSON.stringify({ seq: 1, gate: 'hidden' }) + '\n');
+      const g = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      g('checkout', '-q', '--detach', 'HEAD');
+
+      const result = readOwnManifestChain(dir, { cwd: root });
+      assert.match(result.identityError, /detached HEAD has no branch identity/);
+      assert.deepEqual(gates(result), []);
+      assert.equal(result.ownSegment, null);
+    } finally { clean(root); }
+  });
 });
 
 describe('readOwnManifestChain: ancestry is walked, not assumed flat', () => {
