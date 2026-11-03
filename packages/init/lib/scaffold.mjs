@@ -6,8 +6,10 @@ import {
   openSync,
   readFileSync,
   realpathSync,
+  renameSync,
   writeFileSync,
 } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { dirname, join, relative, resolve } from 'node:path';
 import { isPlainObject } from '@adlc/core';
 import { ACTIVE_DIRECTORY, ARCHIVE_DIRECTORY, LEGACY_FILE, LegacyTicketStore, activeDirectoryStore, archiveDirectoryStore, initializeTicketStores } from '@adlc/tickets';
@@ -279,17 +281,20 @@ function rejectSymlinkComponents(root, relativePath) {
 
 function writeFileNoFollow(path, content, { exclusive = false } = {}) {
   const noFollow = constants.O_NOFOLLOW ?? 0;
-  const flags = exclusive
-    ? constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollow
-    : constants.O_WRONLY | constants.O_TRUNC | noFollow;
-  const descriptor = openSync(path, flags, 0o666);
+  const createFlags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollow;
+  const writeTarget = exclusive
+    ? path
+    : `${path}.tmp-${process.pid}-${randomUUID()}`;
+  const descriptor = openSync(writeTarget, createFlags, 0o666);
   try {
     writeFileSync(descriptor, content);
   } finally {
     closeSync(descriptor);
   }
+  if (!exclusive) {
+    renameSync(writeTarget, path);
+  }
 }
-
 /**
  * Write .adlc/config.json fresh, or — when it already exists and `harness`
  * is explicitly given — reconcile just that one harness into it (round-6/7

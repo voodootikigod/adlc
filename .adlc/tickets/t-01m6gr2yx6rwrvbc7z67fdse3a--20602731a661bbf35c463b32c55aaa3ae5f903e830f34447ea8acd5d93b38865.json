@@ -1,0 +1,19 @@
+{
+  "acceptance": [
+    "writeFileNoFollow with exclusive: false writes to a sibling temporary file with O_NOFOLLOW/O_EXCL and renames it into place so existing files (.gitignore, .adlc/config.json) are never truncated in-place",
+    "if the write fails mid-flight, the temporary file is cleaned up and the pre-existing file remains intact"
+  ],
+  "dependsOn": [],
+  "duration": 15,
+  "id": "T-01M6GR2YX6RWRVBC7Z67FDSE3A",
+  "rails": [
+    "packages/init/test/gitignore-parity.test.mjs",
+    "packages/init/test/gitignore-manifest.test.mjs"
+  ],
+  "scope": [
+    "packages/init/lib/scaffold.mjs",
+    "packages/init/test/scaffold.test.mjs"
+  ],
+  "title": "init: rewrite existing .gitignore atomically via temp file + rename (#668)",
+  "verify": "node --test packages/init/test/scaffold.test.mjs packages/init/test/gitignore-parity.test.mjs packages/init/test/gitignore-manifest.test.mjs"
+}
