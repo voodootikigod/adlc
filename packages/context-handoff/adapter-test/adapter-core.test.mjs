@@ -21,6 +21,7 @@ import {
   ensureDenyMarker,
   writeDenyRecord,
   writeResumeAuth,
+  writeBypassGrant,
   HANDOFF_DEPTH,
   WARN_DEPTH,
 } from '@adlc/context-handoff';
@@ -811,5 +812,62 @@ test('the marker records the host the adapter reports', () => {
     const marker = join(root, '.adlc', 'handoffs', 'denies', 'host-sess.json');
     assert.equal(existsSync(marker), true);
     assert.match(readFileSync(marker, 'utf8'), /"host": "opencode"/);
+  });
+});
+
+test('when a verified bypass grant is withheld due to incomplete_scan_lower_bound or a protected path, bypass_grant_withheld:non_bypassable_reason is reported and the grant is not spent (#612)', () => {
+  withRepo((root) => {
+    const key = 'a'.repeat(64);
+    const written = writeBypassGrant(root, 'sess-withheld', {}, { key });
+    assert.equal(written.ok, true);
+
+    // 1. Withheld due to incomplete_scan_lower_bound:
+    const rScan = evaluateHandoffPreToolUse({
+      root,
+      sessionId: 'sess-withheld',
+      observed: { depth: 1 },
+      scanTruncated: true,
+      manifestKey: key,
+      host: 'test',
+    });
+    assert.equal(rScan.deny, true);
+    assert.ok(rScan.reasons.includes('incomplete_scan_lower_bound'), rScan.reasons.join());
+    assert.ok(rScan.reasons.includes('bypass_grant_withheld:non_bypassable_reason'), rScan.reasons.join());
+
+    // 2. Unverified or absent grant does NOT emit bypass_grant_withheld:non_bypassable_reason:
+    const rNoKey = evaluateHandoffPreToolUse({
+      root,
+      sessionId: 'sess-withheld',
+      observed: { depth: 1 },
+      scanTruncated: true,
+      host: 'test',
+    });
+    assert.equal(rNoKey.deny, true);
+    assert.ok(!rNoKey.reasons.includes('bypass_grant_withheld:non_bypassable_reason'), rNoKey.reasons.join());
+
+    // 3. Withheld due to protected path:
+    const rProtected = evaluateHandoffPreToolUse({
+      root,
+      sessionId: 'sess-withheld',
+      observed: { depth: 1 },
+      editRelPaths: ['.adlc/handoffs/denies/sess-withheld.json'],
+      manifestKey: key,
+      host: 'test',
+    });
+    assert.equal(rProtected.deny, true);
+    assert.ok(rProtected.reasons.includes('bypass_grant_withheld:non_bypassable_reason'), rProtected.reasons.join());
+    assert.ok(rProtected.reasons.some((x) => x.startsWith('path_protected:')), rProtected.reasons.join());
+
+    // 4. And because the grant was withheld rather than spent, an ordinary complete-scan edit next consumes it:
+    ensureDenyMarker(root, { sessionId: 'sess-withheld', ticketId: 'T1', contentHash: 'h1', host: 'test' });
+    const rClaimed = evaluateHandoffPreToolUse({
+      root,
+      sessionId: 'sess-withheld',
+      observed: { depth: 1 },
+      editRelPaths: ['src/app.mjs'],
+      manifestKey: key,
+      host: 'test',
+    });
+    assert.equal(rClaimed.deny, false, `unspent grant must clear D2 on the next valid edit: ${rClaimed.reasons.join()}`);
   });
 });
