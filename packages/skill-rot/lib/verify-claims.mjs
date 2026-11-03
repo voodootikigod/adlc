@@ -8,8 +8,8 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { resolve, join, relative, isAbsolute } from 'node:path';
 
 /**
  * Verify a single claim.
@@ -61,6 +61,17 @@ function verifyCommand(cmd, repoRoot) {
  * Verify a repo-relative file path exists.
  * Check from repo root first, then relative to skill dir.
  */
+function isContainedWithin(candidate, root) {
+  const rel = relative(resolve(root), resolve(candidate));
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function isRealpathContained(candidate, root) {
+  const realCandidate = realpathSync(candidate);
+  const realRoot = realpathSync(root);
+  return isContainedWithin(realCandidate, realRoot);
+}
+
 function verifyPath(pathValue, repoRoot, skillDir) {
   // Skip URLs
   if (/^https?:\/\//.test(pathValue)) {
@@ -68,10 +79,26 @@ function verifyPath(pathValue, repoRoot, skillDir) {
   }
 
   const fromRoot = resolve(repoRoot, pathValue);
-  if (existsSync(fromRoot)) return { status: 'ok' };
+  const inRoot = isContainedWithin(fromRoot, repoRoot);
+  if (inRoot && existsSync(fromRoot)) {
+    if (!isRealpathContained(fromRoot, repoRoot)) {
+      return { status: 'unverifiable', reason: 'outside repository' };
+    }
+    return { status: 'ok' };
+  }
 
   const fromSkill = resolve(skillDir, pathValue);
-  if (existsSync(fromSkill)) return { status: 'ok' };
+  const inSkillOrRepo = isContainedWithin(fromSkill, repoRoot) || isContainedWithin(fromSkill, skillDir);
+  if (inSkillOrRepo && existsSync(fromSkill)) {
+    if (!isRealpathContained(fromSkill, repoRoot) && !isRealpathContained(fromSkill, skillDir)) {
+      return { status: 'unverifiable', reason: 'outside repository' };
+    }
+    return { status: 'ok' };
+  }
+
+  if (!inRoot && !inSkillOrRepo) {
+    return { status: 'unverifiable', reason: 'outside repository' };
+  }
 
   return { status: 'stale', reason: `path not found: ${pathValue}` };
 }

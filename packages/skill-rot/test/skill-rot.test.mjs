@@ -4,7 +4,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdirSync, readFileSync, chmodSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync, chmodSync, symlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -617,5 +617,85 @@ describe("pnpm/yarn subcommands vs script references (#769)", () => {
     const result = checkSkill(skillPath, dir);
     assert.equal(result.stale, 0);
     assert.equal(result.allOk, true);
+  });
+});
+
+describe('verifyClaim — repository path containment (#773)', () => {
+  test('classifies ../ path escaping repoRoot and skillDir as unverifiable (outside repository) even when target exists outside repo', (t) => {
+    const outer = tmp(t, 'skill-rot-outer-');
+    const repoDir = join(outer, 'repo');
+    mkdirSync(repoDir, { recursive: true });
+    writeFileSync(join(outer, 'secret.txt'), 'secret', 'utf8');
+    const skillDir = join(repoDir, 'skills', 's1');
+    mkdirSync(skillDir, { recursive: true });
+
+    const existingEscape = verifyClaim(
+      { type: 'path', value: '../../../secret.txt', raw: '../../../secret.txt' },
+      { repoRoot: repoDir, skillDir }
+    );
+    assert.equal(existingEscape.status, 'unverifiable');
+    assert.equal(existingEscape.reason, 'outside repository');
+
+    const missingEscape = verifyClaim(
+      { type: 'path', value: '../../../missing-outside.txt', raw: '../../../missing-outside.txt' },
+      { repoRoot: repoDir, skillDir }
+    );
+    assert.equal(missingEscape.status, 'unverifiable');
+    assert.equal(missingEscape.reason, 'outside repository');
+
+    const rootEscapeFromRepoOnly = verifyClaim(
+      { type: 'path', value: '../secret.txt', raw: '../secret.txt' },
+      { repoRoot: repoDir, skillDir: repoDir }
+    );
+    assert.equal(rootEscapeFromRepoOnly.status, 'unverifiable');
+    assert.equal(rootEscapeFromRepoOnly.reason, 'outside repository');
+  });
+
+  test('allows ../ path from skillDir that resolves inside repoRoot', (t) => {
+    const repoDir = tmp(t, 'skill-rot-inrepo-');
+    const sharedFile = join(repoDir, 'shared', 'helper.mjs');
+    mkdirSync(join(repoDir, 'shared'), { recursive: true });
+    writeFileSync(sharedFile, 'export const x = 1;', 'utf8');
+    const skillDir = join(repoDir, 'skills', 's1');
+    mkdirSync(skillDir, { recursive: true });
+
+    const okRes = verifyClaim(
+      { type: 'path', value: '../../shared/helper.mjs', raw: '../../shared/helper.mjs' },
+      { repoRoot: repoDir, skillDir }
+    );
+    assert.equal(okRes.status, 'ok');
+
+    const staleRes = verifyClaim(
+      { type: 'path', value: '../../shared/nonexistent.mjs', raw: '../../shared/nonexistent.mjs' },
+      { repoRoot: repoDir, skillDir }
+    );
+    assert.equal(staleRes.status, 'stale');
+    assert.match(staleRes.reason, /path not found/);
+  });
+
+  test('classifies in-repo symlink pointing outside repoRoot as unverifiable (outside repository)', (t) => {
+    const outer = tmp(t, 'skill-rot-sym-outer-');
+    const repoDir = join(outer, 'repo');
+    mkdirSync(repoDir, { recursive: true });
+    const outsideTarget = join(outer, 'outside.mjs');
+    writeFileSync(outsideTarget, 'export default 1;', 'utf8');
+    const skillDir = join(repoDir, 'skills', 's1');
+    mkdirSync(skillDir, { recursive: true });
+    symlinkSync(outsideTarget, join(repoDir, 'escape-link.mjs'));
+
+    const res = verifyClaim(
+      { type: 'path', value: 'escape-link.mjs', raw: 'escape-link.mjs' },
+      { repoRoot: repoDir, skillDir }
+    );
+    assert.equal(res.status, 'unverifiable');
+    assert.equal(res.reason, 'outside repository');
+
+    symlinkSync(outsideTarget, join(skillDir, 'skill-escape-link.mjs'));
+    const skillRes = verifyClaim(
+      { type: 'path', value: './skill-escape-link.mjs', raw: './skill-escape-link.mjs' },
+      { repoRoot: repoDir, skillDir }
+    );
+    assert.equal(skillRes.status, 'unverifiable');
+    assert.equal(skillRes.reason, 'outside repository');
   });
 });
