@@ -1,0 +1,14 @@
+{
+  "body": "## Context\nResolves #785.\n`listTrackedFiles` in `packages/ticket-prune/lib/detect.mjs` runs `git ls-tree -r --name-only <ref>` and splits on `\\n`, allowing a repository with `core.quotePath=false` and a newline-containing filename to inject bogus tracked path entries and flip a non-shipped ticket to shipped.\n\n## Acceptance Criteria\n- Update `listTrackedFiles` in `packages/ticket-prune/lib/detect.mjs` to invoke `git(['ls-tree', '-r', '-z', '--name-only', ref], { cwd, encoding: 'buffer' })` and parse the output with `splitNulPaths` from `@adlc/core`.\n- Add regression tests in `packages/ticket-prune/test/list-tracked-files.test.mjs` verifying newline-bearing and non-ASCII filenames under `core.quotePath=false` do not split into bogus entries.\n\n## Verify\n`node --test packages/ticket-prune/test/list-tracked-files.test.mjs`",
+  "duration": 15,
+  "id": "T-01M6E657YB5TKZ3MDTVW9FKHQ0",
+  "rails": [
+    "packages/ticket-prune/test/detect.test.mjs",
+    "packages/ticket-prune/test/infer-scope-gate.test.mjs"
+  ],
+  "scope": [
+    "packages/ticket-prune/lib/detect.mjs",
+    "packages/ticket-prune/test/list-tracked-files.test.mjs"
+  ],
+  "title": "ticket-prune: use git ls-tree -z and splitNulPaths in listTrackedFiles (#785)"
+}
