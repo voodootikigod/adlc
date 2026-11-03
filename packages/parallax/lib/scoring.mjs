@@ -24,7 +24,28 @@ export function computeScore(divergenceCount, agreementCount) {
  * @param {number} params.threshold - gate threshold
  * @returns {string}
  */
+export function normalizeDivergences(rawDivergences) {
+  if (!Array.isArray(rawDivergences)) return [];
+  const normalized = [];
+  for (const d of rawDivergences) {
+    if (d === null || typeof d !== "object" || Array.isArray(d)) continue;
+    if (typeof d.point !== "string" || d.point.trim() === "") continue;
+    const validOptions = [];
+    if (Array.isArray(d.options)) {
+      for (const opt of d.options) {
+        if (opt === null || typeof opt !== "object" || Array.isArray(opt)) continue;
+        if (typeof opt.label !== "string" || opt.label.trim() === "") continue;
+        if (typeof opt.reading !== "string" || opt.reading.trim() === "") continue;
+        validOptions.push({ label: opt.label, reading: opt.reading });
+      }
+    }
+    normalized.push({ point: d.point, options: validOptions });
+  }
+  return normalized;
+}
+
 export function renderReport({ agreements, divergences, score, threshold }) {
+  const validDivergences = normalizeDivergences(divergences);
   const lines = [];
 
   lines.push('## Agreement set (draft spec)');
@@ -38,11 +59,11 @@ export function renderReport({ agreements, divergences, score, threshold }) {
 
   lines.push('');
   lines.push('## Divergences — answer these');
-  if (divergences.length === 0) {
+  if (validDivergences.length === 0) {
     lines.push('_(none — all readings converged)_');
   } else {
-    for (let i = 0; i < divergences.length; i++) {
-      const d = divergences[i];
+    for (let i = 0; i < validDivergences.length; i++) {
+      const d = validDivergences[i];
       lines.push('');
       lines.push(`**Q${i + 1}: ${d.point}**`);
       for (const opt of d.options) {
@@ -69,7 +90,8 @@ export function renderReport({ agreements, divergences, score, threshold }) {
  * @returns {{mode: string, questions: Array<{point: string, options: Array<{label: string, reading: string}>}>, score: number, threshold: number, gate: boolean}}
  */
 export function renderQuestionsJson({ mode, divergences, score, threshold }) {
-  const questions = divergences.map((d) => ({ point: d.point, options: d.options }));
+  const validDivergences = normalizeDivergences(divergences);
+  const questions = validDivergences.map((d) => ({ point: d.point, options: d.options }));
   return { mode, questions, score, threshold, gate: score <= threshold };
 }
 

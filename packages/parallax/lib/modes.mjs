@@ -10,7 +10,7 @@ import {
   buildRouteAnswerPrompt,
   buildRouteJudgePrompt,
 } from './prompts.mjs';
-import { computeScore } from './scoring.mjs';
+import { computeScore, normalizeDivergences } from './scoring.mjs';
 
 /**
  * Parse raw fan results into readings, collecting per-call errors.
@@ -256,7 +256,12 @@ export async function runDivergenceAnalysis(
   const payloadError = divergencePayloadError(divergenceResult);
   if (payloadError) throw new Error(payloadError);
 
-  const { agreements, divergences } = divergenceResult;
+  const agreements = divergenceResult.agreements;
+  const rawDivergences = divergenceResult.divergences;
+  const divergences = normalizeDivergences(rawDivergences);
+  if (rawDivergences.length > 0 && divergences.length === 0) {
+    throw new Error('divergence analysis returned an off-schema payload (divergences entries must carry a non-empty point string)');
+  }
   const score = computeScore(divergences.length, agreements.length);
 
   return { agreements, divergences, score, readings, errors, requested: n, used: readings.length };

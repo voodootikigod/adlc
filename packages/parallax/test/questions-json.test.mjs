@@ -76,3 +76,22 @@ test('--questions-json with --json → exit 1', () => {
   assert.equal(r.status, 1);
   assert.ok(r.stderr.includes('error:'));
 });
+
+test('renderQuestionsJson: repairs missing options to [] and drops point-less entries (#711)', () => {
+  const payload = renderQuestionsJson({
+    mode: "spec",
+    divergences: [
+      { point: "" },
+      { point: "Missing options" },
+      { point: "Valid question", options: [{ label: "A", reading: "Yes" }] },
+    ],
+    score: 0.5,
+    threshold: 0.25,
+  });
+  assert.deepEqual(payload.questions, [
+    { point: "Missing options", options: [] },
+    { point: "Valid question", options: [{ label: "A", reading: "Yes" }] },
+  ]);
+  const serialized = JSON.parse(JSON.stringify(payload));
+  assert.deepEqual(serialized.questions[0].options, []);
+});
