@@ -16,6 +16,48 @@ export const SANDBOX_PROFILES = {
   },
 };
 
+const CANDIDATE_SECRET_PATTERNS = [
+  /^ADLC_/i,
+  /API_KEY$/i,
+  /_KEY$/i,
+  /_SECRET$/i,
+  /SECRET$/i,
+  /_TOKEN$/i,
+  /TOKEN$/i,
+  /PASSWORD/i,
+  /^AWS_/i,
+  /^GOOGLE_/i,
+  /^GCP_/i,
+  /^AZURE_/i,
+  /^GH_/i,
+  /^GITHUB_TOKEN$/i,
+  /CREDENTIAL/i,
+  /^NPM_TOKEN$/i,
+];
+
+function isSensitiveCandidateVar(name) {
+  return CANDIDATE_SECRET_PATTERNS.some((re) => re.test(name));
+}
+
+/**
+ * Build a scrubbed copy of `baseEnv` for adversary-generated setup/witness
+ * commands (#648): strips ADLC_* trust-root variables (including
+ * ADLC_MANIFEST_KEY) and provider/cloud credentials (*_API_KEY, *_TOKEN, etc.)
+ * while preserving benign runtime variables (PATH, HOME, LANG, TMPDIR, etc.).
+ *
+ * @param {Record<string, string | undefined>} [baseEnv]
+ * @returns {Record<string, string>}
+ */
+export function sanitizeCandidateEnv(baseEnv = process.env) {
+  const out = {};
+  for (const [k, v] of Object.entries(baseEnv)) {
+    if (v === undefined) continue;
+    if (isSensitiveCandidateVar(k)) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
 /**
  * Detect which sandbox binary is available.
  * @param {{which?:Function}} opts - injectable for tests
@@ -119,20 +161,21 @@ export function buildSandboxedArgs(sandboxType, cloneDir, cmdArgs, opts = {}) {
  * @param {string} sandboxType - 'bwrap' | 'sandbox-exec'
  * @param {string} cloneDir
  * @param {string[]} cmdArgs - [cmd, ...args]
- * @param {{cwd?:string, timeout?:number, env?:object}} spawnOpts
+ * @param {{cwd?:string, timeout?:number, env?:object, spawn?:Function}} spawnOpts
  * @returns {{exitCode:number, stdout:string, stderr:string}}
  */
 export function spawnSandboxed(sandboxType, cloneDir, cmdArgs, spawnOpts = {}) {
   const workDir = spawnOpts.workDir ?? spawnOpts.cwd ?? cloneDir;
   const sandboxedArgs = buildSandboxedArgs(sandboxType, cloneDir, cmdArgs, { workDir });
   const [bin, ...args] = sandboxedArgs;
-  const r = spawnSync(bin, args, {
+  const runSpawn = spawnOpts.spawn ?? spawnSync;
+  const r = runSpawn(bin, args, {
     cwd: spawnOpts.cwd ?? cloneDir,
     timeout: spawnOpts.timeout ?? 120_000,
     encoding: 'utf8',
     stdio: 'pipe',
     shell: false,
-    env: spawnOpts.env ?? process.env,
+    env: spawnOpts.env ?? sanitizeCandidateEnv(),
   });
   return {
     exitCode: r.status ?? 1,
@@ -148,7 +191,7 @@ export function spawnSandboxed(sandboxType, cloneDir, cmdArgs, spawnOpts = {}) {
  *
  * @param {string[]} cmdArgs - [cmd, ...args]
  * @param {string} cloneDir
- * @param {{sandboxType?:string|null, unsafeNoSandbox?:boolean, cwd?:string, timeout?:number}} opts
+ * @param {{sandboxType?:string|null, unsafeNoSandbox?:boolean, cwd?:string, timeout?:number, env?:object, spawn?:Function}} opts
  * @returns {{exitCode:number, stdout:string, stderr:string}}
  */
 export function spawnCandidateCmd(cmdArgs, cloneDir, opts = {}) {
@@ -169,12 +212,14 @@ export function spawnCandidateCmd(cmdArgs, cloneDir, opts = {}) {
       'ONLY safe inside a disposable VM or container.\n\n'
     );
     const [cmd, ...args] = cmdArgs;
-    const r = spawnSync(cmd, args, {
+    const runSpawn = opts.spawn ?? spawnSync;
+    const r = runSpawn(cmd, args, {
       cwd: opts.cwd ?? cloneDir,
       timeout: opts.timeout ?? 120_000,
       encoding: 'utf8',
       stdio: 'pipe',
       shell: false,
+      env: opts.env ?? sanitizeCandidateEnv(),
     });
     return {
       exitCode: r.status ?? 1,

@@ -11,6 +11,9 @@ import {
   escapeSeatbeltPath,
   seatbeltWrap,
   SANDBOX_PROFILES,
+  sanitizeCandidateEnv,
+  spawnSandboxed,
+  spawnCandidateCmd,
 } from '../lib/sandbox.mjs';
 
 test('detectSandbox returns sandbox type or null', () => {
@@ -122,3 +125,122 @@ test('buildSandboxedArgs with sandbox-exec escapes quotes and backslashes in clo
   assert.ok(sbpl.includes('/tmp/dir\\"with\\\\special'));
 });
 
+
+test('sanitizeCandidateEnv strips ADLC_*, API keys, tokens, secrets, passwords, and cloud creds while keeping benign env (#648)', () => {
+  const raw = {
+    PATH: '/usr/bin:/bin',
+    HOME: '/home/dev',
+    LANG: 'en_US.UTF-8',
+    TMPDIR: '/tmp',
+    NODE_OPTIONS: '--no-warnings',
+    UNDEFINED_VAR: undefined,
+    ADLC_MANIFEST_KEY: 'top-secret-manifest-key',
+    ADLC_RAILS_BYPASS: '1',
+    adlc_lowercase: 'still-stripped',
+    ANTHROPIC_API_KEY: 'sk-ant-123',
+    OPENAI_API_KEY: 'sk-proj-123',
+    GEMINI_API_KEY: 'AIza-123',
+    CUSTOM_KEY: 'k1',
+    MY_SECRET: 's1',
+    TOPSECRET: 's2',
+    AUTH_TOKEN: 't1',
+     IDTOKEN: 't2',
+    DB_PASSWORD_HASH: 'p1',
+    AWS_SECRET_ACCESS_KEY: 'aws1',
+    AWS_REGION: 'us-east-1',
+    GOOGLE_APPLICATION_CREDENTIALS: '/tmp/creds.json',
+    GCP_PROJECT: 'p',
+    AZURE_CLIENT_ID: 'az',
+    GH_HOST: 'github.com',
+    GITHUB_TOKEN: 'ghp_123',
+    SERVICE_CREDENTIAL_PATH: '/etc/cred',
+    NPM_TOKEN: 'npm_123',
+  };
+
+  const scrubbed = sanitizeCandidateEnv(raw);
+  assert.deepEqual(scrubbed, {
+    PATH: '/usr/bin:/bin',
+    HOME: '/home/dev',
+    LANG: 'en_US.UTF-8',
+    TMPDIR: '/tmp',
+    NODE_OPTIONS: '--no-warnings',
+  });
+  assert.equal('UNDEFINED_VAR' in scrubbed, false);
+  // Original object must not be mutated
+  assert.equal(raw.ADLC_MANIFEST_KEY, 'top-secret-manifest-key');
+});
+
+test('spawnSandboxed scrubs ambient secrets by default and honors an explicit env override (#648)', () => {
+  const prevManifest = process.env.ADLC_MANIFEST_KEY;
+  const prevAnthropic = process.env.ANTHROPIC_API_KEY;
+  const prevBenign = process.env.GF_TEST_BENIGN_VAR;
+  process.env.ADLC_MANIFEST_KEY = 'ambient-manifest-secret';
+  process.env.ANTHROPIC_API_KEY = 'ambient-anthropic-secret';
+  process.env.GF_TEST_BENIGN_VAR = 'keep-me';
+
+  try {
+    let capturedOpts = null;
+    const res = spawnSandboxed('bwrap', '/tmp/clone', ['node', '-v'], {
+      spawn: (_bin, _args, opts) => {
+        capturedOpts = opts;
+        return { status: 0, stdout: 'v24.0.0\n', stderr: '', signal: null };
+      },
+    });
+    assert.equal(res.exitCode, 0);
+    assert.equal(res.stdout, 'v24.0.0\n');
+    assert.equal(res.timedOut, false);
+    assert.ok(capturedOpts && capturedOpts.env, 'spawn must receive an env object');
+    assert.equal(capturedOpts.env.ADLC_MANIFEST_KEY, undefined);
+    assert.equal(capturedOpts.env.ANTHROPIC_API_KEY, undefined);
+    assert.equal(capturedOpts.env.GF_TEST_BENIGN_VAR, 'keep-me');
+
+    // Explicit env override is preserved
+    let explicitCaptured = null;
+    spawnSandboxed('bwrap', '/tmp/clone', ['node', '-v'], {
+      env: { CUSTOM_ONLY: 'yes' },
+      spawn: (_bin, _args, opts) => {
+        explicitCaptured = opts;
+        return { status: 0, stdout: '', stderr: '', signal: null };
+      },
+    });
+    assert.deepEqual(explicitCaptured.env, { CUSTOM_ONLY: 'yes' });
+  } finally {
+    if (prevManifest === undefined) delete process.env.ADLC_MANIFEST_KEY;
+    else process.env.ADLC_MANIFEST_KEY = prevManifest;
+    if (prevAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = prevAnthropic;
+    if (prevBenign === undefined) delete process.env.GF_TEST_BENIGN_VAR;
+    else process.env.GF_TEST_BENIGN_VAR = prevBenign;
+  }
+});
+
+test('spawnCandidateCmd (--unsafe-no-sandbox) does not leak ADLC_MANIFEST_KEY or provider keys to child process (#648)', () => {
+  const prevManifest = process.env.ADLC_MANIFEST_KEY;
+  const prevAnthropic = process.env.ANTHROPIC_API_KEY;
+  const prevBenign = process.env.GF_TEST_BENIGN_SUBPROC;
+  process.env.ADLC_MANIFEST_KEY = 'unsafe-branch-manifest-secret';
+  process.env.ANTHROPIC_API_KEY = 'unsafe-branch-anthropic-secret';
+  process.env.GF_TEST_BENIGN_SUBPROC = 'benign-survives';
+
+  try {
+    const res = spawnCandidateCmd(
+      [
+        process.execPath,
+        '-e',
+        'process.stdout.write(JSON.stringify({ m: process.env.ADLC_MANIFEST_KEY ?? null, a: process.env.ANTHROPIC_API_KEY ?? null, b: process.env.GF_TEST_BENIGN_SUBPROC ?? null }))',
+      ],
+      '/tmp',
+      { sandboxType: null, unsafeNoSandbox: true },
+    );
+    assert.equal(res.exitCode, 0);
+    const parsed = JSON.parse(res.stdout);
+    assert.deepEqual(parsed, { m: null, a: null, b: 'benign-survives' });
+  } finally {
+    if (prevManifest === undefined) delete process.env.ADLC_MANIFEST_KEY;
+    else process.env.ADLC_MANIFEST_KEY = prevManifest;
+    if (prevAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = prevAnthropic;
+    if (prevBenign === undefined) delete process.env.GF_TEST_BENIGN_SUBPROC;
+    else process.env.GF_TEST_BENIGN_SUBPROC = prevBenign;
+  }
+});
