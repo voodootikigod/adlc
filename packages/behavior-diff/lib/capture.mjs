@@ -6,6 +6,10 @@ import { openSync, closeSync, writeFileSync, renameSync } from 'node:fs';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
+function routePathHasDotDot(p) {
+  return p.split('/').includes('..');
+}
+
 /**
  * Validate a capture config object.
  * Returns an array of error strings (empty = valid).
@@ -18,11 +22,16 @@ export function validateConfig(config) {
     return errors;
   }
 
+  let parsedBase = null;
   if (!config.baseUrl || typeof config.baseUrl !== 'string') {
     errors.push('config.baseUrl must be a non-empty string');
   } else {
     try {
-      new URL(config.baseUrl);
+      parsedBase = new URL(config.baseUrl);
+      if (parsedBase.protocol !== 'http:' && parsedBase.protocol !== 'https:') {
+        errors.push(`config.baseUrl must use http: or https: scheme: ${config.baseUrl}`);
+        parsedBase = null;
+      }
     } catch {
       errors.push(`config.baseUrl is not a valid URL: ${config.baseUrl}`);
     }
@@ -48,6 +57,13 @@ export function validateConfig(config) {
       }
       if (typeof route.path !== 'string' || route.path.trim() === '') {
         errors.push(`config.routes[${i}].path must be a non-empty string`);
+      } else if (!route.path.startsWith('/') || route.path.startsWith('//') || routePathHasDotDot(route.path)) {
+        errors.push(`config.routes[${i}].path must start with "/" and not contain "//" or "..": ${route.path}`);
+      } else if (parsedBase) {
+        const resolved = new URL(route.path, parsedBase);
+        if (resolved.origin !== parsedBase.origin) {
+          errors.push(`config.routes[${i}].path resolves outside baseUrl origin: ${route.path}`);
+        }
       }
       if (typeof route.method === 'string' && typeof route.path === 'string') {
         const key = `${route.method.toUpperCase()} ${route.path}`;
@@ -67,15 +83,27 @@ export function validateConfig(config) {
  */
 async function captureRoute(baseUrl, route, timeoutMs) {
   const { method, path, body, headers } = route;
-  const url = `${baseUrl.replace(/\/$/, '')}${path}`;
-
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    const baseObj = new URL(baseUrl);
+    if (baseObj.protocol !== 'http:' && baseObj.protocol !== 'https:') {
+      throw new Error(`unsupported baseUrl protocol: ${baseObj.protocol}`);
+    }
+    if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//') || routePathHasDotDot(path)) {
+      throw new Error(`invalid route path: ${path}`);
+    }
+    const targetObj = new URL(path, baseObj);
+    if (targetObj.origin !== baseObj.origin) {
+      throw new Error(`route path escapes baseUrl origin: ${path}`);
+    }
+    const url = targetObj.href;
+
     const init = {
       method: method.toUpperCase(),
       headers: headers ?? {},
+      redirect: 'manual',
       signal: controller.signal,
     };
 
