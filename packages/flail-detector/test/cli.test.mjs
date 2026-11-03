@@ -363,3 +363,39 @@ test('CLI: variants of same error collapse (normalization)', () => {
   assert.equal(r.status, 2, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
   assert.match(r.stdout, /repeated-error/);
 });
+
+test("#624: CLI detects repeated build error in JSONL toolUseResult.stderr (exit 2)", () => {
+  const f = join(tmpDir, "jsonl-stderr-error.log");
+  const entries = [
+    { type: "user", toolUseResult: { stdout: "", stderr: "Error: cannot find module foo", interrupted: false } },
+    { type: "user", toolUseResult: { stdout: "", stderr: "Error: cannot find module foo", interrupted: false } },
+  ];
+  writeFileSync(f, entries.map((e) => JSON.stringify(e)).join("\n"));
+  const r = run([f]);
+  assert.equal(r.status, 2, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+  assert.match(r.stdout, /repeated-error/);
+});
+
+test("#630: CLI rejects trailing-garbage numeric flags (e.g. 99abc, 100KB) with exit 1", () => {
+  const f = join(tmpDir, "malformed-num.log");
+  writeFileSync(f, "Error: boom\nError: boom\n");
+  for (const [args, pattern] of [
+    [["--max-repeat", "99abc"], /--max-repeat must be a positive integer/],
+    [["--max-repeat", "0"], /--max-repeat must be a positive integer/],
+    [["--max-bytes", "100KB"], /--max-bytes must be a non-negative integer/],
+    [["--spent-tokens", "50x", "--budget", "100"], /--spent-tokens must be a non-negative integer/],
+    [["--spent-tokens", "50", "--budget", "100k"], /--budget must be a non-negative integer/],
+  ]) {
+    const r = run([f, ...args]);
+    assert.equal(r.status, 1, `expected exit 1 for ${args.join(" ")}, got ${r.status}`);
+    assert.match(r.stderr, pattern);
+  }
+});
+
+test("#630: CLI accepts --max-repeat 1 (minimum positive integer) and flails on a single error", () => {
+  const f = join(tmpDir, "max-repeat-1.log");
+  writeFileSync(f, "Error: single error occurrence\n");
+  const r = run([f, "--max-repeat", "1"]);
+  assert.equal(r.status, 2, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+  assert.match(r.stdout, /repeated-error/);
+});

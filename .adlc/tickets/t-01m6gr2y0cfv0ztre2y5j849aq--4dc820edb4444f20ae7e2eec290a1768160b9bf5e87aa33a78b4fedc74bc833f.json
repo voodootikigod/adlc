@@ -1,0 +1,21 @@
+{
+  "acceptance": [
+    "parseLog extracts string values under stdout, stderr, and output keys in JSONL logs so repeated errors in tool results trigger the repeated-error signal",
+    "flail-detector CLI strictly validates --max-repeat, --max-bytes, --spent-tokens, and --budget against integer digits before parsing so trailing garbage like 99abc exits 1 via opError"
+  ],
+  "dependsOn": [],
+  "duration": 15,
+  "id": "T-01M6GR2Y0CFV0ZTRE2Y5J849AQ",
+  "rails": [
+    "packages/flail-detector/test/analyze.test.mjs",
+    "packages/flail-detector/test/signals.test.mjs"
+  ],
+  "scope": [
+    "packages/flail-detector/lib/parse-log.mjs",
+    "packages/flail-detector/bin/flail-detector.mjs",
+    "packages/flail-detector/test/parse-log.test.mjs",
+    "packages/flail-detector/test/cli.test.mjs"
+  ],
+  "title": "flail-detector: extract stdout/stderr/output in JSONL and reject malformed numeric CLI flags (#624, #630)",
+  "verify": "node --test packages/flail-detector/test/parse-log.test.mjs packages/flail-detector/test/cli.test.mjs packages/flail-detector/test/analyze.test.mjs packages/flail-detector/test/signals.test.mjs"
+}

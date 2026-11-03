@@ -9,7 +9,7 @@
 function extractStrings(obj) {
   if (typeof obj === 'string') return [obj];
   if (!obj || typeof obj !== 'object') return [];
-  const KEYS = ['content', 'text', 'message'];
+  const KEYS = ['content', 'text', 'message', 'stdout', 'stderr', 'output'];
   const results = [];
   for (const key of Object.keys(obj)) {
     if (KEYS.includes(key)) {

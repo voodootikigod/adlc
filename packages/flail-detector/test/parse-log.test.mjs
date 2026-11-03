@@ -161,3 +161,15 @@ test('#114: a single-character file_path (length 1) is surfaced; an empty one is
   assert.equal(countWrites(parseLog(JSON.stringify({ type: 'tool_use', name: 'Write', input: { file_path: 'x' } })).lines, 'x'), 1);
   assert.equal(countWrites(parseLog(JSON.stringify({ type: 'tool_use', name: 'Write', input: { file_path: '' } })).lines, ''), 0);
 });
+
+test("#624: parseLog extracts stdout, stderr, and output string values from JSONL tool results", () => {
+  const entries = [
+    { type: "user", toolUseResult: { stdout: "Compiling module A", stderr: "Error: cannot find module foo", interrupted: false } },
+    { type: "tool_result", output: "Fatal: build failed with exit code 1" },
+  ];
+  const content = entries.map((e) => JSON.stringify(e)).join("\n");
+  const { lines } = parseLog(content);
+  assert.ok(lines.includes("Compiling module A"), "stdout must be extracted");
+  assert.ok(lines.includes("Error: cannot find module foo"), "stderr must be extracted");
+  assert.ok(lines.includes("Fatal: build failed with exit code 1"), "output must be extracted");
+});
