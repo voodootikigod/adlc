@@ -14,5 +14,6 @@
     "packages/flail-detector/test/record.test.mjs"
   ],
   "title": "flail-detector: normalize recorded logFile path and warn on unsigned --record (#627, #629)",
-  "verify": "node --test packages/flail-detector/test/record.test.mjs packages/flail-detector/test/cli.test.mjs"
+  "verify": "node --test packages/flail-detector/test/record.test.mjs packages/flail-detector/test/cli.test.mjs",
+  "completed": true
 }

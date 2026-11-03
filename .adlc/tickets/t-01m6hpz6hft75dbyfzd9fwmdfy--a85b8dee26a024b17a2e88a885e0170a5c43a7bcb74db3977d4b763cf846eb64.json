@@ -13,5 +13,6 @@
     "packages/spec-lint/test/record.test.mjs"
   ],
   "title": "spec-lint: warn on stderr when --record writes an unsigned manifest entry (#776)",
-  "verify": "node --test packages/spec-lint/test/record.test.mjs packages/spec-lint/test/spec-lint.test.mjs"
+  "verify": "node --test packages/spec-lint/test/record.test.mjs packages/spec-lint/test/spec-lint.test.mjs",
+  "completed": true
 }

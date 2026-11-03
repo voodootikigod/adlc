@@ -16,5 +16,6 @@
     "packages/gate-fuzzing/test/oracle.test.mjs"
   ],
   "title": "gate-fuzzing: reject or strip adversary-supplied witnessSource and derive independence from harness (#642)",
-  "verify": "node --test packages/gate-fuzzing/test/candidate.test.mjs packages/gate-fuzzing/test/oracle.test.mjs packages/gate-fuzzing/test/classify.test.mjs packages/gate-fuzzing/test/verdict.test.mjs"
+  "verify": "node --test packages/gate-fuzzing/test/candidate.test.mjs packages/gate-fuzzing/test/oracle.test.mjs packages/gate-fuzzing/test/classify.test.mjs packages/gate-fuzzing/test/verdict.test.mjs",
+  "completed": true
 }

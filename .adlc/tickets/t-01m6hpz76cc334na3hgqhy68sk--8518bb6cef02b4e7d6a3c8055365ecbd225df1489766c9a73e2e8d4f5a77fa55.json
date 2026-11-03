@@ -13,5 +13,6 @@
     "packages/premortem/test/prompt-only-usage.test.mjs"
   ],
   "title": "premortem: wrap recordVerdict in opError and warn on unsigned record (#723)",
-  "verify": "node --test packages/premortem/test/prompt-only-usage.test.mjs packages/premortem/test/cli.test.mjs"
+  "verify": "node --test packages/premortem/test/prompt-only-usage.test.mjs packages/premortem/test/cli.test.mjs",
+  "completed": true
 }
