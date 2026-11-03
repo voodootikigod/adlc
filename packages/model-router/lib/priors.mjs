@@ -9,6 +9,8 @@
  * The global (per-model) rate is always available.
  */
 
+import { canonicalJson } from '@adlc/core';
+
 const TIERS = ['cheap', 'mid', 'frontier'];
 
 /**
@@ -23,12 +25,16 @@ export function buildPriors(entries) {
   // Count passes globally and per-category per-model
   const global = {};    // { model: { passes, n } }
   const byCat = {};     // { category: { model: { passes, n } } }
+  const seen = new Set();
 
   for (const entry of entries) {
-    if (entry.type !== 'build') continue;
+    if (!entry || typeof entry !== 'object' || entry.type !== 'build') continue;
     const { model, category, firstPass } = entry;
     if (typeof model !== 'string') continue;
     if (typeof firstPass !== 'boolean') continue;
+    const fingerprint = canonicalJson(entry);
+    if (seen.has(fingerprint)) continue;
+    seen.add(fingerprint);
 
     // Global bucket
     if (!global[model]) global[model] = { passes: 0, n: 0 };

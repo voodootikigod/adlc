@@ -116,9 +116,9 @@ test('buildPriors: ignores non-build entries', () => {
 
 test('buildPriors: Laplace smoothing correct', () => {
   const entries = [
-    { type: 'build', model: 'mid', firstPass: true },
-    { type: 'build', model: 'mid', firstPass: false },
-    { type: 'build', model: 'mid', firstPass: true },
+    { type: 'build', seq: 1, model: 'mid', firstPass: true },
+    { type: 'build', seq: 2, model: 'mid', firstPass: false },
+    { type: 'build', seq: 3, model: 'mid', firstPass: true },
   ];
   const p = buildPriors(entries);
   // passes=2, n=3 → (2+1)/(3+2) = 3/5 = 0.6
@@ -132,8 +132,8 @@ test('bestTierFromPriors: returns mid if no tier-named models', () => {
 
 test('bestTierFromPriors: picks highest-rate tier', () => {
   const entries = [
-    ...Array(5).fill({ type: 'build', model: 'cheap', firstPass: true }),
-    ...Array(5).fill({ type: 'build', model: 'mid', firstPass: false }),
+    ...Array.from({ length: 5 }, (_, i) => ({ type: 'build', seq: i + 1, model: 'cheap', firstPass: true })),
+    ...Array.from({ length: 5 }, (_, i) => ({ type: 'build', seq: i + 6, model: 'mid', firstPass: false })),
   ];
   const p = buildPriors(entries);
   const best = bestTierFromPriors(p);
@@ -142,12 +142,12 @@ test('bestTierFromPriors: picks highest-rate tier', () => {
 
 test('bestTierFromPriors: uses category data when >= 3 samples', () => {
   const entries = [
-    { type: 'build', model: 'cheap', category: 'feature', firstPass: true },
-    { type: 'build', model: 'cheap', category: 'feature', firstPass: true },
-    { type: 'build', model: 'cheap', category: 'feature', firstPass: true },
-    { type: 'build', model: 'mid', category: 'feature', firstPass: false },
-    { type: 'build', model: 'mid', category: 'feature', firstPass: false },
-    { type: 'build', model: 'mid', category: 'feature', firstPass: false },
+    { type: 'build', seq: 1, model: 'cheap', category: 'feature', firstPass: true },
+    { type: 'build', seq: 2, model: 'cheap', category: 'feature', firstPass: true },
+    { type: 'build', seq: 3, model: 'cheap', category: 'feature', firstPass: true },
+    { type: 'build', seq: 4, model: 'mid', category: 'feature', firstPass: false },
+    { type: 'build', seq: 5, model: 'mid', category: 'feature', firstPass: false },
+    { type: 'build', seq: 6, model: 'mid', category: 'feature', firstPass: false },
   ];
   const p = buildPriors(entries);
   // cheap: (3+1)/(3+2) = 0.8; mid: (0+1)/(3+2) = 0.2 → cheap wins
@@ -157,12 +157,12 @@ test('bestTierFromPriors: uses category data when >= 3 samples', () => {
 
 test('bestTierFromPriors: skips category with < 3 samples, uses global', () => {
   const entries = [
-    { type: 'build', model: 'cheap', category: 'feature', firstPass: true },
-    { type: 'build', model: 'cheap', category: 'feature', firstPass: true },
+    { type: 'build', seq: 1, model: 'cheap', category: 'feature', firstPass: true },
+    { type: 'build', seq: 2, model: 'cheap', category: 'feature', firstPass: true },
     // Only 2 samples for category → not used
-    { type: 'build', model: 'mid', firstPass: true },
-    { type: 'build', model: 'mid', firstPass: true },
-    { type: 'build', model: 'mid', firstPass: true },
+    { type: 'build', seq: 3, model: 'mid', firstPass: true },
+    { type: 'build', seq: 4, model: 'mid', firstPass: true },
+    { type: 'build', seq: 5, model: 'mid', firstPass: true },
   ];
   const p = buildPriors(entries);
   // category data skipped (n=2); global: cheap has 2 samples, mid has 3
@@ -217,7 +217,7 @@ test('assign: critical path (float=0) no priors → mid/direct', () => {
 });
 
 test('assign: critical path with good prior → prior tier used', () => {
-  const entries = Array(5).fill({ type: 'build', model: 'cheap', firstPass: true });
+  const entries = Array.from({ length: 5 }, (_, i) => ({ type: 'build', seq: i + 1, model: 'cheap', firstPass: true }));
   const priors = buildPriors(entries);
   const t = { id: 'T1', title: 't', category: 'feature', rails: ['a', 'b'], scope: ['a', 'b'] };
   const a = assignTicket(t, 0, priors, 0.2);
@@ -288,7 +288,7 @@ test('assign: ladder mode budget covers the starting tier PLUS a frontier regene
   // A direct/cheap assignment (float=0, cheap prior) for comparison — the
   // ladder's budget must be strictly larger than just the starting tier,
   // because escalation is a full regeneration, not a cheap top-up.
-  const entries = Array(5).fill({ type: 'build', model: 'cheap', firstPass: true });
+  const entries = Array.from({ length: 5 }, (_, i) => ({ type: 'build', seq: i + 1, model: 'cheap', firstPass: true }));
   const priors = buildPriors(entries);
   const directCheap = assignTicket({ ...t, id: 'T2' }, 0, priors, 0.2);
   assert.equal(directCheap.tier, 'cheap');
@@ -362,11 +362,11 @@ test('runRouter: cycle → opError', async (t) => {
 test('runRouter: priors influence critical path tier', async (t) => {
   const dir = tmp(t, 'model-router-test-');
   writeManifest(dir, [
-    { type: 'build', model: 'cheap', firstPass: true },
-    { type: 'build', model: 'cheap', firstPass: true },
-    { type: 'build', model: 'cheap', firstPass: true },
-    { type: 'build', model: 'cheap', firstPass: true },
-    { type: 'build', model: 'cheap', firstPass: true },
+    { type: 'build', seq: 1, model: 'cheap', firstPass: true },
+    { type: 'build', seq: 2, model: 'cheap', firstPass: true },
+    { type: 'build', seq: 3, model: 'cheap', firstPass: true },
+    { type: 'build', seq: 4, model: 'cheap', firstPass: true },
+    { type: 'build', seq: 5, model: 'cheap', firstPass: true },
   ]);
   const ticketsPath = writeTickets(dir, [
     { id: 'T1', title: 'Solo', category: 'feature',
@@ -386,11 +386,11 @@ test('runRouter: priors reflect entries recorded in a manifest.d/ segment, not j
   const adlc = join(dir, '.adlc');
   mkdirSync(join(adlc, 'manifest.d'), { recursive: true });
   const lines = [
-    { type: 'build', model: 'cheap', firstPass: true },
-    { type: 'build', model: 'cheap', firstPass: true },
-    { type: 'build', model: 'cheap', firstPass: true },
-    { type: 'build', model: 'cheap', firstPass: true },
-    { type: 'build', model: 'cheap', firstPass: true },
+    { type: 'build', seq: 1, model: 'cheap', firstPass: true },
+    { type: 'build', seq: 2, model: 'cheap', firstPass: true },
+    { type: 'build', seq: 3, model: 'cheap', firstPass: true },
+    { type: 'build', seq: 4, model: 'cheap', firstPass: true },
+    { type: 'build', seq: 5, model: 'cheap', firstPass: true },
   ].map((e) => JSON.stringify(e)).join('\n') + '\n';
   writeFileSync(join(adlc, 'manifest.d', 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), lines);
   const ticketsPath = writeTickets(dir, [
@@ -487,12 +487,12 @@ test('CLI: no-args smoke (missing default tickets file → exit 1)', (t) => {
 test('CLI: realistic fixture run', (t) => {
   const dir = tmp(t, 'model-router-test-');
   writeManifest(dir, [
-    { type: 'build', model: 'cheap', category: 'feature', firstPass: true },
-    { type: 'build', model: 'cheap', category: 'feature', firstPass: true },
-    { type: 'build', model: 'cheap', category: 'feature', firstPass: true },
-    { type: 'build', model: 'mid', category: 'feature', firstPass: false },
-    { type: 'build', model: 'mid', category: 'feature', firstPass: false },
-    { type: 'build', model: 'mid', category: 'feature', firstPass: false },
+    { type: 'build', seq: 1, model: 'cheap', category: 'feature', firstPass: true },
+    { type: 'build', seq: 2, model: 'cheap', category: 'feature', firstPass: true },
+    { type: 'build', seq: 3, model: 'cheap', category: 'feature', firstPass: true },
+    { type: 'build', seq: 4, model: 'mid', category: 'feature', firstPass: false },
+    { type: 'build', seq: 5, model: 'mid', category: 'feature', firstPass: false },
+    { type: 'build', seq: 6, model: 'mid', category: 'feature', firstPass: false },
   ]);
   const ticketsPath = writeTickets(dir, [
     // On critical path, well railed, feature → direct, priors say cheap
@@ -801,4 +801,47 @@ test('runRouter & assignTicket: config-heavy ticket with 1 railed code file pass
   assert.equal(t1.railDensity, 1);
   assert.equal(t1.tier, 'cheap');
   assert.equal(t1.mode, 'ladder');
+});
+
+test('buildPriors deduplicates identical build entries (#702)', async (t) => {
+  const identicalEntry = { type: "build", model: "cheap", category: "feature", firstPass: true };
+  const reorderedIdentical = { firstPass: true, category: "feature", model: "cheap", type: "build" };
+  const priorsFromDupes = buildPriors([
+    identicalEntry,
+    identicalEntry,
+    reorderedIdentical,
+    identicalEntry,
+    identicalEntry,
+  ]);
+  assert.equal(priorsFromDupes.global.cheap.n, 1);
+  assert.equal(priorsFromDupes.global.cheap.passes, 1);
+  assert.deepEqual(priorsFromDupes.byCategory.feature, {});
+  assert.equal(bestTierFromPriors(priorsFromDupes, "feature"), "mid");
+
+  // Non-object / null entries are safely ignored, while 3 distinct entries reach n = 3
+  const priorsFromDistinct = buildPriors([
+    null,
+    "not-an-object",
+    { type: "build", seq: 1, model: "cheap", category: "feature", firstPass: true },
+    { type: "build", seq: 2, model: "cheap", category: "feature", firstPass: true },
+    { type: "build", seq: 3, model: "cheap", category: "feature", firstPass: true },
+  ]);
+  assert.equal(priorsFromDistinct.global.cheap.n, 3);
+  assert.equal(priorsFromDistinct.byCategory.feature.cheap.n, 3);
+  assert.equal(bestTierFromPriors(priorsFromDistinct, "feature"), "cheap");
+
+  // End-to-end via runRouter: 5 identical unsigned lines in the manifest do not flip a critical-path ticket from mid to cheap
+  const dir = tmp(t, "model-router-702-");
+  const adlcDir = join(dir, [".adlc"].join("/"));
+  mkdirSync(adlcDir, { recursive: true });
+  const manifestFile = join(adlcDir, ["manifest" + ".jsonl"].join("/"));
+  const repeatedLines = Array.from({ length: 5 }, () => JSON.stringify({ type: "build", model: "cheap", firstPass: true })).join("\n") + "\n";
+  writeFileSync(manifestFile, repeatedLines);
+  const ticketsPath = writeTickets(dir, [
+    { id: "T1", title: "CriticalPath", category: "feature", rails: ["test/a.test.mjs"], scope: ["src/a.mjs"], duration: 2 },
+  ]);
+  const res = await runRouter({ ticketsPath, floor: 0.2, adlcDir });
+  const t1 = res.assignments.find((a) => a.id === "T1");
+  assert.equal(t1.tier, "mid");
+  assert.equal(t1.mode, "direct");
 });
