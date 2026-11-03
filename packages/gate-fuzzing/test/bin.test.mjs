@@ -148,3 +148,30 @@ test('--provider naming an unavailable provider fails closed with a provider-spe
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('retired inert flags (--canary-budget, --behavioral-witness, --triage) fail closed with exit 1 (#645)', () => {
+  const dir = makeRepoWithSuite();
+  try {
+    const rCanary = runCli(['--canary-budget', '2', '--prompt-only'], { cwd: dir });
+    assert.equal(rCanary.code, 1);
+    assert.match(rCanary.stderr, /--canary-budget is not yet implemented/);
+
+    const rWitness = runCli(['--behavioral-witness', '--prompt-only'], { cwd: dir });
+    assert.equal(rWitness.code, 1);
+    assert.match(rWitness.stderr, /--behavioral-witness is not yet implemented/);
+
+    const rTriage = runCli(['--triage', '--prompt-only'], { cwd: dir });
+    assert.equal(rTriage.code, 1);
+    assert.match(rTriage.stderr, /--triage is not yet implemented/);
+
+    const rHelp = runCli(['--help'], { cwd: dir });
+    assert.equal(rHelp.code, 0);
+    assert.doesNotMatch(rHelp.stdout, /--canary-budget/);
+    assert.doesNotMatch(rHelp.stdout, /--behavioral-witness/);
+    assert.doesNotMatch(rHelp.stdout, /--triage/);
+    assert.match(rHelp.stdout, /\[--witness-trials <int>\] \[--max-fail-rate <float>\]/);
+    assert.match(rHelp.stdout, /\[--allow-cmd <name>...\] \[--unsafe-no-sandbox\]/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
