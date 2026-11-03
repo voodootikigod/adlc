@@ -325,7 +325,7 @@ if (oracleScore.recall < 0.999) {
 }
 
 
-// ── SIGINT: restore on an interactive interrupt ───────────────────────────────
+// ── SIGINT / SIGTERM / SIGHUP: restore on a catchable interrupt ─────────────
 // The handler runs only once spawnSync returns control; a signal that kills the
 // process outright is covered by the in-flight record instead.
 
@@ -336,14 +336,15 @@ for (const plant of validPlants) {
   }
 }
 let plantedFiles = preOriginals;
-process.on('SIGINT', () => {
+const handleSignal = () => {
   if (plantedFiles !== null) {
     for (const [absPath, content] of plantedFiles) {
       try { writeFileAtomic(absPath, content); } catch { /* the in-flight record remains */ }
     }
   }
   process.exit(1);
-});
+};
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, handleSignal);
 
 // ── run review with all plants applied ───────────────────────────────────────
 

@@ -29,7 +29,7 @@ import {
 } from '@adlc/core';
 import { runWithPlants } from '../lib/runner.mjs';
 import { verifyWitness } from '../lib/verify.mjs';
-import { BIN, BOUNDARY_PLANT, MATH_SOURCE, createMathRepo, writePlantsFile, runCli } from './cli-fixtures.mjs';
+import { BIN, BOUNDARY_PLANT, MATH_SOURCE, createMathRepo, writePlantsFile, writeFakeJudge, fakeJudgeEnv, runCli } from './cli-fixtures.mjs';
 
 const PLANTED = MATH_SOURCE.replace(BOUNDARY_PLANT.original, BOUNDARY_PLANT.mutated);
 const DEAD_PID = 2 ** 22 + 12345; // above Linux pid_max default; never alive
@@ -77,9 +77,9 @@ describe('a run killed mid-review is recovered by the next run', () => {
       '--min-plants', '1', '--min-recall', '0', '--scorer', 'string'], { cwd: dir, stdio: 'ignore' });
     const exited = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
     await waitFor(() => existsSync(started));
-    child.kill('SIGTERM');
+    child.kill('SIGKILL');
     const { signal } = await exited;
-    assert.equal(signal, 'SIGTERM', 'the run died to the signal');
+    assert.equal(signal, 'SIGKILL', 'the run died to the signal');
     assert.equal(readFileSync(mathPath(dir), 'utf8'), PLANTED, 'the plant is still on disk');
     assert.ok(existsSync(recordPathFor(gitDirOf(dir))), 'the in-flight record survived the kill');
 
@@ -106,7 +106,7 @@ describe('a run killed mid-review is recovered by the next run', () => {
       '--min-plants', '1', '--min-recall', '0', '--scorer', 'string'], { cwd: join(dir, 'src'), stdio: 'ignore' });
     const exited = new Promise((resolve) => child.on('exit', resolve));
     await waitFor(() => existsSync(started));
-    child.kill('SIGTERM');
+    child.kill('SIGKILL');
     await exited;
     assert.equal(readFileSync(mathPath(dir), 'utf8'), PLANTED);
 
@@ -322,5 +322,32 @@ describe('planting is journaled before any source file changes', () => {
     const { dir } = createMathRepo(t);
     const journal = createJournal({ recordPath: recordPathFor(gitDirOf(dir)), repoRoot: dir });
     assert.throws(() => journal.begin([{ absolutePath: '/etc/hosts', original: '', mutated: '' }]), /outside/);
+  });
+
+  it('CLI signal handler restores planted files and exits 1 on SIGINT, SIGTERM, and SIGHUP (#754)', (t) => {
+    const agy = writeFakeJudge(t);
+    const env = fakeJudgeEnv(agy, 'discriminating');
+    for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+      const { dir } = createMathRepo(t);
+      const reviewer = join(tmp(t, `rc-${sig.toLowerCase()}-`), 'signal-parent.mjs');
+      // Reviewer sends the signal to its parent (the CLI) and emits one locating
+      // finding so makeLlmJudge spawns the async fake agy subprocess and
+      // libuv dispatches the pending signal handler on the next event-loop tick.
+      const finding = JSON.stringify({ findings: [{ file: 'src/math.mjs', line: 6, description: 'inclusive bound' }] });
+      writeFileSync(
+        reviewer,
+        `process.stdout.write(${JSON.stringify(finding)});\nprocess.kill(process.ppid, ${JSON.stringify(sig)});\n`
+      );
+      const plants = writePlantsFile(t, [BOUNDARY_PLANT]);
+      const res = runCli([
+        '--review-cmd', `node ${reviewer}`,
+        '--plants-file', plants,
+        '--min-plants', '1',
+        '--min-recall', '0',
+      ], dir, env);
+      assert.equal(res.status, 1, `expected exit 1 on ${sig}, got ${res.status}`);
+      assert.equal(res.stdout, '', `expected no scorecard on ${sig}, got: ${res.stdout}`);
+      assert.equal(readFileSync(mathPath(dir), 'utf8'), MATH_SOURCE, `planted file restored on ${sig}`);
+    }
   });
 });

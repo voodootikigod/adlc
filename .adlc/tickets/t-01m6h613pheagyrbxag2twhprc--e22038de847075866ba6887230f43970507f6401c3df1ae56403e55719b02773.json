@@ -1,0 +1,14 @@
+{
+  "body": "Resolves #754.\n\n## Acceptance Criteria\n1. `packages/review-calibration/bin/review-calibration.mjs` registers the emergency planted-file restore handler on `SIGTERM` and `SIGHUP` in addition to `SIGINT`.\n2. `packages/review-calibration/README.md` documents `SIGTERM` and `SIGHUP` alongside `SIGINT` and updates the `--review-cmd` description and smoke-test example.\n3. Unit/integration tests in `packages/review-calibration/test/inflight-restore.test.mjs` verify that `SIGTERM` and `SIGHUP` restore planted files when handled in-process.",
+  "id": "T-01M6H613PHEAGYRBXAG2TWHPRC",
+  "rails": [
+    "packages/review-calibration/test/inflight-restore.test.mjs"
+  ],
+  "scope": [
+    "packages/review-calibration/bin/review-calibration.mjs",
+    "packages/review-calibration/README.md",
+    "packages/review-calibration/test/inflight-restore.test.mjs"
+  ],
+  "title": "review-calibration: restore planted files on SIGTERM and SIGHUP (#754)",
+  "verify": "node --test packages/review-calibration/test/inflight-restore.test.mjs"
+}
