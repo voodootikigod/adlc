@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { changedLinesFromDiff, classifyDiffBodyLine } from '../lib/mutate.mjs';
-import { usageFromGemini } from '../lib/llm.mjs';
+import { complete, usageFromGemini } from '../lib/llm.mjs';
 
 const hdr = (f) => `diff --git a/${f} b/${f}\n--- a/${f}\n+++ b/${f}\n`;
 
@@ -83,4 +83,32 @@ test('a hunk ending in a deletion does not swallow the next file header', () => 
 
 test('thinking tokens alone count as output when candidates are absent', () => {
   assert.equal(usageFromGemini({ promptTokenCount: 1, thoughtsTokenCount: 4 }).outputTokens, 4);
+});
+
+test('#618: gemini provider sends GEMINI_API_KEY in x-goog-api-key header instead of URL query string', async (t) => {
+  let seenUrl = null;
+  let seenInit = null;
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    seenUrl = String(url);
+    seenInit = init;
+    return {
+      ok: true,
+      json: async () => ({
+        candidates: [{ content: { parts: [{ text: 'ok-header' }] } }],
+      }),
+    };
+  });
+  const out = await complete(
+    { tier: 'cheap', prompt: 'hello', provider: 'gemini' },
+    { GEMINI_API_KEY: 'secret-gemini-key' },
+  );
+  assert.equal(out, 'ok-header');
+  assert.equal(
+    seenUrl,
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent',
+  );
+  assert.equal(seenUrl.includes('secret-gemini-key'), false);
+  assert.equal(seenUrl.includes('?key='), false);
+  assert.equal(seenInit.headers['x-goog-api-key'], 'secret-gemini-key');
+  assert.equal(seenInit.headers['content-type'], 'application/json');
 });
