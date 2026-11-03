@@ -130,8 +130,8 @@ model-ratchet --review-cmd "adversarial-review --file {file}"
 # Machine-readable output for orchestrators
 model-ratchet --top 5 --json
 
-# Run a custom linter as the reviewer
-model-ratchet --review-cmd "eslint {file} --format compact"
+# Run a custom linter as the reviewer (eslint exits 1 when lint problems are found)
+model-ratchet --review-cmd "eslint {file} --format compact" --findings-exit-code 1
 ```
 
 ## Cron and CI Examples

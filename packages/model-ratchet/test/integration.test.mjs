@@ -419,3 +419,55 @@ describe('integration: stderr findings and ENOENT error reporting (#695)', () =>
     assert.match(out.results[0].error, /review-cmd failed to run: .*ENOENT/);
   });
 });
+
+describe('integration: --findings-exit-code (#693)', () => {
+  let tmp;
+  before(() => {
+    tmp = makeRepo([
+      [['src/hot.mjs', 'export const h = 1;']],
+      [['src/hot.mjs', 'export const h = 2;']],
+    ]);
+  });
+  after(() => rmSync(tmp, { recursive: true, force: true }));
+
+  it('records findings when review-cmd exits with --findings-exit-code 1 (eslint contract) and fails on exit 2', () => {
+    const bin = resolve(__dirname, '../bin/model-ratchet.mjs');
+    const eslintStub = join(tmp, 'eslint-stub.mjs');
+    writeFileSync(eslintStub, 'console.log(process.argv[2] + ":4: lint problem found"); process.exit(1);');
+    const res1 = spawnSync('node', [bin, '--top', '1', '--review-cmd', `node ${eslintStub} {file}`, '--findings-exit-code', '1', '--json'], {
+      cwd: tmp,
+      encoding: 'utf8',
+    });
+    assert.equal(res1.status, 0, `stderr: ${res1.stderr}`);
+    const out1 = JSON.parse(res1.stdout);
+    assert.equal(out1.operationalError, false);
+    assert.equal(out1.totalFindings, 1);
+    assert.equal(out1.results[0].findings[0].line, 4);
+
+    const fatalStub = join(tmp, 'eslint-fatal.mjs');
+    writeFileSync(fatalStub, 'console.error("Oops! Something went wrong!"); process.exit(2);');
+    const res2 = spawnSync('node', [bin, '--top', '1', '--review-cmd', `node ${fatalStub} {file}`, '--findings-exit-code', '1', '--json'], {
+      cwd: tmp,
+      encoding: 'utf8',
+    });
+    assert.equal(res2.status, 1);
+    const out2 = JSON.parse(res2.stdout);
+    assert.equal(out2.operationalError, true);
+    assert.match(out2.results[0].error, /review-cmd exited with code 2: Oops!/);
+  });
+
+  it('rejects invalid --findings-exit-code values (0, 256, non-numeric)', () => {
+    const bin = resolve(__dirname, '../bin/model-ratchet.mjs');
+    for (const bad of ['0', '256', '-1', 'abc']) {
+      const res = spawnSync('node', [bin, `--findings-exit-code=${bad}`], { cwd: tmp, encoding: 'utf8' });
+      assert.equal(res.status, 1, `expected exit 1 for ${bad}`);
+      assert.match(res.stderr, /--findings-exit-code must be an integer between 1 and 255/);
+    }
+    const resOk = spawnSync('node', [bin, '--dry-run', '--findings-exit-code', '255', '--json'], { cwd: tmp, encoding: 'utf8' });
+    assert.equal(resOk.status, 0);
+    const resHelp = spawnSync('node', [bin, '--help'], { cwd: tmp, encoding: 'utf8' });
+    assert.equal(resHelp.status, 0);
+    assert.match(resHelp.stdout, /\n  --findings-exit-code <n>\n/);
+    assert.ok(resHelp.stdout.includes('(default: 2; use 1 for linters like eslint)'));
+  });
+});

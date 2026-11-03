@@ -15,6 +15,7 @@ import {
   parseFindingLine,
   runReviewCmd,
   reviewRunError,
+  DEFAULT_FINDINGS_EXIT_CODE,
   parseFindingsFromOutput,
   tokenizeCommand,
   substituteToken,
@@ -274,5 +275,26 @@ describe('runReviewCmd / reviewRunError — spawnError and stderr propagation (#
       stderr: '   ',
     }, 5000);
     assert.equal(errEmptyStderr, 'review-cmd exited with code 1');
+  });
+});
+
+describe('reviewRunError custom findingsExitCode (#693)', () => {
+  it('defaults DEFAULT_FINDINGS_EXIT_CODE to 2', () => {
+    assert.equal(DEFAULT_FINDINGS_EXIT_CODE, 2);
+  });
+
+  it('accepts custom findingsExitCode (e.g. 1 for eslint) and rejects exit 2 as operational error', () => {
+    assert.equal(
+      reviewRunError({ exitCode: 1, stderr: '', timedOut: false, signal: null }, 5000, 1),
+      null
+    );
+    assert.equal(
+      reviewRunError({ exitCode: 0, stderr: '', timedOut: false, signal: null }, 5000, 1),
+      null
+    );
+    assert.match(
+      reviewRunError({ exitCode: 2, stderr: 'fatal config error', timedOut: false, signal: null }, 5000, 1),
+      /review-cmd exited with code 2: fatal config error/
+    );
   });
 });
