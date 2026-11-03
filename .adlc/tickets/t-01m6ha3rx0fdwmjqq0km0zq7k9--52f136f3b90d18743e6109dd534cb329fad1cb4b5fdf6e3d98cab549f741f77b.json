@@ -1,0 +1,20 @@
+{
+  "criteria": [
+    "Given a repository where .adlc/manifest.d exists with segment files and .adlc/manifest.jsonl does not exist, when the Claude Code Stop hook runs manifest(), then it invokes gate-manifest verify --json --allow-legacy-unsigned instead of returning early.",
+    "Given a repository where neither .adlc/manifest.jsonl nor .adlc/manifest.d exists, when the Claude Code Stop hook runs manifest(), then it returns early without invoking gate-manifest."
+  ],
+  "id": "T-01M6HA3RX0FDWMJQQ0KM0ZQ7K9",
+  "intent": "Resolve #803: plugins/adlc-claude-code/hooks/adlc-hook.mjs manifest() returns early if .adlc/manifest.jsonl does not exist, skipping Stop-hook manifest verification in forest-mode repos whose evidence lives only in .adlc/manifest.d/*.jsonl. Check for either .adlc/manifest.jsonl or .adlc/manifest.d before returning early.",
+  "rails": [
+    "plugins/adlc-claude-code/hooks/test/rails.test.mjs",
+    "plugins/adlc-claude-code/hooks/test/build-gate.test.mjs"
+  ],
+  "scope": [
+    "plugins/adlc-claude-code/hooks/adlc-hook.mjs",
+    "plugins/adlc-claude-code/hooks/test/manifest.test.mjs"
+  ],
+  "status": "ready",
+  "tier": "standard",
+  "title": "fix(adlc-claude-code): run Stop-hook manifest verification when .adlc/manifest.d exists without root manifest.jsonl",
+  "verify": "node --test plugins/adlc-claude-code/hooks/test/manifest.test.mjs plugins/adlc-claude-code/hooks/test/rails.test.mjs plugins/adlc-claude-code/hooks/test/build-gate.test.mjs"
+}
