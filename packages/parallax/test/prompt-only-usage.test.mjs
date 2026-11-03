@@ -130,3 +130,31 @@ test('recordVerdict and readVerdictSource unit contract: re-exports core and enf
   assert.equal(diskEntry.data.customField, 'preserved', 'customField is preserved');
   assert.equal('usage' in diskEntry.data, false);
 });
+
+test('#710: parallax --prompt-only --record-verdict discloses (unsigned) when ADLC_MANIFEST_KEY is unset and (signed) when set', () => {
+  const dirUnsigned = mkdtempSync(join(tmpdir(), 'parallax-unsigned-'));
+  fixtureDirs.add(dirUnsigned);
+  const verdictUnsigned = join(dirUnsigned, 'verdict.txt');
+  writeFileSync(verdictUnsigned, 'No divergence.\n', 'utf8');
+  const envUnsigned = { ...process.env };
+  delete envUnsigned.ADLC_MANIFEST_KEY;
+  const resUnsigned = spawnSync(process.execPath, [CLI, '--request', 'Add login', '--prompt-only', '--record-verdict', verdictUnsigned, '--ticket', 'T-UNSIGNED'], {
+    cwd: dirUnsigned,
+    env: envUnsigned,
+    encoding: 'utf8',
+  });
+  assert.equal(resUnsigned.status, 0, resUnsigned.stderr);
+  assert.match(resUnsigned.stdout, /gate-manifest: recorded seq=1 gate=parallax \(unsigned\)/);
+
+  const dirSigned = mkdtempSync(join(tmpdir(), 'parallax-signed-'));
+  fixtureDirs.add(dirSigned);
+  const verdictSigned = join(dirSigned, 'verdict.txt');
+  writeFileSync(verdictSigned, 'No divergence.\n', 'utf8');
+  const resSigned = spawnSync(process.execPath, [CLI, '--request', 'Add login', '--prompt-only', '--record-verdict', verdictSigned, '--ticket', 'T-SIGNED'], {
+    cwd: dirSigned,
+    env: { ...process.env, ADLC_MANIFEST_KEY: 'test-signing-key-710' },
+    encoding: 'utf8',
+  });
+  assert.equal(resSigned.status, 0, resSigned.stderr);
+  assert.match(resSigned.stdout, /gate-manifest: recorded seq=1 gate=parallax \(signed\)/);
+});

@@ -150,7 +150,8 @@ async function recordPromptOnlyVerdict(prompts, extra) {
   const { readVerdictSource, recordVerdict } = await import('../lib/verdict.mjs');
   const verdict = await readVerdictSource(values['record-verdict']);
   const entry = recordVerdict({ ticket: values.ticket, verdict, extra, key: getKey() });
-  console.log(`gate-manifest: recorded seq=${entry.seq} gate=${entry.gate}`);
+  const signed = typeof entry.sig === 'string' ? ' (signed)' : ' (unsigned)';
+  console.log(`gate-manifest: recorded seq=${entry.seq} gate=${entry.gate}${signed}`);
   process.exit(0);
 }
 
