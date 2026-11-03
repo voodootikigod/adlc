@@ -105,17 +105,17 @@ if (!existsSync(logFile)) {
 // Parse options
 // ---------------------------------------------------------------------------
 
-const maxRepeat = parseInt(values['max-repeat'], 10);
-if (!Number.isInteger(maxRepeat) || maxRepeat < 1) {
+if (!/^[1-9]\d*$/.test(values['max-repeat'])) {
   opError('--max-repeat must be a positive integer');
 }
+const maxRepeat = Number(values['max-repeat']);
 
 let maxBytes = null;
 if (values['max-bytes'] !== undefined) {
-  maxBytes = parseInt(values['max-bytes'], 10);
-  if (!Number.isInteger(maxBytes) || maxBytes < 0) {
+  if (!/^\d+$/.test(values['max-bytes'])) {
     opError('--max-bytes must be a non-negative integer');
   }
+  maxBytes = Number(values['max-bytes']);
 }
 
 const scopes = values.scope ?? [];
@@ -129,14 +129,14 @@ if (hasSpentTokens !== hasBudget) {
 let spentTokens = null;
 let budget = null;
 if (hasSpentTokens) {
-  spentTokens = parseInt(values['spent-tokens'], 10);
-  if (!Number.isInteger(spentTokens) || spentTokens < 0) {
+  if (!/^\d+$/.test(values['spent-tokens'])) {
     opError('--spent-tokens must be a non-negative integer');
   }
-  budget = parseInt(values.budget, 10);
-  if (!Number.isInteger(budget) || budget < 0) {
+  spentTokens = Number(values['spent-tokens']);
+  if (!/^\d+$/.test(values.budget)) {
     opError('--budget must be a non-negative integer');
   }
+  budget = Number(values.budget);
 }
 
 // An unreadable --files path is an operational error before any analysis, so a
