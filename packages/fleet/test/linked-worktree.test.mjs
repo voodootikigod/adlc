@@ -76,3 +76,32 @@ test('the host-side link check works when fleet is invoked from a LINKED worktre
   const common = gitCommonDir(linked, gitAt);
   assert.ok(assertWorktreeLink({ path: wt.path, gitDirRoot: common }).gitdir.startsWith(common), 'the common-dir root accepts the nested worktree');
 });
+
+test('createWorktree rejects unsafe ticket ids (#638)', () => {
+  for (const badId of [
+    "",
+    null,
+    undefined,
+    42,
+    'T1") (allow file-write* (subpath "/"',
+    "T1/evil",
+    "T1\\evil",
+    "T1 space",
+    "T1\nnewline",
+  ]) {
+    assert.throws(
+      () => createWorktree("/repo", badId, { integrationBranch: "main", git: () => { throw new Error("git must not be called"); } }),
+      /Invalid ticket id/,
+    );
+  }
+
+  // Valid conservative charset characters (alphanumeric, dot, underscore, hyphen) are accepted
+  const calls = [];
+  const res = createWorktree("/repo", "T-01_A.2", {
+    integrationBranch: "main",
+    git: (...args) => { calls.push(args); return "deadbeef"; },
+  });
+  assert.equal(res.branch, "fleet/t-01_a.2");
+  assert.equal(res.path, "/repo/.worktrees/fleet-t-01_a.2");
+  assert.equal(res.startSha, "deadbeef");
+});
