@@ -20,6 +20,11 @@ export function validateCandidate(candidate, opts = {}) {
     return { valid: false, reason: 'invalid:malformed' };
   }
 
+  // Never allow adversary-supplied witnessSource self-attestation (#642)
+  if ('witnessSource' in candidate) {
+    return { valid: false, reason: 'invalid:malformed' };
+  }
+
   // Required fields
   const required = ['target', 'claimKind', 'diff', 'witnessProposal'];
   for (const field of required) {

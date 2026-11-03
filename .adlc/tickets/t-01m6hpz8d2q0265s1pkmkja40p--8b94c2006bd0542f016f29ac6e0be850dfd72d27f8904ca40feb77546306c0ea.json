@@ -1,0 +1,20 @@
+{
+  "acceptance": [
+    "validateCandidate rejects any candidate object carrying a witnessSource property (returns { valid: false, reason: \"invalid:malformed\" }).",
+    "makeProvisionFn oracleFn never reads cand.witnessSource from the candidate object and derives contract-derived status only via deriveContractWitness against the target gate descriptor."
+  ],
+  "description": "Prevent adversary-controlled candidate JSON from self-attesting witnessSource: \"contract-derived\" in packages/gate-fuzzing/lib/candidate.mjs and packages/gate-fuzzing/lib/provision.mjs.",
+  "id": "T-01M6HPZ8D2Q0265S1PKMKJA40P",
+  "rails": [
+    "packages/gate-fuzzing/test/classify.test.mjs",
+    "packages/gate-fuzzing/test/verdict.test.mjs"
+  ],
+  "scope": [
+    "packages/gate-fuzzing/lib/candidate.mjs",
+    "packages/gate-fuzzing/lib/provision.mjs",
+    "packages/gate-fuzzing/test/candidate.test.mjs",
+    "packages/gate-fuzzing/test/oracle.test.mjs"
+  ],
+  "title": "gate-fuzzing: reject or strip adversary-supplied witnessSource and derive independence from harness (#642)",
+  "verify": "node --test packages/gate-fuzzing/test/candidate.test.mjs packages/gate-fuzzing/test/oracle.test.mjs packages/gate-fuzzing/test/classify.test.mjs packages/gate-fuzzing/test/verdict.test.mjs"
+}
