@@ -37,11 +37,11 @@ function tailLines(text, n = 10) {
 
 // ── required checks ──────────────────────────────────────────────────────────
 
-/** REQUIRED: bash — spawn 'echo preflight-ok' and verify output. */
-export async function checkBash() {
+/** REQUIRED: bash — invoke 'sh -c "echo preflight-ok"' and verify output. */
+export async function checkBash(env = process.env) {
   const name = 'bash';
   try {
-    const { exitCode, stdout } = await runCmd('echo', ['preflight-ok']);
+    const { exitCode, stdout } = await runCmd('sh', ['-c', 'echo preflight-ok'], { env });
     if (exitCode !== 0) {
       return { name, status: 'fail', detail: `echo exited ${exitCode}` };
     }
