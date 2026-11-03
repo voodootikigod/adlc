@@ -10,5 +10,6 @@
     "packages/ticket-prune/lib/detect.mjs",
     "packages/ticket-prune/test/list-tracked-files.test.mjs"
   ],
-  "title": "ticket-prune: use git ls-tree -z and splitNulPaths in listTrackedFiles (#785)"
+  "title": "ticket-prune: use git ls-tree -z and splitNulPaths in listTrackedFiles (#785)",
+  "completed": true
 }

@@ -13,5 +13,6 @@
     "packages/parallax/test/modes.test.mjs",
     "packages/parallax/test/questions-json.test.mjs"
   ],
-  "title": "parallax: normalize divergences lacking options array (#711)"
+  "title": "parallax: normalize divergences lacking options array (#711)",
+  "completed": true
 }

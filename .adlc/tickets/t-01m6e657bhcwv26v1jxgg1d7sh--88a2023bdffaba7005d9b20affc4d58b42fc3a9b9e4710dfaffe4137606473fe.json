@@ -12,5 +12,6 @@
     "packages/model-ratchet/test/run-review.test.mjs",
     "packages/model-ratchet/test/integration.test.mjs"
   ],
-  "title": "model-ratchet: surface review-cmd spawn errors and stderr findings (#695)"
+  "title": "model-ratchet: surface review-cmd spawn errors and stderr findings (#695)",
+  "completed": true
 }
