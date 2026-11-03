@@ -80,7 +80,7 @@ Output:
 
 Exit codes:
   0  clean (gate passes)
-  1  operational error (file not found, bad arguments, could-not-analyze)
+  1  operational error (file not found, bad arguments, ledger-write failure, could-not-analyze)
   2  flail detected (gate fails)
 
 ADLC phase: C6 / P4 supervisor
@@ -181,6 +181,26 @@ if (!analyzability.ok) {
 const result = analyze({ lines, bytes, scopes, maxRepeat, maxBytes, spentTokens, budget });
 
 // ---------------------------------------------------------------------------
+// Record on clean verdict (before printing, so a ledger failure never prints CLEAN)
+// ---------------------------------------------------------------------------
+
+if (values.record && result.verdict !== 'flail') {
+  try {
+    appendManifestEntry({
+      ts: new Date().toISOString(),
+      type: 'flail-check',
+      ticket: values.ticket ?? null,
+      verdict: result.verdict,
+      logFile,
+      logHash: sha256(raw),
+      ...(boundFiles === null ? {} : { files: boundFiles }),
+    }, undefined, { key: getKey() });
+  } catch (err) {
+    opError(`could not record to manifest ledger: ${err.message}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Output
 // ---------------------------------------------------------------------------
 
@@ -188,22 +208,6 @@ if (values.json) {
   printJson(result);
 } else {
   console.log(formatResult(result));
-}
-
-// ---------------------------------------------------------------------------
-// Record on clean verdict
-// ---------------------------------------------------------------------------
-
-if (values.record && result.verdict !== 'flail') {
-  appendManifestEntry({
-    ts: new Date().toISOString(),
-    type: 'flail-check',
-    ticket: values.ticket ?? null,
-    verdict: result.verdict,
-    logFile,
-    logHash: sha256(raw),
-    ...(boundFiles === null ? {} : { files: boundFiles }),
-  }, undefined, { key: getKey() });
 }
 
 // ---------------------------------------------------------------------------
