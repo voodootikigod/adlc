@@ -1,5 +1,6 @@
 {
   "body": "Resolves #796.\n\n## Acceptance Criteria\n1. `renderUsage()` in `packages/tickets/lib/help.mjs` displays `  update <id> --input <path|-> --expect <ticket-hash> [--force] [--write]` so `--expect` is not shown as optional and `--force` is discoverable from top-level usage.\n2. Unit tests in `packages/tickets/test/help.test.mjs` verify that `renderUsage()` includes `update <id> --input <path|-> --expect <ticket-hash> [--force] [--write]`.",
+  "completed": true,
   "id": "T-01M6H6160NXSHNR2V9T6KE5CPY",
   "rails": [
     "packages/tickets/test/help.test.mjs"
