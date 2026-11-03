@@ -218,6 +218,7 @@ export async function runFleet({ all, runId, config, deps, resume }) {
     concurrency: config.concurrency,
     sandboxMode: config.sandboxMode,
     startedAt: config.startedAt,
+    logDir: deps.statusDir ? `${deps.statusDir}/fleet-logs` : undefined,
   });
   const persist = () => { if (deps.statusDir) saveStatus(deps.statusDir, status); };
 

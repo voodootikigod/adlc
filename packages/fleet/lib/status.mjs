@@ -30,7 +30,7 @@ export const PAUSED_STATE = 'paused';
 // Bump ONLY on a breaking change to the observed fields.
 export const FLEET_STATUS_SCHEMA_VERSION = 1;
 
-export function newStatus({ runId, base, baseSha, integrationBranch, concurrency, sandboxMode, startedAt }) {
+export function newStatus({ runId, base, baseSha, integrationBranch, concurrency, sandboxMode, startedAt, logDir }) {
   return {
     schemaVersion: FLEET_STATUS_SCHEMA_VERSION,
     runId,
@@ -40,6 +40,7 @@ export function newStatus({ runId, base, baseSha, integrationBranch, concurrency
     sandboxMode,
     concurrency,
     startedAt,
+    ...(typeof logDir === 'string' && logDir ? { logDir } : {}),
     // Branch-level quarantine: survives across resumes, so a run that could not
     // withdraw a gate-rejected completion never publishes that branch later.
     contaminated: false,

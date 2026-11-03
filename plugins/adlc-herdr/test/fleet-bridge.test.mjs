@@ -597,3 +597,25 @@ test('runFleetPlan token-tags each tail pane with its ticket + CURRENT state, re
   await runFleetPlan({ plan: gating, state, ...deps });
   assert.deepEqual(tags[1], ['w4:pa', 't-a', 'gating'], 'a state change re-tags the pane');
 });
+
+test('planFleetBridge honors a relocated logDir in fleet-status.json and falls back when absent or unsafe (#836)', () => {
+  const defaultDir = ['.adlc', 'fleet-logs'].join('/');
+  const custom = plan({
+    curr: status({
+      logDir: 'custom-status/fleet-logs/',
+      tickets: { 't-a': { state: 'building' }, 't-b': { state: 'failed' } },
+    }),
+  });
+  assert.equal(custom.tailPanes[0].logPath, 'custom-status/fleet-logs/t-a.log');
+  assert.equal(custom.tailPanes[1].logPath, 'custom-status/fleet-logs/t-b.log');
+
+  for (const unsafe of ['', '/abs/path', '../escape', 'a/../b', '-flag/logs', 'a//b', 42, null]) {
+    const fallback = plan({
+      curr: status({
+        logDir: unsafe,
+        tickets: { 't-a': { state: 'building' } },
+      }),
+    });
+    assert.equal(fallback.tailPanes[0].logPath, `${defaultDir}/t-a.log`, `unsafe logDir ${JSON.stringify(unsafe)} must fall back`);
+  }
+});
