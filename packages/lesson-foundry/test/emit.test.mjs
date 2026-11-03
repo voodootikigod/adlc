@@ -1,11 +1,11 @@
 // Tests for file emission shapes.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { buildLintDescriptor, buildCheckScript, buildSkillStub, buildSpecGapLine, planEmissions } from '../lib/emit.mjs';
+import { buildLintDescriptor, buildCheckScript, buildSkillStub, buildSpecGapLine, planEmissions, collectIncludeGlobs } from '../lib/emit.mjs';
 
 // ---------------------------------------------------------------------------
 // buildLintDescriptor
@@ -217,4 +217,66 @@ test('planEmissions: outDir prefix applied to all file paths', () => {
 test('planEmissions: empty clusters returns empty plan', () => {
   const plan = planEmissions([], [], '/tmp/out');
   assert.deepStrictEqual(plan, []);
+});
+
+test('collectIncludeGlobs: includes default extensions and any valid finding file extensions', () => {
+  assert.strictEqual(collectIncludeGlobs([]), '--include="*.mjs" --include="*.js" --include="*.ts" --include="*.tsx"');
+  assert.strictEqual(collectIncludeGlobs(null), '--include="*.mjs" --include="*.js" --include="*.ts" --include="*.tsx"');
+  const globs = collectIncludeGlobs([
+    { desc: 'x', file: 'scripts/deploy.py' },
+    { desc: 'y', file: 'docs/guide.md' },
+    { desc: 'z', file: 'bad/file."quote"' },
+    { desc: 'w', file: 123 },
+    null,
+  ]);
+  assert(globs.includes('--include="*.py"'));
+  assert(globs.includes('--include="*.md"'));
+  assert(!globs.includes('quote'));
+});
+
+test('buildCheckScript: generated gate fails closed (exit 2) when grep exits 1 with stderr (e.g. missing grep on Windows cmd.exe)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'foundry-gate-err1-'));
+  try {
+    const binDir = join(dir, 'fake-bin');
+    mkdirSync(binDir, { recursive: true });
+    const fakeGrep = join(binDir, 'grep');
+    writeFileSync(fakeGrep, '#!/bin/sh\necho "\'grep\' is not recognized as an internal or external command" >&2\nexit 1\n', 'utf8');
+    chmodSync(fakeGrep, 0o755);
+
+    const { path, content } = buildCheckScript('missing-grep', [{ desc: 'Found "TODO" in code', category: 'security' }]);
+    const scriptPath = join(dir, path);
+    writeFileSync(scriptPath, content, 'utf8');
+
+    const res = spawnSync(process.execPath, [scriptPath], {
+      cwd: dir,
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+      encoding: 'utf8',
+      timeout: 15000,
+    });
+    assert.strictEqual(res.status, 2, `gate must fail closed (exit 2) when grep exits 1 with stderr; got ${res.status}: ${res.stdout}`);
+    assert(res.stderr.includes('check-missing-grep: grep error:'), `stderr must report grep error: ${res.stderr}`);
+    assert(res.stderr.includes('not recognized'), `stderr must include underlying stderr text: ${res.stderr}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('buildCheckScript: generated gate matches occurrences in non-JS finding file extensions (.py/.yml)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'foundry-gate-ext-'));
+  try {
+    writeFileSync(join(dir, 'worker.py'), 'SECRET_TOKEN = "hardcoded"\n', 'utf8');
+    const findings = [
+      { desc: 'Found "SECRET_TOKEN" in python worker', file: 'worker.py', category: 'security' },
+    ];
+    const { path, content } = buildCheckScript('py-secret', findings);
+    assert(content.includes('--include="*.py"'));
+    const scriptPath = join(dir, path);
+    writeFileSync(scriptPath, content, 'utf8');
+
+    const res = spawnSync(process.execPath, [scriptPath], { cwd: dir, encoding: 'utf8', timeout: 15000 });
+    assert.strictEqual(res.status, 2, `gate must FAIL (exit 2) on occurrence in .py file; got ${res.status}: ${res.stdout}`);
+    assert(res.stderr.includes('worker.py'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

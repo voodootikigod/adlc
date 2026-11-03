@@ -1,0 +1,13 @@
+{
+  "id": "T-01M6HMF5CK6X855GR9CQ4EP58D",
+  "rails": [
+    "packages/lesson-foundry/test/route.test.mjs",
+    "packages/lesson-foundry/test/cluster.test.mjs"
+  ],
+  "scope": [
+    "packages/lesson-foundry/lib/emit.mjs",
+    "packages/lesson-foundry/test/emit.test.mjs"
+  ],
+  "title": "lesson-foundry: fail closed in generated check script when grep errors or emits stderr (#675)",
+  "verify": "node --test packages/lesson-foundry/test/emit.test.mjs packages/lesson-foundry/test/route.test.mjs packages/lesson-foundry/test/cluster.test.mjs"
+}

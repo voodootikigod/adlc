@@ -1,0 +1,16 @@
+{
+  "id": "T-01M6HMF3P4VK72M7Q9A36W4VF3",
+  "rails": [
+    "packages/model-ratchet/test/score.test.mjs",
+    "packages/model-ratchet/test/walk.test.mjs"
+  ],
+  "scope": [
+    "packages/model-ratchet/lib/run-review.mjs",
+    "packages/model-ratchet/bin/model-ratchet.mjs",
+    "packages/model-ratchet/README.md",
+    "packages/model-ratchet/test/run-review.test.mjs",
+    "packages/model-ratchet/test/integration.test.mjs"
+  ],
+  "title": "model-ratchet: add --findings-exit-code and update eslint README example (#693)",
+  "verify": "node --test packages/model-ratchet/test/run-review.test.mjs packages/model-ratchet/test/integration.test.mjs packages/model-ratchet/test/score.test.mjs packages/model-ratchet/test/walk.test.mjs"
+}

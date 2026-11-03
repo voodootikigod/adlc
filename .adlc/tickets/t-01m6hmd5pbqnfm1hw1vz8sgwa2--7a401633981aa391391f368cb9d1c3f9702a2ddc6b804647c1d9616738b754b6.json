@@ -1,0 +1,12 @@
+{
+  "id": "T-01M6HMD5PBQNFM1HW1VZ8SGWA2",
+  "rails": [
+    "packages/behavior-diff/test/behavior-diff.test.mjs"
+  ],
+  "scope": [
+    "packages/behavior-diff/lib/capture.mjs",
+    "packages/behavior-diff/test/capture-ssrf.test.mjs"
+  ],
+  "title": "behavior-diff: constrain baseUrl scheme, route path prefix, origin, and redirect handling (#585)",
+  "verify": "node --test packages/behavior-diff/test/capture-ssrf.test.mjs packages/behavior-diff/test/behavior-diff.test.mjs"
+}
