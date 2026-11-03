@@ -1,0 +1,14 @@
+{
+  "body": "Resolves #716.\n\n## Acceptance Criteria\n1. `checkWorktrees` in `packages/preflight/lib/checks.mjs` passes `-c core.hooksPath=/dev/null` when invoking `git worktree add --detach` so target repository `post-checkout` hooks never execute with the operator ambient environment.\n2. `packages/preflight/README.md` documents that `--worktrees` disables repository hooks via `-c core.hooksPath=/dev/null`.\n3. Unit tests in `packages/preflight/test/unit.test.mjs` verify that an executable `.git/hooks/post-checkout` hook in the target repo does not fire during `checkWorktrees`.",
+  "id": "T-01M6H614VQDW9KP3EZ1XMJ459M",
+  "rails": [
+    "packages/preflight/test/unit.test.mjs"
+  ],
+  "scope": [
+    "packages/preflight/lib/checks.mjs",
+    "packages/preflight/README.md",
+    "packages/preflight/test/unit.test.mjs"
+  ],
+  "title": "preflight: disable repository hooks during --worktrees checkout probe (#716)",
+  "verify": "node --test packages/preflight/test/unit.test.mjs packages/preflight/test/integration.test.mjs"
+}

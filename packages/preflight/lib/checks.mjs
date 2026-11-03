@@ -138,7 +138,7 @@ export async function checkWorktrees(cwd = process.cwd()) {
   let added = false;
   try {
     git(
-      ['worktree', 'add', '--detach', worktreePath, 'HEAD'],
+      ['-c', 'core.hooksPath=/dev/null', 'worktree', 'add', '--detach', worktreePath],
       { cwd, stdio: ['ignore', 'pipe', 'pipe'] }
     );
     added = true;
