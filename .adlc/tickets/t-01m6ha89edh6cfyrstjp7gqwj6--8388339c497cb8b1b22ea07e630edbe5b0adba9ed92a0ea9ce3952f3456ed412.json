@@ -1,0 +1,20 @@
+{
+  "criteria": [
+    "Given ADLC_MANIFEST_KEY is set, when parallax --prompt-only --record-verdict records an entry, then stdout ends with \"(signed)\".",
+    "Given ADLC_MANIFEST_KEY is unset, when parallax --prompt-only --record-verdict records an entry, then stdout ends with \"(unsigned)\"."
+  ],
+  "id": "T-01M6HA89EDH6CFYRSTJP7GQWJ6",
+  "intent": "Resolve #710: packages/parallax/bin/parallax.mjs prints \"gate-manifest: recorded seq=... gate=...\" without disclosing whether the entry was signed or unsigned when ADLC_MANIFEST_KEY is unset. Append \"(signed)\" or \"(unsigned)\" based on typeof entry.sig === \"string\", matching gate-manifest record.",
+  "rails": [
+    "packages/parallax/test/modes.test.mjs",
+    "packages/parallax/test/scoring.test.mjs"
+  ],
+  "scope": [
+    "packages/parallax/bin/parallax.mjs",
+    "packages/parallax/test/prompt-only-usage.test.mjs"
+  ],
+  "status": "ready",
+  "tier": "standard",
+  "title": "fix(parallax): disclose (signed) or (unsigned) when recording prompt-only verdict to gate-manifest",
+  "verify": "node --test packages/parallax/test/prompt-only-usage.test.mjs packages/parallax/test/modes.test.mjs packages/parallax/test/scoring.test.mjs"
+}
