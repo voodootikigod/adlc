@@ -1461,3 +1461,15 @@ describe('ticket-check (#893)', () => {
     assert.equal(JSON.parse(readFileSync(manifest4, 'utf8').trim()).ticket, 'X');
   });
 });
+
+describe('unknown verb error (#655)', () => {
+  it('lists all accepted verbs including migrate and migrate-branch on an unknown verb', () => {
+    const bin = new URL('../bin/gate-manifest.mjs', import.meta.url).pathname;
+    const r = spawnSync(process.execPath, [bin, 'migrat'], { encoding: 'utf8' });
+    assert.equal(r.status, 1);
+    assert.match(
+      r.stderr,
+      /error: unknown verb: migrat\. Expected: record \| verify \| show \| attest \| repair-chain \| generate-key \| enable \| migrate \| migrate-branch \| adopt/
+    );
+  });
+});

@@ -411,4 +411,5 @@ if (verb === 'adopt') {
 }
 
 // Unknown verb
-opError(`unknown verb: ${verb}. Expected: record | verify | show | attest | repair-chain | generate-key | enable | adopt`);
+const expectedVerbs = ['record', 'verify', 'show', 'attest', 'repair-chain', 'generate-key', 'enable', 'migrate', 'migrate-branch', 'adopt'].join(' | ');
+opError(`unknown verb: ${verb}. Expected: ${expectedVerbs}`);
