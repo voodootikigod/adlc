@@ -6,6 +6,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { SECRET_PATTERNS, looksLikeRandomSecret } from './secret-shapes.mjs';
+import { pidAlive } from './proc.mjs';
+import { isPlainObject } from './cli.mjs';
 
 export const ADLC_DIR = '.adlc';
 
@@ -19,13 +21,26 @@ export function ledgerPath(name, dir = ADLC_DIR) {
 // advisory lockfile serialises writers across processes.
 const LOCK_RETRY_DELAY_MS = 5;
 const LOCK_MAX_RETRIES = 400; // ~2s ceiling
+const LOCK_STALE_MS = 60_000;
 
 function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+function isStaleLockOwner(current, { isPidAlive, staleMs, now }) {
+  if (!isPlainObject(current)) return false;
+  if (current.hostname === hostname() && typeof current.pid === 'number' && !isPidAlive(current.pid)) {
+    return true;
+  }
+  return typeof current.startedAt === 'string' && now() - Date.parse(current.startedAt) > staleMs;
+}
+
 /** Run `fn` while holding an ownership-checked advisory lock on `${target}.lock`. */
-export function withLedgerLock(target, fn, { retries = LOCK_MAX_RETRIES, delayMs = LOCK_RETRY_DELAY_MS } = {}) {
+export function withLedgerLock(
+  target,
+  fn,
+  { retries = LOCK_MAX_RETRIES, delayMs = LOCK_RETRY_DELAY_MS, staleMs = LOCK_STALE_MS, isPidAlive = pidAlive, now = Date.now } = {}
+) {
   const lockPath = `${target}.lock`;
   mkdirSync(dirname(target), { recursive: true });
   const owner = { version: 1, token: randomUUID(), pid: process.pid, hostname: hostname(), startedAt: new Date().toISOString() };
@@ -35,6 +50,10 @@ export function withLedgerLock(target, fn, { retries = LOCK_MAX_RETRIES, delayMs
       fd = openSync(lockPath, 'wx'); // fails if lock already held
     } catch (err) {
       if (err.code !== 'EEXIST') throw err;
+      try {
+        const current = JSON.parse(readFileSync(lockPath, 'utf8'));
+        if (isStaleLockOwner(current, { isPidAlive, staleMs, now })) unlinkSync(lockPath);
+      } catch {}
       if (i < retries) sleepSync(delayMs);
       continue;
     }
@@ -53,7 +72,9 @@ export function withLedgerLock(target, fn, { retries = LOCK_MAX_RETRIES, delayMs
       } catch {}
     }
   }
-  throw new Error(`could not acquire ledger lock: ${lockPath} (held > ${retries * delayMs}ms)`);
+  throw new Error(
+    `could not acquire ledger lock: ${lockPath} (held > ${retries * delayMs}ms) — a previous writer may have been killed; remove ${lockPath} if no ADLC process is running`
+  );
 }
 
 function parseLedger(content) {

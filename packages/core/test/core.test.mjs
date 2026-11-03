@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, writeFileSync, utimesSync, chmodSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, utimesSync, chmodSync , existsSync } from 'node:fs';
 import { tmp, gitRepo } from '../lib/test-kit.mjs';
 
 import { join } from 'node:path';
@@ -1587,4 +1587,118 @@ test('value-substitute: does not resurrect import lines (SKIP_LINE unchanged) (#
 test('value-substitute is not also a primary operator — no double-cover by name (#1013)', () => {
   assert.ok(!OPERATORS.some((o) => o.name === 'value-substitute'),
     'the fallback must stay out of OPERATORS, or every covered line gains a redundant mutant');
+});
+
+// ── withLedgerLock stale-lock reclamation and remediation hint (#621) ────────
+
+test('withLedgerLock: reclaims lockfile orphaned by a dead PID on the same host (#621)', (t) => {
+  const dir = tmp(t, 'adlc-lock-dead-pid-');
+  const target = join(dir, 'manifest.jsonl');
+  const lockPath = `${target}.lock`;
+  writeFileSync(lockPath, JSON.stringify({
+    version: 1,
+    token: 'dead-owner-token',
+    pid: 999999,
+    hostname: corePublic.thisHost(),
+    startedAt: new Date().toISOString(),
+  }) + '\n');
+
+  let ran = false;
+  const res = corePublic.withLedgerLock(target, () => {
+    ran = true;
+    return 'reclaimed-dead-pid';
+  }, {
+    retries: 2,
+    delayMs: 1,
+    isPidAlive: () => false,
+  });
+  assert.equal(ran, true);
+  assert.equal(res, 'reclaimed-dead-pid');
+  assert.equal(existsSync(lockPath), false);
+});
+
+test('withLedgerLock: reclaims lockfile whose startedAt exceeds staleMs even on another host (#621)', (t) => {
+  const dir = tmp(t, 'adlc-lock-stale-age-');
+  const target = join(dir, 'manifest.jsonl');
+  const lockPath = `${target}.lock`;
+  writeFileSync(lockPath, JSON.stringify({
+    version: 1,
+    token: 'stale-owner-token',
+    pid: process.pid,
+    hostname: 'other-host.local',
+    startedAt: '2020-01-01T00:00:00.000Z',
+  }) + '\n');
+
+  const baseMs = Date.parse('2020-01-01T00:00:00.000Z');
+  // First check exact boundary: age === staleMs is NOT stale
+  assert.throws(() => {
+    corePublic.withLedgerLock(target, () => {}, {
+      retries: 1,
+      delayMs: 1,
+      staleMs: 60_000,
+      now: () => baseMs + 60_000,
+    });
+  }, /remove .*manifest\.jsonl\.lock if no ADLC process is running/);
+
+  // age > staleMs IS stale and gets reclaimed
+  const res = corePublic.withLedgerLock(target, () => 'reclaimed-by-age', {
+    retries: 2,
+    delayMs: 1,
+    staleMs: 60_000,
+    now: () => baseMs + 60_001,
+  });
+  assert.equal(res, 'reclaimed-by-age');
+  assert.equal(existsSync(lockPath), false);
+});
+
+test('withLedgerLock: does not reclaim live same-host lock within staleMs and throws with remediation hint (#621)', (t) => {
+  const dir = tmp(t, 'adlc-lock-live-');
+  const target = join(dir, 'findings.jsonl');
+  const lockPath = `${target}.lock`;
+  writeFileSync(lockPath, JSON.stringify({
+    version: 1,
+    token: 'live-owner-token',
+    pid: process.pid,
+    hostname: corePublic.thisHost(),
+    startedAt: new Date().toISOString(),
+  }) + '\n');
+
+  assert.throws(
+    () => corePublic.withLedgerLock(target, () => {}, { retries: 2, delayMs: 1, isPidAlive: () => true }),
+    (err) => {
+      assert.match(err.message, /could not acquire ledger lock: .*findings\.jsonl\.lock \(held > 2ms\)/);
+      assert.match(err.message, /a previous writer may have been killed; remove .*findings\.jsonl\.lock if no ADLC process is running/);
+      return true;
+    }
+  );
+  assert.equal(existsSync(lockPath), true, 'live lockfile must not be unlinked');
+});
+
+test('withLedgerLock: uses default 60_000ms staleMs ceiling and rejects non-plain-object lockfiles (#621)', (t) => {
+  const dir = tmp(t, 'adlc-lock-malformed-');
+  const target = join(dir, 'manifest.jsonl');
+  const lockPath = `${target}.lock`;
+  for (const payload of ['null\n', '42\n', '[]\n']) {
+    writeFileSync(lockPath, payload);
+    assert.throws(
+      () => corePublic.withLedgerLock(target, () => {}, { retries: 1, delayMs: 1 }),
+      /could not acquire ledger lock/
+    );
+  }
+  // Verify default staleMs (60_000) is honored when staleMs option is omitted
+  const startedIso = '2020-01-01T00:00:00.000Z';
+  const baseMs = Date.parse(startedIso);
+  writeFileSync(lockPath, JSON.stringify({
+    version: 1,
+    token: 'default-stale-token',
+    pid: process.pid,
+    hostname: 'remote-host',
+    startedAt: startedIso,
+  }) + '\n');
+  const res = corePublic.withLedgerLock(target, () => 'default-stale-ok', {
+    retries: 1,
+    delayMs: 1,
+    now: () => baseMs + 60_001,
+  });
+  assert.equal(res, 'default-stale-ok');
 });
