@@ -1,5 +1,6 @@
 {
   "body": "## Context\nResolves #711.\n`renderReport` iterates `d.options` unguarded, throwing `TypeError: d.options is not iterable` when a model returns a divergence entry lacking an `options` array, and `renderQuestionsJson` copies `undefined` options through into `--questions-json`.\n\n## Acceptance Criteria\n- Normalize divergence entries in `packages/parallax/lib/scoring.mjs` (`normalizeDivergences`) and apply normalization in `runDivergenceAnalysis` (`packages/parallax/lib/modes.mjs`) as well as defensive normalization in `renderReport` and `renderQuestionsJson`.\n- Repair missing or non-array `options` on divergence entries with a valid `point` string to `[]` (filtering out malformed option items) so option-less divergences still count toward `computeScore` and preserve `options: []` in `--questions-json`, while failing closed if `divergences` is non-empty but contains zero valid `point` entries.\n\n## Verify\n`node --test packages/parallax/test/scoring.test.mjs packages/parallax/test/modes.test.mjs packages/parallax/test/questions-json.test.mjs`",
+  "completed": true,
   "duration": 15,
   "id": "T-01M6E64GYVJ83B7RPK77DN46FD",
   "rails": [
@@ -13,6 +14,5 @@
     "packages/parallax/test/modes.test.mjs",
     "packages/parallax/test/questions-json.test.mjs"
   ],
-  "title": "parallax: normalize divergences lacking options array (#711)",
-  "completed": true
+  "title": "parallax: normalize divergences lacking options array (#711)"
 }

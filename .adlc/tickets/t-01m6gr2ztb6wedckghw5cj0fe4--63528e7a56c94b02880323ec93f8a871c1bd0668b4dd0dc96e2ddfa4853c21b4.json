@@ -3,6 +3,7 @@
     "writeSnapshot writes via a sibling temporary file and renames atomically into outPath, cleaning up the temp file on failure",
     "behavior-diff capture refuses to overwrite an existing valid snapshot that has reachableCount > 0 when the new capture has 0 reachable routes"
   ],
+  "completed": true,
   "dependsOn": [],
   "duration": 15,
   "id": "T-01M6GR2ZTB6WEDCKGHW5CJ0FE4",

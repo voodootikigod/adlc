@@ -3,6 +3,7 @@
     "validateCandidate rejects any null or non-object entry in parsed.changes with { valid: false, reason: \"each change must be an object\" } instead of throwing a TypeError",
     "runConsensusFix discards a candidate whose changes array contains null without aborting the entire run"
   ],
+  "completed": true,
   "dependsOn": [],
   "duration": 15,
   "id": "T-01M6GR2X2FHFAFEE45990G0RPW",

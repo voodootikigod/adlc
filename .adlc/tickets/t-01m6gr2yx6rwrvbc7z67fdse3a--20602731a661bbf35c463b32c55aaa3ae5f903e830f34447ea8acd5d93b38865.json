@@ -3,6 +3,7 @@
     "writeFileNoFollow with exclusive: false writes to a sibling temporary file with O_NOFOLLOW/O_EXCL and renames it into place so existing files (.gitignore, .adlc/config.json) are never truncated in-place",
     "if the write fails mid-flight, the temporary file is cleaned up and the pre-existing file remains intact"
   ],
+  "completed": true,
   "dependsOn": [],
   "duration": 15,
   "id": "T-01M6GR2YX6RWRVBC7Z67FDSE3A",

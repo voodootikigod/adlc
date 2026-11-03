@@ -3,6 +3,7 @@
     "parseLog extracts string values under stdout, stderr, and output keys in JSONL logs so repeated errors in tool results trigger the repeated-error signal",
     "flail-detector CLI strictly validates --max-repeat, --max-bytes, --spent-tokens, and --budget against integer digits before parsing so trailing garbage like 99abc exits 1 via opError"
   ],
+  "completed": true,
   "dependsOn": [],
   "duration": 15,
   "id": "T-01M6GR2Y0CFV0ZTRE2Y5J849AQ",
