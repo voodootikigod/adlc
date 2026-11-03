@@ -152,7 +152,12 @@ export function assertIntegrationWorktreeClean(worktreeAbs, wtGit, label) {
  * Returns { path, branch, startSha } — startSha is the integration tip the
  * ticket was cut from, the diff base for the scope/prosecution gates (N3).
  */
+const SAFE_TICKET_ID_RE = /^[A-Za-z0-9._-]+$/;
+
 export function createWorktree(repo, ticketId, { integrationBranch, git = defaultGit(repo) }) {
+  if (typeof ticketId !== 'string' || !SAFE_TICKET_ID_RE.test(ticketId)) {
+    throw new Error(`Invalid ticket id: ${ticketId}`);
+  }
   const id = ticketId.toLowerCase();
   const branch = `fleet/${id}`;
   const path = join('.worktrees', `fleet-${id}`);
