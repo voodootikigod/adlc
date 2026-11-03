@@ -576,3 +576,15 @@ export function expandRailsToFiles(rails, allFiles) {
   if (!rails || rails.length === 0) return [];
   return allFiles.filter((file) => rails.some((glob) => globMatch(glob, file)));
 }
+
+/**
+ * Normalize a repo-relative path to forward-slash POSIX separators (#663).
+ * `path.relative()` returns backslash-separated paths on Windows, while git
+ * diff and git ls-files keys are always forward-slash.
+ *
+ * @param {string} relPath
+ * @returns {string}
+ */
+export function normalizeRepoRelativePath(relPath) {
+  return String(relPath).replaceAll('\\', '/');
+}

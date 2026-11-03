@@ -12,7 +12,7 @@ import { tmp } from '@adlc/core/test-kit';
 
 import {
   filterTargetFiles, buildFileTargets,
-  readRailsFromTicketFile, expandRailsToFiles,
+  readRailsFromTicketFile, expandRailsToFiles, normalizeRepoRelativePath,
 } from '../lib/targets.mjs';
 import { buildJsonReport, printTable } from '../lib/report.mjs';
 import { checkSyntax, classifyTestResult, runTest, heapCapMb, withHeapCap, withHeapCapHint, launchFor, GROUP_KILL } from '../lib/runner.mjs';
@@ -774,5 +774,13 @@ describe('runTest caps the heap of every node it starts', () => {
     } finally {
       if (prev === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = prev;
     }
+  });
+});
+
+describe('normalizeRepoRelativePath (#663)', () => {
+  it('converts Windows backslash separators to forward slashes so --target matches diff keys', () => {
+    assert.equal(normalizeRepoRelativePath('packages\\hollow-test\\lib\\targets.mjs'), 'packages/hollow-test/lib/targets.mjs');
+    assert.equal(normalizeRepoRelativePath('lib\\foo/bar\\baz.mjs'), 'lib/foo/bar/baz.mjs');
+    assert.equal(normalizeRepoRelativePath('packages/hollow-test/lib/targets.mjs'), 'packages/hollow-test/lib/targets.mjs');
   });
 });

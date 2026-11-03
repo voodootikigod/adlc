@@ -15,6 +15,7 @@ import { gitDiff, isDirty, isGitRepo, resolveBase, mutate, git, repoRoot } from 
 import {
   filterTargetFiles, buildFileTargets, readFileSafe, fileChangeIsCommentOnly, fileChangeIsVersionOnly,
   readRailsFromTicketFile, expandRailsToFiles, isMutableSource, isSupportedSourceExtension,
+  normalizeRepoRelativePath,
 } from '../lib/targets.mjs';
 import { runMutant, runTest, formatDiagnosticOutput } from '../lib/runner.mjs';
 import { deletedLinesFromDiff, readOldSource } from '../lib/diff-deletions.mjs';
@@ -465,7 +466,7 @@ const explicitTargets = (values.target ?? []).map((t) => {
       `symlink (real path: ${realEscape}) — refusing to read or mutate it`
     );
   }
-  return rel;
+  return normalizeRepoRelativePath(rel);
 });
 
 let railsGlobs = [];

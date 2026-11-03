@@ -1,0 +1,16 @@
+{
+  "duration": 2,
+  "edges": [],
+  "id": "T-01M6H2EQGB17ZYK7R74X4YKTAM",
+  "rails": [
+    "packages/hollow-test/test/unit.test.mjs"
+  ],
+  "scope": [
+    "packages/hollow-test/bin/hollow-test.mjs",
+    "packages/hollow-test/lib/targets.mjs",
+    "packages/hollow-test/test/unit.test.mjs"
+  ],
+  "spec": "Normalize explicit --target repo-relative paths to forward-slash POSIX form via a shared helper in packages/hollow-test/lib/targets.mjs and packages/hollow-test/bin/hollow-test.mjs so --target paths match git diff and git ls-files keys across platforms.",
+  "title": "fix(hollow-test): normalize --target relative paths to POSIX separators (#663)",
+  "verify": "node --test packages/hollow-test/test/unit.test.mjs packages/hollow-test/test/hollow-test.test.mjs"
+}
