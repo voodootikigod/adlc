@@ -631,7 +631,7 @@ function flail(input) {
 // of real tampering: a missing sig after the first signed entry, or any invalid
 // sig, still trips this warning. See packages/gate-manifest/lib/verify.mjs.
 function manifest() {
-  if (!existsSync(join('.adlc', 'manifest.jsonl'))) return; // nothing recorded yet
+  if (!existsSync(join('.adlc', 'manifest.jsonl')) && !existsSync(join('.adlc', 'manifest.d'))) return; // nothing recorded yet
   const r = runAdlc(['gate-manifest', 'verify', '--json', '--allow-legacy-unsigned'], { keyed: true });
   if (!r) return emitUntrustedAdlc('gate-manifest verify');
   if (!r.stdout) return;

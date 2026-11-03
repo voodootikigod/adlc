@@ -94,3 +94,16 @@ test('a genuinely broken chain still surfaces the "evidence chain INVALID" advis
   assert.match(out.systemMessage ?? '', /evidence chain INVALID/);
   assert.match(out.systemMessage ?? '', /unsigned entry/);
 });
+
+import { mkdirSync, writeFileSync } from 'node:fs';
+
+test('#803: forest-only repo (.adlc/manifest.d without root .adlc/manifest.jsonl) is audited by Stop hook', (t) => {
+  const dir = tmp(t, 'adlc-cc-manifest-forest-');
+  const manifestD = join(dir, '.adlc', 'manifest.d');
+  mkdirSync(manifestD, { recursive: true });
+  writeFileSync(join(manifestD, '.store.json'), JSON.stringify({ format: 'adlc-manifest-forest', version: 1 }), 'utf8');
+  // Write a broken segment in manifest.d with no root manifest.jsonl
+  writeFileSync(join(manifestD, 'main--001.jsonl'), '{"seq":1,"gate":"test","ts":"2026-01-01T00:00:00.000Z","files":{},"prev":"not-a-valid-anchor"}\n', 'utf8');
+  const out = runManifest(dir, { env: { ADLC_MANIFEST_KEY: KEY } });
+  assert.match(out.systemMessage ?? '', /evidence chain INVALID/);
+});
