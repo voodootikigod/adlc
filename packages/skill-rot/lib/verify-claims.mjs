@@ -9,7 +9,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
-import { resolve, join, relative, isAbsolute } from 'node:path';
+import { resolve, join, relative, isAbsolute, delimiter } from 'node:path';
 
 /**
  * Verify a single claim.
@@ -20,7 +20,7 @@ import { resolve, join, relative, isAbsolute } from 'node:path';
 export function verifyClaim(claim, ctx) {
   switch (claim.type) {
     case 'command':
-      return verifyCommand(claim.value, ctx.repoRoot);
+      return verifyCommand(claim.value, ctx.repoRoot, ctx);
     case 'path':
       return verifyPath(claim.value, ctx.repoRoot, ctx.skillDir);
     case 'script':
@@ -33,7 +33,20 @@ export function verifyClaim(claim, ctx) {
 /**
  * Verify a command exists via `command -v <tok>` or in ./node_modules/.bin.
  */
-function verifyCommand(cmd, repoRoot) {
+export function findOnWindowsPath(cmd, env = process.env, pathDelimiter = delimiter) {
+  const pathVal = env.PATH ?? env.Path ?? '';
+  const dirs = pathVal.split(pathDelimiter).filter(Boolean);
+  const exts = (env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean);
+  const candidates = [cmd, ...exts.map((ext) => cmd + ext), ...exts.map((ext) => cmd + ext.toLowerCase())];
+  for (const dir of dirs) {
+    for (const name of candidates) {
+      if (existsSync(join(dir, name))) return true;
+    }
+  }
+  return false;
+}
+
+function verifyCommand(cmd, repoRoot, opts = {}) {
   // Skip obvious placeholders
   if (isPlaceholder(cmd)) {
     return { status: 'unverifiable', reason: 'placeholder token' };
@@ -41,18 +54,31 @@ function verifyCommand(cmd, repoRoot) {
 
   // Check ./node_modules/.bin first
   const nmBin = join(repoRoot, 'node_modules', '.bin', cmd);
-  if (existsSync(nmBin)) {
+  if (existsSync(nmBin) || existsSync(nmBin + '.cmd')) {
     return { status: 'ok' };
+  }
+
+  const platform = opts.platform ?? process.platform;
+  const env = opts.env ?? process.env;
+  const execFn = opts.execFileSync ?? execFileSync;
+
+  if (platform === 'win32') {
+    if (findOnWindowsPath(cmd, env, opts.pathDelimiter ?? delimiter)) {
+      return { status: 'ok' };
+    }
   }
 
   // Use `command -v` via sh to check for shell builtins and PATH binaries
   try {
-    execFileSync('sh', ['-c', `command -v ${shellEscape(cmd)}`], {
+    execFn('sh', ['-c', `command -v ${shellEscape(cmd)}`], {
       stdio: 'pipe',
       timeout: 5000,
     });
     return { status: 'ok' };
-  } catch {
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      return { status: 'unverifiable', reason: 'no POSIX shell available' };
+    }
     return { status: 'stale', reason: `command not found: ${cmd}` };
   }
 }

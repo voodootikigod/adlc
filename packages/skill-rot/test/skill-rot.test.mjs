@@ -12,7 +12,7 @@ import { tmp } from '@adlc/core/test-kit';
 
 import { findSkills } from '../lib/find-skills.mjs';
 import { extractClaims } from '../lib/extract-claims.mjs';
-import { verifyClaim } from '../lib/verify-claims.mjs';
+import { verifyClaim, findOnWindowsPath } from '../lib/verify-claims.mjs';
 import { checkSkill } from '../lib/rot-checker.mjs';
 import { parseFrontmatter, upsertFrontmatter } from '../lib/frontmatter.mjs';
 
@@ -697,5 +697,80 @@ describe('verifyClaim — repository path containment (#773)', () => {
     );
     assert.equal(skillRes.status, 'unverifiable');
     assert.equal(skillRes.reason, 'outside repository');
+  });
+});
+
+describe('verifyClaim — Windows PATH/PATHEXT lookup and missing POSIX shell handling (#770)', () => {
+  test('returns unverifiable (no POSIX shell available) when spawning sh fails with ENOENT', (t) => {
+    const repoDir = tmp(t, 'skill-rot-770-enoent-');
+    const res = verifyClaim(
+      { type: 'command', value: 'some-missing-cmd', raw: 'some-missing-cmd' },
+      {
+        repoRoot: repoDir,
+        skillDir: repoDir,
+        platform: 'linux',
+        execFileSync: () => {
+          const err = new Error('spawn sh ENOENT');
+          err.code = 'ENOENT';
+          throw err;
+        },
+      }
+    );
+    assert.equal(res.status, 'unverifiable');
+    assert.equal(res.reason, 'no POSIX shell available');
+  });
+
+  test('returns stale when sh exists and command -v exits non-zero', (t) => {
+    const repoDir = tmp(t, 'skill-rot-770-stale-');
+    const res = verifyClaim(
+      { type: 'command', value: 'definitely-not-installed-770', raw: 'definitely-not-installed-770' },
+      {
+        repoRoot: repoDir,
+        skillDir: repoDir,
+        platform: 'linux',
+        execFileSync: () => {
+          const err = new Error('Command failed');
+          err.status = 1;
+          throw err;
+        },
+      }
+    );
+    assert.equal(res.status, 'stale');
+    assert.equal(res.reason, 'command not found: definitely-not-installed-770');
+  });
+
+  test('resolves commands via PATHEXT on win32 without requiring sh, and falls back to unverifiable when absent and sh is ENOENT', (t) => {
+    const repoDir = tmp(t, 'skill-rot-770-win32-');
+    const binDir = join(repoDir, 'win-bin');
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(binDir, 'mytool.CMD'), '@echo off\r\n', 'utf8');
+
+    assert.equal(findOnWindowsPath('mytool', { PATH: binDir, PATHEXT: '.EXE;.CMD' }, ';'), true);
+    assert.equal(findOnWindowsPath('othertool', { Path: binDir }, ';'), false);
+    assert.equal(findOnWindowsPath('othertool', {}, ';'), false);
+
+    let shCalled = false;
+    const okWin = verifyClaim(
+      { type: 'command', value: 'mytool', raw: 'mytool' },
+      {
+        repoRoot: repoDir,
+        skillDir: repoDir,
+        platform: 'win32',
+        pathDelimiter: ';',
+        env: { PATH: binDir, PATHEXT: '.EXE;.CMD' },
+        execFileSync: () => { shCalled = true; },
+      }
+    );
+    assert.equal(okWin.status, 'ok');
+    assert.equal(shCalled, false);
+
+    // Also honors node_modules/.bin/<cmd>.cmd on Windows
+    mkdirSync(join(repoDir, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(join(repoDir, 'node_modules', '.bin', 'localbin.cmd'), '@echo off\r\n', 'utf8');
+    const okNmCmd = verifyClaim(
+      { type: 'command', value: 'localbin', raw: 'localbin' },
+      { repoRoot: repoDir, skillDir: repoDir, platform: 'win32' }
+    );
+    assert.equal(okNmCmd.status, 'ok');
   });
 });

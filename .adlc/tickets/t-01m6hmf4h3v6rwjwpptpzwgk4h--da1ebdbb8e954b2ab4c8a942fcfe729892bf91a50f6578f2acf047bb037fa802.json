@@ -1,0 +1,13 @@
+{
+  "id": "T-01M6HMF4H3V6RWJWPPTPZWGK4H",
+  "rails": [
+    "packages/skill-rot/test/unverified-status.test.mjs",
+    "packages/skill-rot/test/zero-claims.test.mjs"
+  ],
+  "scope": [
+    "packages/skill-rot/lib/verify-claims.mjs",
+    "packages/skill-rot/test/skill-rot.test.mjs"
+  ],
+  "title": "skill-rot: handle missing POSIX sh and PATHEXT command lookup on Windows (#770)",
+  "verify": "node --test packages/skill-rot/test/skill-rot.test.mjs packages/skill-rot/test/unverified-status.test.mjs packages/skill-rot/test/zero-claims.test.mjs"
+}
