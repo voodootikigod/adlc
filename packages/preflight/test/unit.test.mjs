@@ -235,3 +235,35 @@ describe('renderTable', () => {
     assert.match(joined, /FAIL/);
   });
 });
+
+describe('checkBash shell invocation (#714)', () => {
+  it('invokes sh -c rather than spawning echo directly, and fails when sh exits non-zero or outputs unexpected text', async (t) => {
+    const binDir = tmp(t, 'preflight-fake-sh-');
+    const shPath = join(binDir, 'sh');
+
+    // 1. Fake sh that exits 42 -> checkBash fails with exit code 42
+    writeFileSync(shPath, '#!/bin/bash\nexit 42\n', { mode: 0o755 });
+    const failExit = await checkBash({ PATH: binDir });
+    assert.equal(failExit.name, 'bash');
+    assert.equal(failExit.status, 'fail');
+    assert.match(failExit.detail, /exited 42/);
+
+    // 2. Fake sh that exits 0 with wrong stdout -> checkBash fails with unexpected output
+    writeFileSync(shPath, '#!/bin/bash\necho wrong-out\n', { mode: 0o755 });
+    const failOut = await checkBash({ PATH: binDir });
+    assert.equal(failOut.name, 'bash');
+    assert.equal(failOut.status, 'fail');
+    assert.match(failOut.detail, /unexpected echo output: wrong-out/);
+
+    // 3. Fake sh that verifies "-c" and "echo preflight-ok" args -> checkBash passes
+    writeFileSync(
+      shPath,
+      '#!/bin/bash\nif [ "$1" = "-c" ] && [ "$2" = "echo preflight-ok" ]; then echo preflight-ok; exit 0; else exit 9; fi\n',
+      { mode: 0o755 }
+    );
+    const passRes = await checkBash({ PATH: binDir });
+    assert.equal(passRes.name, 'bash');
+    assert.equal(passRes.status, 'pass');
+    assert.equal(passRes.detail, 'echo preflight-ok succeeded');
+  });
+});
