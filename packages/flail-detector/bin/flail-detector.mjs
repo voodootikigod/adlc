@@ -3,6 +3,7 @@
 // Thin CLI: parse args, call lib, exit with the correct code.
 
 import { readFileSync, existsSync } from 'node:fs';
+import { relative, resolve, isAbsolute } from 'node:path';
 import { parseArgs, opError, printJson, sha256 } from '@adlc/core';
 import { appendManifestEntry } from '@adlc/gate-manifest';
 import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
@@ -185,16 +186,22 @@ const result = analyze({ lines, bytes, scopes, maxRepeat, maxBytes, spentTokens,
 // ---------------------------------------------------------------------------
 
 if (values.record && result.verdict !== 'flail') {
+  const signingKey = getKey();
+  if (!signingKey) {
+    console.error('flail-detector: warning: recording UNSIGNED manifest entry (' + 'ADLC_MANIFEST_KEY' + ' is not set)');
+  }
+  const relLog = relative(process.cwd(), resolve(logFile)).replace(/\\/g, '/');
+  const insideRepo = relLog !== '' && !relLog.startsWith('..') && !isAbsolute(relLog);
   try {
     appendManifestEntry({
       ts: new Date().toISOString(),
       type: 'flail-check',
       ticket: values.ticket ?? null,
       verdict: result.verdict,
-      logFile,
+      ...(insideRepo ? { logFile: relLog } : {}),
       logHash: sha256(raw),
       ...(boundFiles === null ? {} : { files: boundFiles }),
-    }, undefined, { key: getKey() });
+    }, undefined, { key: signingKey });
   } catch (err) {
     opError(`could not record to manifest ledger: ${err.message}`);
   }
