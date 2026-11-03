@@ -99,3 +99,29 @@ describe('--record: bin writes a flail-check manifest entry on a clean verdict',
     assert.equal(manifestEntryCount(dir), beforeCount, 'no manifest entry should be written without --record');
   });
 });
+
+test('#628: --help exit-code table documents ledger-write failure under exit code 1', () => {
+  const result = spawnSync(process.execPath, [BIN, '--help'], { encoding: 'utf8' });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /1\s+operational error.*ledger-write failure/);
+});
+
+test('#628: a failed --record ledger append exits 1 via opError without printing CLEAN on stdout or a raw stack trace', () => {
+  const brokenDir = mkdtempSync(join(tmpdir(), 'flail-detector-record-broken-'));
+  try {
+    const logFile = join(brokenDir, 'clean.log');
+    writeFileSync(logFile, 'Build started\nAll tests passed.\n');
+    const adlcDir = join(brokenDir, ADLC_DIR);
+    // Write a corrupt manifest chain so appendManifestEntry throws
+    spawnSync('mkdir', ['-p', adlcDir]);
+    writeFileSync(join(adlcDir, 'manifest' + '.jsonl'), '{"seq":99,"prev":"bad"}\n');
+
+    const result = runBin([logFile, '--record', '--ticket', 'T1'], brokenDir);
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, '', 'stdout must not claim CLEAN when --record failed');
+    assert.match(result.stderr, /^error: could not record to manifest ledger: /m);
+    assert.doesNotMatch(result.stderr, /\n\s+at /);
+  } finally {
+    rmSync(brokenDir, { recursive: true, force: true });
+  }
+});
