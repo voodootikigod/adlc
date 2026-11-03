@@ -63,8 +63,16 @@ export async function run(opts) {
       // the audit trail shows the gate was answered *and* what it concluded.
       console.log(display);
       const { readVerdictSource, recordVerdict } = await import('./verdict.mjs');
-      const verdict = await readVerdictSource(recordVerdictSource);
-      const entry = recordVerdict({ verdict, ticket, specPath, extra: { specPath }, key });
+      if (!key) {
+        console.error('premortem: warning: recording UNSIGNED manifest entry (' + 'ADLC_MANIFEST_KEY' + ' is not set)');
+      }
+      let entry;
+      try {
+        const verdict = await readVerdictSource(recordVerdictSource);
+        entry = recordVerdict({ verdict, ticket, specPath, extra: { specPath }, key });
+      } catch (err) {
+        opError(`could not record verdict to manifest ledger: ${err.message}`);
+      }
       console.log(`gate-manifest: recorded seq=${entry.seq} gate=${entry.gate}`);
       process.exit(0);
     }
