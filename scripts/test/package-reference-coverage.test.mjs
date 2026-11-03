@@ -46,7 +46,7 @@ test('every published package is linked from the README package map', () => {
  * allowance: each entry must still be a gap (the test below fails once it is
  * fixed, so the entry is removed), and nothing may be added.
  */
-const LICENSE_GAPS = new Set(['ticket-sync']);
+const LICENSE_GAPS = new Set([]);
 
 function listsMissingLicense(dir) {
   const pkg = JSON.parse(readFileSync(join(ROOT, 'packages', dir, 'package.json'), 'utf8'));

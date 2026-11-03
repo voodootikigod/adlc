@@ -10,7 +10,8 @@
     "plugins/adlc-cursor/package.json",
     "plugins/adlc-gemini/package.json",
     "plugins/adlc-herdr/package.json",
-    "plugins/adlc-cursor/test/packaging.test.mjs"
+    "plugins/adlc-cursor/test/packaging.test.mjs",
+    "scripts/test/package-reference-coverage.test.mjs"
   ],
   "size": "S",
   "title": "fix(packaging): ship LICENSE in ticket-sync and declare engines.node >=18 in cursor/gemini/herdr (#788, #817, #824)",
