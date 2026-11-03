@@ -593,3 +593,29 @@ test('runConsensusFix: unanimous empty-changeset candidates do not win consensus
 
   assert.equal(readFileSync(f, 'utf8'), 'original', 'source must be untouched');
 });
+
+test("validateCandidate rejects null or non-object entry in changes array (#602)", () => {
+  for (const bad of [null, undefined, "str", 42, true]) {
+    const r = validateCandidate({ changes: [bad] }, ["a.mjs"]);
+    assert.equal(r.valid, false);
+    assert.equal(r.reason, "each change must be an object");
+  }
+});
+
+test("runConsensusFix discards candidate with null entry in changes array without aborting the run (#602)", async (t) => {
+  const dir = tmp(t, "consensus-fix-null-change-");
+  const f = join(dir, "source.mjs");
+  writeFileSync(f, "original");
+  let call = 0;
+  const completeFn = async () => {
+    call++;
+    if (call === 1) return JSON.stringify({ changes: [null] });
+    return fixResponse(f, "fixed");
+  };
+  const testCmd = `test "$(cat '${f}')" != "original"`;
+  const result = await runConsensusFix({ testCmd, files: [f], n: 2, tier: "mid", completeFn });
+  assert.equal(result.discarded.length, 1);
+  assert.equal(result.discarded[0].reason, "validation failed: each change must be an object");
+  assert.equal(result.survivors.length, 1);
+  assert.equal(result.survivors[0].index, 1);
+});

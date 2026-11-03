@@ -1,0 +1,19 @@
+{
+  "acceptance": [
+    "validateCandidate rejects any null or non-object entry in parsed.changes with { valid: false, reason: \"each change must be an object\" } instead of throwing a TypeError",
+    "runConsensusFix discards a candidate whose changes array contains null without aborting the entire run"
+  ],
+  "dependsOn": [],
+  "duration": 15,
+  "id": "T-01M6GR2X2FHFAFEE45990G0RPW",
+  "rails": [
+    "packages/consensus-fix/test/agreement.test.mjs",
+    "packages/consensus-fix/test/hunks.test.mjs"
+  ],
+  "scope": [
+    "packages/consensus-fix/lib/runner.mjs",
+    "packages/consensus-fix/test/runner.test.mjs"
+  ],
+  "title": "consensus-fix: reject null/non-object entries in changes array (#602)",
+  "verify": "node --test packages/consensus-fix/test/runner.test.mjs packages/consensus-fix/test/agreement.test.mjs packages/consensus-fix/test/hunks.test.mjs"
+}
