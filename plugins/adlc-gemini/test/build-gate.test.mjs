@@ -16,7 +16,7 @@ import {
   DEFAULT_DEPTH_THRESHOLD,
 } from '../build-gate-inline.mjs';
 import { createFlailTracker, detectEditChurn, flailMessage, DEFAULT_FLAIL_THRESHOLD } from '../flail-inline.mjs';
-import { runFromStdin, printStatus, printDoctor } from '../hooks/adlc-rails-guard.mjs';
+import { runFromStdin, postToolUse, printStatus, printDoctor } from '../hooks/adlc-rails-guard.mjs';
 import { TRUST_ROOT_RAILS } from '../rails-checker.mjs';
 import { ticketFilename } from '../generated-ticket-reader.mjs';
 
@@ -697,3 +697,94 @@ test('secrets: distinct repositories derive distinct authenticated baseline sign
 
 
 
+
+test('runFromStdin: pathless run_command in --print/headless mode (no workspacePaths, cwd outside repo) resolves tracking root from WORKSPACE_ROOT, command path, or transcript records (#829)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'headless-pathless-'));
+  const outsideDir = mkdtempSync(join(tmpdir(), 'headless-outside-cwd-'));
+  const origCwd = process.cwd();
+  try {
+    mkdirSync(join(root, '.adlc'), { recursive: true });
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [] }));
+    const srcFile = join(root, 'src', 'app.mjs');
+    writeFileSync(srcFile, 'export const x = 1;\n');
+
+    process.chdir(outsideDir);
+
+    // 1. Resolved via WORKSPACE_ROOT when workspacePaths is empty and cwd is outsideDir
+    const payloadWsEnv = JSON.stringify({
+      conversationId: 'sess-headless-env',
+      workspacePaths: [],
+      toolCall: { name: 'run_command', args: { CommandLine: 'npm test' } },
+    });
+    runFromStdin(payloadWsEnv, { WORKSPACE_ROOT: root });
+    assert.equal(
+      createPersistentTracker(root).depth('sess-headless-env'),
+      1,
+      'WORKSPACE_ROOT env must resolve tracking root when workspacePaths is empty',
+    );
+
+    // 2. Resolved via shell Cwd argument when workspacePaths and env are empty
+    const payloadShellCwd = JSON.stringify({
+      conversationId: 'sess-headless-cwd',
+      workspacePaths: [],
+      toolCall: { name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } },
+    });
+    runFromStdin(payloadShellCwd, {});
+    assert.equal(
+      createPersistentTracker(root).depth('sess-headless-cwd'),
+      1,
+      'Cwd argument in run_command must resolve tracking root when workspacePaths is absent',
+    );
+
+    // 3. Resolved via transcript records when transcript lives outside the repo
+    const transcriptFile = join(outsideDir, 'transcript.jsonl');
+    writeFileSync(
+      transcriptFile,
+      JSON.stringify({
+        toolCall: { name: 'view_file', args: { AbsolutePath: srcFile } },
+      }) + '\n',
+    );
+    const payloadTranscript = JSON.stringify({
+      conversationId: 'sess-headless-transcript',
+      transcriptPath: transcriptFile,
+      toolCall: { name: 'run_command', args: { CommandLine: 'npm run build' } },
+    });
+    runFromStdin(payloadTranscript, { ANTIGRAVITY_APP_DATA_DIR: outsideDir });
+    assert.equal(
+      createPersistentTracker(root).depth('sess-headless-transcript'),
+      1,
+      'transcript record discovery must resolve tracking root for pathless call in headless mode',
+    );
+
+    // 4. postToolUse also resolves tracking root from transcript records when transcript lives outside repo
+    runFromStdin(
+      JSON.stringify({
+        conversationId: 'sess-headless-posttool',
+        transcriptPath: transcriptFile,
+        toolCall: { name: 'run_command', args: { CommandLine: 'npm test' } },
+      }),
+      { ANTIGRAVITY_APP_DATA_DIR: outsideDir },
+    );
+    postToolUse(
+      {
+        conversationId: 'sess-headless-posttool',
+        transcriptPath: transcriptFile,
+        toolCall: { name: 'run_command', args: { CommandLine: 'npm test' } },
+        exitCode: 0,
+      },
+      { env: { ANTIGRAVITY_APP_DATA_DIR: outsideDir } },
+    );
+    const sessionsPath = join(root, '.' + 'adlc', 'sessions.json');
+    const sessionsData = JSON.parse(readFileSync(sessionsPath, 'utf8'));
+    assert.equal(
+      sessionsData['sess-headless-posttool'].lastExitCode,
+      0,
+      'postToolUse must discover tracking root from transcript records when workspacePaths is absent',
+    );
+  } finally {
+    process.chdir(origCwd);
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outsideDir, { recursive: true, force: true });
+  }
+});

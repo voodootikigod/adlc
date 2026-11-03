@@ -555,9 +555,10 @@ export function runFromStdin(raw, envArg = process.env) {
       }
     }
   }
+
   const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
   if (distinctRoots.size === 0 && transcriptPath) {
-    const transcriptRoot = findAdlcRoot(transcriptPath, env);
+    const transcriptRoot = findAdlcRoot(transcriptPath, env) ?? discoverRootFromTranscriptRecords(parseTranscriptRecords(transcriptPath), env);
     if (transcriptRoot) distinctRoots.add(transcriptRoot);
   }
 
@@ -647,6 +648,7 @@ export function resolveWorkspaceRoot(payload, env = process.env) {
     env?.ANTIGRAVITY_WORKSPACE,
     env?.GEMINI_WORKSPACE,
     env?.PROJECT_ROOT,
+    env?.WORKSPACE_ROOT,
     env?.INIT_CWD,
     env?.PWD,
     env === process.env ? process.cwd() : null,
@@ -1178,7 +1180,7 @@ export function postToolUse(payload, { env = process.env } = {}) {
     if (wsRoot) distinctRoots.add(wsRoot);
     const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
     if (transcriptPath) {
-      const transcriptRoot = findAdlcRoot(transcriptPath, env);
+      const transcriptRoot = findAdlcRoot(transcriptPath, env) ?? discoverRootFromTranscriptRecords(parseTranscriptRecords(transcriptPath), env);
       if (transcriptRoot) distinctRoots.add(transcriptRoot);
     }
     const exitCode = payload?.exit_code ?? payload?.exitCode ?? payload?.result?.exitCode ?? payload?.toolResult?.exitCode;
