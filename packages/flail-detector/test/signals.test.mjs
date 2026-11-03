@@ -265,3 +265,36 @@ test('detectBudgetExceeded: returns false when spentTokens <= budget', () => {
 test('detectBudgetExceeded: returns true when spentTokens > budget', () => {
   assert.equal(detectBudgetExceeded(201, 200), true);
 });
+
+test('detectRepeatedErrors: suppresses short signatures (< 5 chars) and created/completed-at timestamps (#456)', () => {
+  // 1. Short signature (< 5 chars after normalizeError) is excluded even when repeated >= maxRepeat
+  // "fail" normalizes to "fail" (length 4 < 5)
+  assert.deepEqual(detectRepeatedErrors(["fail", "fail", "fail"], 2), []);
+  // Non-string step items and non-array step containers are ignored cleanly
+  assert.deepEqual(detectRepeatedErrors([123, null, [null, "not an err line"]], 2), []);
+
+  // 2. Signature of length >= 5 (e.g. "error" -> length 5) is retained and counted
+  assert.deepEqual(detectRepeatedErrors(["error", "error"], 2), [
+    { signature: "error", count: 2 },
+  ]);
+
+  // 3. Exact "created at" / "completed at" (with or without colon after normalization) are suppressed
+  // Note: lines must match ERROR_LINE_RE to reach the signature filter; a quoted "error" is stripped by normalizeError!
+  const timestampSteps = [
+    ['Created at: 20261103 "error"', 'Completed at: 20261103 "error"'],
+    ['Created at 20261103 "error"', 'Completed at 20261103 "error"'],
+    ['Created at: 20261104 "error"', 'Completed at: 20261104 "error"'],
+    ['Created at 20261104 "error"', 'Completed at 20261104 "error"'],
+  ];
+  assert.deepEqual(detectRepeatedErrors(timestampSteps, 2), []);
+
+  // 4. Real error lines containing "created at" or "completed at" as a substring are NOT suppressed
+  const realSteps = [
+    ["Error: job created at startup failed", "Error: task completed at shutdown failed"],
+    ["Error: job created at startup failed", "Error: task completed at shutdown failed"],
+  ];
+  assert.deepEqual(detectRepeatedErrors(realSteps, 2), [
+    { signature: "error: job created at startup failed", count: 2 },
+    { signature: "error: task completed at shutdown failed", count: 2 },
+  ]);
+});

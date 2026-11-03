@@ -316,3 +316,36 @@ test('createPersistentTracker handles null sessionID, missing ticket store, null
   }
 });
 
+
+test('detectRepeatedErrors suppresses short signatures (< 5 chars) and created/completed-at timestamps (#456)', () => {
+  // 1. Short signature (< 5 chars after normalizeError, e.g. "FAIL" -> "fail", length 4) is excluded
+  assert.deepEqual(detectRepeatedErrors(["FAIL", "FAIL", "FAIL"], 2), []);
+  assert.deepEqual(detectRepeatedErrors(["ERR!", "ERR!", "ERR!"], 2), []);
+
+  // 2. Signature of length >= 5 ("error" -> length 5, "FAIL!" -> "fail!" length 5) is retained
+  assert.deepEqual(detectRepeatedErrors(["error", "error"], 2), [
+    { signature: "error", count: 2 },
+  ]);
+  assert.deepEqual(detectRepeatedErrors(["FAIL!", "FAIL!"], 2), [
+    { signature: "fail!", count: 2 },
+  ]);
+
+  // 3. Exact "created at" / "completed at" (with or without colon after normalization) are suppressed
+  const timestampSteps = [
+    ['Created at: 20261103 "error"', 'Completed at: 20261103 "error"'],
+    ['Created at 20261103 "error"', 'Completed at 20261103 "error"'],
+    ['Created at: 20261104 "error"', 'Completed at: 20261104 "error"'],
+    ['Created at 20261104 "error"', 'Completed at 20261104 "error"'],
+  ];
+  assert.deepEqual(detectRepeatedErrors(timestampSteps, 2), []);
+
+  // 4. Real error lines containing "created at" or "completed at" as a substring are NOT suppressed
+  const realSteps = [
+    ["Error: job created at startup failed", "Error: task completed at shutdown failed"],
+    ["Error: job created at startup failed", "Error: task completed at shutdown failed"],
+  ];
+  assert.deepEqual(detectRepeatedErrors(realSteps, 2), [
+    { signature: "error: job created at startup failed", count: 2 },
+    { signature: "error: task completed at shutdown failed", count: 2 },
+  ]);
+});
