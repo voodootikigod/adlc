@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { parseArgs, opError, printJson, appendEntry, isGitRepo, churn, repoRoot } from '@adlc/core';
 import { walkSourceFiles, computeInDegree } from '../lib/walk.mjs';
 import { computeScores, topN } from '../lib/score.mjs';
-import { runReviewCmd, reviewRunError, parseFindingsFromOutput, DEFAULT_REVIEW_TIMEOUT_MS } from '../lib/run-review.mjs';
+import { runReviewCmd, reviewRunError, parseFindingsFromOutput, DEFAULT_REVIEW_TIMEOUT_MS, DEFAULT_FINDINGS_EXIT_CODE } from '../lib/run-review.mjs';
 import { formatPlan, formatReviewSummary } from '../lib/format.mjs';
 
 // ---------------------------------------------------------------------------
@@ -19,6 +19,7 @@ const { values } = parseArgs({
     'review-cmd': { type: 'string' },
     'churn-limit':{ type: 'string',  default: '1000' },
     'timeout-ms': { type: 'string',  default: String(DEFAULT_REVIEW_TIMEOUT_MS) },
+    'findings-exit-code': { type: 'string', default: String(DEFAULT_FINDINGS_EXIT_CODE) },
     'dry-run':    { type: 'boolean', default: false },
     'allow-empty':{ type: 'boolean', default: false },
     json:         { type: 'boolean', default: false },
@@ -27,7 +28,7 @@ const { values } = parseArgs({
 });
 
 if (values.help) {
-  console.log(`model-ratchet [--top <n>] [--review-cmd <cmd>] [--timeout-ms <n>] [--churn-limit <n>] [--dry-run] [--allow-empty] [--json]
+  console.log(`model-ratchet [--top <n>] [--review-cmd <cmd>] [--findings-exit-code <n>] [--timeout-ms <n>] [--churn-limit <n>] [--dry-run] [--allow-empty] [--json]
 
 Scheduled re-prosecution of hot paths (ADLC C12) — every model release is a
 free re-audit. Identifies hotspot files (churn × criticality) and either
@@ -37,6 +38,10 @@ Options:
   --top <n>           Number of hotspot files to select (default: 10)
   --review-cmd <cmd>  Shell command to run per file. Use {file} as placeholder.
                       Example: --review-cmd "adversarial-review --file {file}"
+  --findings-exit-code <n>
+                      Non-zero exit code from review-cmd that indicates
+                      findings are present rather than an operational error
+                      (default: ${DEFAULT_FINDINGS_EXIT_CODE}; use 1 for linters like eslint)
   --timeout-ms <n>    Kill a review-cmd run after <n> ms and record it as an
                       operational error for that file (default: ${DEFAULT_REVIEW_TIMEOUT_MS})
   --churn-limit <n>   Commit history depth for churn computation (default: 1000)
@@ -104,6 +109,11 @@ if (!Number.isInteger(churnLimit) || churnLimit < 1) {
 const timeoutMs = /^[1-9][0-9]*$/.test(values['timeout-ms']) ? Number(values['timeout-ms']) : NaN;
 if (!Number.isSafeInteger(timeoutMs)) {
   opError(`--timeout-ms must be a positive integer (got: ${values['timeout-ms']})`);
+}
+
+const findingsExitCode = /^[1-9][0-9]*$/.test(values['findings-exit-code']) ? Number(values['findings-exit-code']) : NaN;
+if (!Number.isSafeInteger(findingsExitCode) || findingsExitCode > 255) {
+  opError(`--findings-exit-code must be an integer between 1 and 255 (got: ${values['findings-exit-code']})`);
 }
 
 const reviewCmd = values['review-cmd'];
@@ -203,7 +213,7 @@ for (const row of selected) {
     continue;
   }
 
-  const runError = reviewRunError(result, timeoutMs);
+  const runError = reviewRunError(result, timeoutMs, findingsExitCode);
   if (runError) {
     fileResults.push({ file: row.file, findings: [], exitCode: result.exitCode, error: runError });
     operationalError = true;

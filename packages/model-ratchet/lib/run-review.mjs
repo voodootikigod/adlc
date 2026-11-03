@@ -127,11 +127,13 @@ export function runReviewCmd(reviewCmd, file, cwd, { timeoutMs = DEFAULT_REVIEW_
  * @param {number} timeoutMs
  * @returns {string|null}
  */
-export function reviewRunError(result, timeoutMs) {
+export const DEFAULT_FINDINGS_EXIT_CODE = 2;
+
+export function reviewRunError(result, timeoutMs, findingsExitCode = DEFAULT_FINDINGS_EXIT_CODE) {
   if (result.timedOut) return `review-cmd timed out after ${timeoutMs}ms`;
   if (result.spawnError !== undefined && result.spawnError !== null) return `review-cmd failed to run: ${result.spawnError}`;
   if (result.signal) return `review-cmd was killed by ${result.signal}`;
-  if (result.exitCode !== 0 && result.exitCode !== 2) {
+  if (result.exitCode !== 0 && result.exitCode !== findingsExitCode) {
     const errDetail = (result.stderr ?? "").trim();
     return errDetail !== "" ? `review-cmd exited with code ${result.exitCode}: ${errDetail}` : `review-cmd exited with code ${result.exitCode}`;
   }
