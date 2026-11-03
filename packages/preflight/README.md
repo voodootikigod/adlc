@@ -41,7 +41,7 @@ preflight --dir .sdlc/.adlc --test-cmd "npm test" --gh --llm --worktrees
 | `--test-cmd "CMD"` | string | Run CMD via `sh -c`, expect exit 0. Tail of output shown on failure. A passed-but-empty value (e.g. an unset `$TEST_CMD`) is rejected with exit 1 — `--test-cmd requires a non-empty command` — never silently skipped. |
 | `--gh` | boolean | Run `gh auth status`; expect exit 0. |
 | `--llm` | boolean | Call `detectProvider()` and assert it is non-null. No API call made. Reports which provider was found. |
-| `--worktrees` | boolean | `git worktree add --detach .worktrees/preflight-test HEAD` then remove. |
+| `--worktrees` | boolean | `git -c core.hooksPath=/dev/null worktree add --detach .worktrees/preflight-test HEAD` then remove (repository hooks disabled). |
 | `--json` | boolean | Machine-readable output: `{ checks, verdict, failedNames }`. |
 
 ## Checks

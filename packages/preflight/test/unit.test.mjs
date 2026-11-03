@@ -3,7 +3,7 @@
 
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { tmp, gitRepo } from '@adlc/core/test-kit';
@@ -265,5 +265,23 @@ describe('checkBash shell invocation (#714)', () => {
     assert.equal(passRes.name, 'bash');
     assert.equal(passRes.status, 'pass');
     assert.equal(passRes.detail, 'echo preflight-ok succeeded');
+  });
+});
+
+describe('checkWorktrees disables repository hooks (#716)', () => {
+  it('passes -c core.hooksPath=/dev/null so post-checkout hook does not execute', async (t) => {
+    const { dir, git } = gitRepo(t, { prefix: 'preflight-wt-hook-' });
+    writeFileSync(join(dir, 'README.md'), '# init\n');
+    git('add', 'README.md');
+    git('commit', '-m', 'init');
+    const marker = join(dir, 'hook-fired.txt');
+    const hooksDir = join(dir, 'custom-hooks');
+    mkdirSync(hooksDir, { recursive: true });
+    const hookPath = join(hooksDir, 'post-checkout');
+    writeFileSync(hookPath, `#!/bin/sh\necho fired > ${JSON.stringify(marker)}\n`, { mode: 0o755 });
+    git('config', 'core.hooksPath', hooksDir);
+    const res = await checkWorktrees(dir);
+    assert.equal(res.status, 'pass', `expected pass, got: ${res.detail}`);
+    assert.equal(existsSync(marker), false, 'post-checkout hook must not fire during checkWorktrees');
   });
 });
