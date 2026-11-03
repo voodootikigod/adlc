@@ -14,6 +14,7 @@ export function formatReport({
   allDivergent,
   selectionResult,
   railsChecked = true,
+  dirtyCheckSkipped = false,
   applied,
   dryRun,
 }) {
@@ -32,6 +33,12 @@ export function formatReport({
     lines.push('   ONLY against --test-cmd (the repro), NOT the full rail suite. A');
     lines.push('   fix that reddens other tests/types can still survive. Pass');
     lines.push('   --rails "<full suite>" to close this regression gate (C7).');
+  }
+
+  if (dirtyCheckSkipped) {
+    lines.push('');
+    lines.push('⚠  WARNING: dirty-tree guard skipped (not a git work tree or git is unavailable).');
+    lines.push('   Uncommitted work in --files has no git undo if this process is SIGKILLed.');
   }
 
   if (discarded.length > 0) {
@@ -107,6 +114,7 @@ export function formatJson({
   allDivergent,
   selectionResult,
   railsChecked = true,
+  dirtyCheckSkipped = false,
   applied,
 }) {
   const groupSummary = [];
@@ -131,6 +139,7 @@ export function formatJson({
       groups: groups.size,
       allDivergent,
       railsChecked,
+      dirtyCheckSkipped,
     },
     groups: groupSummary,
     winner: selectionResult

@@ -521,3 +521,56 @@ test('formatReport shows providers for each member of an agreement group', () =>
 
   assert.ok(out.includes('anthropic') && out.includes('gemini'));
 });
+
+test('formatReport and formatJson surface dirtyCheckSkipped warning and summary flag (#601)', () => {
+  const winner = makeCandidate(0, 'fix');
+  const groups = makeGroups([winner]);
+
+  const defaultReport = formatReport({
+    survivors: [winner],
+    discarded: [],
+    failed: [],
+    groups,
+    allDivergent: false,
+    selectionResult: { winner, largestGroupSize: 1 },
+    applied: false,
+    dryRun: true,
+  });
+  assert.ok(!defaultReport.includes('dirty-tree guard skipped'));
+
+  const skippedReport = formatReport({
+    survivors: [winner],
+    discarded: [],
+    failed: [],
+    groups,
+    allDivergent: false,
+    selectionResult: { winner, largestGroupSize: 1 },
+    dirtyCheckSkipped: true,
+    applied: false,
+    dryRun: true,
+  });
+  assert.ok(skippedReport.includes('WARNING: dirty-tree guard skipped'));
+
+  const defaultJson = formatJson({
+    survivors: [winner],
+    discarded: [],
+    failed: [],
+    groups,
+    allDivergent: false,
+    selectionResult: { winner, largestGroupSize: 1 },
+    applied: false,
+  });
+  assert.equal(defaultJson.summary.dirtyCheckSkipped, false);
+
+  const skippedJson = formatJson({
+    survivors: [winner],
+    discarded: [],
+    failed: [],
+    groups,
+    allDivergent: false,
+    selectionResult: { winner, largestGroupSize: 1 },
+    dirtyCheckSkipped: true,
+    applied: false,
+  });
+  assert.equal(skippedJson.summary.dirtyCheckSkipped, true);
+});

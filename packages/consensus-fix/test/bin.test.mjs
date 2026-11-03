@@ -193,3 +193,77 @@ test('--provider naming an unavailable provider fails closed with a provider-spe
   assert.equal(code, 1);
   assert.match(stderr, /--provider anthropic is not available/);
 });
+
+test('outside a git repo without --allow-dirty, CLI prints a loud dirty-tree guard skipped warning on stderr (#601)', (t) => {
+  const dir = tmp(t, 'consensus-fix-nogit-');
+  const f = join(dir, 'a.mjs');
+  writeFileSync(f, 'export const x = 1;\n');
+  const { code, stderr } = runCli([
+    '--test-cmd', 'exit 1',
+    '--files', f,
+  ], { cwd: dir });
+  assert.equal(code, 1);
+  assert.match(stderr, /WARNING: dirty-tree guard skipped/);
+  assert.match(stderr, /no LLM provider configured/);
+});
+
+test('with --allow-dirty outside a git repo, CLI does not emit the dirty-tree guard skipped warning (#601)', (t) => {
+  const dir = tmp(t, 'consensus-fix-allow-dirty-');
+  const f = join(dir, 'a.mjs');
+  writeFileSync(f, 'export const x = 1;\n');
+  const { code, stderr } = runCli([
+    '--test-cmd', 'exit 1',
+    '--files', f,
+    '--allow-dirty',
+  ], { cwd: dir });
+  assert.equal(code, 1);
+  assert.doesNotMatch(stderr, /dirty-tree guard skipped/);
+});
+
+test('CLI --json output surfaces summary.dirtyCheckSkipped: true outside a git repo and false with --allow-dirty (#601)', (t) => {
+  const dir = tmp(t, 'consensus-fix-json-dirty-skip-');
+  const f = join(dir, 'target.mjs');
+  writeFileSync(f, 'export const val = 1;\n');
+  const preload = join(dir, 'mock-llm.mjs');
+  writeFileSync(preload, `
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({
+        changes: [{ file: ${JSON.stringify(f)},
+          hunks: [{ startLine: 1, endLine: 1, replacement: 'export const val = 2;' }] }]
+      }) } }],
+      usage: { prompt_tokens: 10, completion_tokens: 10 }
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  `);
+
+  const testCmd = `grep -q 'val = 2' '${f}'`;
+
+  const skippedRun = spawnSync(
+    process.execPath,
+    ['--import', preload, BIN, '--test-cmd', testCmd, '--files', f, '--n', '1', '--json'],
+    {
+      cwd: dir,
+      encoding: 'utf8',
+      timeout: 15000,
+      env: { ...process.env, OPENAI_API_KEY: 'mock-key', ANTHROPIC_API_KEY: '', GEMINI_API_KEY: '', ADLC_AGY: '', ADLC_PROVIDER: '' },
+    },
+  );
+  assert.equal(skippedRun.status, 0, `stderr: ${skippedRun.stderr}`);
+  assert.match(skippedRun.stderr, /WARNING: dirty-tree guard skipped/);
+  const skippedParsed = JSON.parse(skippedRun.stdout);
+  assert.equal(skippedParsed.summary.dirtyCheckSkipped, true);
+
+  const allowDirtyRun = spawnSync(
+    process.execPath,
+    ['--import', preload, BIN, '--test-cmd', testCmd, '--files', f, '--n', '1', '--allow-dirty', '--json'],
+    {
+      cwd: dir,
+      encoding: 'utf8',
+      timeout: 15000,
+      env: { ...process.env, OPENAI_API_KEY: 'mock-key', ANTHROPIC_API_KEY: '', GEMINI_API_KEY: '', ADLC_AGY: '', ADLC_PROVIDER: '' },
+    },
+  );
+  assert.equal(allowDirtyRun.status, 0, `stderr: ${allowDirtyRun.stderr}`);
+  assert.doesNotMatch(allowDirtyRun.stderr, /dirty-tree guard skipped/);
+  const allowDirtyParsed = JSON.parse(allowDirtyRun.stdout);
+  assert.equal(allowDirtyParsed.summary.dirtyCheckSkipped, false);
+});

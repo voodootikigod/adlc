@@ -124,12 +124,18 @@ if (values['prompt-only']) {
 }
 
 // Safety: refuse dirty tree unless --allow-dirty.
+let dirtyCheckSkipped = false;
 if (!values['allow-dirty']) {
   let dirty = false;
   try {
     dirty = isDirty();
   } catch {
-    // Not a git repo or git not available — skip the check.
+    // Not a git repo or git not available — warn loudly and record that the guard could not run (#601).
+    dirtyCheckSkipped = true;
+    console.error(
+      '⚠  WARNING: dirty-tree guard skipped (not a git work tree or git is unavailable). ' +
+        'Uncommitted changes are not protected by git; pass --allow-dirty to silence this warning.'
+    );
   }
   if (dirty) {
     opError('working tree has uncommitted changes — commit or stash first, or use --allow-dirty');
@@ -262,6 +268,7 @@ if (values['json']) {
     allDivergent,
     selectionResult,
     railsChecked,
+    dirtyCheckSkipped,
     applied,
   }));
 } else {
@@ -274,6 +281,7 @@ if (values['json']) {
       allDivergent,
       selectionResult,
       railsChecked,
+      dirtyCheckSkipped,
       applied,
       dryRun: !values['apply'],
     })
