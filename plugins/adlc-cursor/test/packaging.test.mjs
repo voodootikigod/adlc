@@ -266,3 +266,17 @@ test('suite-wide invariant: every workspace package.json declares engines.node a
     }
   }
 });
+
+test('cursor commands link interrogation-protocol.md to GitHub URL and codex adlc-spec documents spec-approval (#820, #850)', () => {
+  for (const rel of ['command/adlc-ticket.md', 'command/adlc-spec.md']) {
+    const text = readFileSync(join(pkgDir, rel), 'utf8');
+    assert.match(text, /\[\`docs\/interrogation-protocol\.md\`\]\(https:\/\/github\.com\/voodootikigod\/adlc\/blob\/main\/docs\/interrogation-protocol\.md\)/);
+    assert.doesNotMatch(text, /\(\`docs\/interrogation-protocol\.md\`/);
+  }
+  const ticketCmd = readFileSync(join(pkgDir, 'command/adlc-ticket.md'), 'utf8');
+  assert.match(ticketCmd, /when present, applicable\s+\`\.adlc\/lessons\/interrogation-template\.md\`/);
+  const codexSpec = readFileSync(join(repoRoot, 'plugins/adlc-codex/skills/adlc-spec/SKILL.md'), 'utf8');
+  assert.match(codexSpec, /adlc gate-manifest record spec-approval --ticket <id> --files/);
+  assert.match(codexSpec, /"verdict":"approved"/);
+  assert.match(codexSpec, /"unresolved":0/);
+});

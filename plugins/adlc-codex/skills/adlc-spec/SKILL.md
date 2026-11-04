@@ -133,10 +133,11 @@ adlc premortem spec.md --prompt-only --record-verdict <file> --ticket <id>
 # … interrogation round 2 on premortem's questions …
 adlc spec-lint spec.md --prompt-only  # answer the vacuousness audit
 adlc spec-lint spec.md --record --ticket <id>  # once it passes cleanly
+# Stop for explicit human approval, then record Gate 1 spec-approval (required by `adlc run p1`):
+adlc gate-manifest record spec-approval --ticket <id> --files spec.md --data '{"approver":"<who>","spec_hash":"<sha256 of spec.md>","verdict":"approved","rounds":1,"questions":0,"sources":["parallax","premortem"],"unresolved":0,"approved_assumptions":[]}'
 adlc coldstart --all --tickets .adlc/tickets.json --json
 adlc merge-forecast --tickets .adlc/tickets.json --json
 adlc model-router --tickets .adlc/tickets.json --json
 ```
 
-Stop for human approval after P1 spec approval. Do not mark P2 complete until the ticket
-DAG and cold-start checks pass.
+Stop for explicit human approval at P1 Gate 1 and record `spec-approval` (`--ticket <id> --files <spec.md>` with `"verdict":"approved"` and `"unresolved":0`) after `premortem` and `spec-lint` before running `adlc run p1 --ticket <id>` or decomposing into P2. Do not mark P2 complete until the ticket DAG and cold-start checks pass.

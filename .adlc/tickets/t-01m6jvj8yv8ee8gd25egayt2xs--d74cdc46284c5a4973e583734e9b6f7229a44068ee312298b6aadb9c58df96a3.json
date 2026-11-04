@@ -1,0 +1,17 @@
+{
+  "body": "1. (#820) In plugins/adlc-cursor/command/adlc-ticket.md and plugins/adlc-cursor/command/adlc-spec.md, replace bare docs/interrogation-protocol.md references with the GitHub URL (https://github.com/voodootikigod/adlc/blob/main/docs/interrogation-protocol.md) and mark .adlc/lessons/interrogation-template.md explicitly optional (when present).\n2. (#850) In plugins/adlc-codex/skills/adlc-spec/SKILL.md, document the adlc gate-manifest record spec-approval --ticket <id> --files <spec.md> --data '{...}' step with the interrogation payload shape that adlc run p1 requires.\n3. Add regression assertions in plugins/adlc-cursor/test/packaging.test.mjs.\n\n## Acceptance Criteria\n- Verify: `node --test plugins/adlc-cursor/test/packaging.test.mjs`\n\nallow-suppression: none",
+  "category": "docs",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M6JVJ8YV8EE8GD25EGAYT2XS",
+  "rails": [
+    "plugins/adlc-cursor/test/scaffold.test.mjs"
+  ],
+  "scope": [
+    "plugins/adlc-cursor/command/adlc-ticket.md",
+    "plugins/adlc-cursor/command/adlc-spec.md",
+    "plugins/adlc-codex/skills/adlc-spec/SKILL.md",
+    "plugins/adlc-cursor/test/packaging.test.mjs"
+  ],
+  "title": "Fix adlc-cursor interrogation-protocol links and add spec-approval step to adlc-codex adlc-spec (#820, #850)"
+}

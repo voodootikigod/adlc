@@ -15,7 +15,7 @@ yourself, apply the judgment. `parallax` and `premortem` also support
 (or pipe it on stdin with `-`) so the verdict lands in `.adlc/manifest.jsonl`
 instead of vanishing with the session.
 
-This is one interrogation loop (`docs/interrogation-protocol.md`), not a
+This is one interrogation loop ([`docs/interrogation-protocol.md`](https://github.com/voodootikigod/adlc/blob/main/docs/interrogation-protocol.md) in the ADLC repo), not a
 linear pipeline: premortem needs a spec file to stress-test, so it cannot run
 before one exists, and its questions must reach the human through the SAME
 loop parallax's divergences do — never folded back unilaterally by the model.
@@ -37,7 +37,7 @@ Produce the N independent readings, then the divergence analysis.
 
 ## 2. Interrogate round 1, write the draft — parallax's divergences
 Every divergence is a frontier question — resolve it via the shared
-interrogation protocol (`docs/interrogation-protocol.md` in the ADLC repo):
+interrogation protocol ([`docs/interrogation-protocol.md`](https://github.com/voodootikigod/adlc/blob/main/docs/interrogation-protocol.md) in the ADLC repo):
 codebase-check each one, ask the human the rest in numbered rounds with a
 recommended answer first, fold answers into the spec as revised prose. Write
 the draft spec to a file under `.adlc/specs/` — premortem (step 3) needs this
