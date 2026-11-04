@@ -19,7 +19,7 @@ copilot plugin install adlc-copilot@adlc
 | Primitive | Copilot surface | Notes |
 | --- | --- | --- |
 | Rail protection | `preToolUse` hook | Denies edits to a frozen ticket's rails. |
-| Build-gate context fitness | `preToolUse` hook | Runs after rails-guard. |
+| Build-gate context fitness | `preToolUse` hook | **Inert on Copilot** — the CLI exposes no session transcript, so this gate never denies. Ships wired so it activates if that changes. |
 | Ticket / gate context | `sessionStart`, `preCompact`, `subagentStart/Stop` | Advisory narration. |
 | Flail detection | `postToolUse` hook | Advisory repeated-failure notice. |
 | Gate evidence + review trigger | `agentStop` hook | Advisory. |
@@ -56,6 +56,13 @@ rail unless you run with `--allow-all-tools`.** Verified live:
 **The unbypassable guarantee is the CI diff gate (`rails-guard-ci`)**, which
 covers the `--allow-all-tools` and crash fail-open windows — treat it, not the
 in-session hook, as the hard enforcement boundary.
+
+**Build-gate is currently inert on Copilot.** The `preToolUse` build-gate hook
+reads `transcriptPath` from the hook stdin payload, and the Copilot CLI exposes
+no session transcript (`{sessionId, timestamp, cwd, toolName, toolArgs}`), so
+the hook always takes its advisory-allow early exit and **never denies on
+Copilot**. It ships wired so it activates automatically if the host adds
+transcript exposure.
 
 The rail-decision logic is a verbatim port of the canonical `@adlc/core`
 classifier; `test/shell-drift.test.mjs` pins it so there is no divergent
