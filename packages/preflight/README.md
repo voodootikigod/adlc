@@ -130,8 +130,10 @@ parallel agent fleet to ensure every operation class succeeds. Integrates with
 ## Cleanup guarantees
 
 Every check that creates a side effect (branch, worktree, tmp file) performs
-cleanup in a `finally` block — residue is removed whether the check passes or
-fails.
+best-effort cleanup (`unlink`, `git branch -D`, `git worktree remove --force`)
+in a `finally` block (cleanup errors are caught and ignored), while the parent
+directories created for the probes (`.adlc/tmp/` and `.worktrees/`) are left in
+place.
 
 ## Relationship to sibling tools
 

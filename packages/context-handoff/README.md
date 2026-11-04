@@ -24,9 +24,13 @@ artifacts and manifest evidence share that tree, and any other name is refused
 rather than splitting them. `repair` binds a deny that already exists and is
 still open — it never creates one. `unlock` reclaims only a lock minted on this
 host, so a dead-looking PID from another machine cannot evict a live session.
-A `bypass` grant on stdout is scoped to the calling adapter invocation; the
-durable proof is the `context-handoff-bypass` manifest entry; an explicitly
-empty `--unbound-reason` is refused rather than degraded to a bound grant.
+`handoff bypass --write` persists a signed, session-bound one-shot grant file at
+`.adlc/handoffs/<session>.bypass-grant.json` that the adapter reads back on its
+next mutation-gate evaluation and consumes (deletes) the moment it authorizes
+one, expiring after `BYPASS_GRANT_TTL_MS` (10 min) as a defense-in-depth ceiling;
+the `context-handoff-bypass` manifest entry is the durable audit record only and
+is not itself consulted for authorization. An explicitly empty
+`--unbound-reason` is refused rather than degraded to a bound grant.
 `bypass --write` exits 1 when the resolved ledger has neither a `.adlc/handoffs` directory nor a surviving `.adlc/.deny-store` sentinel (the D0 state, repairable only by an unbound bypass) — run from the repo root or pass `--dir <repo>/.adlc` — so a grant is never reported as recorded under a tree the enforcing hook does not read; a dry run prints the resolved ledger path.
 
 **Disclosed Phase 0 trust-boundary residual ([#609](https://github.com/voodootikigod/adlc/issues/609), [#520](https://github.com/voodootikigod/adlc/issues/520)):** because the Recovery Exception unconditionally allows `<node> <pkg>/bin/handoff.mjs bypass --session <own-id> --write` before Hard-Degraded/deny checks and a bound grant authorizes the session's own unbound marker, a hard-degraded agent whose shell environment inherits `ADLC_MANIFEST_KEY` (the hook scrubs the key from its own process, not from the agent's shell) can clear its own D1/D2 deny in one allowed tool call. In environments where the agent shell holds `ADLC_MANIFEST_KEY`, D1/D2 stickiness is advisory until Phase 1's host-owned integrity anchor / operator-TTY gate ([#520](https://github.com/voodootikigod/adlc/issues/520)) lands. On Windows ([#611](https://github.com/voodootikigod/adlc/issues/611)), `readBypassGrant` fails closed (`null`) because POSIX `O_NOFOLLOW` / `O_NONBLOCK` are unavailable.
@@ -208,7 +212,7 @@ cannot clear expectation; full signed per-deny ledger is still deferred.
 Ticket-store presence alone does not expect denies. A legacy
 `.adlc/handoffs/.deny-store` is treated as expected and self-healed to the new
 path. `evaluateMarkerOnReentry` does **not** use the global sentinel for
-per-session `marker_vanished` — callers thread `denyEverWritten`. Unbound operator bypass may clear `D0:deny_store_unavailable` and
+per-session `marker_vanished` — callers thread `denyEverWritten`. Unbound operator bypass (`handoff bypass --session <id> --unbound-reason <text> --write`) writes a signed one-shot grant at `.adlc/handoffs/<id>.bypass-grant.json` (recovered via the Recovery Exception before Hard-Degraded/deny checks) that may clear `D0:deny_store_unavailable` and
 `D3:invalid_record`.
 
 Advisory nags (`nagSuppression`) are suppressed when remaining-to-hard is below

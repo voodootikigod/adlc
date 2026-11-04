@@ -13,3 +13,11 @@ test('README documents POSIX platform requirement (#715)', () => {
   assert.match(readme, /darwin/);
   assert.match(readme, /linux/);
 });
+
+test("README documents best-effort cleanup and retained .adlc/tmp/ and .worktrees/ directories (#713)", () => {
+  const readme = readFileSync(join(PKG_ROOT, "README.md"), "utf8");
+  assert.doesNotMatch(readme, /residue is removed whether the check passes or\s+fails/);
+  assert.match(readme, /best-effort cleanup/);
+  assert.match(readme, /\.adlc\/tmp\//);
+  assert.match(readme, /\.worktrees\//);
+});

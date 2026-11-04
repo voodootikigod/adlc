@@ -13,11 +13,18 @@ After the matching `@adlc/cli` release:
 
 ```sh
 adlc init
-adlc init --root /path/to/repo --json
+adlc init --root /path/to/repo --json [--no-codex-agents] [--harness <codex|cursor|copilot|pi|opencode|gemini>]
 ```
 
-The initializer preserves existing files, refuses symlink escapes from the
-project root, and never edits user-global `~/.codex` implicitly.
+The initializer preserves existing project-owned files (the only existing files
+it edits are `.gitignore`, where a whole-directory `.adlc` / `.adlc/` / `/.adlc`
+ignore is normalized in place to `.adlc/*` so the negations can take effect, and
+`.adlc/config.json` when registering a `--harness`), refuses symlink escapes
+from the project root, and never edits user-global `~/.codex` implicitly.
+`--no-codex-agents` skips scaffolding `.codex/agents/*.toml`; `--harness cursor`
+and `--harness copilot` each imply `--no-codex-agents` and record
+`harnesses.<name>` in `.adlc/config.json`, and `--harness copilot` also writes
+`.github/copilot-instructions.md` and `.github/workflows/copilot-setup-steps.yml`.
 
 When `.adlc/config.json` is present but is not readable JSON, `adlc init` records a warning and exits 1 without overwriting the broken file. The same holds when `--harness` is passed and the config's `harnesses` field is present but not an object: the harness cannot be registered, so the run fails instead of reporting success.
 
