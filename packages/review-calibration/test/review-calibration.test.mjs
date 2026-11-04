@@ -1065,3 +1065,25 @@ describe('CLI: no-args behavior', () => {
     assert.ok(result.stdout.includes('--min-recall'));
   });
 });
+
+describe('README documentation contract (#757, #752)', () => {
+  it('documents all CLI flags, exit-2 causes, GitHub REDESIGN.md link, and a tokenizeCommand-valid smoke example', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { spawnSync } = await import('node:child_process');
+    const { tokenizeCommand } = await import('../lib/runner.mjs');
+    const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+    for (const flag of [
+      '--review-cmd', '--commit', '--plants', '--min-recall', '--min-precision',
+      '--min-plants', '--scorer', '--files', '--plants-file', '--tier',
+      '--review-provider', '--strict', '--json', '--prompt-only', '--help',
+    ]) {
+      assert.match(readme, new RegExp('\\|' + '\\s*`' + flag), `README Options table must document ${flag}`);
+    }
+    assert.match(readme, /precision < `--min-precision`/);
+    assert.match(readme, /`--strict` provider match/);
+    assert.match(readme, /https:\/\/github\.com\/voodootikigod\/adlc\/blob\/main\/packages\/review-calibration\/REDESIGN\.md/);
+    assert.doesNotMatch(readme, /Shell command to run the reviewer/i);
+    const tokens = tokenizeCommand('node ./fake-reviewer.mjs {base}');
+    assert.deepEqual(tokens, ['node', './fake-reviewer.mjs', '{base}']);
+  });
+});

@@ -69,7 +69,7 @@ This is mutation testing aimed at the *reviewer* instead of the code (ADLC C8).
   echoes changed lines; prints a warning and is not a trustworthy recall number.
   Provided only as an offline escape hatch.
 
-See `REDESIGN.md` for the full design and the rationale for each decision.
+See [`REDESIGN.md`](https://github.com/voodootikigod/adlc/blob/main/packages/review-calibration/REDESIGN.md) in the repository for the full design and the rationale for each decision.
 
 ## Safety
 
@@ -101,21 +101,29 @@ review-calibration --review-cmd "cmd with {base} placeholder" [options]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--review-cmd <cmd>` | (required) | Command template to run the reviewer (tokenized, `shell: false`). `{base}` is substituted with the commit ref. |
+| `--review-cmd <cmd>` | (required) | Command template to run the reviewer (tokenized, not run through a shell — `shell: false`, no pipes, redirects, or variable expansion). `{base}` is substituted with the commit ref. |
 | `--commit <ref>` | `HEAD` | Commit whose changed files are used as plant targets. |
 | `--plants <n>` | `8` | Number of bugs to plant. |
 | `--min-recall <f>` | `0.5` | Minimum recall fraction required to pass (0–1). |
+| `--min-precision <f>` | — | Optional minimum precision fraction to also require (0–1). |
+| `--min-plants <n>` | `4` | Minimum valid-plant count required to report a recall measurement (refuses with exit 1 below this floor). |
+| `--scorer <mode>` | `judge` | `judge` (cheap-model semantic match; requires an LLM API key) or `string` (legacy location-only offline mode; prints a warning). |
 | `--files <list>` | — | Comma-separated fallback file list when commit has no eligible code files. |
-| `--json` | false | Machine-readable JSON output. |
+| `--plants-file <path>` | — | JSON array of authored plants (`[{file,line,original,mutated,category?,defect?,witness?}]`). |
+| `--tier <tier>` | `cheap` | Model tier for the LLM judge (`cheap`, `mid`, or `frontier`). |
+| `--review-provider <name>` | — | Provider/model family used by `--review-cmd` (`anthropic`, `openai`, `gemini`); compared against the judge provider for independence. |
+| `--strict` | `false` | Gate-fail (exit 2) instead of warning when `--review-provider` matches the judge's resolved provider (requires `--review-provider`). |
+| `--json` | `false` | Machine-readable JSON output. |
+| `--prompt-only` | `false` | Print a representative judge prompt and exit 0 (no API key or git repo needed). |
 | `--help` | — | Show help. |
 
 ### Exit codes
 
 | Code | Meaning |
 |---|---|
-| `0` | Gate passes — recall ≥ `--min-recall` |
-| `1` | Operational error — dirty tree, no plants generatable, review command crashed (exit ∉ {0,2}), or bad arguments |
-| `2` | Gate fails — recall < `--min-recall` |
+| `0` | Gate passes — recall (and precision, if `--min-precision` is set) meet thresholds |
+| `1` | Operational error — dirty tree, fewer than `--min-plants` valid plants, review command crashed (exit ∉ {0,2}), no judge available, or control self-test failed |
+| `2` | Gate fails — recall < `--min-recall`, precision < `--min-precision`, or `--strict` provider match |
 
 ## Examples
 
@@ -143,10 +151,11 @@ review-calibration \
   --files "src/auth.mjs,src/api.mjs"
 ```
 
-**Testing with a trivial fake reviewer (CI smoke test):**
+**Testing with a trivial fake reviewer (offline CI smoke test using `--scorer string`):**
 ```bash
 review-calibration \
-  --review-cmd 'node -e "process.stdout.write(\"LGTM\\n\")"' \
+  --review-cmd "node ./fake-reviewer.mjs {base}" \
+  --scorer string \
   --min-recall 0 \
   --json
 ```
