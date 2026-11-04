@@ -1083,6 +1083,47 @@ describe('readOwnChains: allowRecovery is opt-in, defaults to strict token-only 
     );
   });
 
+  it('rejects a present-but-empty sig inside the legacy prefix in both root and recovered segment (#544)', (t) => {
+    const { root, dir } = repo(t);
+    const KEY = 'empty-sig-prefix-key';
+    recordTicketEvidence(root, baseEvidence({ key: KEY }));
+    const rootPath = join(dir, 'manifest' + '.jsonl');
+    const signedRaw = readFileSync(rootPath, 'utf8').trim();
+    const signedEntry = JSON.parse(signedRaw);
+    const prefixEntry = {
+      seq: 1, gate: 'legacy', ts: '2026-01-01T00:00:00.000Z',
+      data: {}, files: {}, prev: null, sig: '',
+    };
+    const prefixRaw = JSON.stringify(prefixEntry);
+    const secondEntry = { ...signedEntry, seq: 2, prev: sha256(prefixRaw) };
+    secondEntry.sig = createHmac('sha256', KEY).update(canonicalEntryBytes(secondEntry)).digest('hex');
+    writeFileSync(rootPath, `${prefixRaw}\n${JSON.stringify(secondEntry)}\n`);
+    assert.throws(
+      () => readOwnChains(dir, { cwd: root, key: KEY }),
+      /root manifest failed chain or signature verification/,
+    );
+  });
+
+  it('resolveOpenSegment refuses recovery when a segment carries a present-but-empty sig (#544)', (t) => {
+    const { root, dir } = repo(t);
+    const KEY = 'seg-empty-sig-key';
+    activate(dir);
+    recordTicketEvidence(root, baseEvidence({ key: KEY }));
+    const resolved = resolveOpenSegment(dir, { cwd: root, key: KEY });
+    const segFile = segmentPath(dir, resolved.name);
+    const firstRaw = readFileSync(segFile, 'utf8').trim();
+    const second = {
+      seq: 2, gate: 'legacy', ts: '2026-01-02T00:00:00.000Z',
+      data: {}, files: {}, prev: sha256(firstRaw), sig: '',
+    };
+    writeFileSync(segFile, `${firstRaw}\n${JSON.stringify(second)}\n`);
+    rmSync(lineagePath(dir), { force: true });
+    assert.throws(
+      () => resolveOpenSegment(dir, { cwd: root, key: KEY }),
+      /cannot be authenticated with the configured key/,
+    );
+  });
+
   it('root with ZERO entries is safe even with a key available — empty is not "unsigned"', (t) => {
     const { root, dir } = repo(t);
     const KEY = 'root-empty-key';

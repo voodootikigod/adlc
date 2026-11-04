@@ -109,7 +109,7 @@ function walkChainForStoreHash(lines, key, chainLabel) {
     //     cannot regress it to unsigned by appending plain entries.
     let entrySigned = false;
     if (key !== null) {
-      const hasSig = typeof entry?.sig === 'string' && entry.sig.length > 0;
+      const hasSig = Boolean(entry) && typeof entry === 'object' && Object.hasOwn(entry, 'sig');
       if (hasSig) {
         if (!entrySigValid(key, entry)) {
           return { ok: false, code: 'MANIFEST_SIGNATURE_INVALID', reason: `${chainLabel} entry at line ${i + 1} has a signature that does not verify; integrity check FAILED` };

@@ -984,7 +984,7 @@ function isChainIntact(lines, key2) {
     const expectedPrev = prevLine === null ? null : sha256(prevLine);
     if (entry.prev !== expectedPrev || entry.seq !== prevSeq + 1) return false;
     if (key2 !== null) {
-      const hasSig = typeof entry.sig === "string" && entry.sig.length > 0;
+      const hasSig = Object.hasOwn(entry, "sig");
       if (hasSig) {
         if (!entrySigValid(key2, entry)) return false;
         seenSignedEntry = true;
@@ -1092,7 +1092,7 @@ function chainIsIntact(lines, key2 = null) {
     const expectedPrev = prevLine === null ? null : sha256(prevLine);
     if (entry?.prev !== expectedPrev || entry?.seq !== prevSeq + 1) return false;
     if (key2 !== null) {
-      const hasSig = typeof entry?.sig === "string" && entry.sig.length > 0;
+      const hasSig = Boolean(entry) && typeof entry === "object" && Object.hasOwn(entry, "sig");
       if (hasSig) {
         if (!entrySigValid(key2, entry)) return false;
         seenSignedEntry = true;
@@ -1679,6 +1679,9 @@ var GIT_MAX_BUFFER = 256 * 1024 * 1024;
 
 // packages/tickets/lib/prompt.mjs
 import { createInterface } from "node:readline/promises";
+
+// packages/tickets/lib/stores/git-tree.mjs
+var MAX_BUFFER = 64 * 1024 * 1024;
 
 // packages/core/lib/llm.mjs
 import { spawn } from "node:child_process";

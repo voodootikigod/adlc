@@ -7,21 +7,27 @@ import { ticketFilename } from '../filename.mjs';
 import { validateTickets } from '../schema.mjs';
 import { TicketSnapshot } from '../snapshot.mjs';
 
-function runGit(cwd, args, { allowFailure = false } = {}) {
-  const result = spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+const GIT_TIMEOUT_MS = 60_000;
+const MAX_BUFFER = 64 * 1024 * 1024;
+
+function runGit(cwd, args, opts = {}) {
+  const { allowFailure, spawnFn } = opts;
+  const result = spawnFn('git', args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, maxBuffer: MAX_BUFFER });
   if (result.status === 0) return result.stdout;
-  if (allowFailure) return null;
   if (result.error) throw operational('GIT_READ_FAILED', `git ${args[0]} failed: ${result.error.message}`);
+  if (result.signal) throw operational('GIT_READ_FAILED', `git ${args[0]} timed out or was killed by ${result.signal}`);
+  if (allowFailure) return null;
   throw operational('GIT_READ_FAILED', `git ${args[0]} failed: ${result.stderr?.trim() || `exit ${result.status}`}`);
 }
 
 export class GitTreeTicketStore {
-  constructor({ cwd = '.', revision, storePath = '.adlc/tickets' }) {
+  constructor({ cwd = '.', revision, spawnFn = spawnSync, storePath = '.adlc/tickets' }) {
     if (!revision) throw new TypeError('GitTreeTicketStore requires an exact revision');
     if (revision.startsWith('-') || /[\0\r\n]/.test(revision)) throw invalid('UNSAFE_GIT_REVISION', 'Git revision cannot be option-like or contain control characters');
     this.cwd = cwd;
     this.revision = revision;
     this.exactRevision = null;
+    this.spawnFn = spawnFn;
     this.storePath = storePath.replace(/\\/g, '/').replace(/\/$/, '');
     if (!this.storePath || this.storePath.startsWith('/') || this.storePath.split('/').includes('..')) {
       throw invalid('UNSAFE_GIT_PATH', `ticket store path must be repository-relative: ${storePath}`);
@@ -29,13 +35,13 @@ export class GitTreeTicketStore {
   }
 
   #show(path) {
-    const output = runGit(this.cwd, ['show', `${this.exactRevision}:${path}`], { allowFailure: true });
+    const output = runGit(this.cwd, ['show', `${this.exactRevision}:${path}`], { allowFailure: true, spawnFn: this.spawnFn });
     if (output === null) throw operational('GIT_PATH_MISSING', `${path} is absent at ${this.exactRevision}`);
     return output;
   }
 
   #entries(path) {
-    const listing = runGit(this.cwd, ['ls-tree', '-r', '-z', this.exactRevision, '--', path]);
+    const listing = runGit(this.cwd, ['ls-tree', '-r', '-z', this.exactRevision, '--', path], { spawnFn: this.spawnFn });
     return listing.split('\0').filter(Boolean).map((record) => {
       const separator = record.indexOf('\t');
       if (separator < 0) throw invalid('INVALID_GIT_TREE', `cannot parse Git tree entry at ${this.revision}`);
@@ -55,7 +61,7 @@ export class GitTreeTicketStore {
   }
 
   load() {
-    const resolved = runGit(this.cwd, ['rev-parse', '--verify', '--quiet', `${this.revision}^{commit}`], { allowFailure: true });
+    const resolved = runGit(this.cwd, ['rev-parse', '--verify', '--quiet', `${this.revision}^{commit}`], { allowFailure: true, spawnFn: this.spawnFn });
     if (resolved === null) {
       throw operational('GIT_REVISION_MISSING', `Git revision not found: ${this.revision}`);
     }

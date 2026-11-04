@@ -1,0 +1,29 @@
+{
+  "acceptance_criteria": [
+    "In packages/tickets/lib/doctor.mjs, an entry with Object.hasOwn(entry, \"sig\") whose signature is empty, null, non-string, or invalid fails with MANIFEST_SIGNATURE_INVALID even inside the legacy prefix.",
+    "In packages/tickets/lib/manifest-segments.mjs and packages/tickets/lib/manifest-primitives.mjs, chainIsIntact/isChainIntact reject any entry with Object.hasOwn(entry, \"sig\") whose signature fails entrySigValid.",
+    "In packages/tickets/lib/stores/git-tree.mjs, runGit passes a 60000ms timeout to spawnSync and throws operational GIT_READ_FAILED when a git call times out or is killed by a signal even when allowFailure is true."
+  ],
+  "category": "bugfix",
+  "description": "Resolves #544 and #572. In packages/tickets/lib/doctor.mjs, packages/tickets/lib/manifest-segments.mjs, and packages/tickets/lib/manifest-primitives.mjs, treat any entry carrying an explicit sig property (Object.hasOwn(entry, \"sig\")) whose signature fails entrySigValid as present-but-invalid (MANIFEST_SIGNATURE_INVALID in doctor) even inside the legacy prefix, reserving legacy-missing tolerance strictly for entries without a sig key. In packages/tickets/lib/stores/git-tree.mjs, bound runGit spawnSync calls with a 60s timeout and fail closed on timeout/signal.",
+  "id": "T-01M6K1DHX17RC2A8J4MNYGP667",
+  "rails": [
+    "packages/tickets/test/doctor.test.mjs",
+    "packages/tickets/test/manifest-segments.test.mjs",
+    "packages/tickets/test/git-tree.test.mjs"
+  ],
+  "scope": [
+    "packages/tickets/lib/doctor.mjs",
+    "packages/tickets/lib/manifest-segments.mjs",
+    "packages/tickets/lib/manifest-primitives.mjs",
+    "packages/tickets/lib/stores/git-tree.mjs",
+    "packages/tickets/test/doctor.test.mjs",
+    "packages/tickets/test/manifest-segments.test.mjs",
+    "packages/tickets/test/git-tree.test.mjs",
+    "plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs"
+  ],
+  "title": "tickets: reject present-but-malformed sig in legacy prefix and bound GitTreeTicketStore git reads (#544, #572)",
+  "verify": [
+    "node --test packages/tickets/test/doctor.test.mjs packages/tickets/test/manifest-segments.test.mjs packages/tickets/test/git-tree.test.mjs"
+  ]
+}
