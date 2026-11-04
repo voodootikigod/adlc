@@ -14,7 +14,7 @@ Runs once per spec. Cheap. No bespoke judgement needed.
 ## Usage
 
 ```
-premortem <spec.md> [--tier cheap|mid|frontier] [--out report.md] [--json] [--prompt-only] [--record-verdict <file|-> --ticket <id>]
+premortem <spec.md> [--tier cheap|mid|frontier] [--max-causes <n>] [--out report.md] [--json] [--prompt-only] [--record-verdict <file|-> --ticket <id>]
 ```
 
 ### Arguments
@@ -23,6 +23,7 @@ premortem <spec.md> [--tier cheap|mid|frontier] [--out report.md] [--json] [--pr
 |---|---|---|
 | `<spec.md>` | Path to the spec file to analyse **(required)** | — |
 | `--tier` | Model tier: `cheap`, `mid`, or `frontier` | `frontier` |
+| `--max-causes <n>` | Ask for at most `<n>` causes, ranked most likely first | `5 to 10` |
 | `--out <path>` | Write markdown report to this file instead of stdout | stdout |
 | `--json` | Emit machine-readable JSON `{ causes: [...] }` | false |
 | `--prompt-only` | Print the exact system + user prompt, then exit 0 — **no API key needed** | false |

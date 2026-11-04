@@ -8,6 +8,7 @@ import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 const { values, positionals } = parseArgs({
   options: {
     tier:         { type: 'string',  default: 'frontier' },
+    'max-causes': { type: 'string' },
     out:          { type: 'string' },
     json:         { type: 'boolean', default: false },
     'prompt-only':{ type: 'boolean', default: false },
@@ -18,12 +19,13 @@ const { values, positionals } = parseArgs({
 });
 
 if (values.help) {
-  console.log(`premortem SPEC.MD [--tier cheap|mid|frontier] [--out report.md] [--json] [--prompt-only] [--record-verdict FILE-OR-DASH --ticket ID]
+  console.log(`premortem SPEC.MD [--tier cheap|mid|frontier] [--max-causes N] [--out report.md] [--json] [--prompt-only] [--record-verdict FILE-OR-DASH --ticket ID]
 
 Failure-first spec stress test (ADLC C2).
 
   <spec.md>        Path to the spec file to analyse (required)
   --tier           Model tier: cheap | mid | frontier  (default: frontier)
+  --max-causes <N> Ask for at most <N> causes (positive integer; default: 5 to 10)
   --out            Write markdown report to this file instead of stdout
   --json           Emit machine-readable JSON {causes:[...]}
   --prompt-only    Print the exact prompt and exit 0 (no API key needed)
@@ -52,6 +54,16 @@ if (!VALID_TIERS.includes(values.tier)) {
   opError(`invalid --tier '${values.tier}' — must be one of: ${VALID_TIERS.join(', ')}`);
 }
 
+let maxCauses;
+if (values['max-causes'] !== undefined) {
+  const rawMax = values['max-causes'].trim();
+  const parsedMax = rawMax === '' ? NaN : Number(rawMax);
+  if (!Number.isSafeInteger(parsedMax) || parsedMax < 1) {
+    opError(`invalid --max-causes '${values['max-causes']}' — must be a positive integer >= 1`);
+  }
+  maxCauses = parsedMax;
+}
+
 if (values['record-verdict'] !== undefined && !values['prompt-only']) {
   opError('--record-verdict requires --prompt-only');
 }
@@ -59,6 +71,7 @@ if (values['record-verdict'] !== undefined && !values['prompt-only']) {
 await run({
   specPath,
   tier: values.tier,
+  maxCauses,
   outPath: values.out,
   json: values.json,
   promptOnlyMode: values['prompt-only'],
