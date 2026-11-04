@@ -34,5 +34,8 @@
     "herdr-plugin.toml",
     "README.md",
     "LICENSE"
-  ]
+  ],
+  "engines": {
+    "node": ">=18"
+  }
 }

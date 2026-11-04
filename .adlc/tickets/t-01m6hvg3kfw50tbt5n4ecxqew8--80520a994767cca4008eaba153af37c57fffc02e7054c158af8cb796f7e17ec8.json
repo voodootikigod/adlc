@@ -1,0 +1,19 @@
+{
+  "description": "Context: packages/ticket-sync lists LICENSE in files[] and declares MIT license without shipping packages/ticket-sync/LICENSE (#788), and plugins/adlc-cursor, plugins/adlc-gemini, and plugins/adlc-herdr omit engines.node >=18 (#817, #824).\nRequirements:\n1. Add packages/ticket-sync/LICENSE matching the repository root MIT LICENSE (#788).\n2. Add engines.node >=18 to plugins/adlc-cursor/package.json (#817), plugins/adlc-gemini/package.json (#824), and plugins/adlc-herdr/package.json.\n3. Add a suite-wide invariant test in plugins/adlc-cursor/test/packaging.test.mjs asserting that every workspace package/plugin with a package.json declares engines.node and ships LICENSE on disk.",
+  "id": "T-01M6HVG3KFW50TBT5N4ECXQEW8",
+  "rails": [
+    "packages/ticket-sync/test/schema.test.mjs",
+    "plugins/adlc-herdr/test/manifest.test.mjs"
+  ],
+  "scope": [
+    "packages/ticket-sync/LICENSE",
+    "plugins/adlc-cursor/package.json",
+    "plugins/adlc-gemini/package.json",
+    "plugins/adlc-herdr/package.json",
+    "plugins/adlc-cursor/test/packaging.test.mjs",
+    "scripts/test/package-reference-coverage.test.mjs"
+  ],
+  "size": "S",
+  "title": "fix(packaging): ship LICENSE in ticket-sync and declare engines.node >=18 in cursor/gemini/herdr (#788, #817, #824)",
+  "verify": "node --test plugins/adlc-cursor/test/packaging.test.mjs packages/ticket-sync/test/schema.test.mjs plugins/adlc-herdr/test/manifest.test.mjs"
+}
