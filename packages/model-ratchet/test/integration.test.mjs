@@ -478,7 +478,9 @@ describe('documentation and --help contract (#692, #691)', () => {
     const readme = readFileSync(resolve(__dirname, '../README.md'), 'utf8');
     const help = spawnSync('node', [bin, '--help'], { encoding: 'utf8' });
     assert.equal(help.status, 0);
-    assert.match(help.stdout, /shell=false/);
+    assert.match(help.stdout, /--review-cmd <cmd>  Command template to run per file \(tokenized, shell=false/);
+    assert.match(help.stdout, /Example: --review-cmd "eslint \{file\} --format compact" --findings-exit-code 1/);
+    assert.match(help.stdout, /Runs command per file \(spawnSync, shell=false/);
     assert.doesNotMatch(help.stdout, /shell=true/i);
     assert.doesNotMatch(help.stdout, /Shell command to run per file/);
     assert.doesNotMatch(help.stdout, /adversarial-review --file/);
