@@ -182,16 +182,17 @@ export function findUnbankedClusters(
     // many lessons, so match per LINE; one lesson's marker must not credit another's.
     // For lint clusters (#676), only descriptors with a present, non-empty companion
     // check-<stem>.mjs script qualify as candidates.
+    const matchingFiles = suffix
+      ? listDir().filter((e) => e.endsWith(suffix) && (route !== 'lint' || hasLintScript(e.slice(0, -suffix.length))))
+      : null;
     const candidates = suffix
-      ? listDir()
-          .filter((e) => e.endsWith(suffix) && (route !== 'lint' || hasLintScript(e.slice(0, -suffix.length))))
-          .map((e) => {
-            try {
-              return readFile(`${outDir}/${e}`) || '';
-            } catch {
-              return '';
-            }
-          })
+      ? matchingFiles.map((e) => {
+          try {
+            return readFile(`${outDir}/${e}`) || '';
+          } catch {
+            return '';
+          }
+        })
       : template.split('\n');
     const related = candidates.filter((c) =>
       members.some((m) => c.includes(m))
