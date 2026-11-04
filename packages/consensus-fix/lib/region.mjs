@@ -113,7 +113,7 @@ export function buildFileExcerpt({
     return { text: content, totalLines, windowed: false };
   }
 
-  const basename = filePath.split('/').pop();
+  const basename = filePath.split(/[\\/]/).pop();
   const refLines = extractLineReferences(testOutput, basename);
   if (refLines.length > 0) {
     const windows = buildWindows(refLines, totalLines, contextLines);

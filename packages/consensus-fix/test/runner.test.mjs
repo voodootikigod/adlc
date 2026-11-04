@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
-import { runCommand, validateCandidate, runConsensusFix } from '../lib/runner.mjs';
+import { runCommand, shellInvocation, validateCandidate, runConsensusFix } from '../lib/runner.mjs';
 
 /** One full-line-replace hunk, for single-line fixture files. */
 function replaceLine1(replacement) {
@@ -618,4 +618,89 @@ test("runConsensusFix discards candidate with null entry in changes array withou
   assert.equal(result.discarded[0].reason, "validation failed: each change must be an object");
   assert.equal(result.survivors.length, 1);
   assert.equal(result.survivors[0].index, 1);
+});
+
+test('shellInvocation selects cmd /d /s /c on win32 and sh -c on POSIX (#605)', () => {
+  assert.deepEqual(shellInvocation('npm test', 'win32'), { file: 'cmd', args: ['/d', '/s', '/c', 'npm test'] });
+  assert.deepEqual(shellInvocation('npm test', 'linux'), { file: 'sh', args: ['-c', 'npm test'] });
+  assert.deepEqual(shellInvocation('npm test', 'darwin'), { file: 'sh', args: ['-c', 'npm test'] });
+});
+
+test('runCommand records spawnError when the child emits an error event (#605)', async () => {
+  const fakeSpawn = () => {
+    const handlers = {};
+    const child = {
+      pid: 99999,
+      stdout: { on: () => {} },
+      stderr: { on: () => {} },
+      on: (ev, fn) => { handlers[ev] = fn; },
+    };
+    queueMicrotask(() => {
+      const err = new Error('spawn sh ENOENT');
+      err.code = 'ENOENT';
+      handlers.error?.(err);
+    });
+    return child;
+  };
+  const res = await runCommand('echo hi', { spawnFn: fakeSpawn });
+  assert.equal(res.exitCode, 127);
+  assert.equal(res.spawnError, 'ENOENT');
+  assert.match(res.output, /ENOENT/);
+});
+
+test('runCommand falls back to err.message when err.code is absent on spawn error (#605)', async () => {
+  const fakeSpawn = () => {
+    const handlers = {};
+    const child = {
+      pid: 99999,
+      stdout: { on: () => {} },
+      stderr: { on: () => {} },
+      on: (ev, fn) => { handlers[ev] = fn; },
+    };
+    queueMicrotask(() => {
+      handlers.error?.(new Error('custom spawn failure'));
+    });
+    return child;
+  };
+  const res = await runCommand('echo hi', { spawnFn: fakeSpawn });
+  assert.equal(res.exitCode, 127);
+  assert.equal(res.spawnError, 'custom spawn failure');
+});
+
+test('runConsensusFix throws isOpError before fanning LLM calls when initial testCmd fails to spawn (#605)', async () => {
+  let llmCalls = 0;
+  await assert.rejects(
+    () => runConsensusFix({
+      testCmd: 'npm test',
+      files: [],
+      n: 3,
+      tier: 'cheap',
+      completeFn: async () => { llmCalls++; return '{}'; },
+      runCommandFn: async () => ({ exitCode: 127, output: 'spawn sh ENOENT', spawnError: 'ENOENT' }),
+    }),
+    (err) => {
+      assert.equal(err.isOpError, true);
+      assert.match(err.message, /failed to run test command: spawn sh ENOENT/);
+      return true;
+    }
+  );
+  assert.equal(llmCalls, 0, 'must not burn any LLM calls when test runner fails to spawn');
+});
+
+test('runConsensusFix uses spawnError in message when output is empty on spawn failure (#605)', async () => {
+  await assert.rejects(
+    () => runConsensusFix({
+      testCmd: 'npm test',
+      files: [],
+      n: 1,
+      tier: 'cheap',
+      completeFn: async () => '{}',
+      runCommandFn: async () => ({ exitCode: 127, output: '', spawnError: 'ENOENT' }),
+    }),
+    (err) => {
+      assert.equal(err.isOpError, true);
+      assert.match(err.message, /failed to run test command: ENOENT/);
+      return true;
+    }
+  );
 });

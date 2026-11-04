@@ -1,0 +1,16 @@
+{
+  "body": "Context: Issue #605. In packages/consensus-fix/lib/runner.mjs, runCommand() hardcodes spawn(\"sh\", [\"-c\", cmd]) and folds spawn ENOENT errors into exitCode 127 without surfacing spawnError, so on Windows where sh is absent the pre-flight \"confirm test fails\" check treats ENOENT as a normal test failure, fans N paid LLM completions, and then fails every candidate. Separately, packages/consensus-fix/lib/region.mjs derives the filename with filePath.split(\"/\").pop(), which fails to strip directory components on Windows backslash paths.\nChanges:\n1. In packages/consensus-fix/lib/runner.mjs, add shellInvocation(cmd, platform = process.platform) returning { file: \"cmd\", args: [\"/d\", \"/s\", \"/c\", cmd] } on win32 and { file: \"sh\", args: [\"-c\", cmd] } otherwise; surface spawnError (err.code || err.message) on child \"error\" events in runCommand(); and in runConsensusFix(), throw an operational error (isOpError: true) if initialRun.spawnError is set so pre-flight aborts before fanning LLM completions when the shell cannot be spawned.\n2. In packages/consensus-fix/lib/region.mjs, extract fileBasename(filePath) splitting on both \"/\" and \"\\\\\" so Windows paths window around stack-trace line references identically to POSIX paths.\n3. Add unit tests in packages/consensus-fix/test/runner.test.mjs and packages/consensus-fix/test/region.test.mjs covering shellInvocation, spawnError handling and pre-flight abort before completeFn, and Windows backslash paths in buildFileExcerpt.\nAcceptance Criteria:\n- AC1: shellInvocation selects cmd /d /s /c on win32 and sh -c on POSIX; runConsensusFix throws an operational error before invoking completeFn when initialRun reports a spawnError.\n- AC2: buildFileExcerpt windows files referenced by basename when filePath uses Windows backslashes.\n- AC3: node --test packages/consensus-fix/test/*.test.mjs and mutation-gate pass.",
+  "category": "bug",
+  "id": "T-01M6J34MJK22X3EGYATH09Z0QH",
+  "rails": [
+    "packages/consensus-fix/test/hunks.test.mjs",
+    "packages/consensus-fix/test/snapshot.test.mjs"
+  ],
+  "scope": [
+    "packages/consensus-fix/lib/runner.mjs",
+    "packages/consensus-fix/lib/region.mjs",
+    "packages/consensus-fix/test/runner.test.mjs",
+    "packages/consensus-fix/test/region.test.mjs"
+  ],
+  "title": "fix(consensus-fix): support Windows shell command execution, ENOENT pre-flight guard, and path basename windowing (#605)"
+}

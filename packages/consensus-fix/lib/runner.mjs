@@ -36,13 +36,22 @@ function killGroup(pid, signal) {
  * blocking spawn would leave the event loop unable to dispatch a termination
  * signal for as long as the command runs.
  */
-export function runCommand(cmd, { signal } = {}) {
+export function shellInvocation(cmd, platform = process.platform) {
+  if (platform === 'win32') {
+    return { file: 'cmd', args: ['/d', '/s', '/c', cmd] };
+  }
+  return { file: 'sh', args: ['-c', cmd] };
+}
+
+export function runCommand(cmd, { signal, platform = process.platform, spawnFn = spawn } = {}) {
   if (signal?.aborted) {
     return Promise.resolve({ exitCode: ABORTED_EXIT_CODE, output: 'aborted before start' });
   }
+  const { file, args } = shellInvocation(cmd, platform);
   return new Promise((resolvePromise) => {
-    const child = spawn('sh', ['-c', cmd], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawnFn(file, args, { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
+    let spawnError = null;
     let escalation = null;
     child.stdout.on('data', (chunk) => { output += chunk; });
     child.stderr.on('data', (chunk) => { output += chunk; });
@@ -57,9 +66,10 @@ export function runCommand(cmd, { signal } = {}) {
       settled = true;
       signal?.removeEventListener('abort', onAbort);
       if (escalation) clearTimeout(escalation);
-      resolvePromise({ exitCode, output });
+      resolvePromise(spawnError ? { exitCode, output, spawnError } : { exitCode, output });
     };
     child.on('error', (err) => {
+      spawnError = err.code || err.message;
       output += err.message;
       finish(127);
     });
@@ -203,6 +213,7 @@ export async function runConsensusFix({
   railsCmd,
   onProgress = () => {},
   signal,
+  runCommandFn = runCommand,
 }) {
   // Fan width: one candidate per named provider when --providers is supplied,
   // otherwise the usual n resamples of the single auto-detected provider.
@@ -217,8 +228,14 @@ export async function runConsensusFix({
   }
   // 1. Run test once — must fail.
   onProgress('Running test to confirm failure...');
-  const initialRun = await runCommand(testCmd, { signal });
+  const initialRun = await runCommandFn(testCmd, { signal });
   throwIfAborted(signal);
+  if (initialRun.spawnError) {
+    throw Object.assign(
+      new Error(`failed to run test command: ${initialRun.output || initialRun.spawnError}`),
+      { isOpError: true }
+    );
+  }
   if (initialRun.exitCode === 0) {
     throw Object.assign(new Error('test already passes — nothing to fix'), { isOpError: true });
   }
@@ -315,7 +332,7 @@ export async function runConsensusFix({
       if (!applyResult.ok) {
         applyError = applyResult.error;
       } else {
-        const testRun = await runCommand(testCmd, { signal });
+        const testRun = await runCommandFn(testCmd, { signal });
         testPassed = testRun.exitCode === 0;
         testRunOutput = testRun.output;
 
@@ -326,7 +343,7 @@ export async function runConsensusFix({
         } else if (testPassed) {
           // Only spend the rails run when the repro already passed; a candidate
           // that fails the repro can never survive regardless of the rails.
-          const railsRun = await runCommand(railsCmd, { signal });
+          const railsRun = await runCommandFn(railsCmd, { signal });
           railsPassed = railsRun.exitCode === 0;
           railsRunOutput = railsRun.output;
         }

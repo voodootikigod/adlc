@@ -137,3 +137,11 @@ test('buildFileExcerpt matches on basename even when filePath is a full/relative
   assert.equal(excerpt.windowed, true);
   assert.match(excerpt.text, /150: line 150/);
 });
+
+test('buildFileExcerpt matches on basename when filePath uses Windows backslashes (#605)', () => {
+  const content = makeLines(200);
+  const testOutput = 'Error at C:\\some\\repo\\src\\deep\\foo.mjs:150';
+  const excerpt = buildFileExcerpt({ content, testOutput, filePath: 'C:\\some\\repo\\src\\deep\\foo.mjs' });
+  assert.equal(excerpt.windowed, true);
+  assert.match(excerpt.text, /150: line 150/);
+});
