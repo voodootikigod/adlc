@@ -6,16 +6,20 @@ it here: add a test in `packages/core/test/`, a declaration in `index.d.ts`,
 and no new runtime dependency. A defect in a core primitive is fixed here, with
 a regression test. The full rule is CONVENTIONS.md hard rule 2.
 
-Import surface (from a tool at `packages/<name>/`):
+Import surface (`@adlc/core` and its subpath exports):
 
 ```js
-import { complete, fan, fanProviders, extractJson, detectProvider, resolveModel, PROVIDER_NAMES } from '../../core/index.mjs';
-import { git, gitDiff, changedFiles, isDirty, isGitRepo, coChange, pairKey, churn } from '../../core/index.mjs';
-import { parseArgs, pass, gateFail, opError, printJson, readStdin, promptOnly } from '../../core/index.mjs';
-import { ADLC_DIR, appendEntry, readEntries, ledgerPath, sha256, hashFiles } from '../../core/index.mjs';
-import { TICKETS_PATH, loadTickets, validateTicket, topoSort, computeFloat, globMatch, inScope, scopesOverlap } from '../../core/index.mjs';
-import { mutate } from '../../core/index.mjs'; // mutate.generateMutants / applyMutant / changedLinesFromDiff / OPERATORS
-import { syntaxLanguage, resolveTypeScript, checkSyntaxDetail, checkSyntax, syntaxCheckProblem } from '../../core/index.mjs';
+import { complete, fan, fanProviders, extractJson, detectProvider, resolveModel, PROVIDER_NAMES } from '@adlc/core';
+import { git, gitDiff, changedFiles, isDirty, isGitRepo, coChange, pairKey, churn } from '@adlc/core';
+import { parseArgs, pass, gateFail, opError, printJson, readStdin, promptOnly } from '@adlc/core';
+import { ADLC_DIR, appendEntry, readEntries, ledgerPath, sha256, hashFiles } from '@adlc/core';
+import { TICKETS_PATH, loadTickets, validateTicket, topoSort, computeFloat, globMatch, inScope, scopesOverlap } from '@adlc/core';
+import { mutate } from '@adlc/core'; // mutate.generateMutants / applyMutant / changedLinesFromDiff / OPERATORS
+import { syntaxLanguage, resolveTypeScript, checkSyntaxDetail, checkSyntax, syntaxCheckProblem } from '@adlc/core';
+
+// Subpath exports (`package.json` "exports"):
+// @adlc/core/llm | @adlc/core/git | @adlc/core/cli | @adlc/core/ledger
+// @adlc/core/revision | @adlc/core/tickets | @adlc/core/mutate | @adlc/core/test-kit
 ```
 
 ## llm
@@ -66,10 +70,10 @@ Schema (see lib/tickets.mjs header): `{ id, title, body, scope[], rails[], edges
 - `computeFloat(tickets)` → `{ floats: {id: n}, criticalPath: [ids], makespan }` (CPM; duration default 1) or `{ error }` on cycle.
 - `globMatch(pattern, path)` (`*`, `**`), `inScope(ticket, path)`, `scopesOverlap(a, b)` (conservative).
 
-## mutate
+## mutate (`@adlc/core/mutate`)
 
-- `mutate.OPERATORS` — invert-comparison, bool-flip, null-return, off-by-one, logic-swap.
-- `mutate.generateMutants(content, { targetLines?, maxMutants? })` → `[{ line, operator, original, mutated }]` (skips comments/imports/console lines).
+- `mutate.OPERATORS` — `invert-comparison`, `bool-flip`, `null-return`, `off-by-one`, `logic-swap`, `negate-guard-subclause`, `array-literal-shrink`, `ternary-swap`.
+- `mutate.generateMutants(content, { targetLines?, maxMutants? })` → `[{ line, operator, original, mutated }]`. Skips pure comment/import/console lines and unclosed block-comment openers (`/* ...`), while stripping a leading closed block-comment prefix (`/* ... */ code`) so executable code after the comment is still mutated (#372). `off-by-one` masks unobservable tuning constants (e.g. `TIMEOUT_MS`, `maxBufferBytes`, or negative duration sentinels) while still mutating countable boundaries (`MAX_RETRIES`, `retryLimit`) and zero sentinels (`0 -> 1`).
 - `mutate.applyMutant(content, mutant)` → mutated content (throws if line content drifted).
 - `mutate.changedLinesFromDiff(diffText)` → `{ file: Set<newSideLineNo> }`. Hunk body lines are classified by their first character only, so a source line that itself begins with `--` or `++` is still a deletion or addition.
 
