@@ -240,6 +240,7 @@ test('lint: a slug-NAMED artifact does not bypass the coverage invariant', (t) =
   // Emitted by the REAL emitter, at its real slug-derived filename.
   const descriptor = buildLintDescriptor(cluster.name, [a, b]);
   writeFileSync(join(outDir, `${cluster.name}.lint.json`), descriptor.content ?? descriptor, 'utf8');
+  writeFileSync(join(outDir, `check-${cluster.name}.mjs`), '// check script\n', 'utf8');
   assert.deepEqual(findUnbankedClusters([cluster], outDir, existsSync, undefined, undefined, 2), [], 'precondition: banked');
 
   const fused = { ...cluster, members: [...cluster.members, 'ffffffffff01', 'ffffffffff02', 'ffffffffff03'], size: 5 };
@@ -410,6 +411,7 @@ test('lint: a descriptor whose file was renamed is still banked via the id in it
   assert.equal(parsed.id, cluster.id, 'descriptor carries the stable id');
   assert.ok(!existsSync(join(outDir, `${cluster.name}.lint.json`)), 'precondition: legacy filename absent');
   writeFileSync(join(outDir, 'no-eval-in-production.lint.json'), descriptor.content, 'utf8');
+  writeFileSync(join(outDir, 'check-no-eval-in-production.mjs'), '// check script\n', 'utf8');
 
   const unbanked = findUnbankedClusters([cluster], outDir, existsSync);
   assert.deepEqual(unbanked, [], 'the renamed lint descriptor is credited by its stable id');

@@ -1,0 +1,23 @@
+{
+  "acceptance": [
+    "findUnbankedClusters requires both <stem>.lint.json and a non-empty companion check-<stem>.mjs in outDir before crediting a lint-routed cluster as banked.",
+    "Deleting or emptying check-<stem>.mjs while leaving <stem>.lint.json in place causes lesson-foundry --gate to report the lint cluster as unbanked (exit 2).",
+    "packages/lesson-foundry/README.md documents that wiring check-<name>.mjs into CI is the operator step and that --gate requires both <name>.lint.json and check-<name>.mjs."
+  ],
+  "autonomous": true,
+  "id": "T-01M6K662ZER6767EKYCXFQND5V",
+  "rails": [
+    "packages/lesson-foundry/test/cli.test.mjs",
+    "packages/lesson-foundry/test/write-preserve-existing.test.mjs"
+  ],
+  "scope": [
+    "packages/lesson-foundry/lib/foundry.mjs",
+    "packages/lesson-foundry/README.md",
+    "packages/lesson-foundry/test/foundry.test.mjs",
+    "packages/lesson-foundry/test/empty-defense-file.test.mjs",
+    "packages/lesson-foundry/test/stable-cluster-id.test.mjs"
+  ],
+  "tier": "tier2",
+  "title": "lesson-foundry: require runnable check-<name>.mjs script before crediting a lint cluster in --gate (#676)",
+  "verify": "node --test packages/lesson-foundry/test/foundry.test.mjs packages/lesson-foundry/test/empty-defense-file.test.mjs packages/lesson-foundry/test/stable-cluster-id.test.mjs packages/lesson-foundry/test/cli.test.mjs packages/lesson-foundry/test/write-preserve-existing.test.mjs"
+}

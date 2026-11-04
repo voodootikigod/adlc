@@ -66,7 +66,7 @@ Options:
 
 ### LINT: `check-<name>.mjs`
 
-A runnable Node.js script that greps the repo for the pattern and exits 2 on match, 0 when clean. Run it as a CI gate.
+A runnable Node.js script that greps the repo for the pattern and exits 2 on match, 0 when clean. Wiring `check-<name>.mjs` into CI is the operator's step; `--gate` requires both `<name>.lint.json` and a non-empty `check-<name>.mjs` in `--out-dir` before crediting a lint cluster as banked.
 
 ### SKILL: `<name>.SKILL.md`
 

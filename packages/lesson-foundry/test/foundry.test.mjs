@@ -2,10 +2,11 @@
 // and integration over temp dirs.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
 import { loadFindings, buildClusters, findUnbankedClusters } from '../lib/foundry.mjs';
+import { buildLintDescriptor } from '../lib/emit.mjs';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -226,6 +227,7 @@ test('findUnbankedClusters: all banked → returns empty array', (t) => {
   mkdirSync(outDir, { recursive: true });
   writeFileSync(join(outDir, 'skill-one.SKILL.md'), 'content', 'utf8');
   writeFileSync(join(outDir, 'lint-two.lint.json'), '{}', 'utf8');
+  writeFileSync(join(outDir, 'check-lint-two.mjs'), '// check script\n', 'utf8');
 
   const clusters = [
     { name: 'skill-one', route: 'skill', size: 2, indices: [0, 1] },
@@ -233,4 +235,44 @@ test('findUnbankedClusters: all banked → returns empty array', (t) => {
   ];
   const unbanked = findUnbankedClusters(clusters, outDir, existsSync);
   assert.strictEqual(unbanked.length, 0);
+});
+
+test('findUnbankedClusters: lint cluster requires non-empty companion check-<stem>.mjs (#676)', (t) => {
+  const dir = tmp(t, 'lesson-foundry-676-');
+  const outDir = join(dir, 'lessons');
+  mkdirSync(outDir, { recursive: true });
+  const findings = [
+    { ts: 't1', file: 'a.mjs', line: 1, category: 'convention', desc: 'production code uses "eval" call directly' },
+    { ts: 't2', file: 'b.mjs', line: 2, category: 'convention', desc: 'production code uses "eval" in the handler' },
+  ];
+  const [cluster] = buildClusters(findings, 2);
+  assert.equal(cluster.route, 'lint');
+
+  // 1. Legacy slug-named .lint.json WITHOUT check-<name>.mjs -> unbanked
+  writeFileSync(join(outDir, `${cluster.name}.lint.json`), '{"pattern":"eval"}', 'utf8');
+  assert.equal(findUnbankedClusters([cluster], outDir, existsSync).length, 1);
+
+  // 2. Empty check-<name>.mjs -> still unbanked
+  const checkPath = join(outDir, `check-${cluster.name}.mjs`);
+  writeFileSync(checkPath, '   \n', 'utf8');
+  assert.equal(findUnbankedClusters([cluster], outDir, existsSync).length, 1);
+
+  // 3. Unreadable check-<name>.mjs (readFile throws) -> still unbanked
+  writeFileSync(checkPath, '// runnable check\n', 'utf8');
+  const throwRead = (p) => {
+    if (p.includes('check-')) throw new Error('EACCES');
+    return readFileSync(p, 'utf8');
+  };
+  assert.equal(findUnbankedClusters([cluster], outDir, existsSync, throwRead).length, 1);
+
+  // 4. Non-empty check-<name>.mjs -> banked (legacy path)
+  assert.equal(findUnbankedClusters([cluster], outDir, existsSync).length, 0);
+
+  // 5. Member-bearing .lint.json (normal --write output) with check-<name>.mjs deleted -> unbanked
+  const desc = buildLintDescriptor(cluster.name, findings);
+  writeFileSync(join(outDir, `${cluster.name}.lint.json`), desc.content, 'utf8');
+  writeFileSync(checkPath, '// check script\n', 'utf8');
+  assert.equal(findUnbankedClusters([cluster], outDir, existsSync).length, 0);
+  writeFileSync(checkPath, '', 'utf8');
+  assert.equal(findUnbankedClusters([cluster], outDir, existsSync).length, 1);
 });

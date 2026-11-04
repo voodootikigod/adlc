@@ -204,8 +204,9 @@ test('AC1/AC3: CLI --gate exits 2 on 0-byte defense file and 0 on non-empty lega
     assert.strictEqual(resEmpty.code, 2, '0-byte defense file must cause --gate to exit 2');
     assert.match(resEmpty.stderr, /unbanked/, 'stderr must report unbanked lesson');
 
-    // 2. With valid non-empty legacy content: --gate must exit 0
+    // 2. With valid non-empty legacy content AND companion check script: --gate must exit 0
     writeFileSync(defensePath, '{"pattern":"eval\\\\(","message":"no eval"}', 'utf8');
+    writeFileSync(join(lessonsDir, `check-${cluster.name}.mjs`), '// check script\n', 'utf8');
     const resValid = runCli(['--ledger', 'findings', '--min', '2', '--gate', '--out-dir', lessonsDir], dir);
     assert.strictEqual(resValid.code, 0, 'non-empty defense file must cause --gate to exit 0');
   } finally {
