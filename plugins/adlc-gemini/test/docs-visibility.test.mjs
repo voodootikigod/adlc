@@ -58,9 +58,7 @@ test('gemini.md Install section callout appears before the install commands, not
 });
 
 test('the Gemini plugin points at scripts/rails-guard-ci.mjs as a required-check recommendation', () => {
-  // plugins/adlc-gemini has no README.md (matches the rest of the plugins/
-  // directory, none of which have one) -- commands/adlc-init.md is the closest
-  // equivalent (it is the plugin's own install/bootstrap doc).
+  // commands/adlc-init.md is the plugin's own in-session bootstrap doc.
   const initDoc = readFileSync(
     join(REPO_ROOT, 'plugins', 'adlc-gemini', 'commands', 'adlc-init.md'),
     'utf8'
@@ -150,4 +148,19 @@ test('the ADLC_AGY_TIMEOUT_MS recovery knob is discoverable, not comment-only', 
 test('adlc-init.md documents the published @adlc/rails-guard-ci CLI invocation for consumer repos (#270)', () => {
   const initMd = readFileSync(join(HERE, '..', 'commands', 'adlc-init.md'), 'utf8');
   assert.match(initMd, /@adlc\/rails-guard-ci/);
+});
+
+test('plugins/adlc-gemini/README.md Install section foregrounds the fail-open risk before install commands (#825)', () => {
+  const readme = readFileSync(join(REPO_ROOT, 'plugins', 'adlc-gemini', 'README.md'), 'utf8');
+  const install = section(readme, '## Install');
+  assert.match(install, /fail(s)?\s*\*{0,2}open/i, 'README Install section should state the hook fails OPEN');
+  assert.match(install, /CI\b.*(backstop|real (guarantee|control))|(backstop|real (guarantee|control)).*CI\b/is, 'README Install section should name CI as the real backstop');
+  const calloutIdx = install.search(/fail(s)?\s*\*{0,2}open/i);
+  const firstCommandIdx = install.indexOf('npx @adlc/gemini@latest install');
+  assert.ok(calloutIdx !== -1 && firstCommandIdx !== -1 && calloutIdx < firstCommandIdx, 'fail-open callout should appear before the first install command in README.md');
+});
+
+test('plugins/adlc-gemini/skills/adlc/SKILL.md clarifies ADLC_RAILS_BYPASS=1 applies only to CLI, not the in-session Gemini hook (#828)', () => {
+  const skill = readFileSync(join(REPO_ROOT, 'plugins', 'adlc-gemini', 'skills', 'adlc', 'SKILL.md'), 'utf8');
+  assert.match(skill, /ADLC_RAILS_BYPASS=1` overrides only the CLI[\s\S]*in-session Gemini hook has no per-call bypass other than[\s\S]*ADLC_P4_ENFORCEMENT/);
 });

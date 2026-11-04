@@ -75,6 +75,7 @@ test('T14 — gemini gains adversarial-review at P1, P3 and P5', () => {
   assert.match(gemini, /^---\nname: adlc\n/, 'gemini frontmatter preserved');
   // Harness-specific content preserved.
   assert.match(gemini, /## Rails in Gemini \(Antigravity\/JetSki\)/, 'gemini rails section preserved');
+  assert.match(gemini, /ADLC_RAILS_BYPASS=1` overrides only the CLI/, 'gemini rails section clarifies ADLC_RAILS_BYPASS scope (#828)');
   assert.match(gemini, /ADLC_GEMINI_SENTINEL_PHASE_ROUTER_V1/, 'gemini sentinel preserved');
 });
 

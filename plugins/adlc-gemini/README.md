@@ -4,6 +4,14 @@ Embrace the ADLC inside Google Gemini (Antigravity `agy` and JetSki `jetski`): a
 
 ## Install
 
+> **⚠️ Fail-open, CI is the real backstop.** The in-session `PreToolUse` rail hook
+> installed below is **advisory only** — the host fails **OPEN** on a non-zero hook
+> exit (crash, timeout, unsupported platform), so a frozen-rail write can slip
+> through. Do not treat the hook as a hard block. The unbypassable control is the
+> CI diff gate (`scripts/rails-guard-ci.mjs`, wired via
+> [`docs/ci/rails-guard.yml`](../../docs/ci/rails-guard.yml)) — **make it a required
+> check** before relying on this integration for enforcement.
+
 **One-liner via npx (recommended):**
 
 ```sh
