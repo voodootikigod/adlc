@@ -784,3 +784,38 @@ describe('normalizeRepoRelativePath (#663)', () => {
     assert.equal(normalizeRepoRelativePath('packages/hollow-test/lib/targets.mjs'), 'packages/hollow-test/lib/targets.mjs');
   });
 });
+
+describe("hollow-test README accuracy (#664, #662, #661, #659)", () => {
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+
+  it("#661: documents --base <ref> default as merge-base with main/master (fails closed)", () => {
+    assert.match(readme, /\| `--base <ref>` \| merge-base with `main`\/`master` \(fails closed if none can be resolved\) \|/);
+  });
+
+  it("#662: renders all 8 mutation operators in a single unbroken Markdown table before the off-by-one callout", () => {
+    const tableBlock = [
+      "| Operator | Example |",
+      "|----------|---------|",
+      "| `invert-comparison` | `===` → `!==`, `<=` → `>` |",
+      "| `bool-flip` | `true` → `false` |",
+      "| `null-return` | `return expr` → `return null` |",
+      "| `off-by-one` | literal `n` → `n+1` |",
+      "| `logic-swap` | `&&` → `\\|\\|` |",
+      "| `negate-guard-subclause` | `Array.isArray(x)` ↔ `!Array.isArray(x)`; `if (value)` → `if (!value)`; loose `v == null` ↔ `v != null` |",
+      "| `array-literal-shrink` | `['id', 'title', 'scope']` → `['id', 'title']` |",
+      "| `ternary-swap` | `cond ? a : b` → `cond ? b : a` |",
+    ].join("\n");
+    assert.ok(readme.includes(tableBlock), "8 mutation operators must form one contiguous Markdown table");
+  });
+
+  it("#659: documents { ttl: 0 } as mutated (yes) and { timeout: -1 } as masked (no)", () => {
+    assert.match(readme, /\| `\{ ttl: 0 \}` \| \*\*yes\*\* \|/);
+    assert.match(readme, /\| `\{ timeout: -1 \}` \| no \|/);
+  });
+
+  it("#664: JSON output schema includes invalid and undetermined counts in summary and optional reason", () => {
+    assert.match(readme, /"invalid": 0/);
+    assert.match(readme, /"undetermined": 0/);
+    assert.match(readme, /"status": "undetermined"[\s\S]*?"reason":/);
+  });
+});

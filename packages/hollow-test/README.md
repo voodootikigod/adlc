@@ -21,7 +21,7 @@ hollow-test --test-cmd "node --test test/" [options]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--test-cmd <cmd>` | *(required)* | Shell command to run the test suite. Must exit non-zero on failure. |
-| `--base <ref>` | `HEAD` | Git base ref for the diff (e.g. `HEAD~1`, `main`, a SHA). |
+| `--base <ref>` | merge-base with `main`/`master` (fails closed if none can be resolved) | Git base ref for the diff (e.g. `HEAD~1`, `main`, a SHA). |
 | `--max <n>` | `20` | Maximum total mutants across all files. Budget is spread round-robin. |
 | `--timeout-ms <n>` | `120000` | Per-mutant test-command timeout in milliseconds. |
 | `--target <file>` | *(none)* | Mutate this file directly, independent of the diff (repeatable). Bypasses the test/spec path exclusion and mutates the whole file, not just diff-changed lines. |
@@ -267,6 +267,9 @@ named `--target` go entirely untested while the run reports success.
 | `null-return` | `return expr` → `return null` |
 | `off-by-one` | literal `n` → `n+1` |
 | `logic-swap` | `&&` → `\|\|` |
+| `negate-guard-subclause` | `Array.isArray(x)` ↔ `!Array.isArray(x)`; `if (value)` → `if (!value)`; loose `v == null` ↔ `v != null` |
+| `array-literal-shrink` | `['id', 'title', 'scope']` → `['id', 'title']` |
+| `ternary-swap` | `cond ? a : b` → `cond ? b : a` |
 
 **`off-by-one` does not mutate a tuning constant.** `+1` on a duration in
 milliseconds or a size in bytes is an *equivalent mutant* — no test can observe
@@ -280,15 +283,13 @@ segments, and `snake_case`/`camelCase` spell the same thing:
 | `timeout`, `ttl`, `maxBuffer`, `highWaterMark` | no | a known tuning **phrase** |
 | `MAX_RETRIES`, `retryLimit`, `chunkSize`, `timeoutRetries` | **yes** | trailing **count** word — a countable boundary, whatever else the name says |
 | `RETENTION_DAYS`, `GRACE_HOURS` | **yes** | a coarse time unit *is* observable under an injected clock |
-| `{ ttl: 0 }`, `{ timeout: -1 }` | **yes** | `0`/negative are discrete sentinels, not magnitudes |
+| `{ ttl: 0 }` | **yes** | `0` is a discrete sentinel (`0 -> 1` crosses the disabled/enabled boundary), not a magnitude |
+| `{ timeout: -1 }` | no | negative duration/tuning values are masked (`-1 -> -2` stays negative and takes the same branch) |
 
 A trailing count word always wins over a tuning phrase earlier in the name, so
 widening the phrase list can never silently delete prosecution of a count. Naming
 the unit is what earns the mask — `MAX_BUFFER_SIZE_BYTES` is masked where
 `MAX_BUFFER_SIZE` is not (#372).
-| `negate-guard-subclause` | `Array.isArray(x)` ↔ `!Array.isArray(x)`; `if (value)` → `if (!value)`; loose `v == null` ↔ `v != null` |
-| `array-literal-shrink` | `['id', 'title', 'scope']` → `['id', 'title']` |
-| `ternary-swap` | `cond ? a : b` → `cond ? b : a` |
 
 ## JSON output schema
 
@@ -298,7 +299,9 @@ the unit is what earns the mask — `MAX_BUFFER_SIZE_BYTES` is masked where
   "summary": {
     "total": 5,
     "killed": 4,
-    "survived": 1
+    "survived": 1,
+    "invalid": 0,
+    "undetermined": 0
   },
   "mutants": [
     {
@@ -309,13 +312,23 @@ the unit is what earns the mask — `MAX_BUFFER_SIZE_BYTES` is masked where
       "timedOut": false,
       "original": "  return a + b;",
       "mutated": "  return null;"
+    },
+    {
+      "file": "src/calc.mjs",
+      "line": 12,
+      "operator": "off-by-one",
+      "status": "undetermined",
+      "reason": "test runner killed by signal SIGTERM",
+      "timedOut": false,
+      "original": "  const limit = 10;",
+      "mutated": "  const limit = 11;"
     }
   ],
   "skipped": { "commentOnly": ["src/notes.mjs"] }
 }
 ```
 
-`skipped` is present only when a changed file was left out as comment-only.
+`reason` is present on mutant entries whose `status` is `"undetermined"` (for example, when a mutant is invalidated by a syntax error or infrastructure failure). `skipped` is present only when a changed file was left out as comment-only.
 
 ## Relationship to sibling tools
 
