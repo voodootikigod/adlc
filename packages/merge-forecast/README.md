@@ -21,7 +21,7 @@ Options:
   --help                     Show this help
 ```
 
-The forecast walks the tree and mines co-change from the git repository root, so it gives the same result from any subdirectory; `--tickets` and `--graph-coupling` paths resolve from the working directory. Outside a git repository the working directory is the root and co-change is skipped with a warning.
+The forecast walks the tree and mines co-change from the git repository root, so it gives the same result from any subdirectory; `--tickets` and `--graph-coupling` paths resolve from the working directory. Outside a git repository (or on a shallow clone with no commit history) the working directory is the root and co-change is skipped with a warning unless `--strict` is passed, which fails the gate (exit 2). The JSON output also includes `signalsEvaluated` (`{ scopeOverlap, namespaceCollision, importRadius, coChange, graphCoupling }`) so callers can inspect which signals were evaluated.
 
 ## Exit Codes
 
@@ -29,7 +29,7 @@ The forecast walks the tree and mines co-change from the git repository root, so
 |------|---------|
 | 0    | Gate passes — schedule is safe at the recommended width |
 | 1    | Operational error — bad tickets file, unresolvable input |
-| 2    | Gate fails — `--width` exceeds firstWaveWidth, or vetoed/high-risk pair scheduled concurrently |
+| 2    | Gate fails — `--width` exceeds firstWaveWidth, vetoed/high-risk pair scheduled concurrently, or `--strict` set when `co-change` could not be evaluated |
 
 ## Signals
 

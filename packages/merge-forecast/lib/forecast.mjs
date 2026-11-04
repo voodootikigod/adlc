@@ -31,6 +31,7 @@ export async function runForecast(opts) {
     width = null,
     buildMin = null,
     mergeMin = null,
+    strict = false,
   } = opts;
   const root = resolve(opts.root ?? process.cwd());
 
@@ -49,6 +50,13 @@ export async function runForecast(opts) {
       certifiedWidth: 0,
       backpressureWidth: null,
       recommendedWidth: 0,
+      signalsEvaluated: {
+        scopeOverlap: false,
+        namespaceCollision: false,
+        importRadius: false,
+        coChange: false,
+        graphCoupling: false,
+      },
       warnings: [],
       gateFailures: [
         `dependency cycle in ticket DAG — cannot schedule: ` +
@@ -192,8 +200,20 @@ export async function runForecast(opts) {
   if (width !== null) candidates.push(width);
   const recommendedWidth = Math.min(...candidates);
 
+  const signalsEvaluated = {
+    scopeOverlap: true,
+    namespaceCollision: true,
+    importRadius: true,
+    coChange: coChangeData !== null,
+    graphCoupling: graphCouplingData !== null,
+  };
+
   // Gate failures
   const gateFailures = [];
+
+  if (strict && !signalsEvaluated.coChange) {
+    gateFailures.push('co-change signal could not be evaluated (--strict requires git history)');
+  }
 
   // Fail if --width exceeds the wave-1 number (see #997: the gate is
   // deliberately measured against wave 1, not scheduleWidth)
@@ -248,6 +268,7 @@ export async function runForecast(opts) {
     certifiedWidth: firstWaveWidth,
     backpressureWidth,
     recommendedWidth,
+    signalsEvaluated,
     warnings,
     gateFailures,
     pullQueueNote: 'idle builders claim next unblocked',

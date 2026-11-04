@@ -1,0 +1,23 @@
+{
+  "acceptance": [
+    "runForecast includes signalsEvaluated: { scopeOverlap, namespaceCollision, importRadius, coChange, graphCoupling } in its returned object (both normal and cycle paths) so callers and --json output can see whether coChange and graphCoupling were evaluated.",
+    "runForecast({ strict: true }) and merge-forecast --strict add a gate failure (\"co-change signal could not be evaluated (--strict requires git history)\") and exit 2 when coChangeData is null (non-git repo, shallow clone, or git error).",
+    "Default non-strict behavior continues to degrade co-change to 0 without failing the gate, and --help / README.md document --strict and signalsEvaluated."
+  ],
+  "autonomous": true,
+  "id": "T-01M6K5SGBZXY3YW9K80256B8DK",
+  "rails": [
+    "packages/merge-forecast/test/co-change-floor.test.mjs",
+    "packages/merge-forecast/test/high-risk-concurrent.test.mjs"
+  ],
+  "scope": [
+    "packages/merge-forecast/lib/forecast.mjs",
+    "packages/merge-forecast/bin/merge-forecast.mjs",
+    "packages/merge-forecast/README.md",
+    "packages/merge-forecast/test/forecast.test.mjs",
+    "packages/merge-forecast/test/cli.test.mjs"
+  ],
+  "tier": "tier2",
+  "title": "merge-forecast: report signalsEvaluated and add --strict to fail closed when git history is unavailable (#684)",
+  "verify": "node --test packages/merge-forecast/test/forecast.test.mjs packages/merge-forecast/test/cli.test.mjs packages/merge-forecast/test/co-change-floor.test.mjs packages/merge-forecast/test/high-risk-concurrent.test.mjs"
+}
