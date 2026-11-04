@@ -4,6 +4,7 @@
     "unit tests cover exact created at / completed at suppression (with and without trailing colon) and verify substring occurrences are still detected"
   ],
   "category": "bug",
+  "completed": true,
   "context": "Closes #456.",
   "id": "T-01M6HS4VBR1BE9ZK66872DT187",
   "rails": [
@@ -22,6 +23,5 @@
     "plugins/adlc-gemini/test/flail.test.mjs",
     "packages/flail-detector/test/analyze.test.mjs",
     "plugins/adlc-gemini/test/manifest.test.mjs"
-  ],
-  "completed": true
+  ]
 }

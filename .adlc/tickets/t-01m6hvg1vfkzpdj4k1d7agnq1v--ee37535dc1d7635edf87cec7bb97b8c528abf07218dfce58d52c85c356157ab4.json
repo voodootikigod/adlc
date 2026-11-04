@@ -1,0 +1,14 @@
+{
+  "description": "Context: packages/preflight/lib/checks.mjs creates preflight-test-branch in checkBranch and .worktrees/preflight-test in checkWorktrees, then deletes them in a finally block that swallows cleanup errors and still returns pass.\nRequirements:\n1. In checkBranch and checkWorktrees (packages/preflight/lib/checks.mjs), reap any pre-existing leftover preflight-test-branch or .worktrees/preflight-test before creating the test artifact so a leaked artifact self-heals on the next preflight run.\n2. Retry cleanup on transient failure and, if cleanup still fails, return status: fail with a clear diagnostic rather than reporting pass (\"created and removed\").\n3. Add unit tests in packages/preflight/test/unit.test.mjs covering pre-existing branch/worktree self-healing and cleanup-failure reporting.",
+  "id": "T-01M6HVG1VFKZPDJ4K1D7AGNQ1V",
+  "rails": [
+    "packages/preflight/test/empty-test-cmd.test.mjs"
+  ],
+  "scope": [
+    "packages/preflight/lib/checks.mjs",
+    "packages/preflight/test/unit.test.mjs"
+  ],
+  "size": "S",
+  "title": "fix(preflight): reap stale test branch/worktree and fail if cleanup fails (#496)",
+  "verify": "node --test packages/preflight/test/unit.test.mjs packages/preflight/test/empty-test-cmd.test.mjs"
+}

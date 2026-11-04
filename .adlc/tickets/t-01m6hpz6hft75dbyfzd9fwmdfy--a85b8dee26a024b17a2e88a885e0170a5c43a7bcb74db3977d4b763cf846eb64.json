@@ -3,6 +3,7 @@
     "When spec-lint --record runs with ADLC_MANIFEST_KEY unset or empty, it prints a warning on stderr noting the recorded entry is unsigned.",
     "When ADLC_MANIFEST_KEY is set, no unsigned warning is printed."
   ],
+  "completed": true,
   "description": "Emit a stderr warning in packages/spec-lint/bin/spec-lint.mjs when --record runs without ADLC_MANIFEST_KEY set.",
   "id": "T-01M6HPZ6HFT75DBYFZD9FWMDFY",
   "rails": [
@@ -13,6 +14,5 @@
     "packages/spec-lint/test/record.test.mjs"
   ],
   "title": "spec-lint: warn on stderr when --record writes an unsigned manifest entry (#776)",
-  "verify": "node --test packages/spec-lint/test/record.test.mjs packages/spec-lint/test/spec-lint.test.mjs",
-  "completed": true
+  "verify": "node --test packages/spec-lint/test/record.test.mjs packages/spec-lint/test/spec-lint.test.mjs"
 }

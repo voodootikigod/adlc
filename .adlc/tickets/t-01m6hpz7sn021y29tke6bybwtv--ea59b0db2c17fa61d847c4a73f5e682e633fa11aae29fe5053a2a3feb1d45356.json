@@ -4,6 +4,7 @@
     "When --record runs on a log file outside the repo/cwd, logFile is omitted from the recorded manifest entry (#629).",
     "When --record runs without ADLC_MANIFEST_KEY set, flail-detector prints a stderr warning noting that the entry is unsigned (#627)."
   ],
+  "completed": true,
   "description": "In packages/flail-detector/bin/flail-detector.mjs, normalize logFile to a repo-relative POSIX path (or omit when outside the repo) when recording to the manifest ledger (#629), and warn on stderr when --record runs without ADLC_MANIFEST_KEY (#627).",
   "id": "T-01M6HPZ7SN021Y29TKE6BYBWTV",
   "rails": [
@@ -14,6 +15,5 @@
     "packages/flail-detector/test/record.test.mjs"
   ],
   "title": "flail-detector: normalize recorded logFile path and warn on unsigned --record (#627, #629)",
-  "verify": "node --test packages/flail-detector/test/record.test.mjs packages/flail-detector/test/cli.test.mjs",
-  "completed": true
+  "verify": "node --test packages/flail-detector/test/record.test.mjs packages/flail-detector/test/cli.test.mjs"
 }

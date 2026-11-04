@@ -4,6 +4,7 @@
     "unit tests cover invalid ticket ids in createWorktree and verify valid charset characters succeed"
   ],
   "category": "bug",
+  "completed": true,
   "context": "Closes #638.",
   "id": "T-01M6HS4T4M6MZCVG5SC03CMVGY",
   "rails": [
@@ -21,6 +22,5 @@
     "packages/fleet/test/linked-worktree.test.mjs",
     "packages/fleet/test/integration-worktree.test.mjs",
     "packages/fleet/test/sandbox.test.mjs"
-  ],
-  "completed": true
+  ]
 }

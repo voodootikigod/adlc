@@ -119,6 +119,60 @@ describe('checkBranch', () => {
     const result = await checkBranch(nonRepo);
     assert.equal(result.status, 'fail');
   });
+
+  it('reaps a pre-existing preflight-test-branch and passes (#496)', async () => {
+    execFileSync('git', ['branch', 'preflight-test-branch'], {
+      cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const result = await checkBranch(dir);
+    assert.equal(result.status, 'pass');
+    assert.equal(result.detail, "branch 'preflight-test-branch' created and removed");
+    const branchList = execFileSync('git', ['branch'], {
+      cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    assert.equal(branchList.includes('preflight-test-branch'), false);
+  });
+
+  it('retries branch cleanup on transient error and passes when retry succeeds (#496)', async () => {
+    let deleteCalls = 0;
+    const gitFn = (args, opts) => {
+      if (args[0] === 'branch' && args[1] === '-D') {
+        deleteCalls += 1;
+        // deleteCalls === 1 is pre-create reap; deleteCalls === 2 is first cleanup attempt
+        if (deleteCalls === 2) throw new Error('packed-refs.lock held');
+      }
+      return execFileSync('git', args, opts);
+    };
+    const result = await checkBranch(dir, { gitFn });
+    assert.equal(result.status, 'pass');
+    assert.equal(deleteCalls, 3);
+  });
+
+  it('returns status: fail (never lies created and removed) when branch cleanup fails (#496)', async () => {
+    let deleteCalls = 0;
+    const gitFn = (args, opts) => {
+      if (args[0] === 'branch' && args[1] === '-D') {
+        deleteCalls += 1;
+        if (deleteCalls >= 2) throw new Error('unable to lock packed-refs\nextra line');
+      }
+      return execFileSync('git', args, opts);
+    };
+    const result = await checkBranch(dir, { gitFn });
+    assert.equal(result.status, 'fail');
+    assert.equal(deleteCalls, 3);
+    assert.match(result.detail, /branch 'preflight-test-branch' created; cleanup failed: unable to lock packed-refs/);
+    assert.doesNotMatch(result.detail, /extra line/);
+  });
+
+  it('reports manual delete hint when branch already exists at create time', async () => {
+    const gitFn = (args) => {
+      if (args[0] === 'branch' && args[1] === '-D') throw new Error('reap blocked');
+      throw new Error("fatal: a branch named 'preflight-test-branch' already exists");
+    };
+    const result = await checkBranch(dir, { gitFn });
+    assert.equal(result.status, 'fail');
+    assert.match(result.detail, /already exists — likely left by a prior crashed run; delete it manually: git branch -D preflight-test-branch/);
+  });
 });
 
 // ── checkWorktrees ────────────────────────────────────────────────────────────
@@ -133,8 +187,58 @@ describe('checkWorktrees', () => {
   it('passes and leaves no residue', async () => {
     const result = await checkWorktrees(dir);
     assert.equal(result.status, 'pass');
+    assert.equal(result.detail, 'worktree add/remove succeeded');
     const worktreePath = join(dir, '.worktrees', 'preflight-test');
     assert.equal(existsSync(worktreePath), false, 'worktree dir must be cleaned up');
+  });
+
+  it('reaps a pre-existing .worktrees/preflight-test and passes (#496)', async () => {
+    const worktreePath = join(dir, '.worktrees', 'preflight-test');
+    execFileSync('git', ['-c', 'core.hooksPath=/dev/null', 'worktree', 'add', '--detach', worktreePath], {
+      cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const result = await checkWorktrees(dir);
+    assert.equal(result.status, 'pass');
+    assert.equal(existsSync(worktreePath), false);
+  });
+
+  it('retries worktree cleanup on transient error and fails if cleanup still fails (#496)', async () => {
+    let removeCalls = 0;
+    const gitFnRetry = (args, opts) => {
+      assert.deepEqual(opts?.stdio, ['ignore', 'pipe', 'pipe']);
+      if (args[0] === 'worktree' && args[1] === 'remove') {
+        removeCalls += 1;
+        if (removeCalls === 2) throw new Error('transient lock');
+      }
+      return execFileSync('git', args, opts);
+    };
+    const passRes = await checkWorktrees(dir, { gitFn: gitFnRetry });
+    assert.equal(passRes.status, 'pass');
+    assert.equal(removeCalls, 3);
+
+    let failCalls = 0;
+    const gitFnFail = (args, opts) => {
+      if (args[0] === 'worktree' && args[1] === 'remove') {
+        failCalls += 1;
+        if (failCalls >= 2) throw new Error('worktree locked\nsecond line');
+      }
+      return execFileSync('git', args, opts);
+    };
+    const failRes = await checkWorktrees(dir, { gitFn: gitFnFail });
+    assert.equal(failRes.status, 'fail');
+    assert.equal(failCalls, 3);
+    assert.match(failRes.detail, /worktree added; cleanup failed: worktree locked/);
+    assert.doesNotMatch(failRes.detail, /second line/);
+  });
+
+  it('returns status: fail when worktree add fails', async () => {
+    const gitFn = (args) => {
+      if (args[0] === 'worktree' && args[1] === 'remove') return '';
+      throw new Error('add failed\nextra');
+    };
+    const res = await checkWorktrees(dir, { gitFn });
+    assert.equal(res.status, 'fail');
+    assert.equal(res.detail, 'add failed');
   });
 });
 

@@ -1,5 +1,6 @@
 {
   "body": "## Context\nIssue #764: In `packages/runner/lib/assertions.mjs`, `assertPhase` sets `operational: false` on content-level gate rejections for `p0` and `p1`, so `packages/runner/bin/adlc.mjs` prints them via the `evidence rejected:` path and exits `2`. However, the content-level rejection branches for `p4` (`p4Errors`), `p5`/`p6` (`P5 evidence is stale` revision mismatch, `ticketStaleError`, `transcriptErrors`, `p5CompletionErrors`), and `p6` (`p6Errors`) still return `operational: true`, causing `adlc run <phase>` to route them through `opError` and exit `1` as operational outages instead of exit `2` gate rejections.\n\n## Scope\n- `packages/runner/lib/assertions.mjs`\n- `packages/runner/test/runner.test.mjs`\n- `packages/runner/test/cli-exit-codes.test.mjs`\n\n## Changes Required\n1. In `packages/runner/lib/assertions.mjs` (`assertPhase`), change `operational: true` to `operational: false` on the content-rejection returns: `assertedRevisionForLiveCheck !== liveWorktreeRevision` (`P5 evidence is stale`), `ticketStaleError`, `transcriptErrors`, `p5CompletionErrors`, `p6Errors`, and `p4Errors`, while keeping genuine operational errors (`unknown phase`, `requires --ticket`, `current worktree revision could not be resolved`, `requires a git worktree revision or --revision`) as `operational: true`.\n2. Update `packages/runner/test/runner.test.mjs` to assert `operational: false` on those content-rejection cases while keeping `operational: true` on genuine operational errors.\n3. Extend `packages/runner/test/cli-exit-codes.test.mjs` to verify through the real `packages/runner/bin/adlc.mjs` CLI that content rejections in `p4`, `p5`, and `p6` exit `2` with `evidence rejected:` on stderr and `operational: false` under `--json`.\n\n## Acceptance Criteria\n- `assertPhase` returns `operational: false` for `p4`, `p5`, and `p6` content-level rejections and `operational: true` for operational errors.\n- `adlc run p4`, `adlc run p5`, and `adlc run p6` exit `2` on content-level rejections.\n- Verify: `node --test packages/runner/test/*.test.mjs`",
+  "completed": true,
   "id": "T-01M6HGJM42M7XZGX4QKQBHFZH9",
   "rails": [
     "packages/runner/test/flail-check-binding.test.mjs",
@@ -10,6 +11,5 @@
     "packages/runner/test/runner.test.mjs",
     "packages/runner/test/cli-exit-codes.test.mjs"
   ],
-  "title": "runner: treat P4/P5/P6 content rejections as exit-2 gate rejections (operational: false) (#764)",
-  "completed": true
+  "title": "runner: treat P4/P5/P6 content rejections as exit-2 gate rejections (operational: false) (#764)"
 }
