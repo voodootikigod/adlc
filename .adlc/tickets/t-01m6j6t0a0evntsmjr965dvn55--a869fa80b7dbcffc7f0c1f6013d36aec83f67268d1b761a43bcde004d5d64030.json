@@ -1,6 +1,7 @@
 {
   "body": "## Context\nIssue #592: `packages/cli/lib/mcp-server.mjs` accepts `process.env.ADLC_CLI_BIN` without checking that it is an absolute path to an existing regular file, and documents it nowhere in `packages/cli/README.md` or `packages/cli/lib/help.mjs`.\nIssue #875: `packages/cli/lib/registry.mjs` and `packages/cli/lib/dispatch.mjs` invoke `npx adversarial-review` with no version range constraint, pulling an unpinned `@latest` from the registry.\n\n## Acceptance Criteria\n- `packages/cli/lib/mcp-server.mjs` validates `ADLC_CLI_BIN` when set: requires a non-empty, control-char-free absolute path (`isAbsolute`) that resolves (`statSync`) to an existing regular file (`isFile()`), throwing `invalid(...)` (`-32602`) otherwise.\n- `packages/cli/README.md` and `packages/cli/lib/help.mjs` document `ADLC_CLI_BIN` as an operator-only entrypoint override seam.\n- `packages/cli/lib/registry.mjs` declares `packageSpec: 'adversarial-review@^2.6.0'` on the `review` tool entry, and `packages/cli/lib/dispatch.mjs` passes `tool.packageSpec ?? tool.packageName` to `npx` (while keeping `tool.packageName` as `'adversarial-review'` for labels and diagnostics).\n\n## Verification\n`node --test packages/cli/test/*.test.mjs`",
   "category": "bug",
+  "completed": true,
   "id": "T-01M6J6T0A0EVNTSMJR965DVN55",
   "rails": [
     "packages/cli/test/dispatch.test.mjs",
