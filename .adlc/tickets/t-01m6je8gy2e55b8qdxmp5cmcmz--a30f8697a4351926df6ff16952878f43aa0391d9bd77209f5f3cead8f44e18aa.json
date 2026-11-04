@@ -1,0 +1,16 @@
+{
+  "body": "## Objective\nResolve #637 and #635 by aligning `packages/fleet/README.md` and `packages/fleet/bin/fleet.mjs` USAGE with the shipped binary name, registered adapter list, exit-code contract, and Linux sandbox backend requirement.\n\n## Acceptance Criteria\n1. `packages/fleet/README.md` lists all 9 registered adapters (`claude-code`, `codex`, `agy`, `gemini`, `jetski`, `copilot`, `opencode`, `pi`, `cursor`) matching `ADAPTERS`, documents `adlc-fleet` (and `adlc fleet`) in Usage, documents quarantine (`quarantined`) and PR-open failure (`pr-open-failed`) under exit code 2, and removes `/unshare` from the Linux sandbox prerequisite (specifying `bwrap` / `bubblewrap` on Linux) — verify: `node --test packages/fleet/test/fleet-entry.test.mjs`\n2. `packages/fleet/bin/fleet.mjs` `USAGE` spells commands as `adlc-fleet run`, `adlc-fleet status`, and `adlc-fleet unlock` (noting `or: adlc fleet ...`) — verify: `node --test packages/fleet/test/fleet-entry.test.mjs`",
+  "category": "bugfix",
+  "cpm_float": 0,
+  "deps": [],
+  "id": "T-01M6JE8GY2E55B8QDXMP5CMCMZ",
+  "priority": 1,
+  "rails": [],
+  "scope": [
+    "packages/fleet/README.md",
+    "packages/fleet/bin/fleet.mjs",
+    "packages/fleet/test/fleet-entry.test.mjs"
+  ],
+  "title": "fleet: document all 9 adapters, adlc-fleet binary, exit 2 causes, and bwrap-only Linux backend (#637, #635)",
+  "verify": "node --test packages/fleet/test/fleet-entry.test.mjs packages/fleet/test/adapter-registry.test.mjs"
+}

@@ -32,22 +32,22 @@ import { Sandbox } from '../lib/sandbox.mjs';
 import { SYSTEM_ROOTS } from '../lib/bounded-model-plane.mjs';
 import { repoCommandEnv } from '../lib/env-scrub.mjs';
 
-const USAGE = `fleet — parallel ADLC ticket orchestration
+const USAGE = `adlc-fleet — parallel ADLC ticket orchestration (or: adlc fleet ...)
 
 Usage:
-  fleet run [--concurrency N] [--dry-run] [--tickets T1,T2] [--base B] [--json]
-            [--adapter NAME] [--model MODEL] [--model-auth-key ENV_VAR]
-            [--i-am-in-a-disposable-container] [--model-plane-writable PATH]
-            [--no-pr] [--no-complete] [--dead-end-file PATH] [--max-strikes N]
-            [--wall-clock-minutes M] [--charter-file PATH]
-            [--pre-strike-argv JSON_ARRAY --pre-strike-env JSON_OBJECT]
-            [--model-plane-read host|bounded] [--model-plane-read-only ABS,ABS,...]
-            [--model-plane-git shared|mirror] [--model-plane-git-mirror ABS_BARE_REPO]
-            [--model-plane-egress open|allowlist] [--worker-deps ABS_NODE_MODULES]
-  fleet status [--json]
-  fleet unlock [--force]
+  adlc-fleet run [--concurrency N] [--dry-run] [--tickets T1,T2] [--base B] [--json]
+                 [--adapter NAME] [--model MODEL] [--model-auth-key ENV_VAR]
+                 [--i-am-in-a-disposable-container] [--model-plane-writable PATH]
+                 [--no-pr] [--no-complete] [--dead-end-file PATH] [--max-strikes N]
+                 [--wall-clock-minutes M] [--charter-file PATH]
+                 [--pre-strike-argv JSON_ARRAY --pre-strike-env JSON_OBJECT]
+                 [--model-plane-read host|bounded] [--model-plane-read-only ABS,ABS,...]
+                 [--model-plane-git shared|mirror] [--model-plane-git-mirror ABS_BARE_REPO]
+                 [--model-plane-egress open|allowlist] [--worker-deps ABS_NODE_MODULES]
+  adlc-fleet status [--json]
+  adlc-fleet unlock [--force]
 
-Exit codes: 0 ok · 1 operational error · 2 a ticket failed/blocked/paused (see --json "reason").`;
+Exit codes: 0 ok · 1 operational error · 2 >= 1 ticket failed/blocked/paused, quarantined, or pr-open-failed (see --json "reason").`;
 
 // Exported so a test can observe that a REPEATABLE flag actually accumulates.
 // `multiple: false` does not error on a repeated flag — it silently keeps the last

@@ -25,7 +25,7 @@ test('running fleet.mjs directly DISPATCHES the CLI (--help prints usage)', () =
   assert.match(r.stdout, /fleet — parallel ADLC ticket orchestration/, 'the entry-point guard dispatches when run directly');
   // The documented exit-code contract is part of the CLI's interface (CONVENTIONS rule 4):
   // 0 = ok, 1 = operational error, 2 = a ticket failed/blocked/paused.
-  assert.match(r.stdout, /Exit codes: 0 ok · 1 operational error · 2 a ticket failed\/blocked\/paused \(see --json "reason"\)\./);
+  assert.match(r.stdout, /Exit codes: 0 ok · 1 operational error · 2 >= 1 ticket failed\/blocked\/paused, quarantined, or pr-open-failed \(see --json "reason"\)\./);
 });
 
 // ── the argv slice is a real boundary (#530 mutation gate) ───────────────────
@@ -143,4 +143,27 @@ test('the production path reads extension files through the bounded single-descr
   const fifo = join(dir, 'charter.fifo'); execFileSync('mkfifo', [fifo]);
   // No injected reader: the default (production) reader must refuse the FIFO without blocking.
   assert.throws(() => loadExt({ charterFile: fifo }), /not a regular file/);
+});
+
+test('README and USAGE document adlc-fleet binary, all 9 adapters, bwrap-only Linux backend, and exit-2 causes (#637, #635)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { ADAPTERS } = await import('../lib/adapters/index.mjs');
+  const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+  for (const a of ADAPTERS) {
+    const name = typeof a === 'string' ? a : a.name;
+    assert.match(readme, new RegExp('`' + name + '`'), `README must list adapter ${name}`);
+  }
+  assert.match(readme, /adlc-fleet run/);
+  assert.match(readme, /adlc fleet/);
+  assert.match(readme, /quarantined/);
+  assert.match(readme, /pr-open-failed/);
+  assert.doesNotMatch(readme, /`bwrap`\/`unshare` on Linux/);
+  assert.match(readme, /`bwrap`/);
+  const r = spawnSync(process.execPath, [BIN, '--help'], { encoding: 'utf8' });
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /or: adlc fleet \.\.\./);
+  assert.match(r.stdout, /adlc-fleet run/);
+  assert.match(r.stdout, /quarantined, or pr-open-failed/);
+  assert.match(r.stdout, /adlc-fleet status/);
+  assert.match(r.stdout, /adlc-fleet unlock/);
 });
