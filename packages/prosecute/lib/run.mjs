@@ -207,7 +207,12 @@ function seedOpenFindingsFromManifest(dir, ticket, revision, cwd) {
   const openFindings = new Map();
   const deferredFindings = new Map();
   const { entries, identityError } = readOwnManifestChain(dir, { cwd });
-  if (identityError) return { openFindings, deferredFindings, errors: [`refusing to prosecute: ${identityError}`] };
+  if (identityError) {
+    const remedy = identityError.includes('detached HEAD')
+      ? ' (check out the branch that owns this work, or run from a named worktree)'
+      : '';
+    return { openFindings, deferredFindings, errors: [`refusing to prosecute: ${identityError}${remedy}`] };
+  }
   for (const entry of entries) {
     if (entry.ticket !== ticket || entry.revision !== revision || !entry.finding) continue;
     const type = entry.type ?? entry.gate;

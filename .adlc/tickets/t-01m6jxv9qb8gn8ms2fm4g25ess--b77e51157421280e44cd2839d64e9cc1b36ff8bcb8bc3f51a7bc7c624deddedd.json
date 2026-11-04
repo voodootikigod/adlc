@@ -1,0 +1,17 @@
+{
+  "body": "## Context\nResolves #727 and #733.\n- #727: In a forest-mode repo on a detached HEAD, `readOwnManifestChain` / `seedOpenFindingsFromManifest` refuses without naming the remedy, and `packages/prosecute/README.md` / `--help` do not document this fail-closed refusal.\n- #733: `adlc-prosecute tier-check --json` in `packages/prosecute/bin/adlc-prosecute.mjs` emits three different object shapes across the non-tiered, no-key, and normal paths and does not document the schema in `packages/prosecute/README.md`.\n\n## Acceptance Criteria\n1. `packages/prosecute/lib/run.mjs` and `packages/gate-manifest/lib/own-chain.mjs` include the remedy (`check out the branch that owns this work, or run from a named worktree`) in the detached-HEAD refusal message, and `packages/prosecute/README.md` and `packages/prosecute/bin/adlc-prosecute.mjs` `--help` document the refusal.\n2. `packages/prosecute/bin/adlc-prosecute.mjs` `tier-check --json` emits a single consistent schema across all three exit paths (`trustRootTier`, `reasons`, `crossModelRequired`, `satisfied`, `revision`, `keyAvailable`, `chainTrustworthy`, `truncationDetected`, `skippedOwnRails`), documented in `packages/prosecute/README.md` and verified in `packages/prosecute/test/prosecute-tier-check-cli.test.mjs`.",
+  "id": "T-01M6JXV9QB8GN8MS2FM4G25ESS",
+  "rails": [
+    "packages/prosecute/test/tier.test.mjs",
+    "packages/prosecute/test/prosecute-cli.test.mjs"
+  ],
+  "scope": [
+    "packages/prosecute/README.md",
+    "packages/prosecute/bin/adlc-prosecute.mjs",
+    "packages/prosecute/lib/run.mjs",
+    "packages/prosecute/test/own-chain-chronology.test.mjs",
+    "packages/prosecute/test/prosecute-tier-check-cli.test.mjs",
+    "packages/prosecute/test/tier-own-ticket-cli.test.mjs"
+  ],
+  "title": "prosecute: append detached-HEAD remedy and unify tier-check --json schema (#727, #733)"
+}

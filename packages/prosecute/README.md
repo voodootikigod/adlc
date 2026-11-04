@@ -341,10 +341,26 @@ why the store path must live outside the tree being tiered.
 ## Exit codes
 
 - `0`: two consecutive dry passes were recorded (or a finding/attestation was recorded)
-- `1`: operational error
+- `1`: operational error — including running `adlc-prosecute` from a **detached `HEAD`** in a forest-mode repository (where `.adlc/manifest.d/*.jsonl` segments exist and branch identity is required to recover the checkout's own causal chain; remedy: check out the branch that owns this work, or run from a named worktree)
 - `2`: verified/needs-human findings remain, the convergence budget ended before two dry
   passes, a trust-root-tier change lacks a matching cross-model attestation, or (with
   `--attestation-store`) a rollback/truncation was detected
+
+### `tier-check --json` output schema
+
+`adlc-prosecute tier-check --json` always emits a single JSON object with all nine keys present across every exit path:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `trustRootTier` | `boolean` | Whether the diff touches a trust-root path or frozen rail. |
+| `reasons` | `string[]` | Human-readable tier classification reasons (`[]` when `trustRootTier` is `false`). |
+| `crossModelRequired` | `boolean` | Whether a distinct-provider cross-model `approve` attestation is required. |
+| `satisfied` | `boolean` | Whether the tier requirement is satisfied (`true` when not tiered or when a valid attestation matches). |
+| `revision` | `string \| null` | Resolved working-tree/packet revision digest (`null` when `trustRootTier` is `false`). |
+| `keyAvailable` | `boolean` | Whether `ADLC_MANIFEST_KEY` is present in the environment/ `.env.local`. |
+| `chainTrustworthy` | `boolean \| null` | Whether the manifest hash/signature chain verified (`null` when not evaluated because `trustRootTier` is `false` or `keyAvailable` is `false`). |
+| `truncationDetected` | `boolean` | Whether `--attestation-store` detected a dropped signed attestation (`false` when not detected or not checked). |
+| `skippedOwnRails` | `string[]` | New rail files owned by `--ticket` that were excluded from self-tiering (`[]` without `--ticket`). |
 
 ## Core gaps
 
