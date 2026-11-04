@@ -4,6 +4,7 @@
     "packages/init/README.md includes an ## Exit codes table documenting 0, 1, and 2",
     "packages/tickets/README.md includes an ## Exit codes table documenting 0, 1, and 2"
   ],
+  "completed": true,
   "id": "T-01M6JHC3TAWC7WPCT6QX6FFMD7",
   "intent": "Add ## Exit codes tables to packages/context-handoff/README.md, packages/init/README.md, and packages/tickets/README.md (#854), and lock them with regression tests.",
   "rails": [

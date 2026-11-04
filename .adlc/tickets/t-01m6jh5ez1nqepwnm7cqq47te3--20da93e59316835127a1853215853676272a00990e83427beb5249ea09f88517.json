@@ -5,6 +5,7 @@
     "packages/hollow-test/README.md documents { ttl: 0 } as mutated (yes) and { timeout: -1 } as masked (no) in the off-by-one table",
     "packages/hollow-test/README.md JSON output schema includes invalid and undetermined counts in summary and optional reason on undetermined mutants"
   ],
+  "completed": true,
   "id": "T-01M6JH5EZ1NQEPWNM7CQQ47TE3",
   "intent": "Fix four documentation inaccuracies in packages/hollow-test/README.md (#664, #662, #661, #659) and lock them with regression tests in packages/hollow-test/test/unit.test.mjs.",
   "rails": [

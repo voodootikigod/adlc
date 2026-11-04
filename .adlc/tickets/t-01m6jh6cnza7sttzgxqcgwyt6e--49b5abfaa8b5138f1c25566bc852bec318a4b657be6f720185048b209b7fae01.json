@@ -4,6 +4,7 @@
     "packages/prosecute/README.md documents --allow-unknown-ticket as an explicit opt-in relaxation for external ticket IDs not in the local ticket store",
     "Regression tests in packages/parallax/test/questions-json.test.mjs and packages/prosecute/test/prosecute-cli.test.mjs assert the README coverage"
   ],
+  "completed": true,
   "id": "T-01M6JH6CNZA7STTZGXQCGWYT6E",
   "intent": "Document --questions-json in packages/parallax/README.md (#708, #855) and --allow-unknown-ticket in packages/prosecute/README.md (#855), with regression tests in both packages.",
   "rails": [

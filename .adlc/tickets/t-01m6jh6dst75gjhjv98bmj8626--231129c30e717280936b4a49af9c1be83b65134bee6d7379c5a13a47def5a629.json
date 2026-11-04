@@ -4,6 +4,7 @@
     "packages/rejection-mining/README.md accurately describes example quote attribution by reviewer initial and PR number with verbatim quotes up to 200 characters",
     "packages/ticket-sync/README.md qualifies scripts/ticket-sync-smoke.mjs as living in the source repository and uses a full GitHub URL for docs/ticket-sync.md"
   ],
+  "completed": true,
   "id": "T-01M6JH6DST75GJHJV98BMJ8626",
   "intent": "Fix README documentation drift in packages/quartermaster/README.md (#738), packages/rejection-mining/README.md (#748), and packages/ticket-sync/README.md (#792), and add regression tests.",
   "rails": [
