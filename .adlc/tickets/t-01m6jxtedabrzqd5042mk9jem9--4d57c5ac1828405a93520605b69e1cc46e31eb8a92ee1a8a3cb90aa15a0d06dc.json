@@ -1,5 +1,6 @@
 {
   "body": "## Context\nResolves #591 and #593.\n- #591: `packages/cli/README.md` states in Resolution model that the dispatcher resolves package-local binaries without searching PATH, without carving out `review` (an `npx` passthrough to `adversarial-review`) or listing `adlc review` in Usage.\n- #593: `adlc mcp-server` is missing from `packages/cli/lib/help.mjs` Usage and `packages/cli/README.md`, and `packages/cli/package.json` lacks an `exports` map declaring `./lib/mcp-server.mjs`.\n\n## Acceptance Criteria\n1. `packages/cli/README.md` carves out `review` in Resolution model as an `npx` passthrough to external `adversarial-review` and lists `adlc review` and `adlc mcp-server` in Usage.\n2. `packages/cli/lib/help.mjs` lists `adlc mcp-server` in Usage as the MCP stdio server entrypoint.\n3. `packages/cli/package.json` declares `exports` including `.`, `./lib/mcp-server.mjs`, and `./package.json`, with tests in `packages/cli/test/dispatch.test.mjs`.",
+  "completed": true,
   "id": "T-01M6JXTEDABRZQD5042MK9JEM9",
   "rails": [
     "packages/cli/test/review-dispatch.test.mjs",
