@@ -74,9 +74,10 @@ Walk the raw ledger lines and validate the hash chain. Every entry's `prev` must
 gate-manifest verify                            # human-readable
 gate-manifest verify --json                      # machine-readable
 gate-manifest verify --allow-legacy-unsigned      # tolerate an honest pre-signing prefix
+gate-manifest verify --require-entries            # fail closed (exit 2) when ledger is absent/empty
 ```
 
-**Exit 0** when valid (or empty manifest). **Exit 2** when the chain is broken — reports the seq and line number of the first break.
+**Exit 0** when valid (or empty manifest unless `--require-entries` is passed). **Exit 2** when the chain is broken — reports the seq and line number of the first break (or when `--require-entries` is set and the ledger has zero entries).
 
 When `ADLC_MANIFEST_KEY` is set, `verify` additionally checks every entry's HMAC signature. By default every entry must carry a valid sig: a missing sig (`unsigned entry`) or a wrong sig (`signature invalid`) breaks the chain. The JSON result includes `signed: true` only when a key was present and every entry verified cryptographically; otherwise `signed: false`.
 
@@ -89,6 +90,7 @@ Honest limit: if a manifest has **zero** signed entries, this flag reports the w
 | `--json` | Emit `{ valid, message, count, signed, break }` |
 | `--dir path` | Override ledger directory |
 | `--allow-legacy-unsigned` | Tolerate a missing sig on the contiguous legacy prefix only |
+| `--require-entries` | Fail closed (exit 2) when the manifest is absent or has 0 entries |
 
 ### show
 
