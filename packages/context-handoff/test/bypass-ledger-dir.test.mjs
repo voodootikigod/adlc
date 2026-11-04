@@ -42,7 +42,7 @@ test('AC1: --write from a subdirectory with no handoffs dir there exits 1 and wr
     const r = bypass(sub, ['--write']);
     assert.equal(r.status, 1, r.stderr);
     assert.ok(r.stderr.includes(join(sub, '.adlc', 'handoffs')), `names the resolved path: ${r.stderr}`);
-    assert.ok(r.stderr.includes('run from the repo root (an operator outside the hook may instead pass --dir <repo>/.adlc)'), `states the remedy: ${r.stderr}`);
+    assert.ok(r.stderr.includes('run from the repo root or pass --dir <repo>/.adlc'), `states the remedy: ${r.stderr}`);
     assert.ok(!`${r.stdout}${r.stderr}`.includes('recorded'), 'no success line');
     assert.equal(existsSync(join(sub, '.adlc')), false, 'nothing created under the subdirectory');
     assert.equal(existsSync(join(root, '.adlc', 'handoffs', 'sess-a.bypass-grant.json')), false);
@@ -76,7 +76,7 @@ test('AC2: --dir pointing at a ledger with no handoffs dir is refused the same w
   });
 });
 
-test('AC3 (not widened): the recovery grammar still rejects a bypass carrying --dir, exactly as the plugin twins do', () => {
+test('AC3 (#1232): the recovery grammar accepts bypass carrying --dir <path> and rejects malformed --dir values', () => {
   withRepo({}, ({ root }) => {
     const interpreterPath = join(root, 'node');
     const scriptPath = join(root, 'handoff.mjs');
@@ -85,7 +85,11 @@ test('AC3 (not widened): the recovery grammar still rejects a bypass carrying --
     const opts = { interpreterPath, scriptPath, sessionId: 'sess-a' };
     const base = `${interpreterPath} ${scriptPath} bypass --session sess-a --write`;
     assert.equal(matchRecoveryCommand(base, opts).matched, true);
-    assert.equal(matchRecoveryCommand(`${base} --dir ${root}/.adlc`, opts).matched, false);
+    assert.deepEqual(matchRecoveryCommand(`${base} --dir ${root}/.adlc`, opts), { matched: true, subcommand: "bypass" });
+    assert.equal(matchRecoveryCommand(`${base} --dir`, opts).matched, false);
+    assert.equal(matchRecoveryCommand(`${base} --dir --write`, opts).matched, false);
+    assert.equal(matchRecoveryCommand(`${base} --dir ${root}/.adlc --dir ${root}/.adlc`, opts).matched, false);
+    assert.equal(matchRecoveryCommand(`${interpreterPath} ${scriptPath} unlock --session sess-a --dir ${root}/.adlc --write`, opts).matched, false);
   });
 });
 

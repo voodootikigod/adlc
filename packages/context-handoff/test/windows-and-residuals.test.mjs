@@ -5,15 +5,15 @@ import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { readBypassGrant, writeBypassGrant } from '../lib/bypass-grant.mjs';
-import { matchRecoveryCommand } from '../lib/recovery-exception.mjs';
+import { matchRecoveryCommand, formatRecoveryCommand } from '../lib/recovery-exception.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, '..', '..', '..');
 const CC_GATE = join(REPO_ROOT, 'plugins', 'adlc-claude-code', 'hooks', 'handoff-gate.mjs');
 const CODEX_GATE = join(REPO_ROOT, 'plugins', 'adlc-codex', 'hooks', 'adlc-handoff-gate.mjs');
 
-const { readVerifiedBypassGrant: ccReadGrant, matchRecoveryCommand: ccMatch } = await import(CC_GATE);
-const { readVerifiedBypassGrant: codexReadGrant, matchRecoveryCommand: codexMatch } = await import(CODEX_GATE);
+const { readVerifiedBypassGrant: ccReadGrant, matchRecoveryCommand: ccMatch, formatRecoveryCommand: ccFormat } = await import(CC_GATE);
+const { readVerifiedBypassGrant: codexReadGrant, matchRecoveryCommand: codexMatch, formatRecoveryCommand: codexFormat } = await import(CODEX_GATE);
 
 test('#611: readBypassGrant and hook twins fail closed (null) when O_NOFOLLOW or O_NONBLOCK is undefined (Windows)', () => {
   const root = mkdtempSync(join(tmpdir(), 'win-grant-'));
@@ -93,4 +93,27 @@ test('#609: README discloses the inherited ADLC_MANIFEST_KEY self-bypass residua
   assert.match(readme, /#609/);
   assert.match(readme, /#520/);
   assert.match(readme, /advisory/i);
+});
+
+test("#806, #800, #1232: formatRecoveryCommand output on Windows paths round-trips through matchRecoveryCommand", () => {
+  const winNode = "C:\\Program Files\\nodejs\\node.exe";
+  const winScript = "D:\\repo\\packages\\context-handoff\\bin\\handoff.mjs";
+  const fakeRealpath = (p) => p.replace(/\//g, "\\").toLowerCase();
+  const pairs = [
+    [formatRecoveryCommand, matchRecoveryCommand],
+    [ccFormat, ccMatch],
+    [codexFormat, codexMatch],
+  ];
+  for (const [fmt, matcher] of pairs) {
+    const rendered = fmt({ interpreterPath: winNode, scriptPath: winScript, sessionId: "sess-win-1" });
+    const cmdLine = rendered.split("\n")[0];
+    assert.deepEqual(
+      matcher(cmdLine, { interpreterPath: winNode, scriptPath: winScript, sessionId: "sess-win-1", realpath: fakeRealpath }),
+      { matched: true, subcommand: "bypass" },
+    );
+    assert.deepEqual(
+      matcher(cmdLine + " --dir /repo/.adlc --write", { interpreterPath: winNode, scriptPath: winScript, sessionId: "sess-win-1", realpath: fakeRealpath }),
+      { matched: true, subcommand: "bypass" },
+    );
+  }
 });

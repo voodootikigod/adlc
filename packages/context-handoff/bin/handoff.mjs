@@ -870,7 +870,7 @@ authorization.
   // recorded while unblocking nothing.
   if (!isEstablishedLedger(root, { sentinelCounts: unbound !== null })) {
     opError(
-      `no handoffs directory or .deny-store at ${handoffsDir(root)} — the grant would not reach the enforcing hook; run from the repo root (an operator outside the hook may instead pass --dir <repo>/.adlc)`,
+      `no handoffs directory or .deny-store at ${handoffsDir(root)} — the grant would not reach the enforcing hook; run from the repo root or pass --dir <repo>/.adlc`,
     );
   }
 
