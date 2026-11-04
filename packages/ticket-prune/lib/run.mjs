@@ -11,7 +11,7 @@ import { acquireLock, releaseLock, readJson, stageJsonAtomic } from './store.mjs
 import { orderArchiveCandidates } from './archive-order.mjs';
 import {
   DirectoryTicketStore, archiveTicket, assertSignableTrustRootWrite, detectTicketStore,
-  recordTicketEvidence, storeHash,
+  pendingTransactions, recordTicketEvidence, storeHash,
 } from '@adlc/tickets';
 
 /**
@@ -91,6 +91,19 @@ export function runTicketPrune(options = {}) {
   // override of cwd rather than concatenating onto it, so `--tickets
   // /abs/path.json` behaves the way users naturally expect.
   const absTicketsPath = resolve(cwd, ticketsPath);
+
+  // Fail closed on pending directory-store transactions before any read or
+  // dry-run/empty-store return (#210): loadTickets reads the raw shards without
+  // checking pending transactions, so a crashed transaction could otherwise be
+  // observed as authoritative state by dry-run consumers (e.g. ceremony-drift).
+  try {
+    const pending = pendingTransactions(cwd);
+    if (pending.length) {
+      return { ok: false, error: `unfinished ticket transaction(s): ${pending.join(', ')}` };
+    }
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 
   const { tickets, errors } = loadTickets(absTicketsPath);
   if (errors.length) {

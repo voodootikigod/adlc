@@ -1208,3 +1208,34 @@ test('#784: legacy --write rejects an override --tickets path outside cwd whose 
     }
   });
 });
+
+test('#210: runTicketPrune fails closed on dry-run and empty store when the directory store has a pending recovery journal', () => {
+  withScratchRepo((dir) => {
+    rmSync(join(dir, '.adlc', 'tickets.json'), { force: true });
+    writeDirectoryStore(dir, [
+      { id: 'T1', title: 'Ship the widget', status: 'done', completed: true, scope: ['plugins/adlc-widget/**'], rails: ['test/adlc-widget/**'] },
+    ]);
+    const txDir = join(dir, '.adlc', 'ticket-transactions', '00000000-0000-4000-8000-000000000001');
+    mkdirSync(txDir, { recursive: true });
+    writeFileSync(join(txDir, 'journal.json'), JSON.stringify({ version: 1, operation: 'complete', operations: [] }));
+
+    const dryRes = runTicketPrune({ cwd: dir, inferScope: true });
+    assert.equal(dryRes.ok, false);
+    assert.match(dryRes.error, /unfinished ticket transaction\(s\): 00000000-0000-4000-8000-000000000001/);
+
+    rmSync(join(dir, '.adlc', 'tickets', ticketFilename('T1')), { force: true });
+    const emptyRes = runTicketPrune({ cwd: dir, inferScope: true });
+    assert.equal(emptyRes.ok, false);
+    assert.match(emptyRes.error, /unfinished ticket transaction\(s\): 00000000-0000-4000-8000-000000000001/);
+
+    const cli = spawnSync(process.execPath, [BIN, '--infer-scope', '--json'], { cwd: dir, encoding: 'utf8' });
+    assert.notEqual(cli.status, 0);
+    assert.match(cli.stdout + cli.stderr, /unfinished ticket transaction/);
+
+    rmSync(join(dir, '.adlc', 'ticket-transactions'), { recursive: true, force: true });
+    writeFileSync(join(dir, '.adlc', 'ticket-transactions'), 'not-a-directory');
+    const badTxRes = runTicketPrune({ cwd: dir, inferScope: true });
+    assert.equal(badTxRes.ok, false);
+    assert.match(badTxRes.error, /is not a safe transaction directory/);
+  });
+});

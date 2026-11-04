@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildLiveDeps } from '../lib/live-deps.mjs';
+import { buildLiveDeps, ensureLocalExclude } from '../lib/live-deps.mjs';
 import { findInner } from './helpers/worker-calls.mjs';
 import { runFleet } from '../lib/run.mjs';
 
@@ -219,4 +219,37 @@ test('prosecute bounds the reviewer by the SMALLER of its own budget and the rem
   await deps.prosecute({ ticket, worktree: '/wt/T1', startSha: 'TIP', remainingMs: DEFAULT_REVIEW_TIMEOUT_MS * 6 });
   await deps.prosecute({ ticket, worktree: '/wt/T1', startSha: 'TIP' });
   assert.deepEqual(seen, [5000, DEFAULT_REVIEW_TIMEOUT_MS, undefined]);
+});
+
+test('#315: ensureLocalExclude writes all 4 fleet exclude entries and handles empty, newline-terminated, and non-newline-terminated exclude files', async () => {
+  const { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+
+  const EXPECTED = ['.worktrees/', '.adlc/fleet-status.json', '.adlc/fleet-logs/', '.adlc/fleet.lock/'];
+  const dir = mkdtempSync(join(tmpdir(), 'fleet-local-exclude-'));
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: dir });
+    const excludePath = join(dir, '.git', 'info', 'exclude');
+    mkdirSync(join(dir, '.git', 'info'), { recursive: true });
+
+    writeFileSync(excludePath, '');
+    ensureLocalExclude(dir);
+    assert.equal(readFileSync(excludePath, 'utf8'), EXPECTED.join('\n') + '\n');
+
+    writeFileSync(excludePath, '# comment\nnode_modules/\n');
+    ensureLocalExclude(dir);
+    assert.equal(readFileSync(excludePath, 'utf8'), '# comment\nnode_modules/\n' + EXPECTED.join('\n') + '\n');
+
+    writeFileSync(excludePath, '# comment without trailing newline');
+    ensureLocalExclude(dir);
+    assert.equal(readFileSync(excludePath, 'utf8'), '# comment without trailing newline\n' + EXPECTED.join('\n') + '\n');
+
+    const before = readFileSync(excludePath, 'utf8');
+    ensureLocalExclude(dir);
+    assert.equal(readFileSync(excludePath, 'utf8'), before);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
