@@ -1,4 +1,5 @@
 {
+  "completed": true,
   "description": "Context: plugins/adlc-herdr/lib/fleet-bridge.mjs hard-codes .adlc/fleet-logs/<id>.log for tail panes and packages/fleet/lib/status.mjs does not publish logDir in fleet-status.json (#836). Also, the comment above fleetTailPaneArgs in fleet-bridge.mjs omits --tab from the supported flag list (#837).\nRequirements:\n1. Have newStatus in packages/fleet/lib/status.mjs accept an optional logDir field and pass it from packages/fleet/lib/run.mjs when statusDir is provided.\n2. Have planFleetBridge in plugins/adlc-herdr/lib/fleet-bridge.mjs validate and use curr.logDir when present, falling back to .adlc/fleet-logs when absent or unsafe, and clarify the --tab flag comment above fleetTailPaneArgs.\n3. Add unit tests in packages/fleet/test/status.test.mjs and plugins/adlc-herdr/test/fleet-bridge.test.mjs.",
   "id": "T-01M6HVG31DE7RV0ED4YVEA5781",
   "rails": [
@@ -14,6 +15,5 @@
   ],
   "size": "S",
   "title": "fix(adlc-herdr,fleet): honor relocated status logDir in fleet tail panes and clarify --tab comment (#836, #837)",
-  "verify": "node --test packages/fleet/test/status.test.mjs packages/fleet/test/status-schema.test.mjs plugins/adlc-herdr/test/fleet-bridge.test.mjs plugins/adlc-herdr/test/manifest.test.mjs",
-  "completed": true
+  "verify": "node --test packages/fleet/test/status.test.mjs packages/fleet/test/status-schema.test.mjs plugins/adlc-herdr/test/fleet-bridge.test.mjs plugins/adlc-herdr/test/manifest.test.mjs"
 }

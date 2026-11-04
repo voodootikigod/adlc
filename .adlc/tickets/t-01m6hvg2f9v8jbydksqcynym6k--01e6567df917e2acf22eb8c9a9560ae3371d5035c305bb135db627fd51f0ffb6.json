@@ -1,4 +1,5 @@
 {
+  "completed": true,
   "description": "Context: withLedgerLock in packages/core/lib/ledger.mjs acquires ${target}.lock with openSync(lockPath, \"wx\") and writes { version, token, pid, hostname, startedAt }, but never inspects an existing lockfile for staleness when a prior writer was hard-killed.\nRequirements:\n1. In withLedgerLock (packages/core/lib/ledger.mjs), when openSync throws EEXIST, inspect the existing lockfile owner record and reclaim the lock if the owner is on the same host with a dead PID or its startedAt timestamp exceeds staleMs.\n2. Include a clear remediation hint in the lock timeout error message telling operators to remove the lockfile if no ADLC process is running.\n3. Update packages/core/index.d.ts for the optional staleMs/isPidAlive options on withLedgerLock and add unit tests in packages/core/test/core.test.mjs.",
   "id": "T-01M6HVG2F9V8JBYDKSQCYNYM6K",
   "rails": [
@@ -12,6 +13,5 @@
   ],
   "size": "S",
   "title": "fix(core): reclaim stale orphaned ledger locks and add remediation hint (#621)",
-  "verify": "node --test packages/core/test/core.test.mjs packages/core/test/proc.test.mjs",
-  "completed": true
+  "verify": "node --test packages/core/test/core.test.mjs packages/core/test/proc.test.mjs"
 }
