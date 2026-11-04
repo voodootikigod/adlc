@@ -1,6 +1,7 @@
 {
   "body": "## Objective\nResolve #692 and #691 by correcting `--review-cmd` documentation in `packages/model-ratchet/bin/model-ratchet.mjs` and `packages/model-ratchet/README.md` (`shell: false` tokenized command template, not a shell command; valid reviewer command examples instead of the nonexistent `@adlc/adversarial-review --file {file}`).\n\n## Acceptance Criteria\n1. `packages/model-ratchet/bin/model-ratchet.mjs` `--help` and `packages/model-ratchet/README.md` describe `--review-cmd` as a tokenized command template (`spawnSync`, `shell: false`, no shell metacharacters) and include `--findings-exit-code` in the README Usage and Flags table — verify: `node --test packages/model-ratchet/test/integration.test.mjs`\n2. `packages/model-ratchet/README.md` and `packages/model-ratchet/bin/model-ratchet.mjs` contain no references to `@adlc/adversarial-review` or `adversarial-review --file` — verify: `node --test packages/model-ratchet/test/integration.test.mjs`",
   "category": "bugfix",
+  "completed": true,
   "cpm_float": 0,
   "deps": [],
   "id": "T-01M6JE9CBX2J7VM8RG3BZNWF59",
