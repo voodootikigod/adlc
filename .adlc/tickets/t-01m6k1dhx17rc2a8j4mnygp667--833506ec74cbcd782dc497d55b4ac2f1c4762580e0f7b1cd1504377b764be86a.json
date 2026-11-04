@@ -5,6 +5,7 @@
     "In packages/tickets/lib/stores/git-tree.mjs, runGit passes a 60000ms timeout to spawnSync and throws operational GIT_READ_FAILED when a git call times out or is killed by a signal even when allowFailure is true."
   ],
   "category": "bugfix",
+  "completed": true,
   "description": "Resolves #544 and #572. In packages/tickets/lib/doctor.mjs, packages/tickets/lib/manifest-segments.mjs, and packages/tickets/lib/manifest-primitives.mjs, treat any entry carrying an explicit sig property (Object.hasOwn(entry, \"sig\")) whose signature fails entrySigValid as present-but-invalid (MANIFEST_SIGNATURE_INVALID in doctor) even inside the legacy prefix, reserving legacy-missing tolerance strictly for entries without a sig key. In packages/tickets/lib/stores/git-tree.mjs, bound runGit spawnSync calls with a 60s timeout and fail closed on timeout/signal.",
   "id": "T-01M6K1DHX17RC2A8J4MNYGP667",
   "rails": [
