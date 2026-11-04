@@ -146,3 +146,8 @@ test('the ADLC_AGY_TIMEOUT_MS recovery knob is discoverable, not comment-only', 
     'the timeout error must name the knob that fixes it'
   );
 });
+
+test('adlc-init.md documents the published @adlc/rails-guard-ci CLI invocation for consumer repos (#270)', () => {
+  const initMd = readFileSync(join(HERE, '..', 'commands', 'adlc-init.md'), 'utf8');
+  assert.match(initMd, /@adlc\/rails-guard-ci/);
+});

@@ -69,6 +69,9 @@ Bootstrap the ADLC runtime for use with `agy` or `jetski`.
    pipeline and make it a required check. The in-session hook is advisory — the host (agy/jetski)
    fails **open** on a non-zero hook exit, so it cannot substitute for CI. The
    workflow template runs `scripts/rails-guard-ci.mjs` directly; treat that script
-   as a required check in branch protection, not just an informational job.
+   as a required check in branch protection, not just an informational job. In
+   consumer repositories that install the published packages rather than
+   checking out the monorepo, invoke `npx @adlc/rails-guard-ci --base origin/main`
+   (or `adlc rails-guard --base origin/main`) in your CI workflow.
 7. **Activate enforcement** for a build: `export ADLC_P4_ENFORCEMENT=1` with an active
    ticket whose `rails[]` are frozen.

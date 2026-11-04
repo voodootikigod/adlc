@@ -1,0 +1,19 @@
+{
+  "body": "Context: Issues #826, #270, and #715.\n1. (#826) plugins/adlc-gemini/rails-checker.mjs TRUST_ROOT_RAILS includes .adlc/tickets/** and .adlc/sessions.lock/**, which do not glob-match bare directory paths .adlc, .adlc/tickets, or .adlc/sessions.lock, allowing a structured tool targeting the directory itself to pass checkRail().\n2. (#270) plugins/adlc-gemini/commands/adlc-init.md step 6 tells consumers to copy docs/ci/rails-guard.yml without noting how to run npx @adlc/rails-guard-ci --base origin/main directly in consumer repos where docs/ci/rails-guard.yml and scripts/rails-guard-ci.mjs are not installed locally.\n3. (#715) packages/preflight/package.json and packages/preflight/README.md do not declare an os constraint or state that the bash and test-cmd checks require a POSIX environment (darwin, linux).\nChanges:\n1. Add \".adlc\", \".adlc/tickets\", and \".adlc/sessions.lock\" to TRUST_ROOT_RAILS in plugins/adlc-gemini/rails-checker.mjs and add regression tests in plugins/adlc-gemini/test/decide.test.mjs.\n2. Update plugins/adlc-gemini/commands/adlc-init.md step 6 to document both the ADLC repository workflow/script (docs/ci/rails-guard.yml and scripts/rails-guard-ci.mjs as a required check) and the published npx @adlc/rails-guard-ci --base origin/main CLI command for consumer repositories, and pin it in plugins/adlc-gemini/test/docs-visibility.test.mjs.\n3. Add \"os\": [\"darwin\", \"linux\"] to packages/preflight/package.json and document the POSIX requirement in packages/preflight/README.md, with a test in packages/preflight/test/os-and-docs.test.mjs.\nAcceptance Criteria:\n- AC1: checkRail denies structured mutations targeting .adlc, .adlc/tickets, and .adlc/sessions.lock.\n- AC2: plugins/adlc-gemini/commands/adlc-init.md documents npx @adlc/rails-guard-ci alongside docs/ci/rails-guard.yml and scripts/rails-guard-ci.mjs.\n- AC3: packages/preflight/package.json declares os: [\"darwin\", \"linux\"] and packages/preflight/README.md documents the POSIX requirement.\n- AC4: All tests and mutation-gate pass.",
+  "category": "bug",
+  "id": "T-01M6J35M89H7TWEBRW594FM67W",
+  "rails": [
+    "plugins/adlc-gemini/test/wire.test.mjs",
+    "packages/preflight/test/unit.test.mjs"
+  ],
+  "scope": [
+    "plugins/adlc-gemini/rails-checker.mjs",
+    "plugins/adlc-gemini/commands/adlc-init.md",
+    "plugins/adlc-gemini/test/decide.test.mjs",
+    "plugins/adlc-gemini/test/docs-visibility.test.mjs",
+    "packages/preflight/package.json",
+    "packages/preflight/README.md",
+    "packages/preflight/test/os-and-docs.test.mjs"
+  ],
+  "title": "fix(adlc-gemini, preflight): freeze bare .adlc and .adlc/tickets dirs, clarify CI gate setup in adlc-init, and declare preflight POSIX os (#826, #270, #715)"
+}

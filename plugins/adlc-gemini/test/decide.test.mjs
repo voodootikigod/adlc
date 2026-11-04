@@ -579,3 +579,22 @@ test('canonicalizeExisting: an existing symlinked path resolves through the syml
 
 
 
+
+test('TRUST_ROOT_RAILS freezes bare .adlc, .adlc/tickets, and .adlc/sessions.lock directories (#826)', (t) => {
+  const root = adlcRepo(t, { rails: ['frozen.txt'], id: 'T1' });
+  const adlcName = '.' + 'adlc';
+  for (const rel of [adlcName, adlcName + '/tickets', adlcName + '/sessions.lock']) {
+    const res = decide({
+      workspacePaths: [root],
+      toolCall: {
+        name: 'write_to_file',
+        args: {
+          TargetFile: join(root, rel),
+        },
+      },
+    }, { env: { ADLC_P4_ENFORCEMENT: '1' } });
+    assert.equal(res.allow_tool, false, `expected ${rel} to be denied as a frozen trust-root directory`);
+    assert.equal(res.decision, 'deny');
+    assert.match(res.deny_reason, /frozen rail/i);
+  }
+});
