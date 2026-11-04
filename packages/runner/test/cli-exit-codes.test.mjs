@@ -104,6 +104,12 @@ test('CLI: missing verb/phase prints usage naming adlc-runner and adlc run (#763
   const r = spawnSync(process.execPath, [BIN], { encoding: 'utf8' });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /usage: adlc-runner run <phase>.*adlc run <phase>/);
+  const help = spawnSync(process.execPath, [BIN, '--help'], { encoding: 'utf8' });
+  assert.equal(help.status, 0);
+  assert.match(help.stdout, /^adlc-runner run <phase>/m);
+  assert.match(help.stdout, /^adlc-runner accept --ticket id/m);
+  assert.match(help.stdout, /adlc run <phase>/);
+  assert.match(help.stdout, /adlc accept --ticket id/);
 });
 
 test('CLI: a REJECTED p4 gate (missing railFiles hash snapshot) exits 2, not 1 (#764)', (t) => {
