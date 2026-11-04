@@ -1702,3 +1702,18 @@ test('withLedgerLock: uses default 60_000ms staleMs ceiling and rejects non-plai
   });
   assert.equal(res, 'default-stale-ok');
 });
+
+test("#617, #616: core README documents @adlc/core package/subpath imports, all 8 mutate.OPERATORS, and closed block-comment rule", () => {
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.doesNotMatch(readme, /\.\.\/\.\.\/core\/index\.mjs/);
+  assert.match(readme, /from '@adlc\/core'/);
+  for (const sub of ["@adlc/core/llm", "@adlc/core/git", "@adlc/core/cli", "@adlc/core/ledger", "@adlc/core/revision", "@adlc/core/tickets", "@adlc/core/mutate", "@adlc/core/test-kit"]) {
+    assert.ok(readme.includes(sub), `README must document subpath ${sub}`);
+  }
+  for (const op of Object.keys(OPERATORS)) {
+    assert.ok(readme.includes(op), `README must document operator ${op}`);
+  }
+  assert.doesNotMatch(readme, /\(skips comments\/imports\/console lines\)/);
+  assert.match(readme, /leading closed block-comment prefix/);
+  assert.match(readme, /tuning constants/);
+});

@@ -1,0 +1,17 @@
+{
+  "acceptance": [
+    "packages/core/README.md shows @adlc/core and its subpath exports (@adlc/core/llm, @adlc/core/git, @adlc/core/cli, @adlc/core/ledger, @adlc/core/revision, @adlc/core/tickets, @adlc/core/mutate) instead of broken ../../core/index.mjs imports (#617)",
+    "packages/core/README.md lists all 8 mutate.OPERATORS entries and accurately describes closed leading block-comment stripping and tuning-identifier masking (#616)"
+  ],
+  "id": "T-01M6JK2Q8CRWB6C8JPYNWFHKQE",
+  "intent": "Update packages/core/README.md to use @adlc/core package/subpath imports (#617) and document all 8 mutation operators, the closed block-comment prefix rule, and tuning-constant masking (#616), with regression tests in packages/core/test/core.test.mjs.",
+  "rails": [
+    "packages/core/test/primitives.test.mjs"
+  ],
+  "scope": [
+    "packages/core/README.md",
+    "packages/core/test/core.test.mjs"
+  ],
+  "title": "core: update README import examples to @adlc/core and document all 8 mutation operators and comment-prefix rule",
+  "verify": "node --test packages/core/test/core.test.mjs packages/core/test/primitives.test.mjs"
+}
