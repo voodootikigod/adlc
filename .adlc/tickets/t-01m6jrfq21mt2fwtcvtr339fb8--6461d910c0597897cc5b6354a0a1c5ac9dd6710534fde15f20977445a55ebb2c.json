@@ -1,4 +1,5 @@
 {
+  "completed": true,
   "description": "Context: plugins/adlc-copilot/README.md lists build-gate context fitness without noting that it is currently inert on Copilot (#810); skills/adlc-ticket/SKILL.md and skills/adlc/SKILL.md reference adlc-runner run p0/p1 instead of adlc run p0/p1 (#812) and defer to docs/interrogation-protocol.md without a followable GitHub URL (#813).\nRequirements:\n1. Update plugins/adlc-copilot/README.md capability table and Enforcement posture section to state that build-gate is currently inert on Copilot because the CLI exposes no session transcript (#810).\n2. Replace adlc-runner run p0 and adlc-runner run p1 with adlc run p0 and adlc run p1 in plugins/adlc-copilot/skills/adlc-ticket/SKILL.md and plugins/adlc-copilot/skills/adlc/SKILL.md (#812).\n3. Link docs/interrogation-protocol.md to its canonical GitHub URL in plugins/adlc-copilot/skills/adlc-ticket/SKILL.md and plugins/adlc-copilot/skills/adlc/SKILL.md (#813).\n4. Add regression assertions in plugins/adlc-copilot/test/contract.test.mjs.",
   "id": "T-01M6JRFQ21MT2FWTCVTR339FB8",
   "rails": [

@@ -1,4 +1,5 @@
 {
+  "completed": true,
   "description": "Context: plugins/adlc-gemini/README.md states the hook freezes ADLC rails without the fail-open/advisory callout before Install (#825), and plugins/adlc-gemini/skills/adlc/SKILL.md offers ADLC_RAILS_BYPASS=1 without clarifying that it applies to the CI adlc rails-guard CLI while the in-session hook honors ADLC_P4_ENFORCEMENT (#828).\nRequirements:\n1. Add the fail-open/CI-backstop callout at the top of the Install section in plugins/adlc-gemini/README.md and extend plugins/adlc-gemini/test/docs-visibility.test.mjs to assert it (#825).\n2. Clarify in plugins/adlc-gemini/skills/adlc/SKILL.md (via scripts/router/router-model.mjs P3_NOTE slot and gen-routers.mjs) that ADLC_RAILS_BYPASS=1 overrides the CI adlc rails-guard CLI, whereas the in-session Gemini hook has no per-call bypass other than ADLC_P4_ENFORCEMENT (#828).\n3. Add regression assertions in plugins/adlc-gemini/test/docs-visibility.test.mjs and scripts/test/router-drift.test.mjs.",
   "id": "T-01M6JRHBBKNNHZJ58N4WAF3XMN",
   "rails": [
