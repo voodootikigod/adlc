@@ -68,3 +68,17 @@ test('root README Use it in other editors list links GitHub Copilot integration 
   const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
   assert.match(readme, /\[GitHub Copilot\]\(\.\/docs\/integrations\/copilot\.md\)/);
 });
+
+test('CHANGELOG 1.11.0 section documents migration notes for build-gate, prosecute, premortem, and runner (#587, #615, #718, #761)', () => {
+  const changelog = readFileSync(join(ROOT, 'CHANGELOG.md'), 'utf8');
+  const start = changelog.indexOf('## [1.11.0]');
+  const end = changelog.indexOf('## [1.10.0]');
+  assert.ok(start !== -1 && end > start, '1.11.0 section exists');
+  const sec = changelog.slice(start, end);
+  assert.match(sec, /--bytes-threshold 262144/);
+  assert.match(sec, /resolveChangeSetRevision/);
+  assert.match(sec, /criss-cross/);
+  assert.match(sec, /adlc premortem <spec\.md> --record-verdict <file> --ticket <id>/);
+  assert.match(sec, /spec-approval/);
+  assert.match(sec, /\{ok, operational, phase, ticket, errors\}/);
+});

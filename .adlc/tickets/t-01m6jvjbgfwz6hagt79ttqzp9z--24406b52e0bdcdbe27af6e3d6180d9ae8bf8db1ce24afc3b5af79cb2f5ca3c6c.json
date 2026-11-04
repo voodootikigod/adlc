@@ -1,0 +1,15 @@
+{
+  "body": "In CHANGELOG.md under [1.11.0] - 2026-08-24, document:\n1. (#587) build-gate CLI --bytes-threshold default changed from 256 KiB to 8 MiB (pass --bytes-threshold 262144 for the previous threshold).\n2. (#615) prosecute / core change-set revision identity (git-change:<baseSha>:<digest>) is now merge-base-anchored rather than base-tip-anchored; <=1.10.0 attestations must be re-recorded once, and ambiguous criss-cross merge-bases fail closed with a null identity.\n3. (#718) premortem --record-verdict now requires --ticket and binds the spec file hash; 1.10.0 unscoped premortem records must be re-run and re-approved for p1.\n4. (#761) runner p1 now requires --ticket and a spec-approval record (run /adlc-approve-spec), p0 is a new ticket-scoped phase, p4 uses p4-build, and p0/p1 --json content rejections return {ok, operational, phase, ticket, errors} without required/present/missing/skipped.\n5. Add regression assertions in scripts/test/package-reference-coverage.test.mjs.\n\n## Acceptance Criteria\n- Verify: `node --test scripts/test/package-reference-coverage.test.mjs`\n\nallow-suppression: none",
+  "category": "docs",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M6JVJBGFWZ6HAGT79TTQZP9Z",
+  "rails": [
+    "scripts/test/release.test.mjs"
+  ],
+  "scope": [
+    "CHANGELOG.md",
+    "scripts/test/package-reference-coverage.test.mjs"
+  ],
+  "title": "Document 1.11.0 CHANGELOG migration notes for build-gate, prosecute, premortem, and runner (#587, #615, #718, #761)"
+}
