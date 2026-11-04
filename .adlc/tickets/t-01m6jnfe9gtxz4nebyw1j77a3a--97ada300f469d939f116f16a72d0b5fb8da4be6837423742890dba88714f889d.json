@@ -4,6 +4,7 @@
     "plugins/adlc-cursor/command/adlc-prosecute.md, commands/adlc-prosecute.md, and rules/adlc-ticket-context.mdc reference ~/.cursor/adlc instead of ~/.adlc (#819).",
     "plugins/adlc-herdr/README.md lists all five actions and three [[events]] in Layout, extends Status through t-herdr-5/8/9, and documents ADLC_HERDR_DEBUG_FILE (#834)."
   ],
+  "completed": true,
   "description": "Qualify preToolUse rail enforcement with ADLC_P4_ENFORCEMENT=1 in plugins/adlc-cursor/README.md (#818), update ~/.adlc state-dir references in plugins/adlc-cursor to ~/.cursor/adlc (#819), and update plugins/adlc-herdr/README.md to list all five actions, three [[events]], Status rows t-herdr-5/8/9, and ADLC_HERDR_DEBUG_FILE (#834).",
   "id": "T-01M6JNFE9GTXZ4NEBYW1J77A3A",
   "rails": [

@@ -4,6 +4,7 @@
     "packages/init/README.md clarifies that .gitignore whole-directory .adlc ignores are normalized to .adlc/* and documents --harness, --no-codex-agents, and .github/workflows/copilot-setup-steps.yml (#667).",
     "packages/preflight/README.md clarifies that cleanup is best-effort and that .adlc/tmp/ and .worktrees/ parent directories remain in place (#713)."
   ],
+  "completed": true,
   "description": "Update packages/context-handoff/README.md to document signed one-shot bypass grants and audit-only manifest entries (#607), update packages/init/README.md to document .gitignore normalization, --harness, --no-codex-agents, and Copilot workflow writes (#667), and update packages/preflight/README.md to describe best-effort cleanup and retained parent directories (#713).",
   "id": "T-01M6JNFA2ABCGE9Z2NQ7VT0AMX",
   "rails": [

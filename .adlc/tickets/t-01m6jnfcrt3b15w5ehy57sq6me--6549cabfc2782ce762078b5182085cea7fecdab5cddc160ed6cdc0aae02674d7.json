@@ -4,6 +4,7 @@
     "plugins/adlc-claude-code/.claude-plugin/plugin.json and .claude-plugin/marketplace.json disclose the enforcing PreToolUse gates (#801).",
     "docs/integrations/claude-code.md Commands table includes /adlc:adlc-spec and /adlc:adlc-approve-spec (#802)."
   ],
+  "completed": true,
   "description": "Document the unconditional fail-closed deny paths of context-handoff in docs/integrations/claude-code.md (#798), disclose the enforcing PreToolUse gates in plugins/adlc-claude-code/.claude-plugin/plugin.json and .claude-plugin/marketplace.json (#801), and add /adlc:adlc-spec and /adlc:adlc-approve-spec to the Commands table in docs/integrations/claude-code.md (#802).",
   "id": "T-01M6JNFCRT3B15W5EHY57SQ6ME",
   "rails": [

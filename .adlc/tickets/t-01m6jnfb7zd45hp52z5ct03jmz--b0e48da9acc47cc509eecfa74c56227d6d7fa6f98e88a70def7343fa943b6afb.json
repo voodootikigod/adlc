@@ -3,6 +3,7 @@
     "packages/core/lib/revision.mjs documents on DEFAULT_IGNORED_PATHS that rails-guard-ci enforces the add-vs-alter ticket-store contract so widening scope or removing rails is blocked at merge (#620).",
     "packages/merge-forecast/bin/merge-forecast.mjs header comment for exit 1 does not claim not a git repo for co-change (#687)."
   ],
+  "completed": true,
   "description": "Cross-reference the rails-guard-ci add-vs-alter ticket-store contract on DEFAULT_IGNORED_PATHS in packages/core/lib/revision.mjs (#620) and remove the unimplemented not-a-git-repo claim from the exit-1 header comment in packages/merge-forecast/bin/merge-forecast.mjs (#687).",
   "id": "T-01M6JNFB7ZD45HP52Z5CT03JMZ",
   "rails": [
