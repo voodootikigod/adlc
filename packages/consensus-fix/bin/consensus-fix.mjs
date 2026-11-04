@@ -12,6 +12,8 @@
  *   --rails    is the regression gate (the FULL frozen rail suite). A candidate
  *              survives only if BOTH gates pass. Without --rails, candidates are
  *              not checked against the rails and a WARNING is printed.
+ *   --require-rails refuses to run (exit 1) unless --rails is supplied, so CI
+ *              callers can enforce regression verification.
  *   --provider forces a single provider for the whole run (anthropic|openai|
  *              gemini|agy), overriding ADLC_PROVIDER for this invocation only.
  *              Default (no flag): single-provider auto-detect, unchanged.
@@ -45,6 +47,7 @@ const { values } = parseArgs({
   options: {
     'test-cmd': { type: 'string' },
     rails: { type: 'string' },
+    'require-rails': { type: 'boolean', default: false },
     files: { type: 'string' },
     n: { type: 'string', default: '3' },
     tier: { type: 'string', default: 'mid' },
@@ -63,6 +66,9 @@ if (!values['files']) opError('--files is required');
 
 const testCmd = values['test-cmd'];
 const railsCmd = values['rails'] || undefined;
+if (values['require-rails'] && !railsCmd) {
+  opError('--require-rails requires a non-empty --rails <cmd> regression gate');
+}
 const filePaths = values['files'].split(',').map((f) => f.trim()).filter(Boolean);
 if (filePaths.length === 0) opError('--files must list at least one file path');
 

@@ -267,3 +267,34 @@ test('CLI --json output surfaces summary.dirtyCheckSkipped: true outside a git r
   const allowDirtyParsed = JSON.parse(allowDirtyRun.stdout);
   assert.equal(allowDirtyParsed.summary.dirtyCheckSkipped, false);
 });
+
+test('--require-rails exits 1 via opError when --rails is omitted or empty (#603)', (t) => {
+  const dir = tmp(t, 'consensus-fix-req-rails-');
+  const f = join(dir, 'a.mjs');
+  writeFileSync(f, 'export const x = 1;\n');
+  for (const extra of [['--require-rails'], ['--require-rails', '--rails', '']]) {
+    const { code, stderr } = runCli([
+      '--test-cmd', 'exit 1',
+      '--files', f,
+      ...extra,
+      '--prompt-only',
+    ]);
+    assert.equal(code, 1);
+    assert.match(stderr, /--require-rails requires a non-empty --rails <cmd> regression gate/);
+  }
+});
+
+test('--require-rails succeeds when --rails is provided (#603)', (t) => {
+  const dir = tmp(t, 'consensus-fix-req-rails-ok-');
+  const f = join(dir, 'a.mjs');
+  writeFileSync(f, 'export const x = 1;\n');
+  const { code, stdout } = runCli([
+    '--test-cmd', 'exit 1',
+    '--files', f,
+    '--require-rails',
+    '--rails', 'npm test',
+    '--prompt-only',
+  ]);
+  assert.equal(code, 0);
+  assert.match(stdout, /<test output will appear here>/);
+});

@@ -138,6 +138,8 @@ for (const target of ['../..', 'a/b']) {
       );
 
       assert.equal(recorded.length, 2, 'both defeats recorded');
+      assert.equal(recorded[0].scaffoldPath, null, 'unsafe target records scaffoldPath: null (#650)');
+      assert.equal(recorded[1].scaffoldPath, join(root, 'packages', 'rails-guard', 'test', `bypass-${safeHash.slice(0, 16)}.test.mjs`), 'safe target records resolved scaffoldPath (#650)');
       assert.deepEqual(warnings, [
         `gate-fuzzing: refusing to write a test scaffold for unsafe target ${JSON.stringify(target)}`,
       ]);
@@ -244,4 +246,27 @@ test('assertContained returns the resolved path for a contained file', () => {
   const base = join(tmpdir(), 'gf-base');
   assert.equal(assertContained(base, join(base, 'x.json')), resolve(base, 'x.json'));
   assert.equal(assertContained(base, join(base, 'deep', 'x.json')), resolve(base, 'deep', 'x.json'));
+});
+
+test('CLI --json surfaces reproPath and scaffoldPath on recorded defeats (#650)', () => {
+  const binSource = readFileSync(new URL('../bin/gate-fuzzing.mjs', import.meta.url), 'utf8');
+  // Extract and evaluate the defeats projection mapper directly against recorded & unrecorded defeats
+  const match = binSource.match(/defeats:\s*verdict\.defeats\.map\((\(d\)\s*=>\s*\([\s\S]*?\))\),/);
+  assert.ok(match, 'gate-fuzzing.mjs defines verdict.defeats.map projection');
+  const projectDefeat = new Function('return ' + match[1])();
+  withRoot((root) => {
+    const [recSafe] = recordDefeats([defeat()], root, { warn: () => {} });
+    const projectedSafe = projectDefeat(recSafe);
+    assert.equal(projectedSafe.reproPath, join(root, '.adlc', 'gate-defeats', `${HASH_PREFIX}.json`));
+    assert.equal(projectedSafe.scaffoldPath, join(root, 'packages', 'rails-guard', 'test', `bypass-${HASH_PREFIX}.test.mjs`));
+
+    const [recUnsafe] = recordDefeats([defeat({ target: '..' })], root, { warn: () => {} });
+    const projectedUnsafe = projectDefeat(recUnsafe);
+    assert.equal(projectedUnsafe.reproPath, join(root, '.adlc', 'gate-defeats', `${HASH_PREFIX}.json`));
+    assert.equal(projectedUnsafe.scaffoldPath, null);
+
+    const unrecorded = projectDefeat(defeat());
+    assert.equal('reproPath' in unrecorded, false);
+    assert.equal('scaffoldPath' in unrecorded, false);
+  });
 });

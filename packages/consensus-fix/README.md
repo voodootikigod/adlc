@@ -24,6 +24,7 @@ consensus-fix --test-cmd "..." --files a.mjs,b.mjs [options]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--rails <cmd>` | _(none)_ | The **regression gate**: a command that runs the FULL frozen rail suite (all tests + types). A candidate survives only if BOTH `--test-cmd` and `--rails` exit 0. A candidate that fixes the repro but reddens the rails is **rejected**, not ranked. If omitted, candidates are checked only against `--test-cmd` and a **WARNING** is printed (no silent caps). |
+| `--require-rails` | off | Refuse to run (exit 1) when `--rails` is not supplied, so CI pipelines that branch on `$?` never mistake an unchecked run for a rails-verified one. |
 | `--n <int>` | `3` | Number of independent fix candidates to generate. Ignored when `--providers` is given (fan width becomes the number of providers named). |
 | `--tier cheap\|mid\|frontier` | `mid` | LLM tier to use for completions. |
 | `--provider <name>` | _(auto-detect)_ | Force a single provider (`anthropic\|openai\|gemini\|agy`) for the whole run, overriding `ADLC_PROVIDER` for this invocation only. Additive — omit it and single-provider auto-detect is unchanged. Mutually exclusive with `--providers`. |
@@ -31,7 +32,7 @@ consensus-fix --test-cmd "..." --files a.mjs,b.mjs [options]
 | `--apply` | off | Write the winning fix. Default is dry-run (report only). |
 | `--allow-dirty` | off | Skip dirty-tree check. Useful in CI with staged-only changes. |
 | `--json` | off | Machine-readable output (JSON to stdout). |
-| `--prompt-only` | off | Print the prompt(s) that would be sent and exit 0. Works with zero API keys. |
+| `--prompt-only` | off | Print the prompt(s) that would be sent and exit 0. Works with zero API keys. Because `--test-cmd` is not executed in `--prompt-only` mode, the prompt substitutes `<test output will appear here>` for the test output; files over 40 lines therefore fall back to a tail excerpt rather than windowing around failing line numbers. |
 
 ---
 
@@ -39,8 +40,8 @@ consensus-fix --test-cmd "..." --files a.mjs,b.mjs [options]
 
 | Code | Meaning |
 |------|---------|
-| `0` | Gate passes: at least one candidate survived and there is a consensus group with 2+ members (or effective fan width `< 3` — i.e. `--n < 3` or `--providers` with fewer than 3 providers). |
-| `1` | Operational error: bad arguments, unreadable files, dirty tree (without `--allow-dirty`), no LLM provider. |
+| `0` | Gate passes: at least one candidate survived and there is a consensus group with 2+ members (or effective fan width `< 3` — i.e. `--n < 3` or `--providers` with fewer than 3 providers). **Note:** exit `0` alone does not imply the regression gate ran — if `--rails` was omitted, check `railsChecked: true` in `--json` output or pass `--require-rails`. |
+| `1` | Operational error: bad arguments (including `--require-rails` without `--rails`), unreadable files, dirty tree (without `--allow-dirty`), no LLM provider. |
 | `2` | Gate fails: no candidates survived OR all survivors are singletons and effective fan width `>= 3` (all-divergent, spec ambiguity). |
 
 ---

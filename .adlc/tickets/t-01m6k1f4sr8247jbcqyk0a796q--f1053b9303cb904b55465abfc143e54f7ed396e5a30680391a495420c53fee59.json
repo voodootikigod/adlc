@@ -1,0 +1,31 @@
+{
+  "acceptance_criteria": [
+    "consensus-fix supports --require-rails (exiting 1 via opError when --rails is omitted) and documents in the exit-code table that exit 0 without --rails does not mean the regression gate ran (#603).",
+    "consensus-fix README.md and --help document that --prompt-only uses a placeholder for test output so source excerpts may differ from a live run (#606).",
+    "gate-fuzzing writeReproArtifact sets defeat.scaffoldPath (written path or null) and gate-fuzzing --json includes scaffoldPath on each defeat when --record is used (#650)."
+  ],
+  "category": "bugfix",
+  "description": "Resolves #603, #606, and #650. Add --require-rails to consensus-fix and document in its exit-code table that exit 0 without --rails does not imply the regression gate ran (#603); document in consensus-fix README and --help that --prompt-only substitutes a placeholder for test output so source excerpts may differ from a live run (#606); and record scaffoldPath on the defeat and in gate-fuzzing --json output when --record writes packages/<target>/test/bypass-<id>.test.mjs (#650).",
+  "id": "T-01M6K1F4SR8247JBCQYK0A796Q",
+  "rails": [
+    "packages/consensus-fix/test/bin.test.mjs",
+    "packages/gate-fuzzing/test/record.test.mjs",
+    "packages/gate-fuzzing/test/record-paths.test.mjs",
+    "packages/gate-fuzzing/test/bin.test.mjs"
+  ],
+  "scope": [
+    "packages/consensus-fix/bin/consensus-fix.mjs",
+    "packages/consensus-fix/README.md",
+    "packages/consensus-fix/test/bin.test.mjs",
+    "packages/gate-fuzzing/lib/record.mjs",
+    "packages/gate-fuzzing/bin/gate-fuzzing.mjs",
+    "packages/gate-fuzzing/README.md",
+    "packages/gate-fuzzing/test/record.test.mjs",
+    "packages/gate-fuzzing/test/record-paths.test.mjs",
+    "packages/gate-fuzzing/test/bin.test.mjs"
+  ],
+  "title": "consensus-fix,gate-fuzzing: add --require-rails, document --prompt-only placeholder, and surface scaffoldPath (#603, #606, #650)",
+  "verify": [
+    "node --test packages/consensus-fix/test/bin.test.mjs packages/gate-fuzzing/test/record.test.mjs packages/gate-fuzzing/test/record-paths.test.mjs packages/gate-fuzzing/test/bin.test.mjs"
+  ]
+}
