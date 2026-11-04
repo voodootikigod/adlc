@@ -18,11 +18,13 @@ spec-lint <spec.md> [--llm] [--json] [--prompt-only] [--record --ticket <id>]
 
 | Flag | Description |
 |------|-------------|
-| `--llm` | Run a cheap-tier LLM pass on VERIFIED criteria to catch vacuous methods ("works correctly", "run tests"). Demoted criteria become WISH. Requires a provider env var (see core). |
+| `--llm` | Run an LLM pass on VERIFIED criteria to catch vacuous methods ("works correctly", "run tests"). Demoted criteria become WISH. Requires a provider env var (see core). |
+| `--tier <tier>` | Model tier for the `--llm` pass (`cheap`, `mid`, or `frontier`; default: `cheap`). |
 | `--json` | Emit machine-readable JSON (for orchestrators). All other output is suppressed. |
 | `--prompt-only` | Print the exact LLM prompt and exit 0. Works with zero API keys — paste into any harness. |
-| `--record` | On a passing run, record a `spec-lint` entry into `.adlc/manifest.jsonl` via `gate-manifest`, hashing `<spec.md>` into it. Requires `--ticket` — an unbound record could satisfy another ticket's P1 gate. Never records on a failing (WISH-containing) run. |
+| `--record` | On a passing run, record a `spec-lint` entry into the `gate-manifest` ledger (`.adlc/manifest.jsonl`, or the active `.adlc/manifest.d/` segment in a segmented repo), hashing `<spec.md>` into it. Requires `--ticket` — an unbound record could satisfy another ticket's P1 gate. Never records on a failing (WISH-containing) run. |
 | `--ticket <id>` | Ticket to bind the recorded entry to (required with `--record`). |
+| `--dir <path>` | Override the `.adlc` directory used when recording manifest evidence (default: `.adlc`). |
 
 ### Exit codes
 
