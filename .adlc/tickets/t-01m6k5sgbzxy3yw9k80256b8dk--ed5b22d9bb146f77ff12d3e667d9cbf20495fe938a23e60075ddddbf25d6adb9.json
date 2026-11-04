@@ -5,6 +5,7 @@
     "Default non-strict behavior continues to degrade co-change to 0 without failing the gate, and --help / README.md document --strict and signalsEvaluated."
   ],
   "autonomous": true,
+  "completed": true,
   "id": "T-01M6K5SGBZXY3YW9K80256B8DK",
   "rails": [
     "packages/merge-forecast/test/co-change-floor.test.mjs",

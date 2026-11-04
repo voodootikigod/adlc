@@ -5,6 +5,7 @@
     "packages/premortem/bin/premortem.mjs --help and packages/premortem/README.md document --max-causes <n>."
   ],
   "autonomous": true,
+  "completed": true,
   "id": "T-01M6K6MY42AGP9FXZG054PCA5H",
   "rails": [
     "packages/premortem/test/cli.test.mjs",

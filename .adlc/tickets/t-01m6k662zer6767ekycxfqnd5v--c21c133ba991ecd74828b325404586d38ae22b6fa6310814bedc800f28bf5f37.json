@@ -5,6 +5,7 @@
     "packages/lesson-foundry/README.md documents that wiring check-<name>.mjs into CI is the operator step and that --gate requires both <name>.lint.json and check-<name>.mjs."
   ],
   "autonomous": true,
+  "completed": true,
   "id": "T-01M6K662ZER6767EKYCXFQND5V",
   "rails": [
     "packages/lesson-foundry/test/cli.test.mjs",
