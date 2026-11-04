@@ -315,10 +315,20 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     },
   });
 
-  const repoCmdEnv = (worktree) => repoCommandEnv(io.env, {
-    passthrough: config.envPassthrough ?? [],
-    syntheticHome: join(worktree, '.fleet-home'),
-  });
+  const REPO_COMMAND_AMBIENT_ADLC_VARS = new Set(['ADLC_TICKET', 'ADLC_P4_ENFORCEMENT']);
+  const repoCmdEnv = (worktree) => {
+    const passthrough = config.envPassthrough ?? [];
+    const passthroughSet = new Set(passthrough);
+    const filteredSource = {};
+    for (const [k, v] of Object.entries(io.env ?? {})) {
+      if (k.startsWith('ADLC_') && !REPO_COMMAND_AMBIENT_ADLC_VARS.has(k) && !passthroughSet.has(k)) continue;
+      filteredSource[k] = v;
+    }
+    return repoCommandEnv(filteredSource, {
+      passthrough,
+      syntheticHome: join(worktree, '.fleet-home'),
+    });
+  };
 
   // The MODEL-plane sandbox (spec 7.3; issue #395). Same backend and the same
   // run-wide mode decision as the repo-command plane -- deliberately, because that

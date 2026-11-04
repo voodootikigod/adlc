@@ -152,9 +152,11 @@ running on the model plane.
 **Closed:** it cannot write outside the ticket worktree. Not the operator-local
 quartermaster registry, not `~/.claude/settings.json` or `~/.claude/hooks/`, not
 the installed toolkit, not another repo's worktree. It is also no longer *told*
-where any of those are — every ambient `ADLC_*` variable is withheld from the
-model-plane environment, and what the charter needs (`ADLC_TICKET`,
-`ADLC_P4_ENFORCEMENT`) is injected explicitly.
+where any of those are — ambient operator-local `ADLC_*` variables are withheld
+from both the model-plane and repo-command-plane environments (and `ADLC_*=`
+assignments are scrubbed from gate output so a failing `fleet.gate` command
+cannot relay trust-root paths into the next strike's prompt; #634), leaving
+only `ADLC_TICKET` and `ADLC_P4_ENFORCEMENT`.
 
 **Not closed:** model-plane **reads** are unbounded, and egress is open, so a
 read-and-exfiltrate path remains. Bounding reads means enumerating where every

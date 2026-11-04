@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { buildLiveDeps, ensureLocalExclude } from '../lib/live-deps.mjs';
 import { findInner } from './helpers/worker-calls.mjs';
 import { runFleet } from '../lib/run.mjs';
+import { scrubAdlcEnvAssignments, runGateCommand } from '../lib/gates.mjs';
 
 // A permissive fake git: records calls, returns sensible defaults by verb.
 // Model git's PER-WORKTREE HEAD. Each worktree has its own checked-out branch, which
@@ -252,4 +253,62 @@ test('#315: ensureLocalExclude writes all 4 fleet exclude entries and handles em
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('#634: repo-command plane (gate and init) withholds ambient operator-local ADLC_* trust-root vars while keeping ADLC_TICKET and ADLC_P4_ENFORCEMENT', async () => {
+  const rec = newRec();
+  const richEnv = {
+    ...env,
+    ADLC_TICKET: 'T1',
+    ADLC_P4_ENFORCEMENT: '1',
+    ADLC_QUARTERMASTER_REGISTRY: '/operator/quartermaster.json',
+    ADLC_TICKET_STORE: '/operator/tickets',
+    ADLC_RAILS_BYPASS: '1',
+    ADLC_SIGNED_RUNNER_POOL: '/operator/pool',
+    ADLC_RUNNER_PATH: '/operator/adlc-runner',
+  };
+  const deps = buildLiveDeps({
+    repo: '/repo',
+    config: { ...config, init: 'npm ci', envPassthrough: ['ADLC_RUNNER_PATH'] },
+    statusDir: undefined,
+    sandboxSpec,
+    reviewRunner: () => ({ ok: true, findings: [] }),
+    io: fakeIo(rec, richEnv),
+  });
+  await deps.createWorktree({ ticket, integrationBranch: 'fleet/run-1' });
+  await deps.gate({ ticket, worktree: '/wt/T1', startSha: 'SHA' });
+  const wrapped = rec.spawn.filter((s) => s.cmd === 'bwrap' && s.args.includes('--unshare-net'));
+  assert.ok(wrapped.length >= 3, 'init, build, and test all ran on the repo-command plane');
+  for (const call of wrapped) {
+    assert.equal(call.env.ADLC_TICKET, 'T1');
+    assert.equal(call.env.ADLC_P4_ENFORCEMENT, '1');
+    assert.equal(call.env.ADLC_RUNNER_PATH, '/operator/adlc-runner', 'explicitly passthrough-allowed var is kept');
+    assert.equal(call.env.ADLC_QUARTERMASTER_REGISTRY, undefined);
+    assert.equal(call.env.ADLC_TICKET_STORE, undefined);
+    assert.equal(call.env.ADLC_RAILS_BYPASS, undefined);
+    assert.equal(call.env.ADLC_SIGNED_RUNNER_POOL, undefined);
+  }
+});
+
+test('#634: scrubAdlcEnvAssignments and runGateCommand redact ADLC_*= trust-root assignments from gate output while preserving ADLC_TICKET and ADLC_P4_ENFORCEMENT', async () => {
+  const raw = 'ADLC_QUARTERMASTER_REGISTRY=/op/qm.json\nADLC_TICKET=T1\nADLC_P4_ENFORCEMENT=1\nADLC_TICKET_STORE=/op/store';
+  const scrubbed = scrubAdlcEnvAssignments(raw);
+  assert.equal(
+    scrubbed,
+    'ADLC_QUARTERMASTER_REGISTRY=[REDACTED]\nADLC_TICKET=T1\nADLC_P4_ENFORCEMENT=1\nADLC_TICKET_STORE=[REDACTED]'
+  );
+  assert.equal(scrubAdlcEnvAssignments(null), '');
+  const failSandbox = {
+    run: async () => {
+      const err = new Error('exit 1');
+      err.stdout = 'ADLC_QUARTERMASTER_REGISTRY=/secret/path\n';
+      err.stderr = 'ADLC_TICKET=T1\n';
+      throw err;
+    },
+  };
+  const r = await runGateCommand(failSandbox, 'env; exit 1', {});
+  assert.equal(r.ok, false);
+  assert.doesNotMatch(r.output, /\/secret\/path/);
+  assert.match(r.output, /ADLC_QUARTERMASTER_REGISTRY=\[REDACTED\]/);
+  assert.match(r.output, /ADLC_TICKET=T1/);
 });

@@ -17,6 +17,19 @@ import { inScope } from '@adlc/core';
  * exit or a thrown sandbox error is a gate failure (ok:false), never a throw —
  * the scheduler decides what a failure means (a strike).
  */
+const ALLOWED_GATE_OUTPUT_ADLC_VARS = new Set(['ADLC_TICKET', 'ADLC_P4_ENFORCEMENT']);
+
+/**
+ * Scrub `ADLC_<NAME>=<value>` assignments (except `ADLC_TICKET` and
+ * `ADLC_P4_ENFORCEMENT`) from gate output before it can be fenced into
+ * `deadEnds` for the next strike's model-plane prompt (#634).
+ */
+export function scrubAdlcEnvAssignments(text) {
+  return String(text ?? '').replace(/\b(ADLC_[A-Z0-9_]*)=([^\r\n]*)/g, (match, name) =>
+    ALLOWED_GATE_OUTPUT_ADLC_VARS.has(name) ? match : `${name}=[REDACTED]`
+  );
+}
+
 export async function runGateCommand(sandbox, command, env, { timeoutMs = null } = {}) {
   const argv = ['/bin/sh', '-c', command];
   try {
@@ -24,9 +37,9 @@ export async function runGateCommand(sandbox, command, env, { timeoutMs = null }
     // the sandbox as `timeout`, which the exec layer enforces on the child.
     // A budget of 0 is an EXPIRED budget, never "no timeout" (spawnAsync reads 0 as unbounded; agy fleet r9 c2).
     const output = await sandbox.run(argv, timeoutMs != null ? { env, timeout: Math.max(1, timeoutMs) } : { env });
-    return { ok: true, output: String(output ?? '') };
+    return { ok: true, output: scrubAdlcEnvAssignments(output) };
   } catch (e) {
-    return { ok: false, output: `${e.stdout ?? ''}${e.stderr ?? ''}${e.message ?? ''}`, timedOut: e?.timedOut === true };
+    return { ok: false, output: scrubAdlcEnvAssignments(`${e.stdout ?? ''}${e.stderr ?? ''}${e.message ?? ''}`), timedOut: e?.timedOut === true };
   }
 }
 
