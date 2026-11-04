@@ -94,6 +94,16 @@ test('CLI: --help lists every phase and every ticket-required phase, matching th
   for (const phase of ['p7']) {
     assert.doesNotMatch(r.stdout, new RegExp(`Ticket required:.*\\b${phase}\\b`), `--help must NOT list ${phase} as ticket-required`);
   }
+  assert.match(r.stdout, /adlc-runner run <phase>/);
+  assert.match(r.stdout, /adlc-runner accept --ticket id/);
+  assert.match(r.stdout, /@adlc\/cli/);
+  assert.match(r.stdout, /2\s+required phase evidence is missing or rejected/);
+});
+
+test('CLI: missing verb/phase prints usage naming adlc-runner and adlc run (#763)', () => {
+  const r = spawnSync(process.execPath, [BIN], { encoding: 'utf8' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /usage: adlc-runner run <phase>.*adlc run <phase>/);
 });
 
 test('CLI: a REJECTED p4 gate (missing railFiles hash snapshot) exits 2, not 1 (#764)', (t) => {

@@ -5,12 +5,19 @@ Artifact-asserting phase runner for ADLC.
 ## Usage
 
 ```sh
-adlc run p5 --ticket T1 --dir .adlc --json
-adlc run p6 --ticket T1 --dir .adlc
+adlc-runner run p5 --ticket T1 --dir .adlc --json
+adlc-runner run p6 --ticket T1 --dir .adlc
+# or `adlc run p5 ...` / `adlc accept ...` when the `@adlc/cli` umbrella is installed
 ```
 
-The runner does not treat "a command ran" as a gate. It checks `.adlc/manifest.jsonl`
-for the evidence each phase requires. P0, P1, P2, P3, P4, P5, and P6 evidence must be scoped
+Standalone installs (`npm i @adlc/runner`) provide the `adlc-runner` binary; `adlc run` and
+`adlc accept` are the equivalent subcommands when `@adlc/cli` is installed.
+
+The runner does not treat "a command ran" as a gate. It reads `.adlc/manifest.jsonl` plus,
+when manifest forest mode (`gate-manifest enable`) is active, this checkout's own causal
+chain of `.adlc/manifest.d/<segment>.jsonl` segments (root prefix, ancestor segments cut at
+their fork points, and this branch's own segment — evidence recorded on unrelated branches'
+segments does not count) for the evidence each phase requires. P0, P1, P2, P3, P4, P5, and P6 evidence must be scoped
 to a ticket; `adlc run p0`, `adlc run p1`, `adlc run p2`, `adlc run p3`, `adlc run p4`,
 `adlc run p5`, and `adlc run p6` fail operationally without `--ticket`.
 
@@ -46,7 +53,7 @@ though its paths are excluded from the worktree fingerprint.
 
 - `0`: required phase artifacts are present
 - `1`: operational error
-- `2`: required phase artifacts are missing
+- `2`: required phase evidence is missing or present-but-rejected
 
 ## ADLC phase
 
