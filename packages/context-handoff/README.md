@@ -214,3 +214,11 @@ per-session `marker_vanished` — callers thread `denyEverWritten`. Unbound oper
 Advisory nags (`nagSuppression`) are suppressed when remaining-to-hard is below
 `MIN_REMAINING_TO_HARD` (near-hard / handoff zone) so deny/handoff owns the
 signal; this never affects mutation deny.
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success (checkpoint/resume-auth/bypass written, lock reclaimed, or `--help`) |
+| `1` | Operational error (missing required flags or `ADLC_MANIFEST_KEY`, invalid `--dir`, I/O failure) |
+| `2` | Gate reject / blocked (same-session resume, lock held by a live session or foreign host, unbound/consumed deny on `continue`, or checkpoint hash mismatch) |

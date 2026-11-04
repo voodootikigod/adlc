@@ -41,3 +41,11 @@ against a signed chain. `signed` mode closes that gap once the runner-pool
 ceremony has run. Repos with a real trust boundary between the agent and the
 CI runner (untrusted contributors, a compliance requirement) should plan the
 upgrade; `unsigned-fallback` is the correct starting point for everyone else.
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Initialization succeeded (or `--help`) |
+| `1` | Operational or configuration error (unknown option, unreadable `.adlc/config.json`, invalid `harnesses` shape, mis-ordered `.gitignore` rules, or symlink escape) |
+| `2` | Reserved (not emitted by `adlc init`) |

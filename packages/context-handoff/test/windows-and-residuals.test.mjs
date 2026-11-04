@@ -117,3 +117,11 @@ test("#806, #800, #1232: formatRecoveryCommand output on Windows paths round-tri
     );
   }
 });
+
+test("#854: context-handoff README documents Exit codes table (0, 1, 2)", () => {
+  const readme = readFileSync(join(REPO_ROOT, "packages", "context-handoff", "README.md"), "utf8");
+  assert.match(readme, /## Exit codes/);
+  assert.match(readme, /\| `0` \|/);
+  assert.match(readme, /\| `1` \|/);
+  assert.match(readme, /\| `2` \|/);
+});
