@@ -97,6 +97,11 @@ override is **only** honored if it can be durably recorded to
 `.adlc/manifest.jsonl` as a `build-gate-bypass` entry — an override that
 cannot be recorded is refused, never silently allowed.
 
+When the manifest ledger already contains signed entries (`sig`), an override
+without `ADLC_MANIFEST_KEY` set is refused (`recordOverride` returns `false`
+and the CLI exits `2`) rather than appending an unsigned entry that would
+corrupt `gate-manifest verify`.
+
 ## Toolkit modules (Path A — reusable by any harness)
 
 - `lib/risk.mjs` — `computeRiskTier(ticket)` / `deriveRiskSignals(ticket)`

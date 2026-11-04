@@ -18,6 +18,7 @@
 // re-deriving its chain/signing logic.
 
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
+import { readManifestForest } from '@adlc/gate-manifest/lib/forest.mjs';
 import { ADLC_DIR } from '@adlc/core';
 
 /**
@@ -37,6 +38,12 @@ import { ADLC_DIR } from '@adlc/core';
  */
 export function recordOverride({ ticketId, signals, depth, sessionBytes, reason, dir = ADLC_DIR, key }) {
   try {
+    if (typeof key !== 'string' || key === '') {
+      const { entries } = readManifestForest(dir);
+      if (entries.some((e) => typeof e?.sig === 'string' && e.sig !== '')) {
+        return false;
+      }
+    }
     record({
       gate: 'build-gate-bypass',
       ticket: ticketId ?? undefined,
