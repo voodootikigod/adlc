@@ -360,3 +360,38 @@ test('an UNSATURATED sweep finding nothing is treated as an exhaustive miss', (t
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.calls, /issue create/);
 });
+
+test('#209: a ticket modified between report generation and command execution is refused with STALE_TICKET (exit 2) and not completed', async (t) => {
+  const repo = makeMixedRepo(t);
+  const ticketsFile = join(repo, '.adlc', 'tickets.json');
+  const initDoc = JSON.parse(readFileSync(ticketsFile, 'utf8'));
+  initDoc.tickets.find((x) => x.id === 'RAILED').status = 'done';
+  writeFileSync(ticketsFile, JSON.stringify(initDoc, null, 2));
+  const { runTicketPrune } = await import('../../packages/ticket-prune/lib/run.mjs');
+  const { renderIssueBody } = await import('../ceremony-drift.mjs');
+  const pruneRes = runTicketPrune({ cwd: repo });
+  assert.equal(pruneRes.ok, true);
+  const body = renderIssueBody(pruneRes.needsCeremony);
+  const cmd = body.split('\n').map((l) => l.trim())
+    .find((l) => /^adlc ticket complete RAILED --expect [0-9a-f]{64} --write --authorize --json$/.test(l));
+  assert.ok(cmd, 'rendered command must include --expect <64-hex-hash>');
+
+  // Mutate RAILED before running the rendered command (simulating commit B reopening/changing RAILED)
+  const storeDoc = JSON.parse(readFileSync(ticketsFile, 'utf8'));
+  const railed = storeDoc.tickets.find((x) => x.id === 'RAILED');
+  railed.rails.push('packages/extra/**');
+  writeFileSync(ticketsFile, JSON.stringify(storeDoc, null, 2));
+
+  const args = cmd.replace(/^adlc\s+/, '').trim().split(/\s+/);
+  const ADLC = join(REPO_ROOT, 'packages', 'cli', 'bin', 'adlc.mjs');
+  let exitStatus = 0;
+  try {
+    execFileSync(process.execPath, [ADLC, ...args], {
+      cwd: repo, stdio: 'pipe', env: { ...process.env, ADLC_MANIFEST_KEY: 'test-manifest-key' },
+    });
+  } catch (err) {
+    exitStatus = err.status;
+  }
+  assert.equal(exitStatus, 2, 'must refuse with conflict exit code 2 when ticketHash changed');
+  assert.deepEqual(completedIds(repo), [], 'RAILED must NOT be completed after its hash changed');
+});

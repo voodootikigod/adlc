@@ -11,7 +11,7 @@ import { acquireLock, releaseLock, readJson, stageJsonAtomic } from './store.mjs
 import { orderArchiveCandidates } from './archive-order.mjs';
 import {
   DirectoryTicketStore, archiveTicket, assertSignableTrustRootWrite, detectTicketStore,
-  pendingTransactions, recordTicketEvidence, storeHash,
+  pendingTransactions, recordTicketEvidence, storeHash, ticketHash,
 } from '@adlc/tickets';
 
 /**
@@ -25,7 +25,7 @@ function computeNeedsCeremony(stale, ticketsById) {
   for (const item of stale) {
     const ticket = ticketsById.get(item.id);
     if (!ticket) continue;
-    const disposition = ceremonyDisposition(ticket, item.reason);
+    const disposition = ceremonyDisposition(ticket, item.reason, { ticketHash: ticketHash(ticket) });
     if (disposition.disposition === 'ceremony') out.push(disposition.entry);
   }
   return out;
@@ -199,7 +199,7 @@ export function runTicketPrune(options = {}) {
         if (!ticket) continue; // vanished under us since the first pass
         const reclassified = classifyTicket(ticket, trackedFiles, { inferScope });
         if (!reclassified.stale) continue; // un-staled since the first pass
-        const disposition = ceremonyDisposition(ticket, reclassified.reason);
+        const disposition = ceremonyDisposition(ticket, reclassified.reason, { ticketHash: ticketHash(ticket) });
         if (disposition.disposition === 'done') continue;
         if (disposition.disposition === 'ceremony') {
           needsCeremony.push(disposition.entry); // rails-freeze / preexisting-completed-field → reported, not archived
@@ -308,7 +308,7 @@ export function runTicketPrune(options = {}) {
     for (const ticket of staleCandidates) {
       const reclassified = classifyTicket(ticket, trackedFiles, { inferScope });
       if (!reclassified.stale) continue;                 // un-staled under the lock — leave it
-      const disposition = ceremonyDisposition(ticket, reclassified.reason);
+      const disposition = ceremonyDisposition(ticket, reclassified.reason, { ticketHash: ticketHash(ticket) });
       if (disposition.disposition === 'done') continue;  // already completed — nothing to do
       if (disposition.disposition === 'tombstone') {
         if (write) {

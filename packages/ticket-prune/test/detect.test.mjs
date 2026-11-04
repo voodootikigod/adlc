@@ -138,3 +138,19 @@ test('ceremonyDisposition: a rails-less ticket that already carries a completed 
     { disposition: 'ceremony', entry: { id: 'T1', reason: 'r', rails: [], blocker: 'preexisting-completed-field' } },
   );
 });
+
+test('#209: ceremonyDisposition attaches ticketHash when non-empty string is supplied and omits it otherwise', () => {
+  const h = 'a'.repeat(64);
+  assert.deepEqual(
+    ceremonyDisposition({ id: 'T1', rails: ['test/a/**'] }, 'r', { ticketHash: h }),
+    { disposition: 'ceremony', entry: { id: 'T1', reason: 'r', rails: ['test/a/**'], blocker: 'rails-freeze', ticketHash: h } },
+  );
+  assert.deepEqual(
+    ceremonyDisposition({ id: 'T1', completed: false }, 'r', { ticketHash: h }),
+    { disposition: 'ceremony', entry: { id: 'T1', reason: 'r', rails: [], blocker: 'preexisting-completed-field', ticketHash: h } },
+  );
+  assert.deepEqual(
+    ceremonyDisposition({ id: 'T1', rails: ['test/a/**'] }, 'r', { ticketHash: '' }),
+    { disposition: 'ceremony', entry: { id: 'T1', reason: 'r', rails: ['test/a/**'], blocker: 'rails-freeze' } },
+  );
+});

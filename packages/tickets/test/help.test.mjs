@@ -282,3 +282,12 @@ test('top-level renderUsage shows --expect as required and lists [--force] on up
   assert.match(usage, /^  update <id> --input <path\|-> --expect <ticket-hash> \[--force\] \[--write\]$/m);
   assert.doesNotMatch(usage, /\[--expect <ticket-hash>\]/);
 });
+
+test('#209: complete --help and renderUsage document optional --expect', () => {
+  const completeHelp = renderCommandHelp('complete');
+  assert.match(completeHelp, /^adlc ticket complete <id> \[--expect <ticket-hash>\] \[--write --authorize\] \[--allow-unsigned\] \[--json\]$/m);
+  assert.match(completeHelp, /When --expect <ticket-hash> is supplied, the/);
+  assert.match(completeHelp, /STALE_TICKET/);
+  const usage = renderUsage();
+  assert.match(usage, /^  complete <id> \[--expect <hash>\] \[--write --authorize\]$/m);
+});

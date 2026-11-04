@@ -246,10 +246,11 @@ export class TicketService {
     });
   }
 
-  planComplete(id, { authorized = false } = {}) {
-    return this.#plan('complete', (tickets) => {
+  planComplete(id, { expect, authorized = false } = {}) {
+    return this.#plan('complete', (tickets, snapshot) => {
       const ticket = tickets.find((item) => item.id === id);
       if (!ticket) throw invalid('TICKET_NOT_FOUND', `ticket not found: ${id}`);
+      if (expect !== undefined && snapshot.ticketHashes[id] !== expect) throw conflict('STALE_TICKET', `ticket ${id} hash changed`);
       if (this.protectedIds.has(id) && !authorized) throw policy('AUTHORIZATION_REQUIRED', `protected completion requires authorization for ${id}`);
       const before = deepClone(ticket);
       ticket.completed = true;

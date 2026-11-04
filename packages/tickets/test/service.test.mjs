@@ -419,3 +419,28 @@ test('planCreateBatch: the plan is store-scoped, carrying no per-ticket binding 
       'changedFields is the sorted union of keys across the batch');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('#209: planComplete with matching --expect completes the ticket; with stale --expect throws STALE_TICKET without mutating', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-tickets-complete-expect-'));
+  try {
+    const path = writeDirectory(root, [ticket('A')]);
+    const store = new DirectoryTicketStore(path);
+    const service = new TicketService(store, { root });
+    const snap0 = store.load();
+    const hash0 = snap0.ticketHashes.A;
+    assert.throws(
+      () => service.planComplete('A', { expect: '' }),
+      (err) => err.code === 'STALE_TICKET' && /ticket A hash changed/.test(err.message),
+    );
+    assert.throws(
+      () => service.planComplete('A', { expect: '0'.repeat(64) }),
+      (err) => err.code === 'STALE_TICKET' && /ticket A hash changed/.test(err.message),
+    );
+    assert.equal(store.load().get('A').completed, undefined);
+    const plan = service.planComplete('A', { expect: hash0 });
+    const after = service.apply(plan);
+    assert.equal(after.get('A').completed, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

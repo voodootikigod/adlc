@@ -204,7 +204,7 @@ async function main() {
     plan = session.plan;
     editDraftPath = session.draftPath;
   } else if (command === 'discard') plan = service.planDiscard(positionals[1]);
-  else if (command === 'complete') plan = service.planComplete(positionals[1], { authorized: Boolean(flags.authorize) });
+  else if (command === 'complete') plan = service.planComplete(positionals[1], { expect: flags.expect, authorized: Boolean(flags.authorize) });
   else if (command === 'archive' || command === 'restore') {
     if (!(store instanceof DirectoryTicketStore)) throw new TicketStoreError('policy', 'DIRECTORY_STORE_REQUIRED', `${command} requires a directory store`);
     const options = { expectedSnapshotHash: snapshot.hash, reason: flags.reason, sourceRevision: flags.revision, root, authorized: Boolean(flags.authorize), key, allowUnsigned };

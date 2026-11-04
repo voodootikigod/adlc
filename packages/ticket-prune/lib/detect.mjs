@@ -168,9 +168,10 @@ export function classifyTickets(tickets, trackedFiles, { inferScope = false } = 
  *                                 it is a MUTATION the add-only PR exemption denies
  * The rails check comes FIRST, matching the write path's original ordering.
  */
-export function ceremonyDisposition(ticket, reason) {
+export function ceremonyDisposition(ticket, reason, { ticketHash = undefined } = {}) {
   if (ticket.completed === true) return { disposition: 'done' };
   const rails = Array.isArray(ticket.rails) ? ticket.rails : [];
+  const hashField = typeof ticketHash === 'string' && ticketHash !== '' ? { ticketHash } : {};
   // A `completed` field that is PRESENT but not `true` (e.g. deliberately
   // `false` to keep rails frozen during follow-up work) is a value someone set
   // on purpose. It must route to manual review — 'preexisting-completed-field' —
@@ -180,10 +181,10 @@ export function ceremonyDisposition(ticket, reason) {
   // expires its rails. The blocker carries the rails so the report still shows
   // them; it is simply never presented as safe to bulk-complete.
   if (Object.prototype.hasOwnProperty.call(ticket, 'completed')) {
-    return { disposition: 'ceremony', entry: { id: ticket.id, reason, rails, blocker: 'preexisting-completed-field' } };
+    return { disposition: 'ceremony', entry: { id: ticket.id, reason, rails, blocker: 'preexisting-completed-field', ...hashField } };
   }
   if (rails.length > 0) {
-    return { disposition: 'ceremony', entry: { id: ticket.id, reason, rails, blocker: 'rails-freeze' } };
+    return { disposition: 'ceremony', entry: { id: ticket.id, reason, rails, blocker: 'rails-freeze', ...hashField } };
   }
   return { disposition: 'tombstone' };
 }
