@@ -1,6 +1,7 @@
 {
   "body": "## Context\nIssue #763: `@adlc/runner` ships a single standalone binary named `adlc-runner`, while `adlc run` / `adlc accept` are dispatched by `@adlc/cli`, yet `packages/runner/README.md` and `packages/runner/bin/adlc.mjs` (`--help` and usage error) only show `adlc run` / `adlc accept` without naming `adlc-runner` or `@adlc/cli`.\nIssue #762: `packages/runner/README.md` says the runner checks `.adlc/manifest.jsonl` and defines exit code `2` only as missing artifacts, whereas forest mode reads `.adlc/manifest.jsonl` plus this checkout's own causal chain of `.adlc/manifest.d/` segments and exit code `2` also covers present-but-rejected evidence.\n\n## Acceptance Criteria\n- `packages/runner/bin/adlc.mjs` (`help()` and usage error) names `adlc-runner` alongside `adlc` (via `@adlc/cli`) and states that exit code `2` means required phase evidence is missing or rejected.\n- `packages/runner/README.md` shows `adlc-runner` (and `adlc` via `@adlc/cli`), documents own-chain `.adlc/manifest.d/` segment resolution, and updates the exit-code `2` description to include rejected evidence.\n- `packages/runner/test/cli-exit-codes.test.mjs` pins the updated `--help` banner and usage error strings.\n\n## Verification\n`node --test packages/runner/test/cli-exit-codes.test.mjs packages/runner/test/runner.test.mjs`",
   "category": "chore",
+  "completed": true,
   "id": "T-01M6JAJ1D2EBC16VQ3RGCHG2HM",
   "rails": [
     "packages/runner/test/runner.test.mjs"
