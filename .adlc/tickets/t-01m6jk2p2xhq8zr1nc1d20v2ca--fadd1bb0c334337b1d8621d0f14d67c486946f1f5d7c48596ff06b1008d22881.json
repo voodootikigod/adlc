@@ -4,6 +4,7 @@
     "packages/prosecute/README.md describes the trust-root changed-file set as computed against the merge-base of <base> and HEAD (git diff --name-only <merge-base>) rather than a two-dot base-tip diff (#725)",
     "packages/prosecute/README.md names @adlc/gate-manifest/lib/forest.mjs readManifestForest as the attestation reader instead of @adlc/core readEntries (#731)"
   ],
+  "completed": true,
   "id": "T-01M6JK2P2XHQ8ZR1NC1D20V2CA",
   "intent": "Fix three documentation inaccuracies in packages/prosecute/README.md (#731, #730, #725) and lock them with regression tests in packages/prosecute/test/prosecute-cli.test.mjs.",
   "rails": [
@@ -16,3 +17,4 @@
   "title": "prosecute: fix README lens list, merge-base tiering description, and readManifestForest reference",
   "verify": "node --test packages/prosecute/test/prosecute-cli.test.mjs packages/prosecute/test/prosecute-schema-validation.test.mjs"
 }
+

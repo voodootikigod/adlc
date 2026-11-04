@@ -4,6 +4,7 @@
     "packages/coldstart/README.md and packages/coldstart/lib/verdict.mjs document the gate-manifest ledger (.adlc/manifest.jsonl or .adlc/manifest.d/ in segmented/forest mode) (#596)",
     "packages/premortem/README.md and packages/premortem/bin/premortem.mjs document the gate-manifest ledger (.adlc/manifest.jsonl or .adlc/manifest.d/ in forest mode) (#722)"
   ],
+  "completed": true,
   "id": "T-01M6JK2R8P6D8H4NZCDVSYJVEX",
   "intent": "Add --tier and cached JSON field to packages/coldstart/README.md (#597), and update packages/coldstart/README.md, packages/coldstart/lib/verdict.mjs (#596), packages/premortem/README.md, and packages/premortem/bin/premortem.mjs (#722) to document the segmented .adlc/manifest.d/ destination alongside .adlc/manifest.jsonl.",
   "rails": [
@@ -20,3 +21,4 @@
   "title": "coldstart,premortem: document --tier, cached JSON field, and forest-mode manifest.d ledger destination",
   "verify": "node --test packages/coldstart/test/cli-options.test.mjs packages/premortem/test/cli.test.mjs packages/premortem/test/premortem.test.mjs"
 }
+
