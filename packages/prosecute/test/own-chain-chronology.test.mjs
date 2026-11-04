@@ -211,4 +211,18 @@ describe('finding replay: a foreign segment does not dispose of this chain\'s fi
       assert.equal(readFileSync(join(dir, 'manifest.jsonl'), 'utf8'), rootLinesBefore);
     } finally { clean(root); }
   });
+
+  it('#727: refuses on detached HEAD in forest mode and names the remedy', () => {
+    const { root, dir, g } = repo();
+    try {
+      append(dir, root, findingEntry('p5-finding-verified'));
+      activateSegments(dir);
+      append(dir, root, { gate: 'noop' });
+      g('checkout', '-q', '--detach', 'HEAD');
+      const result = prosecute(root, dir);
+      assert.equal(result.status, 'op-error');
+      assert.equal(result.exitCode, 1);
+      assert.equal(result.errors.some((e) => /detached HEAD has no branch identity.*check out the branch that owns this work, or run from a named worktree/.test(e)), true);
+    } finally { clean(root); }
+  });
 });

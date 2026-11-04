@@ -112,7 +112,7 @@ describe('tier-check --ticket skips only that ticket\'s own new rails (#1180)', 
     const r = tierCheck(dir, ['--ticket', 'T2', '--json']);
     assert.equal(r.status, 0, r.stderr);
     assert.deepEqual(JSON.parse(r.stdout), {
-      trustRootTier: false, reasons: [], crossModelRequired: false, satisfied: true, skippedOwnRails: ['test/own/**'],
+      trustRootTier: false, reasons: [], crossModelRequired: false, satisfied: true, revision: null, keyAvailable: true, chainTrustworthy: null, truncationDetected: false, skippedOwnRails: ['test/own/**'],
     });
     assert.ok(r.stderr.includes(SKIP_LINE), r.stderr);
   });

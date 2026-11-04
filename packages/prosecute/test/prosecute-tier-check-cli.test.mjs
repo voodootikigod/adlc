@@ -83,7 +83,7 @@ describe('adlc-prosecute tier-check (#326 CI trust-root gate)', () => {
     // --json contract: a non-tier change reports satisfied:true, crossModelRequired:false.
     const j = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], dir);
     assert.equal(j.status, 0);
-    assert.deepEqual(JSON.parse(j.stdout), { trustRootTier: false, reasons: [], crossModelRequired: false, satisfied: true, skippedOwnRails: [] });
+    assert.deepEqual(JSON.parse(j.stdout), { trustRootTier: false, reasons: [], crossModelRequired: false, satisfied: true, revision: null, keyAvailable: true, chainTrustworthy: null, truncationDetected: false, skippedOwnRails: [] });
   });
 
   it('exits 2 for a trust-root change (enforcement package) with no attestation', (t) => {
@@ -634,5 +634,48 @@ describe('adlc-prosecute mirror-attestations + tier-check --attestation-store (#
     ], dir);
     assert.equal(badInput.status, 1);
     assert.match(badInput.stderr, /could not read --input/);
+  });
+
+  it('#733: tier-check --json emits identical key sets across non-tiered, no-key, and tiered paths', (t) => {
+    const helpOut = runBin(['--help'], process.cwd());
+    assert.equal(helpOut.status, 0);
+    assert.match(helpOut.stdout, /prosecuting from a detached HEAD refuses with\s+exit 1 because branch identity is required/);
+    const expectedKeys = ['chainTrustworthy', 'crossModelRequired', 'keyAvailable', 'reasons', 'revision', 'satisfied', 'skippedOwnRails', 'truncationDetected', 'trustRootTier'];
+
+    // 1. Non-tiered path
+    const benign = scratchRepo(t, { baseTickets: [T({ rails: [] })], mutate: (d) => {
+      writeFileSync(join(d, 'README.md'), 'benign\n');
+    } });
+    const rBenign = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], benign.dir);
+    assert.equal(rBenign.status, 0);
+    const jBenign = JSON.parse(rBenign.stdout);
+    assert.deepEqual(Object.keys(jBenign).sort(), expectedKeys);
+    assert.equal(jBenign.trustRootTier, false);
+    assert.equal(jBenign.revision, null);
+    assert.equal(jBenign.keyAvailable, true);
+    assert.equal(jBenign.chainTrustworthy, null);
+    assert.equal(jBenign.truncationDetected, false);
+
+    // 2. Tiered no-key path
+    const tiered = scratchRepo(t, { baseTickets: [T({ rails: [] })], mutate: (d) => {
+      mkdirSync(join(d, 'packages', 'prosecute', 'lib'), { recursive: true });
+      writeFileSync(join(d, 'packages', 'prosecute', 'lib', 'x.mjs'), 'export const z = 1;\n');
+    } });
+    const rNoKey = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], tiered.dir, { ADLC_MANIFEST_KEY: '' });
+    assert.equal(rNoKey.status, 2);
+    const jNoKey = JSON.parse(rNoKey.stdout);
+    assert.deepEqual(Object.keys(jNoKey).sort(), expectedKeys);
+    assert.equal(jNoKey.keyAvailable, false);
+    assert.equal(jNoKey.chainTrustworthy, null);
+    assert.equal(jNoKey.truncationDetected, false);
+
+    // 3. Tiered normal path
+    const rNormal = runBin(['tier-check', '--base', 'main', '--author-provider', 'anthropic', '--dir', '.adlc', '--json'], tiered.dir);
+    assert.equal(rNormal.status, 2);
+    const jNormal = JSON.parse(rNormal.stdout);
+    assert.deepEqual(Object.keys(jNormal).sort(), expectedKeys);
+    assert.equal(jNormal.keyAvailable, true);
+    assert.equal(jNormal.chainTrustworthy, true);
+    assert.equal(jNormal.truncationDetected, false);
   });
 });

@@ -684,7 +684,15 @@ ADLC P5 review-evidence recorder.
       verified distinct-provider cross-model approve for its revision. With
       --ticket, that ticket's own new rails are skipped as described above and
       listed on stderr; without --ticket, every active ticket's rails tier.
-      --json always includes "skippedOwnRails" (empty without --ticket).
+      --json always emits a single stable schema with keys: trustRootTier,
+      reasons, crossModelRequired, satisfied, revision, keyAvailable,
+      chainTrustworthy, truncationDetected, and skippedOwnRails.
+
+  Note (forest-mode detached HEAD): in a repo with committed manifest segments
+      (.adlc/manifest.d/*.jsonl), prosecuting from a detached HEAD refuses with
+      exit 1 because branch identity is required to recover the checkout's own
+      causal chain. Remedy: check out the branch that owns this work, or run
+      from a named worktree.
 
   tier-check ... [--attestation-store PATH]
       OPTIONAL: pass a direct file path to a protected-ref attestation store to
@@ -955,7 +963,7 @@ if (positionals[0] === 'tier-check') {
 
   // AC3: the tier decision is ALWAYS visible — tiered or not.
   if (!tier.isTrustRootTier) {
-    if (values.json) printJson({ trustRootTier: false, reasons: [], crossModelRequired: false, satisfied: true, skippedOwnRails });
+    if (values.json) printJson({ trustRootTier: false, reasons: [], crossModelRequired: false, satisfied: true, revision: null, keyAvailable: Boolean(getKey()), chainTrustworthy: null, truncationDetected: false, skippedOwnRails });
     else console.log('tier-check: NOT trust-root tier — no cross-model review required.');
     process.exit(0);
   }
@@ -991,7 +999,7 @@ if (positionals[0] === 'tier-check') {
   const key = getKey();
   if (!key) {
     if (values.json) {
-      printJson({ trustRootTier: true, reasons: tier.reasons, crossModelRequired: true, satisfied: false, revision, keyAvailable: false, skippedOwnRails });
+      printJson({ trustRootTier: true, reasons: tier.reasons, crossModelRequired: true, satisfied: false, revision, keyAvailable: false, chainTrustworthy: null, truncationDetected: false, skippedOwnRails });
     } else {
       console.error(`tier-check: ADLC_MANIFEST_KEY is not available, so cross-model attestations cannot be signature-verified — an unverifiable attestation is forgeable, so NONE is trusted. This required trust-root gate FAILS CLOSED for revision ${revision}. Provide the key as a CI secret (available to same-repo runs) and re-record the attestation with it.`);
     }
@@ -1045,7 +1053,7 @@ if (positionals[0] === 'tier-check') {
     truncationDetected = !assertNoTruncation({ prEntries, observedEntries: authorScopedObserved, revision, key }).ok;
   }
   if (values.json) {
-    printJson({ trustRootTier: true, reasons: tier.reasons, crossModelRequired: true, satisfied, revision, chainTrustworthy, truncationDetected, skippedOwnRails });
+    printJson({ trustRootTier: true, reasons: tier.reasons, crossModelRequired: true, satisfied, revision, keyAvailable: true, chainTrustworthy, truncationDetected, skippedOwnRails });
     process.exit(satisfied ? 0 : 2);
   }
   if (satisfied) {
