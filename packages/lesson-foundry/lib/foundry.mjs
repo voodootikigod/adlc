@@ -141,12 +141,15 @@ export function findUnbankedClusters(
   };
   const hasLintScript = (stem) => {
     const checkPath = `${outDir}/check-${stem}.mjs`;
-    if (!existsSync(checkPath)) return false;
-    try {
-      return hasDefenseContent(readFile(checkPath));
-    } catch {
-      return false;
+    let checkContent = null;
+    if (existsSync(checkPath)) {
+      try {
+        checkContent = readFile(checkPath);
+      } catch {
+        checkContent = null;
+      }
     }
+    return hasDefenseContent(checkContent);
   };
 
   return clusters.filter((cluster) => {
@@ -171,13 +174,7 @@ export function findUnbankedClusters(
       // Grant filename-based legacy credit ONLY to an artifact that records no member
       // metadata (genuinely pre-overlap) and has non-empty content (#672). For lint-routed
       // clusters, also require the companion runnable check-<name>.mjs script (#676).
-      if (
-        hasDefenseContent(slugContent)
-        && !RECORDS_MEMBERS.test(slugContent)
-        && (route !== 'lint' || hasLintScript(name))
-      ) {
-        return false;
-      }
+      if (hasDefenseContent(slugContent) && !RECORDS_MEMBERS.test(slugContent) && (route !== 'lint' || hasLintScript(name))) return false;
     }
 
     // Gather the artifact content that actually references THIS cluster — by member
