@@ -139,6 +139,16 @@ export function findUnbankedClusters(
     if (dirEntries === null) dirEntries = readDir(outDir);
     return dirEntries;
   };
+  const hasLintScript = (stem) => {
+    const checkPath = `${outDir}/check-${stem}.mjs`;
+    if (!existsSync(checkPath)) return false;
+    try {
+      return hasDefenseContent(readFile(checkPath));
+    } catch {
+      return false;
+    }
+  };
+
   return clusters.filter((cluster) => {
     const { route, name, id, members = [] } = cluster;
     const suffix = route === 'lint' ? '.lint.json' : route === 'skill' ? '.SKILL.md' : null;
@@ -159,26 +169,32 @@ export function findUnbankedClusters(
         slugContent = null;
       }
       // Grant filename-based legacy credit ONLY to an artifact that records no member
-      // metadata (genuinely pre-overlap) and has non-empty content (#672). If it records
-      // members — whether ours or a DIFFERENT cluster's that merely shares the 50-char-truncated
-      // slug — fall through to the coverage/collision logic, which credits it only for the
-      // members it actually covers. Checking `!members.some(...)` here was the bug: a colliding
-      // artifact records none of OUR members, so it slipped through as a false credit.
-      // An empty, whitespace-only, or unreadable file must never grant legacy credit.
-      if (hasDefenseContent(slugContent) && !RECORDS_MEMBERS.test(slugContent)) return false;
+      // metadata (genuinely pre-overlap) and has non-empty content (#672). For lint-routed
+      // clusters, also require the companion runnable check-<name>.mjs script (#676).
+      if (
+        hasDefenseContent(slugContent)
+        && !RECORDS_MEMBERS.test(slugContent)
+        && (route !== 'lint' || hasLintScript(name))
+      ) {
+        return false;
+      }
     }
 
     // Gather the artifact content that actually references THIS cluster — by member
     // key, by the derived id, or by the legacy slug. For spec-gap the template holds
     // many lessons, so match per LINE; one lesson's marker must not credit another's.
+    // For lint clusters (#676), only descriptors with a present, non-empty companion
+    // check-<stem>.mjs script qualify as candidates.
     const candidates = suffix
-      ? listDir().filter((e) => e.endsWith(suffix)).map((e) => {
-          try {
-            return readFile(`${outDir}/${e}`) || '';
-          } catch {
-            return '';
-          }
-        })
+      ? listDir()
+          .filter((e) => e.endsWith(suffix) && (route !== 'lint' || hasLintScript(e.slice(0, -suffix.length))))
+          .map((e) => {
+            try {
+              return readFile(`${outDir}/${e}`) || '';
+            } catch {
+              return '';
+            }
+          })
       : template.split('\n');
     const related = candidates.filter((c) =>
       members.some((m) => c.includes(m))
