@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "adlc",
-      "description": "Embrace the ADLC from inside Claude Code: a phase-routing discovery skill and commands to bootstrap (.adlc/) and author tickets (P0). Requires the @adlc/cli gate toolkit (npm i -g @adlc/cli).",
+      "description": "Embrace the ADLC from inside Claude Code: a phase-routing discovery skill, commands to bootstrap (.adlc/) and author/interrogate/prosecute tickets, and enforcing PreToolUse gates (rails-guard, build-gate) that can deny edits in ADLC-initialized repositories. Requires the @adlc/cli gate toolkit (npm i -g @adlc/cli).",
       "version": "1.12.0",
       "author": {
         "name": "Chris Williams"
