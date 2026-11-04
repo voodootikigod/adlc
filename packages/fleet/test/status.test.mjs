@@ -54,3 +54,12 @@ test('statusById and inFlightIds derive scheduler inputs', () => {
   assert.deepEqual(statusById(s), { T1: 'building', T2: 'merged', T3: 'pending' });
   assert.deepEqual(inFlightIds(s), ['T1']);
 });
+
+test('newStatus records optional logDir when non-empty and omits it when absent (#836)', () => {
+  const sDefault = newStatus({ runId: 'r1', base: 'main', concurrency: 2 });
+  assert.equal('logDir' in sDefault, false);
+  const sEmpty = newStatus({ runId: 'r1', base: 'main', concurrency: 2, logDir: '' });
+  assert.equal('logDir' in sEmpty, false);
+  const sCustom = newStatus({ runId: 'r1', base: 'main', concurrency: 2, logDir: 'custom/fleet-logs' });
+  assert.equal(sCustom.logDir, 'custom/fleet-logs');
+});

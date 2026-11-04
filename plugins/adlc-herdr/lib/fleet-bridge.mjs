@@ -26,6 +26,12 @@ export const MAX_TAIL_PANES = 24;
 // can never traverse a path or be read as a CLI flag.
 const ID_RE = /^[A-Za-z0-9._][A-Za-z0-9._-]*$/;
 const safeId = (id) => typeof id === 'string' && ID_RE.test(id) && !id.includes('..');
+const DEFAULT_LOG_DIR = ['.adlc', 'fleet-logs'].join('/');
+function resolveLogDir(raw) {
+  if (typeof raw !== 'string') return DEFAULT_LOG_DIR;
+  const trimmed = raw.replace(/\/+$/, '');
+  return trimmed.split('/').every((seg) => safeId(seg)) ? trimmed : DEFAULT_LOG_DIR;
+}
 
 // `observed` marks a plan built from a VALID status this beat — the only case in
 // which absence of a ticket is evidence it left the in-flight set. A null status
@@ -67,20 +73,21 @@ export function planFleetBridge({ prev, curr, knownSchemaVersion, seenRunIds }) 
   // in-flight ones, so the shared MAX_TAIL_PANES quota is filled by ACTIVE builds
   // first — a heavily-failing run must never let zombie failed panes starve a
   // still-building ticket of its live log (and then have the executor close it).
+  const logDir = resolveLogDir(curr.logDir);
   const retained = [];
   for (const [id, rec] of Object.entries(tickets)) {
     if (!safeId(id)) continue; // hostile id → never reaches a log path, argv, or the board
     const state = rec && typeof rec.state === 'string' ? rec.state : null;
     if (!state) continue;
     if (IN_FLIGHT.has(state)) {
-      if (out.tailPanes.length < MAX_TAIL_PANES) out.tailPanes.push({ ticketId: id, state, logPath: `.adlc/fleet-logs/${id}.log`, runId });
+      if (out.tailPanes.length < MAX_TAIL_PANES) out.tailPanes.push({ ticketId: id, state, logPath: `${logDir}/${id}.log`, runId });
     } else if (TERMINAL.has(state)) {
       out.boardRows.push({ ticketId: id, state });
       // RETAIN the tail pane for a FAILED/BLOCKED ticket so its final output (the
       // error / stack trace) stays visible — closing it the instant a build fails
       // hides exactly what the developer needs to read. A merged ticket has nothing
       // more to show, so its pane is released. (Filled into the quota below.)
-      if (state !== 'merged') retained.push({ ticketId: id, state, logPath: `.adlc/fleet-logs/${id}.log`, runId });
+      if (state !== 'merged') retained.push({ ticketId: id, state, logPath: `${logDir}/${id}.log`, runId });
       const prevState = prevTickets[id] && typeof prevTickets[id].state === 'string' ? prevTickets[id].state : null;
       if (sameRun && prevState !== state) {
         if (state === 'merged') {
@@ -112,7 +119,7 @@ export function fleetTabArgs(title) {
 }
 export function fleetTailPaneArgs({ tabId, repoRoot, logPath, ticketId, runId }) {
   // The agent NAME carries the pane's identity — `agent start` has no --label
-  // (0.7.4: only --cwd/--env/--split), so a per-ticket name is what makes N
+  // (0.7.4: only --cwd/--env/--tab/--split; no --label), so a per-ticket name is what makes N
   // concurrent tail panes distinguishable in herdr's UI. It MUST be namespaced by
   // `runId`: herdr agent names are global across the multiplexer, but the daemon
   // observes many repos at once, so two concurrent runs sharing a ticket id (e.g.
