@@ -50,3 +50,10 @@ Dispatcher-level failures, such as an unknown tool or missing package, exit `1`.
 
 Cross-cutting. This is the delivery and invocation layer for the ADLC Codex
 integration.
+
+## MCP server (`adlc mcp-server`)
+
+`adlc mcp-server` runs a stdio JSON-RPC server exposing `adlc_gate` (read-only/prompt-only gate invocations) and `adlc_prosecute` (P5 evidence recording).
+
+**Operator-only environment seam (`ADLC_CLI_BIN`, [#592](https://github.com/voodootikigod/adlc/issues/592)):**
+`ADLC_CLI_BIN` overrides the `adlc.mjs` script path the MCP server executes under `process.execPath`. When set, it must be an **absolute path** to an **existing regular file** (relative paths, missing paths, and directories are rejected with JSON-RPC `-32602`). Because any process that can set `ADLC_CLI_BIN` in the MCP server's environment chooses the script executed for every tool call, treat `ADLC_CLI_BIN` as a trusted host/operator seam and never populate it from untrusted repository configuration.
