@@ -36,7 +36,7 @@ import { buildBoundedModelSandbox, bridgeArgv, mirrorCreateWorktree, mirrorFetch
 // Ignore fleet working state WITHOUT committing to the base checkout
 // (adversarial-review L2). `.git/info/exclude` is a local, per-repo, UNcommitted
 // ignore file — the fleet never writes base history.
-function ensureLocalExclude(repoDir) {
+export function ensureLocalExclude(repoDir) {
   // In a LINKED git worktree `<repo>/.git` is a FILE, not a directory, so the
   // naive join silently failed into the catch below. That was harmless while
   // nothing created `.adlc/fleet-logs/` — but dispatch now does, and an
