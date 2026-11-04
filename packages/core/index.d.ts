@@ -135,7 +135,7 @@ export function appendEntries<T = unknown>(
   entriesOrFactory: T[] | ((state: { entries: unknown[]; skipped: Array<{ line: number; error: string }>; rawLines: string[]; lastRawLine: string | null }) => T[]),
   dir?: string
 ): T[];
-export function withLedgerLock<T>(target: string, fn: () => T, options?: { retries?: number; delayMs?: number }): T;
+export function withLedgerLock<T>(target: string, fn: () => T, options?: { retries?: number; delayMs?: number; staleMs?: number; isPidAlive?: (pid: number) => boolean; now?: () => number }): T;
 export function readEntries<T = unknown>(
   name: string,
   dir?: string
