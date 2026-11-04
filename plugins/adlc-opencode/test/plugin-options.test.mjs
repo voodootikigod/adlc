@@ -5,7 +5,7 @@
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { optionsToEnv } from '../index.mjs';
@@ -158,4 +158,15 @@ test('ungatedTools option survives the build-gate backstop (degraded high-risk s
     await strict.emit(compactionEnded('sess'));
     await assert.rejects(() => call(strict, 'symbols_index'));
   }).finally(() => rmSync(dir, { recursive: true, force: true }));
+});
+
+test('README and opencode integration docs clarify suppressionEnforcement and scopeEnforcement are advisory-only (#838)', () => {
+  const repoRoot = join(new URL('../../../', import.meta.url).pathname);
+  const readme = readFileSync(join(repoRoot, 'plugins/adlc-opencode/README.md'), 'utf8');
+  const doc = readFileSync(join(repoRoot, 'docs/integrations/opencode.md'), 'utf8');
+  assert.match(readme, /suppressionEnforcement[\s\S]*?advisory-only today/);
+  assert.match(readme, /scopeEnforcement[\s\S]*?advisory-only today/);
+  assert.doesNotMatch(readme, /Enforce \(not just warn on\)/);
+  assert.match(doc, /suppressionEnforcement.*advisory-only today/);
+  assert.match(doc, /scopeEnforcement.*advisory-only today/);
 });

@@ -127,8 +127,8 @@ repo default). The audited bypasses (`ADLC_RAILS_BYPASS`,
     "options": {
       "advisoryHooks": false,          // true = downgrade rails guard to advisory (env: ADLC_ALLOW_ADVISORY_HOOKS=1)
       "ungatedTools": [],              // extra benign no-target tools, still spoof-guarded (env: ADLC_UNGATED_TOOLS)
-      "suppressionEnforcement": false, // enforce (not warn) suppression markers (env: ADLC_SUPPRESSION_ENFORCEMENT=1)
-      "scopeEnforcement": false        // enforce (not warn) out-of-scope edits (env: ADLC_SCOPE_ENFORCEMENT=1)
+      "suppressionEnforcement": false, // reserved / advisory-only today: watcher warns on suppression markers and never auto-reverts (env: ADLC_SUPPRESSION_ENFORCEMENT=1)
+      "scopeEnforcement": false        // reserved / advisory-only today: watcher warns on out-of-scope edits and never auto-reverts (env: ADLC_SCOPE_ENFORCEMENT=1)
     }
   }]
 }

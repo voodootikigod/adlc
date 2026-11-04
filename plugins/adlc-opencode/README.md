@@ -50,8 +50,8 @@ Plugin options ride the object form of the `plugins` entry in `opencode.json`
 | --- | --- | --- |
 | `advisoryHooks: true` | `ADLC_ALLOW_ADVISORY_HOOKS=1` | Downgrade the rails guard from enforcing to advisory (explicit escape hatch) |
 | `ungatedTools: [...]` | `ADLC_UNGATED_TOOLS=a,b` | Extra benign no-target tools exempt from gating (still spoof-guarded) |
-| `suppressionEnforcement: true` | `ADLC_SUPPRESSION_ENFORCEMENT=1` | Enforce (not just warn on) unapproved suppression markers |
-| `scopeEnforcement: true` | `ADLC_SCOPE_ENFORCEMENT=1` | Enforce (not just warn on) edits outside the active ticket's scope |
+| `suppressionEnforcement: true` | `ADLC_SUPPRESSION_ENFORCEMENT=1` | Reserved / advisory-only today: the watcher emits advisory notices on unapproved suppression markers and never auto-reverts |
+| `scopeEnforcement: true` | `ADLC_SCOPE_ENFORCEMENT=1` | Reserved / advisory-only today: the watcher emits advisory notices on out-of-scope edits and never auto-reverts |
 
 ## Notices and known gaps
 

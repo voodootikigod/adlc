@@ -54,7 +54,7 @@ than in a version range.
 - **Ticket doctrine injection** — the active ticket's scope, rails, and spec are appended
   to the system prompt each turn (the body fenced as untrusted).
 - **Native tools** — `adlc_prosecute` runs the deterministic P5 review loop in-session;
-  `adlc_gate` runs the LLM-backed gates keyless through your session model. Both fail
+  `adlc_gate` runs deterministic ADLC gates by invoking the `adlc` CLI under a rails-aware argv policy. Both fail
   closed rather than reporting a result they did not obtain: a gate whose process was
   killed (its 120s timeout, or any signal), that reported no exit code, or that exited 0
   without printing its `--json` verdict is a **tool error**, never a `PASS`, and records
