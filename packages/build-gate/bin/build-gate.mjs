@@ -9,8 +9,9 @@
 // the caller (a hook, CI wrapper, or any Path-A harness) supplies the signal
 // via --depth/--session-bytes, or a --transcript file to derive it from.
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, openSync, fstatSync, readSync, closeSync } from 'node:fs';
 import { parseArgs, opError, printJson, loadTickets, ADLC_DIR } from '@adlc/core';
+import { MAX_ACTIVE_CONTEXT_BYTES } from '@adlc/context-handoff';
 import { computeRiskTier } from '../lib/risk.mjs';
 import { computeDepthSignal, classifyTranscriptSignal, isDegraded, DEFAULT_DEPTH_THRESHOLD } from '../lib/depth-signal.mjs';
 import { decideBuildGate } from '../lib/decide.mjs';
@@ -133,12 +134,26 @@ if (values.transcript !== undefined) {
     opError(`transcript file not found: ${values.transcript}`);
   }
   let text;
+  let totalBytes;
   try {
-    text = readFileSync(values.transcript, 'utf8');
+    const fd = openSync(values.transcript, 'r');
+    try {
+      totalBytes = fstatSync(fd).size;
+      if (totalBytes > MAX_ACTIVE_CONTEXT_BYTES) {
+        const start = totalBytes - MAX_ACTIVE_CONTEXT_BYTES;
+        const buf = Buffer.alloc(MAX_ACTIVE_CONTEXT_BYTES);
+        readSync(fd, buf, 0, MAX_ACTIVE_CONTEXT_BYTES, start);
+        text = buf.toString('utf8');
+      } else {
+        text = readFileSync(values.transcript, 'utf8');
+      }
+    } finally {
+      closeSync(fd);
+    }
   } catch (err) {
     opError(`could not read transcript: ${err.message}`);
   }
-  const sig = computeDepthSignal({ text });
+  const sig = computeDepthSignal({ text, bytes: totalBytes });
   depth = sig.depth;
   sessionBytes = sig.bytes;
   signalSource = classifyTranscriptSignal(sig) === 'measured' ? 'transcript' : 'transcript-empty';
