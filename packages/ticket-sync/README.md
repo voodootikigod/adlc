@@ -54,7 +54,7 @@ adlc-ticket-sync doctor             # check repo health, read-only
   the ticket id is reassigned `T<n>` → `gh:<owner>/<repo>#<n>` with a store-wide edge
   rewrite.
 - **Offline-first**: all logic is tested offline via an injected `gh` runner; the one
-  live edge has an opt-in smoke (`scripts/ticket-sync-smoke.mjs`).
+  live edge has an opt-in smoke (`scripts/ticket-sync-smoke.mjs` in the source repository).
 
 ## Token scopes
 
@@ -63,7 +63,7 @@ over the broad `repo` scope. `GH_HOST` is honored for GitHub Enterprise.
 
 ## Full guide
 
-See **[docs/ticket-sync.md](../../docs/ticket-sync.md)** for the flag matrix, config
+See **[docs/ticket-sync.md](https://github.com/voodootikigod/adlc/blob/main/docs/ticket-sync.md)** for the flag matrix, config
 reference, the block/sidecar formats, idempotency details, the rails-trust-root
 interaction, and the live smoke.
 

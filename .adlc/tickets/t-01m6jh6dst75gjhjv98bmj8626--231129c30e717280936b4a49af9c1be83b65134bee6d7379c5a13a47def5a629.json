@@ -1,0 +1,22 @@
+{
+  "acceptance": [
+    "packages/quartermaster/README.md accurately describes (adapter, model) -> provider table coverage and load-time validation for alias-based channels",
+    "packages/rejection-mining/README.md accurately describes example quote attribution by reviewer initial and PR number with verbatim quotes up to 200 characters",
+    "packages/ticket-sync/README.md qualifies scripts/ticket-sync-smoke.mjs as living in the source repository and uses a full GitHub URL for docs/ticket-sync.md"
+  ],
+  "id": "T-01M6JH6DST75GJHJV98BMJ8626",
+  "intent": "Fix README documentation drift in packages/quartermaster/README.md (#738), packages/rejection-mining/README.md (#748), and packages/ticket-sync/README.md (#792), and add regression tests.",
+  "rails": [
+    "packages/quartermaster/test/route-job.test.mjs"
+  ],
+  "scope": [
+    "packages/quartermaster/README.md",
+    "packages/quartermaster/test/registry-validation.test.mjs",
+    "packages/rejection-mining/README.md",
+    "packages/rejection-mining/test/lens.test.mjs",
+    "packages/ticket-sync/README.md",
+    "packages/ticket-sync/test/cli.test.mjs"
+  ],
+  "title": "quartermaster,rejection-mining,ticket-sync: align README claims with implementation and fix relative links",
+  "verify": "node --test packages/quartermaster/test/registry-validation.test.mjs packages/rejection-mining/test/lens.test.mjs packages/ticket-sync/test/cli.test.mjs packages/quartermaster/test/route-job.test.mjs"
+}
