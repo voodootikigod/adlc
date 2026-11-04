@@ -722,7 +722,7 @@ describe('adlc rails hook', () => {
       'npm test',
       'node --test packages/runner/test/runner.test.mjs',
       'adlc hollow-test --test-cmd "npm test"',
-      'adlc rails-guard --ticket T1 --record --json',
+      'adlc rails-guard --ticket T1 --json',
       'adlc flail-detector build.log --json',
       'adlc run p4 --ticket T1 --dir .adlc --json',
     ]) {
