@@ -15,7 +15,7 @@ mirroring how `adversarial-review` treats `ADVERSARIAL_REVIEW_CONFIG`. Load-time
 validation enforces rules 1–7 — closed channel names, an adapter allowlist drawn
 from `packages/fleet/lib/adapters/`, no argv-shaped fields at any depth, distinct
 fallback transports, a closed transport taxonomy, concrete model IDs for reviewer
-seats, and a complete `(adapter, model) → provider` table. Every failure is fail
+seats, and a `(adapter, model) → provider` table covering every concrete seat (for alias-based channels, load-time validation checks that the adapter has at least one mapping; see [`docs/integrations/quartermaster-registry.md`](../../docs/integrations/quartermaster-registry.md)). Every failure is fail
 closed; there are no default channels.
 
 A reviewer group's quorum counts independent model **families**, not seats, and a

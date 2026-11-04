@@ -10,7 +10,7 @@ Sister of `skill-mining`. Mines human PR review objections into *prosecution len
 2. Filters for negative-signal language (objections, rejections, criticism)
 3. Clusters similar objections using token-set Jaccard similarity (≥ 0.4)
 4. Authors each cluster into a lens file: `<out-dir>/lens-<slug>.md`
-5. Each lens includes a prosecution charter, checklist item, and anonymized example quotes
+5. Each lens includes a prosecution charter, checklist item, and example quotes attributed by reviewer initial and PR number (with verbatim quote bodies up to 200 characters)
 
 Result: "would security reject this?" is answered in seconds pre-submit instead of days post-queue.
 

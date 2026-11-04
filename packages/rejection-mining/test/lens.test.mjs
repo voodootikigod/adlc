@@ -206,3 +206,11 @@ test('planLensEmissions: LLM title used when provided', () => {
   const plans = planLensEmissions(clusters, signals, '.adlc/lenses', llmRefinements);
   assert(plans[0].content.includes('# Lens: Error Exposure Leak'));
 });
+
+test("#748: README accurately describes example quote attribution by reviewer initial and PR number", async () => {
+  const { readFileSync } = await import("node:fs");
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.doesNotMatch(readme, /anonymized example quotes/i);
+  assert.match(readme, /example quotes attributed by reviewer initial and PR number/);
+  assert.match(readme, /200 characters/);
+});

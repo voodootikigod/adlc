@@ -180,3 +180,11 @@ test('a NONEXISTENT argv[1] resolves to "not the entry" instead of dispatching o
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, '', 'a bare import must not print usage');
 });
+
+test("#792: README qualifies scripts/ticket-sync-smoke.mjs as living in the source repository and uses an absolute GitHub URL for docs/ticket-sync.md", async () => {
+  const { readFileSync } = await import("node:fs");
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.match(readme, /`scripts\/ticket-sync-smoke\.mjs` in the source repository/);
+  assert.doesNotMatch(readme, /\.\.\/\.\.\/docs\/ticket-sync\.md/);
+  assert.match(readme, /https:\/\/github\.com\/voodootikigod\/adlc\/blob\/main\/docs\/ticket-sync\.md/);
+});

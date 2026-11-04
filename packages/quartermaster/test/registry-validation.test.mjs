@@ -696,3 +696,11 @@ test('#737: validateRegistry deep-freezes channels, seats, reviewerGroups, membe
   assert.throws(() => { reg.reviewerGroups['cross-model-routine'].members.push({}); }, TypeError);
   assert.throws(() => { reg.modelProviders.opencode['gpt-5.4'] = 'anthropic'; }, TypeError);
 });
+
+test("#738: README accurately describes (adapter, model) -> provider table coverage and alias-based load-time validation", async () => {
+  const { readFileSync } = await import("node:fs");
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.doesNotMatch(readme, /complete `\(adapter, model\) → provider` table/);
+  assert.match(readme, /covering every concrete seat/);
+  assert.match(readme, /alias-based channels/);
+});
