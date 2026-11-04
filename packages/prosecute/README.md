@@ -248,7 +248,8 @@ Record the attestation (after an actual cross-model review approves) with:
 
 ```
 ADLC_MANIFEST_KEY=<key> adlc prosecute record-cross-model --ticket <id> \
-  --provider <p> --author-provider <a> --verdict approve [--input <passes.json>] [--revision <r>]
+  --provider <p> --author-provider <a> --verdict approve [--input <passes.json>] [--revision <r>] \
+  [--allow-unsigned] [--allow-unknown-ticket]
 ```
 
 **Recording requires the signing key (#370).** The gate trusts an attestation only via its
@@ -265,6 +266,14 @@ Writing an unsigned entry on purpose — #326's forge-resistance test does, to p
 rejects one — needs the explicit `--allow-unsigned`. An unsigned write never prints the
 success line; it prints a warning naming the consequence instead. `--json` reports
 `"signed": true|false` alongside the recorded entry either way.
+
+**Recording requires a known ticket ID (#485).** When a canonical ticket store exists,
+`record-cross-model` checks that `--ticket <id>` resolves to a ticket in the store and
+**fails closed** (exit 2, listing near-miss IDs) when it does not — because the manifest is
+append-only, an attestation bound to a mistyped ticket ID is permanent and will never match
+the gate. Pass `--allow-unknown-ticket` as an explicit opt-in relaxation when recording
+against a store-external ticket reference (such as an issue-number-style ID not stored in
+`.adlc/tickets/`). A repository with no ticket store records without requiring the flag.
 
 It resolves the revision the same way the gate does (`resolveProsecutionRevision`), so pass
 the same `--input`/`--revision` you use for the gate run. `--provider` must differ from

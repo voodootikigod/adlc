@@ -54,6 +54,7 @@ parallax --route "question" --context spec.md --context arch.md
 | `--threshold <0-1>` | 0.25 | Ambiguity score gate threshold |
 | `--tier cheap\|mid\|frontier` | cheap for fan, mid for divergence | Override LLM tier |
 | `--json` | false | Machine-readable output (score + divergences) |
+| `--questions-json` | false | Emit open questions as structured JSON (`{mode, questions: [{point, options}], ...}`) for interrogation consumers; live mode only, mutually exclusive with `--json` and `--prompt-only` |
 | `--prompt-only` | false | Print exact prompts, exit 0 — no API key needed |
 | `--record-verdict <file\|->` | — | With `--prompt-only`: read the operator's answer from `<file>` (or stdin when `-`) and record it into `.adlc/manifest.jsonl` via `gate-manifest` (all three modes). Requires `--ticket`. |
 | `--ticket <id>` | — | Ticket this run is evidence for. Required with `--record-verdict` — an unbound record can satisfy any ticket's P1 gate. |
@@ -170,6 +171,53 @@ Route:
   "warnings": []
 }
 ```
+
+---
+
+## Structured questions output (`--questions-json`)
+
+Emits open questions in the structured machine contract consumed by P1 interrogation flows instead of scraping the Markdown report. Live mode only — passing `--questions-json` together with `--json` or `--prompt-only` is an operational error (exit 1).
+
+Spec/edge (`renderQuestionsJson`):
+```json
+{
+  "mode": "spec",
+  "questions": [
+    {
+      "point": "...",
+      "options": [{"label": "A", "reading": "..."}]
+    }
+  ],
+  "score": 0.33,
+  "threshold": 0.25,
+  "gate": false,
+  "requested": 3,
+  "used": 3,
+  "warnings": []
+}
+```
+
+Route (`renderRouteQuestionsJson` when answers diverge; variants are labeled `A`–`F` then numeric `"7"`, `"8"`, ...):
+```json
+{
+  "mode": "route",
+  "questions": [
+    {
+      "point": "...",
+      "options": [
+        {"label": "A", "reading": "option A"},
+        {"label": "B", "reading": "option B"}
+      ]
+    }
+  ],
+  "gate": false,
+  "requested": 3,
+  "used": 3,
+  "warnings": []
+}
+```
+
+When route answers are equivalent, `questions` is `[]`, `gate` is `true`, and `answer` holds the consensus answer.
 
 ---
 

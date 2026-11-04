@@ -1,0 +1,20 @@
+{
+  "acceptance": [
+    "packages/parallax/README.md lists --questions-json in the Flags table and documents its structured output schema and mutual exclusion with --json and --prompt-only",
+    "packages/prosecute/README.md documents --allow-unknown-ticket as an explicit opt-in relaxation for external ticket IDs not in the local ticket store",
+    "Regression tests in packages/parallax/test/questions-json.test.mjs and packages/prosecute/test/prosecute-cli.test.mjs assert the README coverage"
+  ],
+  "id": "T-01M6JH6CNZA7STTZGXQCGWYT6E",
+  "intent": "Document --questions-json in packages/parallax/README.md (#708, #855) and --allow-unknown-ticket in packages/prosecute/README.md (#855), with regression tests in both packages.",
+  "rails": [
+    "packages/parallax/test/modes.test.mjs"
+  ],
+  "scope": [
+    "packages/parallax/README.md",
+    "packages/parallax/test/questions-json.test.mjs",
+    "packages/prosecute/README.md",
+    "packages/prosecute/test/prosecute-cli.test.mjs"
+  ],
+  "title": "parallax,prosecute: document --questions-json and --allow-unknown-ticket in package READMEs",
+  "verify": "node --test packages/parallax/test/questions-json.test.mjs packages/prosecute/test/prosecute-cli.test.mjs packages/parallax/test/modes.test.mjs"
+}
