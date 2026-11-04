@@ -1,6 +1,7 @@
 {
   "body": "## Context\n1. Issue #872: `plugins/adlc-pi/package.json` pins 6 `@adlc/*` dependencies with a caret (`^1.12.0`) and `@adlc/tickets` exactly (`1.12.0`). After the next release, installing an older `@adlc/pi` produces two live `@adlc/tickets` instances.\n2. Issue #458: `apps/docs/public/install.sh` gates `install_gemini()` on `have agy || have jetski || return 0`, but `scripts/test/install-sh.test.mjs` only tests sandboxes with `agy` present and never tests `jetski` alone (`agy` absent).\n\n## Changes\n1. Change `\"@adlc/tickets\": \"1.12.0\"` to `\"^1.12.0\"` in `plugins/adlc-pi/package.json` and add a packaging test in `plugins/adlc-pi/test/packaging.test.mjs` asserting all `@adlc/*` dependencies in `plugins/adlc-pi/package.json` use consistent range prefixes (`^`).\n2. Add a sandbox test in `scripts/test/install-sh.test.mjs` with `bins: [\"node\", \"npm\", \"jetski\"]` (no `agy`) asserting `install_gemini` proceeds and delegates to the package helper without invoking `agy` or `jetski` directly.\n\n## Acceptance Criteria\n- AC1: Every `@adlc/*` dependency in `plugins/adlc-pi/package.json` uses a consistent `^` range prefix. Verify: `node --test plugins/adlc-pi/test/packaging.test.mjs` exits 0.\n- AC2: `install_gemini` runs and delegates to the package helper when only `jetski` is on PATH (`agy` absent). Verify: `node --test scripts/test/install-sh.test.mjs` exits 0.",
   "category": "bug",
+  "completed": true,
   "id": "T-01M6HZ9B3ZHKYHKEJZBS61FS4S",
   "rails": [
     "plugins/adlc-pi/test/gate-tool.test.mjs"
