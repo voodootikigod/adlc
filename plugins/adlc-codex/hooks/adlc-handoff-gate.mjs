@@ -219,10 +219,16 @@ function recoveryParsePathToken(token) {
   return null;
 }
 
-function recoveryIdentityMatches(candidatePath, expectedPath) {
-  if (typeof candidatePath !== 'string' || !candidatePath.startsWith('/')) return false;
+const RECOVERY_WINDOWS_DRIVE_ABS_RE = /^[A-Za-z]:[\\/]/;
+
+function isAbsoluteRecoveryCandidatePath(p) {
+  return typeof p === 'string' && (p.startsWith('/') || RECOVERY_WINDOWS_DRIVE_ABS_RE.test(p));
+}
+
+function recoveryIdentityMatches(candidatePath, expectedPath, realpath = realpathSync) {
+  if (!isAbsoluteRecoveryCandidatePath(candidatePath)) return false;
   try {
-    return realpathSync(candidatePath) === realpathSync(expectedPath);
+    return realpath(candidatePath) === realpath(expectedPath);
   } catch {
     return false;
   }
@@ -230,10 +236,10 @@ function recoveryIdentityMatches(candidatePath, expectedPath) {
 
 /**
  * @param {string} commandText
- * @param {{ interpreterPath: string, scriptPath: string, sessionId: string|null }} opts
+ * @param {{ interpreterPath: string, scriptPath: string, sessionId: string|null, realpath?: (p: string) => string }} opts
  * @returns {{ matched: true, subcommand: string } | { matched: false }}
  */
-export function matchRecoveryCommand(commandText, { interpreterPath, scriptPath, sessionId } = {}) {
+export function matchRecoveryCommand(commandText, { interpreterPath, scriptPath, sessionId, realpath = realpathSync } = {}) {
   const NO_MATCH = { matched: false };
   const tokens = recoveryTokenize(commandText);
   if (!tokens || tokens.length < 3) return NO_MATCH;
@@ -241,12 +247,10 @@ export function matchRecoveryCommand(commandText, { interpreterPath, scriptPath,
   const [interpreterTok, scriptTok, subcommandTok, ...rest] = tokens;
 
   const interpreterCandidate = recoveryParsePathToken(interpreterTok);
-  if (interpreterCandidate === null || !interpreterCandidate.startsWith('/')) return NO_MATCH;
-  if (!recoveryIdentityMatches(interpreterCandidate, interpreterPath)) return NO_MATCH;
+  if (!recoveryIdentityMatches(interpreterCandidate, interpreterPath, realpath)) return NO_MATCH;
 
   const scriptCandidate = recoveryParsePathToken(scriptTok);
-  if (scriptCandidate === null || !scriptCandidate.startsWith('/')) return NO_MATCH;
-  if (!recoveryIdentityMatches(scriptCandidate, scriptPath)) return NO_MATCH;
+  if (!recoveryIdentityMatches(scriptCandidate, scriptPath, realpath)) return NO_MATCH;
 
   if (!RECOVERY_VALUE_RE.test(subcommandTok) || !RECOVERY_SUBCOMMANDS.includes(subcommandTok)) return NO_MATCH;
   const subcommand = subcommandTok;
@@ -429,8 +433,9 @@ const MAX_BYPASS_GRANT_BYTES = 4096;
  * @param {{ key?: string|null, now?: () => number }} [opts]
  * @returns {{ session_id: string, unbound_reason: string|null, written_at: string, verified: boolean } | null}
  */
-export function readVerifiedBypassGrant(root, sessionId, { key = null, now = () => Date.now() } = {}) {
+export function readVerifiedBypassGrant(root, sessionId, { key = null, now = () => Date.now(), fsConstants = constants } = {}) {
   if (!isSafeSessionId(sessionId)) return null;
+  if (!Number.isInteger(fsConstants?.O_NOFOLLOW) || !Number.isInteger(fsConstants?.O_NONBLOCK)) return null;
   const path = join(root, '.adlc', 'handoffs', `${sessionId}.bypass-grant.json`);
   // Round-17 review: a separate lstat-then-readFileSync(path) had a TOCTOU —
   // a concurrent writer could swap the checked regular file for a FIFO or
@@ -442,7 +447,7 @@ export function readVerifiedBypassGrant(root, sessionId, { key = null, now = () 
   // (bypass-grant.mjs) for the canonical twin this mirrors.
   let fd;
   try {
-    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
   } catch {
     return null;
   }

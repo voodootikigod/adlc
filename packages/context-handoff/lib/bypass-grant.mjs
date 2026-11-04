@@ -104,9 +104,16 @@ export function buildBypassGrantDoc({ sessionId, unboundReason = null, key, now 
 export function readBypassGrant(
   root,
   sessionId,
-  { key = null, now = () => Date.now(), open = openSync, fstat = fstatSync, close = closeSync, readFile = readFileSync } = {},
+  { key = null, now = () => Date.now(), open = openSync, fstat = fstatSync, close = closeSync, readFile = readFileSync, fsConstants = constants } = {},
 ) {
   const path = bypassGrantPath(root, sessionId);
+  // Issue #611: fs.constants.O_NOFOLLOW and O_NONBLOCK are undefined on
+  // Windows; bitwise-OR with undefined coerces to 0, silently degrading the
+  // open to plain O_RDONLY with no symlink/FIFO defense. Fail closed (null)
+  // whenever either POSIX open flag is missing.
+  if (!Number.isInteger(fsConstants?.O_NOFOLLOW) || !Number.isInteger(fsConstants?.O_NONBLOCK)) {
+    return null;
+  }
   // Round-17 review: a separate lstat-then-readFileSync(path) had a TOCTOU —
   // a concurrent writer could swap the checked regular file for a FIFO or
   // oversized file between the two path-based operations. Opening ONCE
@@ -117,7 +124,7 @@ export function readBypassGrant(
   // from under it.
   let fd;
   try {
-    fd = open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    fd = open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
   } catch {
     return null; // missing, permission denied, or a symlink (ELOOP) — all read as absent
   }

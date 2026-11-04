@@ -166,10 +166,16 @@ function parsePathToken(token) {
  * @param {string} expectedPath unresolved reference path (e.g. process.execPath)
  * @returns {boolean}
  */
-function identityMatches(candidatePath, expectedPath) {
-  if (typeof candidatePath !== 'string' || !candidatePath.startsWith('/')) return false;
+const WINDOWS_DRIVE_ABS_RE = /^[A-Za-z]:[\\/]/;
+
+function isAbsoluteCandidatePath(p) {
+  return typeof p === 'string' && (p.startsWith('/') || WINDOWS_DRIVE_ABS_RE.test(p));
+}
+
+function identityMatches(candidatePath, expectedPath, realpath = realpathSync) {
+  if (!isAbsoluteCandidatePath(candidatePath)) return false;
   try {
-    return realpathSync(candidatePath) === realpathSync(expectedPath);
+    return realpath(candidatePath) === realpath(expectedPath);
   } catch {
     return false;
   }
@@ -183,9 +189,10 @@ function identityMatches(candidatePath, expectedPath) {
  * @param {string} opts.interpreterPath adapter's own process.execPath (unresolved OK)
  * @param {string} opts.scriptPath adapter's own bin/handoff.mjs path (unresolved OK)
  * @param {string|null} opts.sessionId this session's own resolved session id, or null
+ * @param {(p: string) => string} [opts.realpath] injectable realpath resolver
  * @returns {{ matched: true, subcommand: string } | { matched: false }}
  */
-export function matchRecoveryCommand(commandText, { interpreterPath, scriptPath, sessionId } = {}) {
+export function matchRecoveryCommand(commandText, { interpreterPath, scriptPath, sessionId, realpath = realpathSync } = {}) {
   const NO_MATCH = { matched: false };
   const tokens = tokenize(commandText);
   if (!tokens || tokens.length < 3) return NO_MATCH;
@@ -193,12 +200,10 @@ export function matchRecoveryCommand(commandText, { interpreterPath, scriptPath,
   const [interpreterTok, scriptTok, subcommandTok, ...rest] = tokens;
 
   const interpreterCandidate = parsePathToken(interpreterTok);
-  if (interpreterCandidate === null || !interpreterCandidate.startsWith('/')) return NO_MATCH;
-  if (!identityMatches(interpreterCandidate, interpreterPath)) return NO_MATCH;
+  if (!identityMatches(interpreterCandidate, interpreterPath, realpath)) return NO_MATCH;
 
   const scriptCandidate = parsePathToken(scriptTok);
-  if (scriptCandidate === null || !scriptCandidate.startsWith('/')) return NO_MATCH;
-  if (!identityMatches(scriptCandidate, scriptPath)) return NO_MATCH;
+  if (!identityMatches(scriptCandidate, scriptPath, realpath)) return NO_MATCH;
 
   if (!VALUE_RE.test(subcommandTok) || !SUBCOMMANDS.includes(subcommandTok)) return NO_MATCH;
   const subcommand = subcommandTok;
