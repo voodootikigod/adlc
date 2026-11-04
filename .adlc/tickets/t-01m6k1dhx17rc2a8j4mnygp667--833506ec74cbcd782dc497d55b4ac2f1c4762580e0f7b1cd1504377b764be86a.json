@@ -19,7 +19,8 @@
     "packages/tickets/lib/stores/git-tree.mjs",
     "packages/tickets/test/doctor.test.mjs",
     "packages/tickets/test/manifest-segments.test.mjs",
-    "packages/tickets/test/git-tree.test.mjs"
+    "packages/tickets/test/git-tree.test.mjs",
+    "plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs"
   ],
   "title": "tickets: reject present-but-malformed sig in legacy prefix and bound GitTreeTicketStore git reads (#544, #572)",
   "verify": [
