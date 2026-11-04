@@ -6,7 +6,7 @@
 # zero-dep (plan §6.6).
 id = "adlc"
 name = "ADLC"
-version = "0.2.0"
+version = "1.12.0"
 min_herdr_version = "0.7.4"
 description = "Agentic Development Lifecycle: per-pane phase/ticket/gate status, backlog board, gate actions, and fleet run observability."
 platforms = ["linux", "macos"]

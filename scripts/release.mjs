@@ -265,6 +265,50 @@ export function hostPluginManifestPaths(pluginsDir = PLUGINS) {
   return paths;
 }
 
+const TOML_MANIFEST_SUFFIX = '-plugin.toml';
+const TOML_VERSION_LINE = /^version\s*=\s*"([^"\r\n]+)"$/m;
+
+function isTomlHostManifestName(entry) {
+  return entry.endsWith(TOML_MANIFEST_SUFFIX) && entry.length > TOML_MANIFEST_SUFFIX.length && !entry.startsWith('.');
+}
+
+function tomlManifestVersion(manifestPath) {
+  let text;
+  try {
+    text = readFileSync(manifestPath, 'utf8');
+  } catch {
+    return null;
+  }
+  const match = text.match(TOML_VERSION_LINE);
+  return match ? match[1] : null;
+}
+
+function writeTomlManifestVersion(manifestPath, version) {
+  const text = readFileSync(manifestPath, 'utf8');
+  writeFileSync(manifestPath, text.replace(TOML_VERSION_LINE, `version = "${version}"`));
+}
+
+export function hostTomlManifestPaths(pluginsDir = PLUGINS) {
+  if (!existsSync(pluginsDir)) return [];
+  const paths = [];
+  for (const name of readdirSync(pluginsDir).sort()) {
+    if (name === 'node_modules') continue;
+    const dir = join(pluginsDir, name);
+    let entries;
+    try {
+      entries = readdirSync(dir).sort();
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!isTomlHostManifestName(entry)) continue;
+      const candidate = join(dir, entry);
+      if (tomlManifestVersion(candidate) !== null) paths.push(candidate);
+    }
+  }
+  return paths;
+}
+
 /**
  * Directories that LOOK like host packaging dirs but do not match
  * HOST_PLUGIN_DIR — `.Codex-plugin`, `.claude_plugin`, `.jetbrains.ai-plugin`.
@@ -340,6 +384,15 @@ export function hostDiscoveryNearMisses({ root = ROOT, pluginsDir = PLUGINS } = 
             `it is invisible to BOTH the bump and the drift gate.`
         );
       }
+      for (const entry of entries) {
+        if (!isTomlHostManifestName(entry)) continue;
+        const manifest = join(dir, entry);
+        if (tomlManifestVersion(manifest) !== null) continue;
+        misses.push(
+          `${manifest}: TOML host manifest has no string "version" field (or cannot be read) — ` +
+            `it is invisible to BOTH the bump and the drift gate.`
+        );
+      }
     }
   }
   return misses;
@@ -387,6 +440,10 @@ export function findVersionDrift(version, { root = ROOT, packagesDir = PKGS, plu
   // checked. They can no longer diverge.
   for (const manifest of hostPluginManifestPaths(pluginsDir)) {
     const v = readJson(manifest).version;
+    if (v !== version) problems.push(`${manifest}: ${v} != ${version}`);
+  }
+  for (const manifest of hostTomlManifestPaths(pluginsDir)) {
+    const v = tomlManifestVersion(manifest);
     if (v !== version) problems.push(`${manifest}: ${v} != ${version}`);
   }
   for (const marketplacePath of hostMarketplacePaths(root)) {
@@ -901,6 +958,10 @@ export function releaseMain(
       plugin.version = version;
       writeJson(manifest, plugin);
       console.log(`set ${plugin.name}@${version} (host manifest: ${manifest.slice(root.length + 1)})`);
+    }
+    for (const manifest of hostTomlManifestPaths(pluginsDir)) {
+      writeTomlManifestVersion(manifest, version);
+      console.log(`set ${manifest.slice(root.length + 1)}@${version} (host manifest)`);
     }
   }
 
