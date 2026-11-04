@@ -45,7 +45,7 @@ exits 1 instead of counting it as present.
 ## What you get
 
 - **`sessionStart`** — ticket/rails context injection (best-effort) + session id env.
-- **`preToolUse` dispatcher** — rails decision first; frozen-rail edits denied.
+- **`preToolUse` dispatcher** — rails decision first; frozen-rail edits denied while `ADLC_P4_ENFORCEMENT=1` (no-op otherwise; the CI rail-freeze gate is the unbypassable control).
 - **`afterFileEdit` audit** — observational rail + flail notice.
 - **`beforeShellExecution` advisory** — honesty nudge; never denies.
 - **`stop` / `beforeSubmitPrompt`** — stop-audit + preflight (Cursor-documented).

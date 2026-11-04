@@ -17,8 +17,10 @@ plus herdr's own API. The capability × harness matrix keeps seven columns.
 | --- | --- | --- |
 | Manifest, herdr CLI shim, sanitizer rail | t-herdr-1 | shipped |
 | Watcher daemon → per-pane status tokens | t-herdr-2 | shipped |
-| Actions: ticket-show / gate / prosecute | t-herdr-3 | shipped |
+| Actions: ticket-show / gate / prosecute / ticket-complete / adlc-init | t-herdr-3 | shipped |
 | Board pane | t-herdr-4 | shipped |
+| Event glue (`worktree.created`, `pane.agent_status_changed`, `pane.exited`) | t-herdr-5 | shipped |
+| Fleet run observer + watchable tabs | t-herdr-8 / t-herdr-9 | shipped |
 
 ## Install
 
@@ -110,8 +112,12 @@ hints, the elision marker — is ASCII, so the chrome is exact either way.
 ## Layout
 
 - `herdr-plugin.toml` — manifest: identity plus the shipped
-  entrypoints — `[[startup]]` watcher, `[[panes]]` board, and three
-  `[[actions]]`. `[[events]]` is deferred to Phase 2.
+  entrypoints — `[[startup]]` watcher, `[[panes]]` board, five
+  `[[actions]]` (`ticket-show`, `gate`, `prosecute`, `ticket-complete`,
+  `adlc-init`), and three `[[events]]` (`worktree.created`,
+  `pane.agent_status_changed`, `pane.exited`) wired to `bin/on-event.mjs`.
+- `bin/board.mjs` — board overlay entrypoint (`ADLC_HERDR_DEBUG_FILE`
+  overrides the default `${HERDR_PLUGIN_STATE_DIR}/board.log` trace path).
 - `lib/herdr.mjs` — the single shim every herdr CLI call goes through: fixed
   argv arrays, no shell, `HERDR_BIN_PATH`-or-`herdr` binary resolution,
   runtime failures fail soft. When a herdr release changes CLI shape, this is

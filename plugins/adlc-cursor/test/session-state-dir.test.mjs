@@ -85,3 +85,14 @@ test("withStateLock falls back to busy-spin when wait is not a function (#821)",
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("#818, #819: adlc-cursor README qualifies preToolUse rail enforcement with ADLC_P4_ENFORCEMENT=1 and command/rule docs name ~/.cursor/adlc", async () => {
+  const { readFileSync } = await import("node:fs");
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.match(readme, /\*\*`preToolUse` dispatcher\*\*[^\n]*ADLC_P4_ENFORCEMENT=1/);
+  for (const rel of ["../command/adlc-prosecute.md", "../commands/adlc-prosecute.md", "../rules/adlc-ticket-context.mdc"]) {
+    const doc = readFileSync(new URL(rel, import.meta.url), "utf8");
+    assert.ok(!doc.includes("~/" + ".adlc"), `${rel} must not reference home .adlc`);
+    assert.match(doc, /~\/\.cursor\/adlc/);
+  }
+});
