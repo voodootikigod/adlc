@@ -4,6 +4,7 @@
     "computeDepthSignal receives both the bounded tail window text and the full file size as bytes so sessionBytes reflects the entire transcript file while depth counts tool calls in the tail window."
   ],
   "category": "bugfix",
+  "completed": true,
   "description": "Resolves #590. In packages/build-gate/bin/build-gate.mjs, import MAX_ACTIVE_CONTEXT_BYTES from @adlc/context-handoff and stage a bounded tail window (up to MAX_ACTIVE_CONTEXT_BYTES) when reading --transcript while passing the full file byte size as bytes to computeDepthSignal.",
   "id": "T-01M6K1F2QPE48PCN5Y1QWZW46X",
   "rails": [
