@@ -350,3 +350,36 @@ test('README documents signed-ledger requirement for ADLC_BUILD_GATE_BYPASS (#58
   assert.match(readme, /ADLC_MANIFEST_KEY/);
   assert.match(readme, /signed entries/i);
 });
+
+test('--transcript bounds scan to MAX_ACTIVE_CONTEXT_BYTES tail window while preserving full sessionBytes (#590)', () => {
+  withTicketRepo([{ id: 'T1', title: 'x', category: 'contract' }], (dir) => {
+    const tp = join(dir, 'huge-transcript.jsonl');
+    const earlyCall = JSON.stringify({ type: 'tool_use', name: 'Read' }) + '\n';
+    const paddingLine = 'x'.repeat(1023) + '\n';
+    const padCount = 8192 + 10; // > 8 MiB
+    const tailCall = JSON.stringify({ type: 'tool_use', name: 'Edit' }) + '\n';
+    const content = earlyCall.repeat(50) + paddingLine.repeat(padCount) + tailCall.repeat(3);
+    writeFileSync(tp, content);
+    const totalSize = Buffer.byteLength(content, 'utf8');
+    assert.ok(totalSize > 8 * 1024 * 1024, 'fixture exceeds MAX_ACTIVE_CONTEXT_BYTES');
+
+    // Raise --bytes-threshold so only depth decides: if the whole file were scanned,
+    // depth would be 53 (>= 40 -> deny); with the 8 MiB tail window, the 50 early
+    // calls are outside the window and depth is 3 (< 40 -> allow), while sessionBytes
+    // still reports the full file size.
+    const r = run(['T1', '--transcript', tp, '--bytes-threshold', String(totalSize + 1024), '--json'], { cwd: dir });
+    assert.equal(r.code, 0, r.stderr);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.decision, 'allow');
+    assert.equal(out.depth, 3);
+    assert.equal(out.sessionBytes, totalSize);
+    assert.equal(out.signalSource, 'transcript');
+
+    // Without raising --bytes-threshold, full sessionBytes (> 8 MiB) still triggers deny.
+    const deny = run(['T1', '--transcript', tp, '--json'], { cwd: dir });
+    assert.equal(deny.code, 2);
+    const denyOut = JSON.parse(deny.stdout);
+    assert.equal(denyOut.sessionBytes, totalSize);
+    assert.equal(denyOut.depth, 3);
+  });
+});

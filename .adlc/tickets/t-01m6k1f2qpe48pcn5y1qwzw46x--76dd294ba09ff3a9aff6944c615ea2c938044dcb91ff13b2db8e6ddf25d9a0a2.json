@@ -1,0 +1,21 @@
+{
+  "acceptance_criteria": [
+    "packages/build-gate/bin/build-gate.mjs imports MAX_ACTIVE_CONTEXT_BYTES from @adlc/context-handoff and reads at most a MAX_ACTIVE_CONTEXT_BYTES tail window of --transcript.",
+    "computeDepthSignal receives both the bounded tail window text and the full file size as bytes so sessionBytes reflects the entire transcript file while depth counts tool calls in the tail window."
+  ],
+  "category": "bugfix",
+  "description": "Resolves #590. In packages/build-gate/bin/build-gate.mjs, import MAX_ACTIVE_CONTEXT_BYTES from @adlc/context-handoff and stage a bounded tail window (up to MAX_ACTIVE_CONTEXT_BYTES) when reading --transcript while passing the full file byte size as bytes to computeDepthSignal.",
+  "id": "T-01M6K1F2QPE48PCN5Y1QWZW46X",
+  "rails": [
+    "packages/build-gate/test/cli.test.mjs",
+    "packages/build-gate/test/transcript-degenerate.test.mjs"
+  ],
+  "scope": [
+    "packages/build-gate/bin/build-gate.mjs",
+    "packages/build-gate/test/cli.test.mjs"
+  ],
+  "title": "build-gate: bound CLI --transcript reads to MAX_ACTIVE_CONTEXT_BYTES tail window (#590)",
+  "verify": [
+    "node --test packages/build-gate/test/*.test.mjs"
+  ]
+}
