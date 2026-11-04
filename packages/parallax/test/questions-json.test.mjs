@@ -95,3 +95,12 @@ test('renderQuestionsJson: repairs missing options to [] and drops point-less en
   const serialized = JSON.parse(JSON.stringify(payload));
   assert.deepEqual(serialized.questions[0].options, []);
 });
+
+test("#708, #855: README documents --questions-json flag, payload shape, and mutual exclusion", async () => {
+  const { readFileSync } = await import("node:fs");
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.match(readme, /\| `--questions-json` \| false \|/);
+  assert.match(readme, /## Structured questions output \(`--questions-json`\)/);
+  assert.match(readme, /renderRouteQuestionsJson/);
+  assert.match(readme, /mutually exclusive with `--json` and `--prompt-only`/);
+});

@@ -206,3 +206,9 @@ describe('adlc-prosecute cli', () => {
     }
   });
 });
+
+it("#855: README documents --allow-unknown-ticket and its fail-closed rationale", () => {
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.match(readme, /--allow-unknown-ticket/);
+  assert.match(readme, /fails closed/i);
+});
