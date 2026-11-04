@@ -212,3 +212,13 @@ it("#855: README documents --allow-unknown-ticket and its fail-closed rationale"
   assert.match(readme, /--allow-unknown-ticket/);
   assert.match(readme, /fails closed/i);
 });
+
+it("#730, #725, #731: README documents all 8 built-in lenses, merge-base tiering, and readManifestForest", () => {
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.match(readme, /`security`, `correctness`, `tests`, `contract`,\s*`diff`, `behavior`, `integration`, or `docs`/);
+  assert.match(readme, /git merge-base --all <base> HEAD/);
+  assert.match(readme, /git diff --name-only <merge-base>/);
+  assert.doesNotMatch(readme, /two-dot\s+`git diff --name-only <base>`/);
+  assert.match(readme, /readManifestForest/);
+  assert.doesNotMatch(readme, /`@adlc\/core`'s `readEntries`/);
+});
