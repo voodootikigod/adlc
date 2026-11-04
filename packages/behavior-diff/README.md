@@ -63,7 +63,7 @@ the run. The snapshot always contains an entry for every route in the config.
 | Code | Meaning |
 |------|---------|
 | `0` | All routes attempted and at least one reachable; snapshot written (some routes may have errored) |
-| `1` | Operational error: config file unreadable, invalid config, cannot write output |
+| `1` | Operational error: config file unreadable, invalid config, cannot write output, or `0/N` routes reachable (target unreachable) |
 
 ---
 
@@ -84,7 +84,7 @@ behavior-diff compare before.json after.json [--json]
 **Output (human-readable):**
 
 ```
-2 routes identical, 2 changed, 0 errored
+2 routes identical, 2 changed, 0 errored, 0 unreachable (both)
 
   + GET /metrics: route added (absent in before, present in after)
   ~ GET /health:
@@ -114,7 +114,7 @@ behavior-diff compare before.json after.json [--json]
 |------|---------|
 | `0` | Gate passes — all routes identical |
 | `1` | Operational error: snapshot file unreadable or invalid JSON |
-| `2` | Gate fails — one or more routes changed, removed, or added |
+| `2` | Gate fails — one or more routes changed, removed, added, or unreachable in both snapshots |
 
 ---
 

@@ -85,7 +85,7 @@ Options:
   --help                  Show this help
 
 Exit codes:
-  0   Earned clean (canary beaten, no defeats found)
+  0   Earned clean (no defeats found, dry streak reached)
   1   Operational error (dirty tree, no sandbox, control self-test failed, etc.)
   2   A gate was defeated, or zero candidates were evaluated and --allow-empty not set
 

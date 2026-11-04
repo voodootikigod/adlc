@@ -318,3 +318,14 @@ test('CLI --gate --prompt-only: exits 2 when unbanked recurring clusters exist a
   assert.strictEqual(bankedRes.code, 0, `expected exit 0 on banked --gate --prompt-only, got ${bankedRes.code}: ${bankedRes.stderr}`);
   assert.match(bankedRes.stdout, /missing-null-check-in-database-query/);
 });
+
+test("#677: lesson-foundry README documents id/members in .lint.json, cluster-id/cluster-members in SKILL.md, --tier, and member-key coverage", async () => {
+  const { readFileSync } = await import("node:fs");
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.match(readme, /"id": "cluster-/);
+  assert.match(readme, /"members": \[/);
+  assert.match(readme, /cluster-id/);
+  assert.match(readme, /cluster-members/);
+  assert.match(readme, /--tier <cheap\|mid\|frontier>/);
+  assert.match(readme, /member-key coverage/);
+});

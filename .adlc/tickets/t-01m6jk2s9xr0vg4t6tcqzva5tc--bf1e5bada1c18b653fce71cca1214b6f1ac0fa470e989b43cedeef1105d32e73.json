@@ -1,0 +1,23 @@
+{
+  "acceptance": [
+    "packages/behavior-diff/README.md documents capture exit 1 on 0 reachable routes, compare exit 2 on unreachable-in-both routes, and N unreachable (both) in sample output (#584)",
+    "packages/lesson-foundry/README.md shows id and members in .lint.json, mined-from/cluster-id/cluster-members in SKILL.md frontmatter, --tier in Usage, and member-key coverage for --gate (#677)",
+    "packages/gate-fuzzing/README.md and packages/gate-fuzzing/bin/gate-fuzzing.mjs do not claim an unimplemented potency canary in exit-code descriptions (#646)"
+  ],
+  "id": "T-01M6JK2S9XR0VG4T6TCQZVA5TC",
+  "intent": "Fix README and help drift in packages/behavior-diff/README.md (#584), packages/lesson-foundry/README.md (#677), and packages/gate-fuzzing/README.md + packages/gate-fuzzing/bin/gate-fuzzing.mjs (#646), with regression tests.",
+  "rails": [
+    "packages/behavior-diff/test/compare.test.mjs"
+  ],
+  "scope": [
+    "packages/behavior-diff/README.md",
+    "packages/behavior-diff/test/behavior-diff.test.mjs",
+    "packages/lesson-foundry/README.md",
+    "packages/lesson-foundry/test/cli.test.mjs",
+    "packages/gate-fuzzing/README.md",
+    "packages/gate-fuzzing/bin/gate-fuzzing.mjs",
+    "packages/gate-fuzzing/test/bin.test.mjs"
+  ],
+  "title": "behavior-diff,lesson-foundry,gate-fuzzing: align README exit codes, sample outputs, and CLI help with implementation",
+  "verify": "node --test packages/behavior-diff/test/behavior-diff.test.mjs packages/lesson-foundry/test/cli.test.mjs packages/gate-fuzzing/test/bin.test.mjs packages/behavior-diff/test/compare.test.mjs"
+}

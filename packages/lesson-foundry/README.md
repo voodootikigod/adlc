@@ -16,7 +16,7 @@ Converts prosecution findings into permanent defenses. Every recurring finding i
    - **SKILL** — category is `convention`, `pattern`, `architecture`, or `style` → emits a `SKILL.md` stub with frontmatter and evidence quotes
    - **SPEC-GAP** — otherwise → appends a question to `interrogation-template.md` for P1 to address
 5. By default: dry-run (prints what would be written). Add `--write` to emit files.
-6. With `--gate`: exits 2 if any cluster has no existing non-empty defense file in `--out-dir`, or if findings ledger contains unparseable/malformed lines exceeding `--tolerate-malformed`
+6. With `--gate`: exits 2 if any cluster lacks member-key coverage in an existing non-empty defense artifact in `--out-dir` (mere file existence does not credit a cluster whose member keys are uncovered), or if findings ledger contains unparseable/malformed lines exceeding `--tolerate-malformed`
 
 ## Usage
 
@@ -32,8 +32,9 @@ Options:
   --gate                   Exit 2 if any cluster >= --min has no non-empty defense file in --out-dir
   --allow-missing-ledger   Allow missing ledger file when --gate is set (bootstrap opt-in).
   --tolerate-malformed <n> Tolerate up to <n> unparseable/malformed ledger lines before failing --gate (default: 0)
-  --llm                    Refine cluster wording via one mid-tier LLM call per cluster;
+  --llm                    Refine cluster wording via one LLM call per cluster;
                            exits 1 (writing nothing) when no cluster could be refined
+  --tier <cheap|mid|frontier>  Model tier for --llm refinement (default: mid)
   --prompt-only            Print LLM prompts and exit 0 (works with zero API keys)
   --json                   Machine-readable output (stdout JSON, errors to stderr)
 ```
@@ -52,6 +53,8 @@ Options:
 
 ```json
 {
+  "id": "cluster-abc123def456",
+  "members": ["src/a.mjs::missing guard"],
   "name": "cluster-name",
   "pattern": "ESCAPED_LITERAL_OR_MARKER",
   "paths": ["**"],
@@ -59,13 +62,15 @@ Options:
 }
 ```
 
+`id` (stable cluster ID) and `members` (member-key array) are emitted first and serve as the durable banking identity that `--gate` credits against.
+
 ### LINT: `check-<name>.mjs`
 
 A runnable Node.js script that greps the repo for the pattern and exits 2 on match, 0 when clean. Run it as a CI gate.
 
 ### SKILL: `<name>.SKILL.md`
 
-Markdown with YAML frontmatter (`name`, `description`, `category`, `triggers`) and a body containing the rule, evidence quotes, and provenance count. Ready to load into any skill-mining pipeline.
+Markdown with YAML frontmatter (`name`, `description`, `category`, `mined-from`, `cluster-id`, `cluster-members`, `triggers`) and a body containing the rule, evidence quotes, and provenance count. Ready to load into any skill-mining pipeline.
 
 ### SPEC-GAP: `interrogation-template.md`
 

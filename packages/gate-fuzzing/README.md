@@ -24,8 +24,8 @@ gate-fuzzing [--suite <path>] [--n <int>] [--tier cheap|mid]
 
 | Code | Meaning |
 |------|---------|
-| `0` | Earned clean: potency canary beaten, no defeats found, dry streak reached |
-| `1` | Operational error: dirty tree, no sandbox binary, control self-test failed, all-inconclusive (strict), canary not beaten (strict) |
+| `0` | Earned clean: no defeats found, dry streak reached (or round ceiling reached cleanly) |
+| `1` | Operational error: dirty tree, no sandbox binary, control self-test failed, or inconclusive stop under `--strict-budget` |
 | `2` | A gate was defeated, or zero candidates were evaluated across the run and `--allow-empty` was not set |
 
 ## Flags
