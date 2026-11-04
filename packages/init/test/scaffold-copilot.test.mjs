@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { scaffold } from '../lib/scaffold.mjs';
+import { COPILOT_CLI_PACKAGE_SPEC, COPILOT_JOB_PERMISSIONS, COPILOT_SETUP_STEPS, scaffold } from '../lib/scaffold.mjs';
 
 const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'adlc-init.mjs');
 
@@ -35,7 +35,11 @@ test('scaffold --harness copilot writes the .github instructions + setup-steps s
     assert.match(instr, /copilot plugin install adlc-copilot@adlc/);
     assert.match(instr, /fails open/i, 'honest about the in-session hook posture');
     const steps = readFileSync(join(root, '.github/workflows/copilot-setup-steps.yml'), 'utf8');
-    assert.match(steps, /npm i -g @adlc\/cli/);
+    assert.equal(COPILOT_CLI_PACKAGE_SPEC, '@adlc/cli@^1');
+    assert.equal(COPILOT_JOB_PERMISSIONS, 'contents: read');
+    assert.match(steps, /permissions:\n\s+contents: read/);
+    assert.match(steps, /npm i -g @adlc\/cli@\^1/);
+    assert.equal(steps, COPILOT_SETUP_STEPS);
   });
 });
 
@@ -57,4 +61,12 @@ test('CLI rejects an unknown harness', () => {
       /must be one of codex, cursor, copilot/,
     );
   });
+});
+
+test('README and --help document that harnesses.<name>.railEnforcement is advisory metadata (#669)', () => {
+  const help = execFileSync(process.execPath, [BIN, '--help'], { encoding: 'utf8' });
+  assert.match(help, /harnesses\.<name> records which harness scaffolded the repo and railEnforcement is advisory metadata/);
+  const readme = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'README.md'), 'utf8');
+  assert.match(readme, /advisory metadata/);
+  assert.match(readme, /rails-guard-ci/);
 });

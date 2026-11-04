@@ -25,7 +25,10 @@ from the project root, and never edits user-global `~/.codex` implicitly.
 `--harness` (`cursor`, `copilot`, `claude-code`, `pi`, `opencode`, `gemini`)
 implies `--no-codex-agents` and records `harnesses.<name>` in `.adlc/config.json`,
 and `--harness copilot` additionally writes `.github/copilot-instructions.md` and
-`.github/workflows/copilot-setup-steps.yml`.
+`.github/workflows/copilot-setup-steps.yml`. The `harnesses.<name>` entry is a
+record of which harness scaffolded the repository, and its `railEnforcement:
+"auto"` field is currently advisory metadata — actual rail enforcement comes
+from the harness plugin's `preToolUse` hook and the `rails-guard-ci` backstop.
 
 When `.adlc/config.json` is present but is not readable JSON, `adlc init` records a warning and exits 1 without overwriting the broken file. The same holds when `--harness` is passed and the config's `harnesses` field is present but not an object: the harness cannot be registered, so the run fails instead of reporting success.
 

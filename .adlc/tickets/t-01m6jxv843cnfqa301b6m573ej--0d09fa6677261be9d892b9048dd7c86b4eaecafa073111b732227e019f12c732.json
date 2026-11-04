@@ -1,0 +1,15 @@
+{
+  "body": "## Context\nResolves #669 and #670.\n- #669: `packages/init/lib/scaffold.mjs` writes `railEnforcement: \"auto\"` into config, which is advisory metadata recording which harness scaffolded the repo while actual enforcement comes from the harness plugin hook and `rails-guard-ci`.\n- #670: `COPILOT_SETUP_STEPS` in `packages/init/lib/scaffold.mjs` installs `@adlc/cli` unpinned and declares no `permissions:` block on the `copilot-setup-steps` job.\n\n## Acceptance Criteria\n1. `packages/init/README.md` and `packages/init/bin/adlc-init.mjs` `--help` document that `harnesses.<name>` records which harness scaffolded the repo and `railEnforcement` is advisory metadata.\n2. `COPILOT_SETUP_STEPS` in `packages/init/lib/scaffold.mjs` declares `permissions: contents: read` on the `copilot-setup-steps` job and pins `@adlc/cli` to the package version, with assertions in `packages/init/test/scaffold-copilot.test.mjs`.",
+  "id": "T-01M6JXV843CNFQA301B6M573EJ",
+  "rails": [
+    "packages/init/test/scaffold.test.mjs",
+    "packages/init/test/config-harnesses-shape.test.mjs"
+  ],
+  "scope": [
+    "packages/init/README.md",
+    "packages/init/bin/adlc-init.mjs",
+    "packages/init/lib/scaffold.mjs",
+    "packages/init/test/scaffold-copilot.test.mjs"
+  ],
+  "title": "init: document advisory harnesses.<name>.railEnforcement and pin @adlc/cli with permissions in copilot-setup-steps.yml (#669, #670)"
+}

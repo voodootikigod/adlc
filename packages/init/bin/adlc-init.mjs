@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { HARNESS_GUESS_WARNING_PREFIX, KNOWN_HARNESSES, scaffold } from '../lib/scaffold.mjs';
 
+const RAIL_ENFORCEMENT_HELP_NOTE = 'Note: harnesses.<name> records which harness scaffolded the repo and railEnforcement is advisory metadata (actual enforcement comes from the harness plugin hook and rails-guard-ci).';
+
 function usage() {
   console.log(`adlc init [--root <path>] [--json] [--no-codex-agents] [--harness <${KNOWN_HARNESSES.join('|')}>]
 
@@ -9,7 +11,7 @@ Codex agents. --harness cursor and --harness copilot each imply --no-codex-agent
 and record harnesses.<name> in a fresh config; --harness copilot also scaffolds a
 .github/copilot-instructions.md block and a copilot-setup-steps.yml snippet. With
 no --harness at all, the config registers "codex" as a guess and warns — pass the
-harness you actually use explicitly to avoid the guess.
+harness you actually use explicitly to avoid the guess. ${RAIL_ENFORCEMENT_HELP_NOTE}
 Writes are confined to --root; never edits user-global harness configuration
 implicitly.`);
 }
