@@ -101,7 +101,8 @@ review-calibration --review-cmd "cmd with {base} placeholder" [options]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--review-cmd <cmd>` | (required) | Command template to run the reviewer (tokenized, not run through a shell — `shell: false`, no pipes, redirects, or variable expansion). `{base}` is substituted with the commit ref. |
+| `--review-cmd <cmd>` | (required) | Command template to run the reviewer (tokenized, not run through a shell — `shell: false`, no pipes, redirects, or variable expansion). `{base}` is substituted with the commit ref. On Windows, Node.js refuses to spawn `.cmd`/`.bat` shims with `shell: false`; invoke the underlying script with `node <script.mjs>` directly. |
+| `--review-timeout <seconds>` | `300` | Timeout in seconds for the `--review-cmd` subprocess. |
 | `--commit <ref>` | `HEAD` | Commit whose changed files are used as plant targets. |
 | `--plants <n>` | `8` | Number of bugs to plant. |
 | `--min-recall <f>` | `0.5` | Minimum recall fraction required to pass (0–1). |
