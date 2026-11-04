@@ -36,8 +36,8 @@ prints a prosecution plan or runs a review command over them.
 
 Options:
   --top <n>           Number of hotspot files to select (default: 10)
-  --review-cmd <cmd>  Shell command to run per file. Use {file} as placeholder.
-                      Example: --review-cmd "adversarial-review --file {file}"
+  --review-cmd <cmd>  Command template to run per file (tokenized, shell=false — no shell metacharacters). Use {file} as placeholder.
+                      Example: --review-cmd "eslint {file} --format compact" --findings-exit-code 1
   --findings-exit-code <n>
                       Non-zero exit code from review-cmd that indicates
                       findings are present rather than an operational error
@@ -61,7 +61,7 @@ Default (no --review-cmd, or --dry-run):
   Plus suggested charter line per file.
 
 With --review-cmd:
-  Runs command per file (argv tokens, no shell), bounded by --timeout-ms.
+  Runs command per file (spawnSync, shell=false — argv tokens, no shell metacharacters), bounded by --timeout-ms.
   Lines matching /\\S+:\\d+/ or starting with '- ' are parsed as findings.
   Findings are appended to the .adlc/findings ledger.
   Exit code 2 from review-cmd is treated as "findings present" (not an error).
@@ -82,12 +82,12 @@ Examples:
   # Print plan for top 5 files, last 500 commits
   model-ratchet --top 5 --churn-limit 500
 
-  # Run adversarial review over top 10 hot files
-  model-ratchet --review-cmd "adversarial-review --file {file}"
+  # Run a per-file reviewer script over top 10 hot files
+  model-ratchet --review-cmd "node scripts/review-file.mjs {file}"
 
   # CI: run on every model release (add to .github/workflows/model-release.yml)
   # Cron: run monthly
-  model-ratchet --review-cmd "npx adversarial-review {file}" --json
+  model-ratchet --review-cmd "node scripts/review-file.mjs {file}" --json
 `);
   process.exit(0);
 }
