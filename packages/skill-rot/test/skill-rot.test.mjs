@@ -776,8 +776,8 @@ describe('verifyClaim — Windows PATH/PATHEXT lookup and missing POSIX shell ha
 });
 
 describe('README documentation contract (#772, #771)', () => {
-  it('excludes npx X from script reference patterns and documents ok > 0 && stale === 0 stamp rule', () => {
-    const readme = readFileSync(join(__dirname, '..', 'README.md'), 'utf8');
+  test('excludes npx X from script reference patterns and documents ok > 0 && stale === 0 stamp rule', () => {
+    const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
     assert.doesNotMatch(readme, /`npm run X`, `npx X`/);
     assert.match(readme, /`npx` is intentionally\s+excluded/);
     assert.doesNotMatch(readme, /When \*\*all\*\* claims in a skill are ok/);
