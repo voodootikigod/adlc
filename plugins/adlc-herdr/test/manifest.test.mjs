@@ -24,10 +24,12 @@ test('shipped manifest parses and validates with zero errors', () => {
   assert.deepEqual(validateManifest(parsed), []);
 });
 
-test('shipped manifest declares the pinned identity', () => {
+test('shipped manifest declares the pinned identity and stays in lockstep with package.json (#868)', () => {
   const { top } = loadShipped();
+  const pkg = JSON.parse(readFileSync(join(pluginRoot, 'package.json'), 'utf8'));
   assert.equal(top.id, 'adlc');
   assert.equal(top.name, 'ADLC');
+  assert.equal(top.version, pkg.version);
   assert.equal(top.min_herdr_version, '0.7.4');
   assert.deepEqual(top.platforms, ['linux', 'macos']);
 });

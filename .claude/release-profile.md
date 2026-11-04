@@ -36,13 +36,19 @@ verify:
     # v1.8.0 rate-limited into a response that read as "all 38 missing". No parallelism;
     # no raw HTTP.
     names=""
+    total=0
     for f in $(find packages plugins -maxdepth 2 -name package.json -not -path '*/node_modules/*'); do
       name=$(node -p "require('$PWD/$f').name || ''" 2>/dev/null)
       priv=$(node -p "require('$PWD/$f').private === true" 2>/dev/null)
       [ "$priv" = "true" ] && continue
       [ -z "$name" ] && continue
       names="$names $name:"
+      total=$(( total + 1 ))
     done
+    if [ "$total" -eq 0 ]; then
+      echo "verify enumerated 0 targets — refusing to report success" >&2
+      exit 1
+    fi
     pending="$names"
     fail=0
     while :; do
@@ -69,7 +75,10 @@ verify:
           next="$next $name:$d"
         fi
       done
-      [ -z "$next" ] && exit $fail
+      if [ -z "$next" ]; then
+        [ "$fail" -eq 0 ] && echo "verified $total/$total targets"
+        exit $fail
+      fi
       pending="$next"
       sleep 20
     done

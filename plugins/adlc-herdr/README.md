@@ -107,7 +107,7 @@ hints, the elision marker — is ASCII, so the chrome is exact either way.
 
 ## Layout
 
-- `herdr-plugin.toml` — manifest (v0.2.0): identity plus the shipped
+- `herdr-plugin.toml` — manifest: identity plus the shipped
   entrypoints — `[[startup]]` watcher, `[[panes]]` board, and three
   `[[actions]]`. `[[events]]` is deferred to Phase 2.
 - `lib/herdr.mjs` — the single shim every herdr CLI call goes through: fixed

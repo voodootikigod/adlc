@@ -14,7 +14,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'nod
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { releaseMain, repinInternalDependencies, packagePublishOrder, findVersionDrift, publishTargets, findPublishMetadataProblems, defaultIsPublished, hostMarketplacePaths } from '../release.mjs';
+import { releaseMain, repinInternalDependencies, packagePublishOrder, findVersionDrift, publishTargets, findPublishMetadataProblems, defaultIsPublished, hostMarketplacePaths, hostTomlManifestPaths, hostDiscoveryNearMisses } from '../release.mjs';
 
 // Every fixture the factories below mint; removed once this file's tests finish.
 const fixtureDirs = new Set();
@@ -645,5 +645,116 @@ test('a repo without .github/plugin/marketplace.json gains no such file from a r
     assert.deepEqual(hostMarketplacePaths(root), []);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('#868/#858: hostTomlManifestPaths discovers herdr-plugin.toml on the real repo and findVersionDrift reports lockstep', () => {
+  const version = readListing(join(REPO_ROOT, 'package.json')).version;
+  const tomls = hostTomlManifestPaths(join(REPO_ROOT, 'plugins'));
+  assert.ok(tomls.some((p) => p.endsWith(join('adlc-herdr', 'herdr-plugin.toml'))), 'herdr-plugin.toml must be discovered');
+  assert.deepEqual(findVersionDrift(version, {
+    root: REPO_ROOT,
+    packagesDir: join(REPO_ROOT, 'packages'),
+    pluginsDir: join(REPO_ROOT, 'plugins'),
+  }), []);
+});
+
+test('#868/#858: releaseMain bumps herdr-plugin.toml (preserving min_herdr_version), findVersionDrift flags stale TOML, and near-miss catches versionless TOML', () => {
+  const { root, packagesDir, pluginsDir } = makeRepo();
+  try {
+    mkdirSync(join(pluginsDir, 'adlc-herdr'), { recursive: true });
+    writeListing(join(pluginsDir, 'adlc-herdr', 'package.json'), {
+      name: '@adlc/herdr',
+      version: '1.0.0',
+      private: true,
+    });
+    const tomlPath = join(pluginsDir, 'adlc-herdr', 'herdr-plugin.toml');
+    writeFileSync(tomlPath, [
+      'id = "adlc"',
+      'name = "ADLC"',
+      'version = "0.2.0"',
+      'min_herdr_version = "0.7.4"',
+      '',
+    ].join('\n'));
+
+    // Decoys in pluginsDir: node_modules, a stray file, a bare -plugin.toml, and a hidden .herdr-plugin.toml are ignored.
+    mkdirSync(join(pluginsDir, 'node_modules'), { recursive: true });
+    writeFileSync(join(pluginsDir, 'node_modules', 'vendored-plugin.toml'), 'version = "0.0.1"\n');
+    writeFileSync(join(pluginsDir, 'NOTES.md'), '# stray file\n');
+    writeFileSync(join(pluginsDir, 'adlc-herdr', '-plugin.toml'), 'version = "0.0.1"\n');
+    writeFileSync(join(pluginsDir, 'adlc-herdr', '.herdr-plugin.toml'), 'version = "0.0.1"\n');
+    assert.deepEqual(hostTomlManifestPaths(join(root, 'no-such-plugins')), []);
+    assert.deepEqual(hostTomlManifestPaths(pluginsDir), [tomlPath]);
+
+    // 1. findVersionDrift flags the stranded TOML manifest.
+    const driftBefore = findVersionDrift('1.0.0', { root, packagesDir, pluginsDir });
+    assert.ok(driftBefore.includes(`${tomlPath}: 0.2.0 != 1.0.0`));
+
+    // 2. releaseMain bumps version in herdr-plugin.toml while preserving min_herdr_version.
+    const rc = releaseMain(['1.2.0'], {
+      root,
+      packagesDir,
+      pluginsDir,
+      regenerateLockfile: (r) => writeListing(join(r, 'package-lock.json'), { name: 'adlc', version: '1.2.0' }),
+    });
+    assert.equal(rc, 0);
+    const bumpedToml = readFileSync(tomlPath, 'utf8');
+    assert.match(bumpedToml, /^version = "1\.2\.0"$/m);
+    assert.match(bumpedToml, /^min_herdr_version = "0\.7\.4"$/m);
+    assert.deepEqual(findVersionDrift('1.2.0', { root, packagesDir, pluginsDir }), []);
+
+    // 3. A TOML host manifest without a string version field is flagged by hostDiscoveryNearMisses and aborts releaseMain preflight.
+    writeFileSync(tomlPath, 'id = "adlc"\nname = "ADLC"\nmin_herdr_version = "0.7.4"\n');
+    const misses = hostDiscoveryNearMisses({ root, pluginsDir });
+    assert.ok(misses.some((m) => m.includes(tomlPath) && m.includes('no string "version"')));
+    const rcAbort = releaseMain(['1.3.0'], { root, packagesDir, pluginsDir, regenerateLockfile() {} });
+    assert.equal(rcAbort, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('#869: .claude/release-profile.md verify block fails closed on 0 enumerated targets and reports verified N/N on success', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const profile = readFileSync(join(REPO_ROOT, '.' + 'claude', 'release-profile.md'), 'utf8');
+  const match = profile.match(/verify:\n  - \|\n([\s\S]*?)\n---/);
+  assert.ok(match, 'verify block must exist in .claude/release-profile.md');
+  const rawScript = match[1]
+    .split('\n')
+    .map((line) => (line.startsWith('    ') ? line.slice(4) : line))
+    .join('\n')
+    .replaceAll('{{version}}', '1.2.3');
+
+  // Case 1: Empty directory (0 targets enumerated) -> exits 1 with refusal message.
+  const emptyDir = mkdtempSync(join(tmpdir(), 'adlc-verify-empty-'));
+  try {
+    mkdirSync(join(emptyDir, 'packages'));
+    mkdirSync(join(emptyDir, 'plugins'));
+    const res = spawnSync('sh', ['-c', rawScript], { cwd: emptyDir, encoding: 'utf8' });
+    assert.equal(res.status, 1, 'verify block must exit 1 when 0 targets are enumerated');
+    assert.match(res.stderr + res.stdout, /verify enumerated 0 targets/);
+  } finally {
+    rmSync(emptyDir, { recursive: true, force: true });
+  }
+
+  // Case 2: Non-empty enumeration with a stub npm that reports 1.2.3 -> exits 0 and prints verified 1/1 targets.
+  const okDir = mkdtempSync(join(tmpdir(), 'adlc-verify-ok-'));
+  try {
+    mkdirSync(join(okDir, 'packages', 'core'), { recursive: true });
+    mkdirSync(join(okDir, 'plugins'), { recursive: true });
+    writeListing(join(okDir, 'packages', 'core', 'package.json'), { name: '@adlc/core', version: '1.2.3' });
+    const binDir = join(okDir, 'bin');
+    mkdirSync(binDir);
+    const fakeNpm = join(binDir, 'npm');
+    writeFileSync(fakeNpm, '#!/bin/sh\necho "1.2.3"\n', { mode: 0o755 });
+    const res = spawnSync('sh', ['-c', rawScript], {
+      cwd: okDir,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+    });
+    assert.equal(res.status, 0, res.stderr + res.stdout);
+    assert.match(res.stdout, /verified 1\/1 targets/);
+  } finally {
+    rmSync(okDir, { recursive: true, force: true });
   }
 });
