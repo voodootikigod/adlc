@@ -1,0 +1,15 @@
+{
+  "body": "## Objective\nResolve #757 and #752 by updating `packages/review-calibration/README.md` so all CLI flags, exit-code 2 causes, the `REDESIGN.md` reference, and the CI smoke-test example match the shipped CLI.\n\n## Acceptance Criteria\n1. `packages/review-calibration/README.md` Options table documents all flags from `HELP_TEXT` (`--review-cmd`, `--commit`, `--plants`, `--min-recall`, `--min-precision`, `--min-plants`, `--scorer`, `--files`, `--plants-file`, `--tier`, `--review-provider`, `--strict`, `--json`, `--prompt-only`, `--help`) and Exit codes table documents precision threshold failure and `--strict` provider match under exit code 2 — verify: `node --test packages/review-calibration/test/review-calibration.test.mjs`\n2. `packages/review-calibration/README.md` replaces the broken nested-quote `node -e` smoke-test example with an executable `--scorer string` command that tokenizes cleanly without API keys, and links `REDESIGN.md` via its repository URL — verify: `node --test packages/review-calibration/test/review-calibration.test.mjs`",
+  "category": "bugfix",
+  "cpm_float": 0,
+  "deps": [],
+  "id": "T-01M6JE9DHCDR7XBBAQ0J8CF82J",
+  "priority": 1,
+  "rails": [],
+  "scope": [
+    "packages/review-calibration/README.md",
+    "packages/review-calibration/test/review-calibration.test.mjs"
+  ],
+  "title": "review-calibration: document all CLI flags, exit-2 causes, executable smoke-test example, and GitHub REDESIGN.md link (#757, #752)",
+  "verify": "node --test packages/review-calibration/test/review-calibration.test.mjs"
+}
