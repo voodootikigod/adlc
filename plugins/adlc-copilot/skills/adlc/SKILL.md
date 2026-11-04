@@ -54,7 +54,7 @@ Turn a request into a self-contained ticket through the unified ticket service. 
 use one canonical shard per ticket under `.adlc/tickets/`; legacy
 `.adlc/tickets.json` remains supported until an approved migration. Everything
 downstream reads the logical store. The mechanism is **human interrogation
-before the store write** (`docs/interrogation-protocol.md` in the ADLC repo):
+before the store write** ([`docs/interrogation-protocol.md`](https://github.com/voodootikigod/adlc/blob/main/docs/interrogation-protocol.md) in the ADLC repo):
 frontier rounds of numbered questions, each codebase-checked before it is
 asked; applicable `.adlc/lessons/interrogation-template.md` checkboxes are
 mandatory candidates. After the write, coldstart gaps drive the loop until
@@ -62,7 +62,7 @@ none remain, and the verdict is recorded (`--record-verdict`) so the p0 gate
 has evidence.
 
 ### P1 — Interrogate (spec is testable and stress-tested)
-The phase's mechanism is the interrogation loop (`docs/interrogation-protocol.md`
+The phase's mechanism is the interrogation loop ([`docs/interrogation-protocol.md`](https://github.com/voodootikigod/adlc/blob/main/docs/interrogation-protocol.md)
 in the ADLC repo): parallax divergences, premortem questions, and applicable
 `.adlc/lessons/interrogation-template.md` checkboxes form the frontier; each
 question is codebase-checked before it reaches the human; answers fold into the
@@ -75,7 +75,7 @@ adlc \
   "sources":[…],"unresolved":0,"approved_assumptions":[]}'
 ```
 (the trailing `\` is a shell line-continuation — paste both lines as one
-command) — `adlc-runner run p1` requires and validates that record: it
+command) — `adlc run p1` requires and validates that record: it
 rejects a missing `--ticket`/`--files` binding, a non-`"approved"` verdict, a
 `spec_hash` that does not match the file's actual hash, and an approval
 recorded before the ticket's own spec-lint/premortem evidence. The tools:

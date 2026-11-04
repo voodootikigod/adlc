@@ -52,7 +52,7 @@ A ticket must be **executable without guesswork** (that is exactly what
 - **category** — free-form routing hint (e.g. `feature`, `bugfix`, `refactor`).
 - **budget** — optional token budget (omit if unknown).
 
-Before the dry-run, interrogate the human per `docs/interrogation-protocol.md`
+Before the dry-run, interrogate the human per [`docs/interrogation-protocol.md`](https://github.com/voodootikigod/adlc/blob/main/docs/interrogation-protocol.md)
 (the ADLC repo's shared protocol): build the frontier of open decisions from
 the checklist above (plus `.adlc/lessons/interrogation-template.md` checkboxes
 when present, filtered by the codebase-check clause), **check the codebase
@@ -126,7 +126,7 @@ provider configured it exits `1`. Use the prompt-only flow instead:
 2. **Answer that prompt yourself**, applying its own rubric: list every genuine gap
    that would block a fresh agent (information not derivable from the repo).
 3. Act on the verdict — the post-write half of the interrogation loop
-   (`docs/interrogation-protocol.md`):
+   ([`docs/interrogation-protocol.md`](https://github.com/voodootikigod/adlc/blob/main/docs/interrogation-protocol.md)):
    - Gaps found → each gap becomes a frontier question: check the codebase
      first, ask the human the rest, fold answers into the body with
      `adlc ticket update <id> --input <file> --expect <ticketHash> --write`,
@@ -140,7 +140,7 @@ provider configured it exits `1`. Use the prompt-only flow instead:
      `{"gaps":[],"ticketHash":"<that hash>"}` before recording:
      `adlc coldstart <id> --prompt-only --record-verdict <file|->`.
 
-`adlc-runner run p0` requires `--ticket <id>` — p0 is ticket-scoped, not a
+`adlc run p0` requires `--ticket <id>` — p0 is ticket-scoped, not a
 global presence check.
 
 (If the user has explicitly configured an API key and prefers a real provider call,
