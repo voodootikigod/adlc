@@ -1717,3 +1717,8 @@ test("#617, #616: core README documents @adlc/core package/subpath imports, all 
   assert.match(readme, /leading closed block-comment prefix/);
   assert.match(readme, /tuning constants/);
 });
+
+test("#620: revision.mjs DEFAULT_IGNORED_PATHS cross-references the rails-guard-ci add-vs-alter ticket-store contract", () => {
+  const src = readFileSync(new URL("../lib/revision.mjs", import.meta.url), "utf8");
+  assert.match(src, /rails-guard-ci\.mjs enforces the add-vs-alter ticket-store contract/);
+});
