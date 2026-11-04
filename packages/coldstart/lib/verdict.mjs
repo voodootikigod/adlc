@@ -19,8 +19,9 @@ import { record } from '@adlc/gate-manifest/lib/record.mjs';
 export { readVerdictSource };
 
 /**
- * Record the operator's prompt-only verdict into .adlc/manifest.jsonl via
- * gate-manifest's record() function delegated through @adlc/core.
+ * Record the operator's prompt-only verdict into the gate-manifest ledger
+ * (.adlc/manifest.jsonl, or .adlc/manifest.d/<segment>.jsonl in a segmented repo)
+ * via gate-manifest's record() function delegated through @adlc/core.
  *
  * @param {object} opts
  * @param {string|undefined} opts.ticket  ticket id this verdict concerns (optional)

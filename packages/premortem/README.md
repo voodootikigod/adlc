@@ -26,7 +26,7 @@ premortem <spec.md> [--tier cheap|mid|frontier] [--out report.md] [--json] [--pr
 | `--out <path>` | Write markdown report to this file instead of stdout | stdout |
 | `--json` | Emit machine-readable JSON `{ causes: [...] }` | false |
 | `--prompt-only` | Print the exact system + user prompt, then exit 0 — **no API key needed** | false |
-| `--record-verdict <file\|->` | With `--prompt-only`: read the operator's answer from `<file>` (or stdin when `-`) and record it into `.adlc/manifest.jsonl` via `gate-manifest`. Requires `--ticket` — an unbound record could satisfy another ticket's P1 gate | — |
+| `--record-verdict <file\|->` | With `--prompt-only`: read the operator's answer from `<file>` (or stdin when `-`) and record it into the gate-manifest ledger (`.adlc/manifest.jsonl`, or `.adlc/manifest.d/` in forest mode) via `gate-manifest`. Requires `--ticket` — an unbound record could satisfy another ticket's P1 gate | — |
 | `--ticket <id>` | Ticket to bind the recorded verdict to (required with `--record-verdict`) | — |
 | `--help` | Print usage and exit 0 | false |
 
@@ -106,7 +106,7 @@ the operator (the model itself) answers it and applies judgment. Without
 produced — never enters the audit trail; only the fact that a prompt was
 printed is observable. `--record-verdict <file|->` closes that gap: after
 printing the prompt as usual, it reads the operator's answer from `<file>` (or
-stdin when `-`) and records it into `.adlc/manifest.jsonl` via
+stdin when `-`) and records it into the gate-manifest ledger (`.adlc/manifest.jsonl`, or `.adlc/manifest.d/` in forest mode) via
 `@adlc/gate-manifest`'s own `record()` — reusing its hash-chaining/signing
 logic rather than reimplementing it.
 

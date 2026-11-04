@@ -64,3 +64,12 @@ test('CLI: whitespace-only spec file exits 1 and writes zero manifest entries', 
     rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("#722: premortem --help and README document manifest.d forest-mode destination", async () => {
+  const { readFileSync } = await import("node:fs");
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  const helpRes = spawnSync(process.execPath, [CLI, "--help"], { encoding: "utf8" });
+  assert.equal(helpRes.status, 0);
+  assert.match(helpRes.stdout, /manifest\.d\//);
+  assert.match(readme, /manifest\.d\//);
+});

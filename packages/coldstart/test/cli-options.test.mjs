@@ -117,3 +117,13 @@ test('resolveTicketArg: positional only, --ticket only, both matching, conflicti
   assert.equal(conflict.ticketId, null);
   assert.match(conflict.error, /conflicting ticket ids: positional "T1" vs --ticket "T2"/);
 });
+
+test("#597, #596: coldstart README documents --tier option, cached JSON field, and segmented manifest.d ledger", async () => {
+  const { readFileSync } = await import("node:fs");
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  const verdictSrc = readFileSync(new URL("../lib/verdict.mjs", import.meta.url), "utf8");
+  assert.match(readme, /\| `--tier <cheap\\\|mid\\\|frontier>` \| `cheap` \|/);
+  assert.match(readme, /"cached": false/);
+  assert.match(readme, /manifest\.d\//);
+  assert.match(verdictSrc, /manifest\.d\//);
+});
