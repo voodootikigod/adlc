@@ -70,6 +70,7 @@ test("#722: premortem --help and README document manifest.d forest-mode destinat
   const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
   const helpRes = spawnSync(process.execPath, [CLI, "--help"], { encoding: "utf8" });
   assert.equal(helpRes.status, 0);
+  assert.match(helpRes.stdout, /from <file>/);
   assert.match(helpRes.stdout, /manifest\.d\//);
   assert.match(readme, /manifest\.d\//);
 });
