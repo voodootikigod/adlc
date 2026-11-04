@@ -1,0 +1,17 @@
+{
+  "body": "## Context\nIssue #740: `packages/rails-guard/README.md` documents `--base <ref>` as defaulting to `HEAD` and shows `\"base\": \"HEAD\"` in JSON/manifest samples, whereas `bin/rails-guard.mjs` resolves the merge-base with trunk (`main`/`master`/`origin/main`/`origin/master`) and fails closed rather than defaulting to `HEAD`.\nIssue #741: `packages/rails-guard/README.md` omits `--sanctioned-add <path>` from the Usage block and Flags table.\nIssue #704: `packages/model-router/README.md` omits the `budget` field from the `--json` example and does not document the tier token-budget defaults.\nIssue #703: `packages/model-router/README.md` says priors read `.adlc/manifest.jsonl`, whereas `readManifestForest` reads `.adlc/manifest.jsonl` plus every valid segment under `.adlc/manifest.d/`.\n\n## Acceptance Criteria\n- `packages/rails-guard/README.md` documents `--base <ref>` default as merge-base with trunk (failing closed when no trunk ref exists, never defaulting to `HEAD`), includes `--sanctioned-add <path>` in Usage and Flags, and uses a resolved commit/ref in the JSON and manifest samples.\n- `packages/model-router/README.md` includes `\"budget\": 50000` in the `--json` example (and documents tier budget defaults) and states that priors are read across `.adlc/manifest.jsonl` and `.adlc/manifest.d/` segments via `readManifestForest`.\n- `packages/rails-guard/test/rail-addition-sanction.test.mjs` and `packages/model-router/test/model-router.test.mjs` pin these README contracts.\n\n## Verification\n`node --test packages/rails-guard/test/rail-addition-sanction.test.mjs packages/rails-guard/test/check.test.mjs packages/model-router/test/model-router.test.mjs packages/model-router/test/floor-zero.test.mjs`",
+  "category": "chore",
+  "id": "T-01M6JAZQTRDCGWYGCVYNN2TEVX",
+  "rails": [
+    "packages/rails-guard/test/check.test.mjs",
+    "packages/model-router/test/floor-zero.test.mjs"
+  ],
+  "scope": [
+    "packages/rails-guard/README.md",
+    "packages/rails-guard/test/rail-addition-sanction.test.mjs",
+    "packages/model-router/README.md",
+    "packages/model-router/test/model-router.test.mjs"
+  ],
+  "size": "S",
+  "title": "docs(rails-guard,model-router): document merge-base --base default, --sanctioned-add, budget field, and manifest.d priors (#740, #741, #704, #703)"
+}

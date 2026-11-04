@@ -41,6 +41,7 @@ AUTH-2        frontier    direct    0.000        0       category 'spec' require
       "id": "AUTH-1",
       "tier": "cheap",
       "mode": "ladder",
+      "budget": 50000,
       "railDensity": 1.0,
       "float": 3,
       "reason": "..."
@@ -50,6 +51,8 @@ AUTH-2        frontier    direct    0.000        0       category 'spec' require
   "skippedLedger": []
 }
 ```
+
+Each assignment includes `budget` (the per-ticket token cap from `resolveBudget`: default tier budgets for `direct` mode, or starting-tier budget plus one `frontier` regeneration in `ladder` mode).
 
 ## Exit codes
 
@@ -110,7 +113,7 @@ Classic critical-path-method float from `computeFloat()` in `@adlc/core`. Float 
 
 ### Priors from the manifest ledger
 
-Every `build`-type entry in `.adlc/manifest.jsonl` with shape `{ model, category, firstPass: boolean }` is counted. Success rate per model (and per model + category when >= 3 samples exist) is computed with Laplace smoothing:
+Every `build`-type entry across `.adlc/manifest.jsonl` and every valid segment under `.adlc/manifest.d/` (read via `readManifestForest`) with shape `{ model, category, firstPass: boolean }` is counted. Success rate per model (and per model + category when >= 3 samples exist) is computed with Laplace smoothing:
 
 ```
 rate = (passes + 1) / (n + 2)
