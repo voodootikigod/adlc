@@ -68,7 +68,7 @@ jobs:
         # Pinned to the 11.x line (NOT @latest): npm 12 dropped Node 20 support
         # (requires node ^22.22 || ^24.15 || >=26), so `npm@latest` fails
         # EBADENGINE on this runner. 11.x has OIDC and supports Node 20.
-        run: npm install -g npm@11
+        run: npm install -g --ignore-scripts npm@11.11.0
 
       - name: Resolve version
         id: ver
@@ -84,7 +84,7 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Publish (core-first, lockstep)
+      - name: Publish (topological order, lockstep)
         run: node scripts/release.mjs "${{ steps.ver.outputs.version }}" --publish
         env:
           # Bootstrap run: set NPM_TOKEN as an ENVIRONMENT secret on `npm-publish`
