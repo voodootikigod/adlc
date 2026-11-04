@@ -24,7 +24,7 @@ import { renderReport } from './render.mjs';
  *                  unbound premortem record can satisfy any ticket's P1 gate
  */
 export async function run(opts) {
-  const { specPath, tier = 'frontier', outPath, json, promptOnlyMode, recordVerdictSource, ticket, key = null } = opts;
+  const { specPath, tier = 'frontier', maxCauses, outPath, json, promptOnlyMode, recordVerdictSource, ticket, key = null } = opts;
 
   if (recordVerdictSource !== undefined && !ticket) {
     opError('--record-verdict requires --ticket (an unbound premortem record cannot count as this ticket\'s P1 evidence)');
@@ -50,7 +50,7 @@ export async function run(opts) {
     opError(`spec content is empty or whitespace-only (no readable letter or digit)`);
   }
 
-  const prompt = buildPrompt(specContent);
+  const prompt = buildPrompt(specContent, { maxCauses });
 
   // --prompt-only: print and exit 0
   if (promptOnlyMode) {

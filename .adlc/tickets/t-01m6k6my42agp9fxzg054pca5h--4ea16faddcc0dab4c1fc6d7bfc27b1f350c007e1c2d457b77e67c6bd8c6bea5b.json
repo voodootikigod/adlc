@@ -1,0 +1,23 @@
+{
+  "acceptance": [
+    "buildPrompt(specContent, { maxCauses }) asks for \"at most <n> causes\" when maxCauses is provided and \"5 to 10 causes\" by default, and always asks for the causes ranked most likely first.",
+    "premortem CLI accepts --max-causes <n>, validates that <n> is a positive integer >= 1 (exiting 1 via opError otherwise), and forwards maxCauses to run() and buildPrompt() including in --prompt-only mode.",
+    "packages/premortem/bin/premortem.mjs --help and packages/premortem/README.md document --max-causes <n>."
+  ],
+  "autonomous": true,
+  "id": "T-01M6K6MY42AGP9FXZG054PCA5H",
+  "rails": [
+    "packages/premortem/test/cli.test.mjs",
+    "packages/premortem/test/prompt-fencing.test.mjs"
+  ],
+  "scope": [
+    "packages/premortem/lib/prompt.mjs",
+    "packages/premortem/lib/run.mjs",
+    "packages/premortem/bin/premortem.mjs",
+    "packages/premortem/README.md",
+    "packages/premortem/test/premortem.test.mjs"
+  ],
+  "tier": "tier2",
+  "title": "premortem: add --max-causes <n> and rank causes most likely first (#1292)",
+  "verify": "node --test packages/premortem/test/premortem.test.mjs packages/premortem/test/cli.test.mjs packages/premortem/test/prompt-fencing.test.mjs"
+}

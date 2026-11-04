@@ -16,15 +16,20 @@ export const SYSTEM_PROMPT =
 /**
  * Build the user prompt for the premortem LLM call.
  * @param {string} specContent  — raw text of the spec file
+ * @param {object} [opts]
+ * @param {number} [opts.maxCauses] — optional cap on the number of causes
  * @returns {string}
  */
-export function buildPrompt(specContent) {
+export function buildPrompt(specContent, { maxCauses } = {}) {
+  const countClause = maxCauses !== undefined && maxCauses !== null
+    ? `at most ${maxCauses} causes`
+    : '5 to 10 causes';
   return (
     fence('SPEC', specContent.trim(), SPEC_MAX_CHARS, { bias: 'head' }) +
     '\n\n' +
     'It is three months later and this project FAILED in production. ' +
     'Write the postmortem. ' +
     'Output JSON {"causes":[{"cause":string,"earliest_signal":string,"prevention":string,"interrogation_question":string}]} ' +
-    '— 5 to 10 causes, each specific to THIS spec (reference its actual features), no generic platitudes.'
+    `— ${countClause}, ranked most likely first, each specific to THIS spec (reference its actual features), no generic platitudes.`
   );
 }

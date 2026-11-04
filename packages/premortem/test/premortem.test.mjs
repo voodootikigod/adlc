@@ -496,3 +496,38 @@ test('buildPrompt keeps the OPENING of an over-cap spec', () => {
   assert.ok(!m[1].includes('TRAILING_SECTION'), 'the trailing section is what gets dropped');
   assert.match(prompt, /truncated, showing first 64000 of \d+ chars/);
 });
+
+// #1292: --max-causes <n> and ranking causes most likely first
+test('buildPrompt: ranks causes most likely first and respects maxCauses (#1292)', () => {
+  const defaultPrompt = buildPrompt(FIXTURE_SPEC);
+  assert.match(defaultPrompt, /5 to 10 causes, ranked most likely first/);
+  assert.doesNotMatch(defaultPrompt, /at most/);
+
+  const cappedPrompt = buildPrompt(FIXTURE_SPEC, { maxCauses: 4 });
+  assert.match(cappedPrompt, /at most 4 causes, ranked most likely first/);
+  assert.doesNotMatch(cappedPrompt, /5 to 10 causes/);
+});
+
+test('CLI: --max-causes forwards cap to --prompt-only and rejects invalid values (#1292)', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'premortem-max-causes-'));
+  try {
+    const specPath = join(tmpDir, 'spec.md');
+    writeFileSync(specPath, FIXTURE_SPEC, 'utf8');
+
+    const ok = spawnSync(process.execPath, [CLI, specPath, '--prompt-only', '--max-causes', '4'], { encoding: 'utf8' });
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.match(ok.stdout, /at most 4 causes, ranked most likely first/);
+
+    const minOk = spawnSync(process.execPath, [CLI, specPath, '--prompt-only', '--max-causes', '1'], { encoding: 'utf8' });
+    assert.equal(minOk.status, 0, minOk.stderr);
+    assert.match(minOk.stdout, /at most 1 causes, ranked most likely first/);
+
+    for (const bad of ['0', '-2', '2.5', 'abc', '']) {
+      const res = spawnSync(process.execPath, [CLI, specPath, '--prompt-only', `--max-causes=${bad}`], { encoding: 'utf8' });
+      assert.equal(res.status, 1, `expected exit 1 for --max-causes ${JSON.stringify(bad)}`);
+      assert.match(res.stderr, /invalid --max-causes/);
+    }
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
