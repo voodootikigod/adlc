@@ -418,7 +418,7 @@ function isChainIntact(lines, key) {
     const expectedPrev = prevLine === null ? null : sha256(prevLine);
     if (entry.prev !== expectedPrev || entry.seq !== prevSeq + 1) return false;
     if (key !== null) {
-      const hasSig = typeof entry.sig === 'string' && entry.sig.length > 0;
+      const hasSig = Object.hasOwn(entry, 'sig');
       if (hasSig) {
         if (!entrySigValid(key, entry)) return false;
         seenSignedEntry = true;

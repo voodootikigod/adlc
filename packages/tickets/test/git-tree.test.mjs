@@ -56,3 +56,32 @@ test('GitTreeTicketStore rejects option-like revisions and resolves moving refs 
     assert.deepEqual(store.load().tickets.map((item) => item.id), ['B']);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test('GitTreeTicketStore bounds git reads with timeout and maxBuffer and fails closed on spawn error or signal (#572)', () => {
+  const calls = [];
+  const store = new GitTreeTicketStore({
+    cwd: '/tmp',
+    revision: 'HEAD',
+    spawnFn: (cmd, args, opts) => {
+      calls.push({ cmd, args, opts });
+      return { status: null, stdout: '', stderr: '', signal: 'SIGTERM' };
+    },
+  });
+  assert.throws(
+    () => store.load(),
+    (err) => err.code === 'GIT_READ_FAILED' && /timed out or was killed by SIGTERM/.test(err.message),
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].opts.timeout, 60_000);
+  assert.equal(calls[0].opts.maxBuffer, 64 * 1024 * 1024);
+
+  const errStore = new GitTreeTicketStore({
+    cwd: '/tmp',
+    revision: 'HEAD',
+    spawnFn: () => ({ status: null, stdout: '', stderr: '', error: new Error('ETIMEDOUT') }),
+  });
+  assert.throws(
+    () => errStore.load(),
+    (err) => err.code === 'GIT_READ_FAILED' && /git rev-parse failed: ETIMEDOUT/.test(err.message),
+  );
+});

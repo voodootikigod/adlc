@@ -375,18 +375,21 @@ test('doctor storehash-manifest-bind: an UNSIGNED entry may not supply the bound
   assert.match(check.reason ?? '', /sign/i, 'and the reason names why it could not bind');
 });
 
-test('doctor storehash-manifest-bind: a one-character signature is tampering, not a legacy entry', (t) => {
+test('doctor storehash-manifest-bind: a one-character or empty/malformed signature in the legacy prefix is tampering, not a legacy entry (#544)', (t) => {
   const { root, store } = storeWithEvidence(t);
-  // A `sig` of ANY non-zero length is a present signature and must verify.
-  // Treating a short one as "absent" would let a forger opt back into the
-  // legacy-prefix tolerance simply by truncating the field.
-  writeChainedManifest(root, 'test-signing-key', [
-    { rawSig: 'a' },
-    { sign: true, storeHash: store.load().hash },
-  ]);
-  const check = bindCheck(doctorTicketStore(store, { root, key: 'test-signing-key' }));
-  assert.equal(check.ok, false, 'a present-but-unverifiable sig is rejected however short');
-  assert.equal(check.code, 'MANIFEST_SIGNATURE_INVALID');
+  // Any entry carrying a `sig` property — even empty string, null, or non-string —
+  // is a present signature and must verify. Only an entry with NO `sig` key at all
+  // is tolerated in the legacy prefix.
+  for (const rawSig of ['a', '', null, 123, false]) {
+    writeChainedManifest(root, 'test-signing-key', [
+      { rawSig },
+      { sign: true, storeHash: store.load().hash },
+    ]);
+    const check = bindCheck(doctorTicketStore(store, { root, key: 'test-signing-key' }));
+    assert.equal(check.ok, false, `a present-but-malformed sig (${JSON.stringify(rawSig)}) is rejected in the legacy prefix`);
+    assert.equal(check.code, 'MANIFEST_SIGNATURE_INVALID');
+    assert.match(check.reason, /has a signature that does not verify/);
+  }
 });
 
 test('doctor storehash-manifest-bind: the failure reason names the OFFENDING line, 1-indexed', (t) => {
