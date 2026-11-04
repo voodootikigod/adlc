@@ -321,6 +321,25 @@ describe('merge-forecast --strict and signalsEvaluated (#684)', () => {
       assert.equal(parsedStrictFail.signalsEvaluated.coChange, false);
       assert.ok(parsedStrictFail.gateFailures.includes('co-change signal could not be evaluated (--strict requires git history)'));
 
+      // Cyclic DAG in CLI --json returns all signalsEvaluated as false
+      const cycleTicketsFile = join(dir, 'cycle-tickets.json');
+      writeFileSync(cycleTicketsFile, JSON.stringify({
+        tickets: [
+          { id: 'C1', title: 'C1', scope: ['src/a.js'], edges: [{ to: 'C2' }] },
+          { id: 'C2', title: 'C2', scope: ['src/b.js'], edges: [{ to: 'C1' }] },
+        ],
+      }));
+      const rCycle = spawnSync(process.execPath, [CLI, '--tickets', cycleTicketsFile, '--json'], { cwd: dir, encoding: 'utf8' });
+      assert.equal(rCycle.status, 2);
+      const parsedCycle = JSON.parse(rCycle.stdout);
+      assert.deepEqual(parsedCycle.signalsEvaluated, {
+        scopeOverlap: false,
+        namespaceCollision: false,
+        importRadius: false,
+        coChange: false,
+        graphCoupling: false,
+      });
+
       // Inside git repo (repoRoot) with --strict -> exit 0, signalsEvaluated.coChange === true
       withTickets((repoTicketsFile) => {
         const rStrictPass = spawnSync(process.execPath, [CLI, '--tickets', repoTicketsFile, '--strict', '--json'], { cwd: repoRoot, encoding: 'utf8' });
