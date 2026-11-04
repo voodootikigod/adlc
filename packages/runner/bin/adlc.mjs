@@ -22,7 +22,7 @@ function help() {
   const ticketRequired = phases.filter((p) => requiresTicket(p));
   console.log(`adlc-runner run <phase> [--dir .adlc] [--ticket id] [--revision rev] [--json]
 adlc-runner accept --ticket id --packet .adlc/packet.json [--before .adlc/before.json] [--after .adlc/after.json] [--dir .adlc] [--revision rev] [--json]
-(or \`adlc run\` / \`adlc accept\` when @adlc/cli is installed)
+(or \`adlc run <phase> ...\` / \`adlc accept --ticket id ...\` when @adlc/cli is installed)
 
 Artifact-asserting ADLC phase runner.
 
