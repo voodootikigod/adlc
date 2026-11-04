@@ -1,6 +1,7 @@
 {
   "body": "1. (#838) In plugins/adlc-opencode/README.md and docs/integrations/opencode.md, clarify that suppressionEnforcement / ADLC_SUPPRESSION_ENFORCEMENT and scopeEnforcement / ADLC_SCOPE_ENFORCEMENT are currently advisory-only (the watcher emits advisory notices and never auto-reverts).\n2. (#842) In plugins/adlc-pi/README.md and docs/integrations/pi.md, update the adlc_gate description to state that adlc_gate runs deterministic ADLC gates by invoking the adlc CLI under a rails-aware argv policy rather than running LLM-backed gates keyless via the session model.\n3. Add regression assertions in plugins/adlc-opencode/test/plugin-options.test.mjs and plugins/adlc-pi/test/gate-tool.test.mjs.\n\n## Acceptance Criteria\n- Verify: `node --test plugins/adlc-opencode/test/plugin-options.test.mjs plugins/adlc-pi/test/gate-tool.test.mjs`\n\nallow-suppression: none",
   "category": "docs",
+  "completed": true,
   "duration": 1,
   "edges": [],
   "id": "T-01M6JVJ9TD0DW4RM3HMK5QCAZQ",
