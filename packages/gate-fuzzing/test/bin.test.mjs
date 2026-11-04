@@ -182,6 +182,7 @@ test("#646: gate-fuzzing README and --help do not claim an unimplemented potency
   const { code, stdout } = runCli(["--help"]);
   assert.equal(code, 0);
   assert.doesNotMatch(stdout, /canary beaten/i);
+  assert.match(stdout, /0\s+Earned clean \(no defeats found, dry streak reached\)/);
   assert.doesNotMatch(readme, /potency canary beaten/i);
   assert.doesNotMatch(readme, /canary not beaten/i);
 });
