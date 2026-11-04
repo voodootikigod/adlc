@@ -519,6 +519,9 @@ copilot plugin install adlc-copilot@adlc
   \`adlc-prosecute\` before merge (P5).
 `;
 
+export const COPILOT_CLI_PACKAGE_SPEC = '@adlc/cli@^1';
+export const COPILOT_JOB_PERMISSIONS = 'contents: read';
+
 export const COPILOT_SETUP_STEPS = `# GitHub Copilot coding-agent environment setup for ADLC.
 # https://docs.github.com/copilot/how-tos/agents/copilot-coding-agent/customizing-the-development-environment
 name: Copilot Setup Steps
@@ -528,13 +531,15 @@ on: workflow_dispatch
 jobs:
   copilot-setup-steps:
     runs-on: ubuntu-latest
+    permissions:
+      ${COPILOT_JOB_PERMISSIONS}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
       - name: Install the ADLC gate toolkit
-        run: npm i -g @adlc/cli
+        run: npm i -g ${COPILOT_CLI_PACKAGE_SPEC}
 `;
 
 /**
