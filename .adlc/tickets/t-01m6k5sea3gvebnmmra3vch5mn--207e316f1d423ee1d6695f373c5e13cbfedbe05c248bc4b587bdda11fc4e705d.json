@@ -1,0 +1,22 @@
+{
+  "acceptance": [
+    "verify(dir, key, { requireEntries = false }) returns { valid: false, entries: 0, message: \"empty manifest (--require-entries requires at least one entry)\" } when both root manifest and manifest.d segments are empty and requireEntries is true, while continuing to return { valid: true, entries: 0 } by default.",
+    "gate-manifest verify accepts --require-entries and exits 2 via gateFail when the ledger has 0 entries, while gate-manifest verify without --require-entries continues to exit 0.",
+    "USAGE and packages/gate-manifest/README.md document --require-entries for CI checks."
+  ],
+  "autonomous": true,
+  "id": "T-01M6K5SEA3GVEBNMMRA3VCH5MN",
+  "rails": [
+    "packages/gate-manifest/test/forest-format.test.mjs",
+    "packages/gate-manifest/test/own-chain.test.mjs"
+  ],
+  "scope": [
+    "packages/gate-manifest/lib/verify.mjs",
+    "packages/gate-manifest/bin/gate-manifest.mjs",
+    "packages/gate-manifest/README.md",
+    "packages/gate-manifest/test/gate-manifest.test.mjs"
+  ],
+  "tier": "tier2",
+  "title": "gate-manifest: add --require-entries so verify fails closed on an absent or empty ledger (#656)",
+  "verify": "node --test packages/gate-manifest/test/gate-manifest.test.mjs packages/gate-manifest/test/forest-format.test.mjs packages/gate-manifest/test/own-chain.test.mjs"
+}

@@ -226,9 +226,10 @@ export function verifyChain(nonEmpty, { key, requireSignatures, anchorOnFirst })
  * @param {string} [dir]  ledger directory (default ADLC_DIR)
  * @param {object} [opts]
  * @param {boolean} [opts.requireSignatures=true]  see verifyChain
+ * @param {boolean} [opts.requireEntries=false]    when true, fail closed on an empty or absent ledger
  * @returns {VerifyResult}
  */
-export function verify(dir = ADLC_DIR, { requireSignatures = true, key: keyParam } = {}) {
+export function verify(dir = ADLC_DIR, { requireSignatures = true, requireEntries = false, key: keyParam } = {}) {
   const key = validateKeyParam(keyParam);
   const rootRaw = readRawLines(ledgerPath('manifest', dir));
   const { valid: segmentNames, invalid: invalidSegments } = discoverSegments(dir);
@@ -246,6 +247,17 @@ export function verify(dir = ADLC_DIR, { requireSignatures = true, key: keyParam
   }
 
   if (segmentNames.length === 0) {
+    if (requireEntries && rootRaw.length === 0) {
+      const reason = 'empty manifest (--require-entries requires at least one entry)';
+      return {
+        valid: false,
+        message: reason,
+        count: 0,
+        segments: 0,
+        signed: false,
+        break: { seq: null, lineNo: null, reason, segment: 'root' },
+      };
+    }
     // Fast path: byte-identical to the pre-forest verifier (AC2) for the
     // valid/message/count/signed fields; break gets the same `segment: 'root'`
     // label every other failure path in this function returns, for a

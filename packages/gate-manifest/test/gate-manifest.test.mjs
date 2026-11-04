@@ -1473,3 +1473,61 @@ describe('unknown verb error (#655)', () => {
     );
   });
 });
+
+describe('verify --require-entries (#656)', () => {
+  it('verify() returns valid:true by default on an absent/empty ledger, and valid:false when requireEntries:true', (t) => {
+    const dir = tmp(t, 'gm-require-entries-');
+    const defRes = realVerify(dir, { key: null });
+    assert.equal(defRes.valid, true);
+    assert.equal(defRes.count, 0);
+    assert.equal(defRes.message, 'empty manifest');
+    assert.equal(defRes.break, null);
+
+    const reqRes = realVerify(dir, { key: null, requireEntries: true });
+    assert.equal(reqRes.valid, false);
+    assert.equal(reqRes.count, 0);
+    assert.equal(reqRes.segments, 0);
+    assert.equal(reqRes.signed, false);
+    assert.equal(reqRes.message, 'empty manifest (--require-entries requires at least one entry)');
+    assert.deepEqual(reqRes.break, {
+      seq: null,
+      lineNo: null,
+      reason: 'empty manifest (--require-entries requires at least one entry)',
+      segment: 'root',
+    });
+
+    // Once an entry is recorded, requireEntries:true succeeds
+    record({ gate: 'spec', dir });
+    const nonEmptyRes = realVerify(dir, { key: null, requireEntries: true });
+    assert.equal(nonEmptyRes.valid, true);
+    assert.equal(nonEmptyRes.count, 1);
+  });
+
+  it('CLI: gate-manifest verify --require-entries exits 2 on absent ledger and exits 0 when entries exist', (t) => {
+    const bin = new URL('../bin/gate-manifest.mjs', import.meta.url).pathname;
+    const dir = tmp(t, 'gm-cli-require-entries-');
+
+    // Without --require-entries -> exit 0
+    const rDefault = spawnSync(process.execPath, [bin, 'verify', '--dir', dir], { encoding: 'utf8' });
+    assert.equal(rDefault.status, 0, rDefault.stderr);
+    assert.match(rDefault.stdout, /empty manifest/);
+
+    // With --require-entries on absent ledger -> exit 2
+    const rFail = spawnSync(process.execPath, [bin, 'verify', '--require-entries', '--dir', dir], { encoding: 'utf8' });
+    assert.equal(rFail.status, 2);
+    assert.match(rFail.stderr, /gate-manifest verify: empty manifest \(--require-entries requires at least one entry\)/);
+
+    // With --require-entries --json on absent ledger -> exit 2 with JSON
+    const rJsonFail = spawnSync(process.execPath, [bin, 'verify', '--require-entries', '--json', '--dir', dir], { encoding: 'utf8' });
+    assert.equal(rJsonFail.status, 2);
+    const parsedFail = JSON.parse(rJsonFail.stdout);
+    assert.equal(parsedFail.valid, false);
+    assert.equal(parsedFail.count, 0);
+
+    // Record an entry -> --require-entries exits 0
+    record({ gate: 'spec', dir });
+    const rPass = spawnSync(process.execPath, [bin, 'verify', '--require-entries', '--dir', dir], { encoding: 'utf8', env: { ...process.env, ADLC_MANIFEST_KEY: '' } });
+    assert.equal(rPass.status, 0, rPass.stderr);
+    assert.match(rPass.stdout, /manifest ok \(1 entries\)/);
+  });
+});

@@ -21,7 +21,7 @@ import { resolveCeremonyKey, writeKeyHandoffFile, computeKeyFingerprint } from '
 const USAGE =
   'usage: gate-manifest <verb> [options]\n' +
   'verbs: record <gate-name> [--ticket id] [--data \'{json}\'] [--files a,b,c] [--force]\n' +
-  '       verify [--json] [--allow-legacy-unsigned]\n' +
+  '       verify [--json] [--allow-legacy-unsigned] [--require-entries]\n' +
   '       show   [--ticket id] [--json]\n' +
   '       attest [--ticket id]\n' +
   '       repair-chain --reason "..." [--write] [--attest-unsigned] [--json]\n' +
@@ -45,6 +45,7 @@ const { values: flags, positionals } = parseArgs({
     write:  { type: 'boolean', default: false },
     'attest-unsigned': { type: 'boolean', default: false },
     'allow-legacy-unsigned': { type: 'boolean', default: false },
+    'require-entries': { type: 'boolean', default: false },
     output: { type: 'string' },
     'allow-key-import': { type: 'boolean', default: false },
     'allow-keyless': { type: 'boolean', default: false },
@@ -134,7 +135,7 @@ if (verb === 'verify') {
   // flag tolerates a missing sig ONLY on that contiguous legacy prefix; a missing
   // sig on any entry after signing was adopted, or a present-but-invalid sig
   // anywhere, still fails the chain. See verify()'s requireSignatures doc.
-  const result = verify(flags.dir, { requireSignatures: !flags['allow-legacy-unsigned'], key: getKey() });
+  const result = verify(flags.dir, { requireSignatures: !flags['allow-legacy-unsigned'], requireEntries: flags['require-entries'], key: getKey() });
 
   if (flags.json) {
     printJson(result);
