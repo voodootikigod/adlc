@@ -39,7 +39,7 @@ describe('classifyTrustRootTier — positive surface classes', () => {
     // pre-gate control surface: CI runs candidate `npm install` before the gate, so
     // a postinstall script or a repointed dependency executes in the gate's own job.
     // Tiering them means such a change cannot merge without a cross-model attestation.
-    for (const f of ['package.json', 'package-lock.json']) {
+    for (const f of ['package.json', 'package-lock.json', '.gitignore']) {
       const r = classifyTrustRootTier({ changedFiles: [f], tickets: TICKETS });
       assert.equal(r.isTrustRootTier, true, `${f} should be trust-root`);
       assert.ok(r.reasons.some((x) => x.includes(f)));
@@ -81,6 +81,14 @@ describe('classifyTrustRootTier — positive surface classes', () => {
     const r = classifyTrustRootTier({ changedFiles: ['test/auth/login.test.mjs'], tickets: TICKETS });
     assert.equal(r.isTrustRootTier, true);
     assert.ok(r.reasons.some((x) => x.includes('T7') && x.includes('test/auth/**')));
+  });
+
+  it('TRUE for root .gitignore (#619) and FALSE for nested .gitignore outside trust-root prefixes', () => {
+    const rootRes = classifyTrustRootTier({ changedFiles: ['.gitignore'], tickets: TICKETS });
+    assert.equal(rootRes.isTrustRootTier, true);
+    assert.ok(rootRes.reasons.some((x) => x.includes('.gitignore')));
+    const nestedRes = classifyTrustRootTier({ changedFiles: ['packages/foo/.gitignore'], tickets: TICKETS });
+    assert.equal(nestedRes.isTrustRootTier, false);
   });
 
 });

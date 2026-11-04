@@ -35,9 +35,12 @@ const TRUST_ROOT_FILES = [
   // them would otherwise merge with no cross-model review. EXACT-match only: a
   // NESTED package.json tiers solely via its package prefix, not this rule. The gate
   // step additionally reinstalls with --ignore-scripts as defense-in-depth.
-  'package.json',
-  '.npmrc',
-  'package-lock.json',
+  // The root .gitignore (#619): untrackedNonIgnoredPaths in @adlc/core runs
+  // `git ls-files --others --exclude-standard`, which honours the repo's own
+  // .gitignore when deciding whether an untracked working-tree file refuses
+  // attestation. Widening the ignore set can hide an untracked file from that
+  // refusal, so any reviewed change that modifies .gitignore is trust-root tier.
+  ...['package.json', '.npmrc', 'package-lock.json', '.gitignore'],
   // A required CI gate whose own source and test control both the enforcement
   // logic and the tests that verify it in the same change — declared a trust root
   // in scripts/rails-guard-ci.mjs's REPO_TRUST_ROOTS and CODEOWNERS, but neither

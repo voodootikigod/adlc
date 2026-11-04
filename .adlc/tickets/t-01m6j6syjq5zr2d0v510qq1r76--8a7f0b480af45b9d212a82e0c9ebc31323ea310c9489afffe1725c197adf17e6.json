@@ -1,0 +1,14 @@
+{
+  "body": "## Context\nIssue #619: `untrackedNonIgnoredPaths` in `@adlc/core` runs `git ls-files --others --exclude-standard`, which honours the repository `.gitignore`. Because `@adlc/core` is frozen, the issue recommends treating a `.gitignore` change within the reviewed change set as trust-root-tiering in `packages/prosecute/lib/tier.mjs` so widening the ignore set is itself subject to cross-model review.\n\n## Acceptance Criteria\n- `TRUST_ROOT_FILES` in `packages/prosecute/lib/tier.mjs` includes `'.gitignore'` so any diff modifying the root `.gitignore` is classified as trust-root tier (`trustRoot: true`, rule `'trust-root-file'`).\n- Unit tests in `packages/prosecute/test/tier.test.mjs` verify that `.gitignore` triggers `trust-root-file` while nested `.gitignore` files do not match the exact root rule.\n\n## Verification\n`node --test packages/prosecute/test/tier.test.mjs packages/prosecute/test/cross-model.test.mjs packages/prosecute/test/untracked-file-refusal.test.mjs`",
+  "category": "bug",
+  "id": "T-01M6J6SYJQ5ZR2D0V510QQ1R76",
+  "rails": [
+    "packages/prosecute/test/cross-model.test.mjs",
+    "packages/prosecute/test/untracked-file-refusal.test.mjs"
+  ],
+  "scope": [
+    "packages/prosecute/lib/tier.mjs",
+    "packages/prosecute/test/tier.test.mjs"
+  ],
+  "title": "prosecute: classify .gitignore changes as trust-root tier (#619)"
+}
