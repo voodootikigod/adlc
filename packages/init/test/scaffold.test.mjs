@@ -576,11 +576,13 @@ test("#854: init README documents Exit codes table (0, 1, 2)", () => {
   assert.match(readme, /\| `2` \|/);
 });
 
-test("#667: init README documents .gitignore normalization, --harness, --no-codex-agents, and Copilot workflow writes", () => {
+test("#667: init README documents .gitignore normalization, --harness (all KNOWN_HARNESSES), --no-codex-agents, and Copilot workflow writes", async () => {
+  const { KNOWN_HARNESSES } = await import("../lib/scaffold.mjs");
   const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
   assert.doesNotMatch(readme, /The initializer preserves existing files, refuses/);
   assert.match(readme, /normalized in place to `\.adlc\/\*`/);
   assert.match(readme, /--harness/);
   assert.match(readme, /--no-codex-agents/);
+  for (const h of KNOWN_HARNESSES) assert.ok(readme.includes(h), `README omits harness "${h}"`);
   assert.match(readme, /\.github\/workflows\/copilot-setup-steps\.yml/);
 });
