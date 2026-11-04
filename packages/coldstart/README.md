@@ -22,12 +22,13 @@ coldstart --all     [options]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--tickets <path>` | `.adlc/tickets.json` | Path to the tickets file |
+| `--tier <cheap\|mid\|frontier>` | `cheap` | Model tier used to audit ticket executability |
 | `--all` | off | Run the gate on every ticket in the file |
 | `--offline` | off | Run deterministic offline schema and input contract validation without calling an LLM or requiring API keys |
 | `--force` | off | Bypass the cache entirely and re-audit every target ticket |
 | `--max-age <days>` | `30` | Treat a cached verdict older than this as stale; `0` treats every cache entry as stale |
 | `--prompt-only` | off | Print the exact prompt(s) and exit 0 — no LLM call made. For a ticket over the 64,000-char auditable cap: no prompt, nothing recorded, exit 2 (see Caching) |
-| `--record-verdict <file\|->` | — | With `--prompt-only`: read the operator's answer from `<file>` (or stdin when `-`) and record it into `.adlc/manifest.jsonl` via `gate-manifest` — see below |
+| `--record-verdict <file\|->` | — | With `--prompt-only`: read the operator's answer from `<file>` (or stdin when `-`) and record it into the gate-manifest ledger (`.adlc/manifest.jsonl`, or `.adlc/manifest.d/<segment>.jsonl` once the repo has cut over to the segmented manifest) via `gate-manifest` — see below |
 | `--json` | off | Machine-readable JSON output for orchestrators |
 
 ---
@@ -78,7 +79,7 @@ coldstart T3 --tickets path/to/tickets.json
 ## Caching
 
 A real (non-`--prompt-only`) audit records `{ticketHash, model, gaps,
-textChars, cap}` into `.adlc/manifest.jsonl` after it runs. The NEXT run, for
+textChars, cap}` into the gate-manifest ledger (`.adlc/manifest.jsonl`, or `.adlc/manifest.d/<segment>.jsonl` in a segmented repo) after it runs. The NEXT run, for
 the SAME ticket, skips the LLM call entirely when it finds a matching entry:
 same `ticketHash` (the ticket's content is unchanged — editing anything about
 it produces a different hash), same *resolved* model id (not just the same
@@ -143,7 +144,7 @@ operator (the model itself) answers it and applies judgment. Without
 fact that a prompt was printed is observable. `--record-verdict <file|->`
 closes that gap: after printing the prompt(s) as usual, it reads the
 operator's answer from `<file>` (or stdin when `-`) and records it into
-`.adlc/manifest.jsonl` via `@adlc/gate-manifest`'s own `record()` — reusing its
+the gate-manifest ledger (`.adlc/manifest.jsonl`, or `.adlc/manifest.d/<segment>.jsonl` once the repo has cut over to the segmented manifest) via `@adlc/gate-manifest`'s own `record()` — reusing its
 hash-chaining/signing logic rather than reimplementing it.
 
 ```sh
@@ -188,14 +189,16 @@ as missing**. Only genuine human-only questions are gaps:
     {
       "id": "T1",
       "pass": true,
-      "gaps": []
+      "gaps": [],
+      "cached": false
     },
     {
       "id": "T2",
       "pass": false,
       "gaps": [
         { "what": "UserSchema", "why_blocking": "Shape referenced in body but not defined." }
-      ]
+      ],
+      "cached": false
     }
   ]
 }
