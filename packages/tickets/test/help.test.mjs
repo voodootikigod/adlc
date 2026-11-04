@@ -291,3 +291,11 @@ test('#209: complete --help and renderUsage document optional --expect', () => {
   const usage = renderUsage();
   assert.match(usage, /^  complete <id> \[--expect <hash>\] \[--write --authorize\]$/m);
 });
+
+test("#854: tickets README documents Exit codes table (0, 1, 2)", () => {
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.match(readme, /## Exit codes/);
+  assert.match(readme, /\| `0` \|/);
+  assert.match(readme, /\| `1` \|/);
+  assert.match(readme, /\| `2` \|/);
+});

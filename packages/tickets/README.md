@@ -118,3 +118,11 @@ Sensitive mutations use recoverable, evidence-bearing transactions on both suppo
 1.x backends. POSIX persistence flushes changed files and parent-directory entries;
 Windows flushes files and relies on the documented platform recovery tests because Node
 does not provide portable directory fsync.
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Command succeeded (`list`, `show`, `schema`, `store status`, clean `doctor`, dry-run plan, or applied `--write`) |
+| `1` | Operational error (`kind: "operational"` — unreadable store, I/O failure, or unexpected runtime error) |
+| `2` | Policy, validation, or conflict rejection (`kind: "invalid" \| "conflict" \| "policy"`, missing `--authorize` or `ADLC_MANIFEST_KEY`, stale `--expect` hash, or failing `doctor` check) |

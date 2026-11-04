@@ -567,3 +567,11 @@ test("#668: ensureGitignore and writeOrReconcileConfig replace existing files at
     assert.notEqual(cfgInoAfter, cfgInoBefore, "existing .adlc/config.json must be replaced via atomic rename (new inode)");
   });
 });
+
+test("#854: init README documents Exit codes table (0, 1, 2)", () => {
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.match(readme, /## Exit codes/);
+  assert.match(readme, /\| `0` \|/);
+  assert.match(readme, /\| `1` \|/);
+  assert.match(readme, /\| `2` \|/);
+});
