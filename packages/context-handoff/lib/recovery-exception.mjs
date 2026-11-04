@@ -39,7 +39,7 @@ const SUBCOMMANDS = ['bypass', 'unlock', 'repair', 'write', 'resume'];
 
 /** Per-subcommand whitelisted flags, taken directly from the real CLI. */
 const SUBCOMMAND_FLAGS = {
-  bypass: { '--session': 'value', '--ticket': 'value', '--write': 'boolean', '--json': 'boolean' },
+  bypass: { '--session': 'value', '--ticket': 'value', '--dir': 'value', '--write': 'boolean', '--json': 'boolean' },
   unlock: {
     '--session': 'value',
     '--pid': 'value',

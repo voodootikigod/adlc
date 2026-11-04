@@ -134,7 +134,7 @@ const RECOVERY_PATH_UNQUOTED_RE = /^[A-Za-z0-9_./=-]+$/;
 const RECOVERY_VALUE_RE = /^[A-Za-z0-9_./=:-]+$/;
 const RECOVERY_SUBCOMMANDS = ['bypass', 'unlock', 'repair', 'write', 'resume'];
 const RECOVERY_SUBCOMMAND_FLAGS = {
-  bypass: { '--session': 'value', '--ticket': 'value', '--write': 'boolean', '--json': 'boolean' },
+  bypass: { '--session': 'value', '--ticket': 'value', '--dir': 'value', '--write': 'boolean', '--json': 'boolean' },
   unlock: {
     '--session': 'value',
     '--pid': 'value',

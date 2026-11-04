@@ -224,6 +224,8 @@ test('the CC recovery matcher agrees with matchRecoveryCommand', () => {
     const spacedOpts = { interpreterPath: spacedInterpreterPath, scriptPath: spacedScriptPath, sessionId };
     const cases = [
       [`${interpreterPath} ${scriptPath} bypass --session ${sessionId} --write`, opts],
+      [`${interpreterPath} ${scriptPath} bypass --session ${sessionId} --dir /repo/.adlc --write`, opts],
+      [`${interpreterPath} ${scriptPath} unlock --session ${sessionId} --dir /repo/.adlc --write`, opts],
       [`${interpreterPath} ${scriptPath} unlock --session ${sessionId} --started-at 2026-08-15T12:34:56.789Z --write`, opts],
       [`${interpreterPath} ${scriptPath} resume --session ${sessionId} --deny-session other-session --write`, opts],
       [`${interpreterPath} ${scriptPath} bypass --session other-session --write`, opts], // wrong session
