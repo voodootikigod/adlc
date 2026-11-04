@@ -1512,3 +1512,16 @@ describe('coldstart truncation completeness (#1197)', () => {
     assert.ok(overRes.errors.includes('P0 evidence is incomplete: coldstart audited the first 64000 of 64001 chars'));
   });
 });
+
+it('runner docs enumerate the per-phase required evidence contract (#846, #847)', () => {
+  const repoRoot = resolve(import.meta.dirname, '..', '..', '..');
+  for (const rel of ['packages/runner/README.md', 'docs/toolkit.md', 'apps/docs/content/docs/toolkit/runner.mdx']) {
+    const text = readFileSync(join(repoRoot, rel), 'utf8');
+    for (const marker of ['coldstart', 'spec-lint', 'premortem', 'spec-approval', 'merge-forecast', 'rails-red', 'hollow-test', 'rails-frozen', 'p4-build', 'rails-check', 'flail-check', 'p5-complete', 'p6-acceptance-packet', 'lesson-foundry', 'rejection-mining', 'skill-rot']) {
+      assert.ok(text.includes(marker), `${rel} must document required phase marker ${marker}`);
+    }
+  }
+  const mdx = readFileSync(join(repoRoot, 'apps/docs/content/docs/toolkit/runner.mdx'), 'utf8');
+  assert.match(mdx, /P0–P7 assertions/);
+  assert.doesNotMatch(mdx, /P3–P6 assertions/);
+});

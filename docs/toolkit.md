@@ -180,6 +180,19 @@ which is fixed as of the pinned version, but because `--loop` is incompatible wi
 The package READMEs define each tool's exact schema. Treat these docs as a routing map,
 then follow the linked README for command-specific details.
 
+## Per-phase required evidence
+
+| Phase | `--ticket` required | Required manifest markers | How recorded |
+| --- | --- | --- | --- |
+| `p0` | yes | `coldstart` | `adlc coldstart <id> --prompt-only --record-verdict <file\|->` |
+| `p1` | yes | `spec-lint`, `premortem`, `spec-approval` | `adlc spec-lint <spec.md> --record --ticket <id>`, `adlc premortem <spec.md> --prompt-only --record-verdict <file\|-> --ticket <id>`, `adlc gate-manifest record spec-approval --ticket <id> --files <spec.md> --data '{...}'` |
+| `p2` | yes | `coldstart`, `merge-forecast` | `adlc coldstart <id> --prompt-only --record-verdict <file\|->`, `adlc gate-manifest record merge-forecast --ticket <id>` |
+| `p3` | yes | `rails-red`, `hollow-test`, `rails-frozen` | `adlc gate-manifest record rails-red --ticket <id>`, `adlc hollow-test --record --ticket <id> ...`, `adlc gate-manifest record rails-frozen --ticket <id>` |
+| `p4` | yes | `p4-build`, `rails-check`, `flail-check` | `adlc gate-manifest record p4-build --ticket <id> --files <changed-files>`, `adlc rails-guard --record --ticket <id> ...`, `adlc flail-detector <log> --record --ticket <id> --files <changed-files>` |
+| `p5` | yes | `p5-complete` | `adlc prosecute --input <passes.json>` (after dry-pass convergence across >=3 lenses) |
+| `p6` | yes | `p5-complete`, `p6-acceptance-packet` | `adlc accept --ticket <id> --packet .adlc/packet.json [--before ... --after ...]` |
+| `p7` | no | `lesson-foundry`, `rejection-mining`, `skill-rot` | `adlc gate-manifest record lesson-foundry`, `adlc gate-manifest record rejection-mining`, `adlc gate-manifest record skill-rot` |
+
 ### Ticket argument convention
 
 Every ticket-scoped verb accepts `--ticket <id>` so scripts and hooks can pass the

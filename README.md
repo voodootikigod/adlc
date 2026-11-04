@@ -141,6 +141,7 @@ Each agent tool has its own native integration. See the guides:
 
 - **[Codex](./docs/integrations/codex.md)** — hooks-based integration.
 - **[Cursor](./docs/integrations/cursor.md)** — preToolUse rails dispatcher, hook parity, command suite + prosecutor loop, rules.
+- **[GitHub Copilot](./docs/integrations/copilot.md)** — skills, preToolUse rails hook, allowlisted MCP gate tools, and read-only prosecution agents.
 - **[Google Gemini](./docs/integrations/gemini.md)** — native plugin system.
 - **[OpenCode](./docs/integrations/opencode.md)** — full phase-router coverage.
 - **[Pi](./docs/integrations/pi.md)** — TypeScript Extension integration.
@@ -204,6 +205,7 @@ Requires **Node.js 18 or newer**.
 - [ADLC.md](./ADLC.md) — the full lifecycle thesis and flaw inventory.
 - [docs/integrations/claude-code.md](./docs/integrations/claude-code.md) — adopt the ADLC inside Claude Code (plugin).
 - [docs/integrations/codex.md](./docs/integrations/codex.md) — native Codex integration guide.
+- [docs/integrations/copilot.md](./docs/integrations/copilot.md) — GitHub Copilot CLI plugin guide.
 - [docs/integrations/pi.md](./docs/integrations/pi.md) — pi coding-agent harness integration guide.
 - [docs/](./docs/README.md) — toolkit guide, package reference, ADRs, and narrative essays.
 - [CONVENTIONS.md](./CONVENTIONS.md) — the contract every package follows.

@@ -1,0 +1,18 @@
+{
+  "description": "Context: packages/runner/README.md, docs/toolkit.md, and apps/docs/content/docs/toolkit/runner.mdx do not enumerate the per-phase evidence contract required by PHASE_REQUIREMENTS (#846, #847), and root README.md omits GitHub Copilot from the Use it in other editors list (#853).\nRequirements:\n1. Add a per-phase required evidence table (p0 coldstart, p1 spec-lint/premortem/spec-approval, p2 coldstart/merge-forecast, p3 rails-red/hollow-test/rails-frozen, p4 p4-build/rails-check/flail-check, p5 p5-complete, p6 p5-complete/p6-acceptance-packet, p7 lesson-foundry/rejection-mining/skill-rot) and recording commands to packages/runner/README.md, docs/toolkit.md, and apps/docs/content/docs/toolkit/runner.mdx, and update the runner.mdx header to p0-p7 (#846, #847).\n2. Add GitHub Copilot (docs/integrations/copilot.md) to the Use it in other editors list and Documentation section in root README.md (#853).\n3. Add regression assertions in packages/runner/test/runner.test.mjs and scripts/test/package-reference-coverage.test.mjs.",
+  "id": "T-01M6JRHC7NA6PCP1C9G8H7K8WA",
+  "rails": [
+    "packages/runner/test/p5-evidence.test.mjs"
+  ],
+  "scope": [
+    "packages/runner/README.md",
+    "docs/toolkit.md",
+    "apps/docs/content/docs/toolkit/runner.mdx",
+    "README.md",
+    "packages/runner/test/runner.test.mjs",
+    "scripts/test/package-reference-coverage.test.mjs"
+  ],
+  "size": "S",
+  "title": "docs(runner): document per-phase evidence contract and update root README integrations (#846, #847, #853)",
+  "verify": "node --test packages/runner/test/runner.test.mjs packages/runner/test/p5-evidence.test.mjs scripts/test/package-reference-coverage.test.mjs"
+}
