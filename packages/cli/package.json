@@ -25,7 +25,6 @@
     "adlc": "./bin/adlc.mjs"
   },
   "exports": {
-    ".": "./index.mjs",
     "./lib/mcp-server.mjs": "./lib/mcp-server.mjs",
     "./package.json": "./package.json"
   },
