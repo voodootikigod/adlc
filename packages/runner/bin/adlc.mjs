@@ -20,8 +20,9 @@ const { values, positionals } = parseArgs({
 function help() {
   const phases = allPhases();
   const ticketRequired = phases.filter((p) => requiresTicket(p));
-  console.log(`adlc run <phase> [--dir .adlc] [--ticket id] [--revision rev] [--json]
-adlc accept --ticket id --packet .adlc/packet.json [--before .adlc/before.json] [--after .adlc/after.json] [--dir .adlc] [--revision rev] [--json]
+  console.log(`adlc-runner run <phase> [--dir .adlc] [--ticket id] [--revision rev] [--json]
+adlc-runner accept --ticket id --packet .adlc/packet.json [--before .adlc/before.json] [--after .adlc/after.json] [--dir .adlc] [--revision rev] [--json]
+(or \`adlc run <phase> ...\` / \`adlc accept --ticket id ...\` when @adlc/cli is installed)
 
 Artifact-asserting ADLC phase runner.
 
@@ -33,7 +34,7 @@ Explicit --revision selects recorded manifest/artifact evidence without live wor
 Exit codes:
   0  required phase evidence exists
   1  operational error
-  2  required phase evidence is missing
+  2  required phase evidence is missing or rejected
 `);
 }
 
@@ -65,7 +66,7 @@ if (verb === 'accept') {
 }
 
 if (verb !== 'run' || !phase) {
-  opError('usage: adlc run <phase> [--dir .adlc] [--ticket id] [--json]');
+  opError('usage: adlc-runner run <phase> [--dir .adlc] [--ticket id] [--json] (or adlc run <phase> ...)');
 }
 
 if (requirementsForPhase(phase) === null) {
