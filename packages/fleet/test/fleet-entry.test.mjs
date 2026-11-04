@@ -161,6 +161,7 @@ test('README and USAGE document adlc-fleet binary, all 9 adapters, bwrap-only Li
   assert.match(readme, /`bwrap`/);
   const r = spawnSync(process.execPath, [BIN, '--help'], { encoding: 'utf8' });
   assert.equal(r.status, 0);
+  assert.match(r.stdout, /or: adlc fleet <subcommand>/);
   assert.match(r.stdout, /adlc-fleet run/);
   assert.match(r.stdout, /adlc-fleet status/);
   assert.match(r.stdout, /adlc-fleet unlock/);

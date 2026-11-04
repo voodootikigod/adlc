@@ -32,7 +32,7 @@ import { Sandbox } from '../lib/sandbox.mjs';
 import { SYSTEM_ROOTS } from '../lib/bounded-model-plane.mjs';
 import { repoCommandEnv } from '../lib/env-scrub.mjs';
 
-const USAGE = `adlc-fleet — parallel ADLC ticket orchestration (or: adlc fleet ...)
+const USAGE = `adlc-fleet — parallel ADLC ticket orchestration (or: adlc fleet <subcommand> ...)
 
 Usage:
   adlc-fleet run [--concurrency N] [--dry-run] [--tickets T1,T2] [--base B] [--json]
