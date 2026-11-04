@@ -1,0 +1,24 @@
+{
+  "acceptance": [
+    "plugins/adlc-cursor/README.md states that preToolUse frozen-rail edits are denied while ADLC_P4_ENFORCEMENT=1 and no-op otherwise (#818).",
+    "plugins/adlc-cursor/command/adlc-prosecute.md, commands/adlc-prosecute.md, and rules/adlc-ticket-context.mdc reference ~/.cursor/adlc instead of ~/.adlc (#819).",
+    "plugins/adlc-herdr/README.md lists all five actions and three [[events]] in Layout, extends Status through t-herdr-5/8/9, and documents ADLC_HERDR_DEBUG_FILE (#834)."
+  ],
+  "description": "Qualify preToolUse rail enforcement with ADLC_P4_ENFORCEMENT=1 in plugins/adlc-cursor/README.md (#818), update ~/.adlc state-dir references in plugins/adlc-cursor to ~/.cursor/adlc (#819), and update plugins/adlc-herdr/README.md to list all five actions, three [[events]], Status rows t-herdr-5/8/9, and ADLC_HERDR_DEBUG_FILE (#834).",
+  "id": "T-01M6JNFE9GTXZ4NEBYW1J77A3A",
+  "rails": [
+    "plugins/adlc-cursor/test/session-state-dir.test.mjs",
+    "plugins/adlc-herdr/test/actions-phase2.test.mjs"
+  ],
+  "scope": [
+    "plugins/adlc-cursor/README.md",
+    "plugins/adlc-cursor/command/adlc-prosecute.md",
+    "plugins/adlc-cursor/commands/adlc-prosecute.md",
+    "plugins/adlc-cursor/rules/adlc-ticket-context.mdc",
+    "plugins/adlc-cursor/test/session-state-dir.test.mjs",
+    "plugins/adlc-herdr/README.md",
+    "plugins/adlc-herdr/test/actions-phase2.test.mjs"
+  ],
+  "title": "docs(adlc-cursor,adlc-herdr): align README and command docs with shipped runtime contracts (#818, #819, #834)",
+  "verify": "node --test plugins/adlc-cursor/test/session-state-dir.test.mjs plugins/adlc-herdr/test/actions-phase2.test.mjs"
+}

@@ -74,3 +74,14 @@ test('AC7 the README keybinding docs mention every manifest action id', () => {
   assert.ok(/keybinding/i.test(readme), 'README must have a Keybindings section');
   for (const id of actionIds()) assert.ok(readme.includes(id), `README keybinding docs omit action "${id}"`);
 });
+
+test("AC7b the README Layout and Status sections mention every manifest [[events]] on value and ADLC_HERDR_DEBUG_FILE (#834)", () => {
+  const readme = readFileSync(join(pluginRoot, "README.md"), "utf8");
+  const { sections } = manifest();
+  const eventOns = sections.filter((s) => s.name === "events").map((s) => s.entries.on);
+  assert.equal(eventOns.length, 3);
+  for (const on of eventOns) assert.ok(readme.includes(on), `README omits [[events]] on="${on}"`);
+  assert.doesNotMatch(readme, /`\[\[events\]\]` is deferred to Phase 2/);
+  assert.match(readme, /ADLC_HERDR_DEBUG_FILE/);
+  assert.match(readme, /t-herdr-5/);
+});

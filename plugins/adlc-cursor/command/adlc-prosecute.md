@@ -47,7 +47,7 @@ the mechanical gates in step 5 and the marker/evidence commands below.
 
 **P5 marker (session-matched, fenced — T64 helper).** Before fan-out, write a
 fresh marker via the plugin's `writeP5Marker` helper (user-scoped state dir
-`~/.adlc` / `ADLC_CURSOR_STATE_DIR`, never consumer `.adlc/`):
+`~/.cursor/adlc` / `ADLC_CURSOR_STATE_DIR`, never consumer `.adlc/`):
 
 ```js
 // From a short node one-liner in the consumer repo (adjust path if needed):
