@@ -471,3 +471,21 @@ describe('integration: --findings-exit-code (#693)', () => {
     assert.ok(resHelp.stdout.includes('(default: 2; use 1 for linters like eslint)'));
   });
 });
+
+describe('documentation and --help contract (#692, #691)', () => {
+  it('describes --review-cmd as shell=false tokenized command template and omits nonexistent @adlc/adversarial-review --file', () => {
+    const bin = resolve(__dirname, '../bin/model-ratchet.mjs');
+    const readme = readFileSync(resolve(__dirname, '../README.md'), 'utf8');
+    const help = spawnSync('node', [bin, '--help'], { encoding: 'utf8' });
+    assert.equal(help.status, 0);
+    assert.match(help.stdout, /shell=false/);
+    assert.doesNotMatch(help.stdout, /shell=true/i);
+    assert.doesNotMatch(help.stdout, /Shell command to run per file/);
+    assert.doesNotMatch(help.stdout, /adversarial-review --file/);
+    assert.match(readme, /shell: false/);
+    assert.match(readme, /--findings-exit-code <n>/);
+    assert.doesNotMatch(readme, /Shell command to run per file/);
+    assert.doesNotMatch(readme, /@adlc\/adversarial-review/);
+    assert.doesNotMatch(readme, /adversarial-review --file/);
+  });
+});

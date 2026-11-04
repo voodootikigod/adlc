@@ -28,7 +28,7 @@ npm install -g @adlc/model-ratchet   # or use npx
 ## Usage
 
 ```
-model-ratchet [--top <n>] [--review-cmd <cmd>] [--timeout-ms <n>] [--churn-limit <n>] [--dry-run] [--allow-empty] [--json]
+model-ratchet [--top <n>] [--review-cmd <cmd>] [--findings-exit-code <n>] [--timeout-ms <n>] [--churn-limit <n>] [--dry-run] [--allow-empty] [--json]
 ```
 
 ### Flags
@@ -36,7 +36,8 @@ model-ratchet [--top <n>] [--review-cmd <cmd>] [--timeout-ms <n>] [--churn-limit
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--top <n>` | `10` | Number of hotspot files to select |
-| `--review-cmd <cmd>` | — | Shell command to run per file. Use `{file}` as placeholder. |
+| `--review-cmd <cmd>` | — | Command template to run per file (`spawnSync`, `shell: false` — quotes group whitespace, no shell metacharacters are interpreted; wrap pipelines in a script). Use `{file}` as placeholder. |
+| `--findings-exit-code <n>` | `2` | Non-zero exit code from `review-cmd` that indicates findings are present rather than an operational error (use `1` for linters like `eslint`). |
 | `--timeout-ms <n>` | `600000` | Kill a review-cmd run after `<n>` ms; it counts as an operational error for that file and the remaining files are still reviewed |
 | `--churn-limit <n>` | `1000` | Commit history depth for churn computation |
 | `--dry-run` | `false` | Print prosecution plan only; do not run review-cmd |
@@ -122,10 +123,10 @@ model-ratchet
 model-ratchet --top 5 --churn-limit 500
 
 # Dry-run plan even if review-cmd is provided
-model-ratchet --top 10 --review-cmd "adversarial-review {file}" --dry-run
+model-ratchet --top 10 --review-cmd "node scripts/review-file.mjs {file}" --dry-run
 
-# Run adversarial review and append findings
-model-ratchet --review-cmd "adversarial-review --file {file}"
+# Run a per-file reviewer script and append findings
+model-ratchet --review-cmd "node scripts/review-file.mjs {file}"
 
 # Machine-readable output for orchestrators
 model-ratchet --top 5 --json
@@ -163,7 +164,7 @@ jobs:
         run: |
           npx @adlc/model-ratchet \
             --top 10 \
-            --review-cmd "npx @adlc/adversarial-review --file {file}" \
+            --review-cmd "node scripts/review-file.mjs {file}" \
             --json > ratchet-results.json
       - uses: actions/upload-artifact@v4
         with:
@@ -176,10 +177,10 @@ jobs:
 ```bash
 # Run on every model release — add to crontab or a release script
 # crontab entry: run on the 1st of every month at 09:00
-# 0 9 1 * * cd /path/to/repo && model-ratchet --top 10 --review-cmd "adversarial-review {file}" --json >> .adlc/ratchet-runs.log 2>&1
+# 0 9 1 * * cd /path/to/repo && model-ratchet --top 10 --review-cmd "node scripts/review-file.mjs {file}" --json >> .adlc/ratchet-runs.log 2>&1
 
 # Or run manually after a model upgrade:
-model-ratchet --top 20 --review-cmd "adversarial-review --file {file}" --json
+model-ratchet --top 20 --review-cmd "node scripts/review-file.mjs {file}" --json
 ```
 
 ### CI gate (plan-only, no API key required)
