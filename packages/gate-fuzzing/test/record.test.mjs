@@ -54,6 +54,7 @@ describe('record: writeReproArtifact', () => {
     // The scaffold was also written to packages/test-target/test/bypass-<id>.test.mjs
     const scaffoldPath = join(tmpDir, 'packages', 'test-target', 'test', `bypass-${ID}.test.mjs`);
     assert.ok(existsSync(scaffoldPath), 'test scaffold file should exist in target package');
+    assert.equal(defeat.scaffoldPath, scaffoldPath, 'writeReproArtifact sets defeat.scaffoldPath (#650)');
 
     const scaffoldContent = readFileSync(scaffoldPath, 'utf8');
     assert.equal(scaffoldContent, content.redTestScaffold);

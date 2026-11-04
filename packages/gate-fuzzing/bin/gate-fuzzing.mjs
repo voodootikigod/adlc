@@ -362,6 +362,7 @@ if (values.json) {
       target: d.target,
       claimKind: d.claimKind,
       witnessSource: d.witnessSource ?? d.verdict?.witnessSource,
+      ...(d.reproPath !== undefined ? { reproPath: d.reproPath, scaffoldPath: d.scaffoldPath } : {}),
     })),
     byCategory: Object.fromEntries(
       verdict.defeats.map((d) => [`gate-bypass:${d.strategy}`, 1])

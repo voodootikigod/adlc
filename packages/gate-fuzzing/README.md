@@ -47,7 +47,7 @@ gate-fuzzing [--suite <path>] [--n <int>] [--tier cheap|mid]
 | `--unsafe-no-sandbox` | off | Skip OS sandbox (ONLY inside disposable VM) |
 | `--strict-budget` | off | Any inconclusive stop → exit 1 (CI recommended) |
 | `--fail-on-behavioral` | off | Behavioral defeats → exit 2 (default: REPORT only) |
-| `--record` | off | Write repro artifacts + cluster findings |
+| `--record` | off | Write repro artifacts (`.adlc/gate-defeats/<id>.json`), RED test scaffolds (`packages/<target>/test/bypass-<id>.test.mjs`), and cluster findings |
 | `--json` | off | Machine-readable JSON report |
 | `--prompt-only` | off | Print adversary prompts and exit 0 (zero API keys) |
 

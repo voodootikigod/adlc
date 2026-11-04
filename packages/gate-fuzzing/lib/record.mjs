@@ -108,6 +108,7 @@ export function writeReproArtifact(defeat, dir = '.', { warn = console.error } =
 
   const reproPath = writeContained(join(dir, GATE_DEFEATS_DIR), `${id}.json`, JSON.stringify(artifact, null, 2));
 
+  defeat.scaffoldPath = null;
   if (!isSafeTarget(target)) {
     warn(`gate-fuzzing: refusing to write a test scaffold for unsafe target ${JSON.stringify(target)}`);
     return reproPath;
@@ -116,7 +117,7 @@ export function writeReproArtifact(defeat, dir = '.', { warn = console.error } =
   // The RED test scaffold goes to the target package's test directory.
   const targetTestDir = join(dir, 'packages', target, 'test');
   try {
-    writeContained(targetTestDir, `bypass-${id}.test.mjs`, scaffold);
+    defeat.scaffoldPath = writeContained(targetTestDir, `bypass-${id}.test.mjs`, scaffold);
   } catch (err) {
     // A containment violation is a bug, never a "warning"; let it surface.
     if (err.message.startsWith('gate-fuzzing: refusing to write outside')) throw err;
@@ -217,8 +218,9 @@ export function recordDefeats(defeats, dir = '.', opts = {}) {
   const recorded = [];
   for (const defeat of defeats) {
     const reproPath = writeReproArtifact(defeat, dir, opts);
+    defeat.reproPath = reproPath;
     const finding = appendFinding(defeat, reproPath, dir);
-    recorded.push({ ...defeat, reproPath, finding });
+    recorded.push({ ...defeat, reproPath, scaffoldPath: defeat.scaffoldPath ?? null, finding });
   }
   return recorded;
 }
