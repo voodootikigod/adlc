@@ -21,6 +21,7 @@ import {
   resolveDriftBaseRef,
   reviewCommand,
   isRenderableRef,
+  isRenderableHash,
 } from '../ceremony-drift.mjs';
 import { tmp } from '@adlc/core/test-kit';
 import { runAsProgram, importFromInlineModule } from './helpers/entry-guard.mjs';
@@ -50,7 +51,7 @@ const readyCommandIds = (body) =>
   body
     .split('\n')
     .map((l) => l.trim())
-    .map((l) => l.match(/^adlc ticket complete (\S+) --write --authorize --json$/))
+    .map((l) => l.match(/^adlc ticket complete (\S+)(?: --expect [0-9a-f]{64})? --write --authorize --json$/))
     .filter(Boolean)
     .map((m) => m[1]);
 const offersCommand = (body) => readyCommandIds(body).length > 0;
@@ -973,4 +974,22 @@ test('imported by another module, the entry guard neither throws nor runs the CL
   const r = importFromInlineModule(SCRIPT, { cwd: tmp(t, 'adlc-import-entry-') });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout + r.stderr, '');
+});
+
+test('#209: renderIssueBody includes --expect <ticketHash> when entry carries a valid 64-hex sha256 and omits invalid hashes', () => {
+  const validHash = 'abcdef0123456789'.repeat(4);
+  assert.equal(isRenderableHash(validHash), true);
+  assert.equal(isRenderableHash('not-a-hash'), false);
+  assert.equal(isRenderableHash('ABCDEF0123456789'.repeat(4)), false);
+  assert.equal(isRenderableHash(null), false);
+  const bodyWithHash = renderIssueBody([
+    { id: 'T7', reason: 'explicit status: "done"', rails: ['packages/core/**'], blocker: 'rails-freeze', ticketHash: validHash },
+  ]);
+  assert.match(bodyWithHash, new RegExp(`adlc ticket complete T7 --expect ${validHash} --write --authorize --json`));
+  assert.deepEqual(readyCommandIds(bodyWithHash), ['T7']);
+  const bodyWithHostileHash = renderIssueBody([
+    { id: 'T7', reason: 'explicit status: "done"', rails: ['packages/core/**'], blocker: 'rails-freeze', ticketHash: '$(touch pwned)' },
+  ]);
+  assert.match(bodyWithHostileHash, /adlc ticket complete T7 --write --authorize --json/);
+  assert.doesNotMatch(bodyWithHostileHash, /--expect/);
 });

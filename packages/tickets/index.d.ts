@@ -50,7 +50,7 @@ export class TicketService {
   planCreate(input?: Partial<Ticket>): TicketPlan;
   planUpdate(id: string, input: Ticket, options?: { expect?: string; authorized?: boolean }): TicketPlan;
   planDiscard(id: string): TicketPlan;
-  planComplete(id: string, options?: { authorized?: boolean }): TicketPlan;
+  planComplete(id: string, options?: { expect?: string; authorized?: boolean }): TicketPlan;
   planReassign(id: string, nextId: string, options?: { authorized?: boolean }): TicketPlan;
   planReconciliation(tickets: Ticket[], options?: { authorized?: boolean; expectedSnapshotHash?: string | null }): TicketPlan;
   apply(plan: TicketPlan, options?: { lock?: unknown }): TicketSnapshot;

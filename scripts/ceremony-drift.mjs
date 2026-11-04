@@ -115,7 +115,14 @@ export function reviewCommand(baseRef = resolveDriftBaseRef()) {
 // before completing one ticket — a repo-wide change outside the reviewed diff.
 // `--json` makes the command non-interactive, so it does exactly what is
 // advertised: complete one ticket, nothing else.
-const completeCmd = (id) => `adlc ticket complete ${id} --write --authorize --json`;
+const SAFE_TICKET_HASH = /^[0-9a-f]{64}$/;
+export const isRenderableHash = (hash) => typeof hash === 'string' && SAFE_TICKET_HASH.test(hash);
+const completeCmd = (t) => {
+  const id = typeof t === 'string' ? t : t?.id;
+  const hash = typeof t === 'object' && t !== null ? t.ticketHash : undefined;
+  const expectArg = isRenderableHash(hash) ? ` --expect ${hash}` : '';
+  return `adlc ticket complete ${id}${expectArg} --write --authorize --json`;
+};
 
 // A ticket id is interpolated into a copy-paste shell command in a bot-authored
 // issue. The id comes from the repo (a merged ticket), and the store validator
@@ -398,7 +405,7 @@ export function renderIssueBody(needsCeremony, { activeTicketId = null, activeTi
               'must be signed. Without the key the command refuses and changes nothing.',
               '',
               '```bash',
-              ...completable.map((t) => completeCmd(t.id)),
+              ...completable.map((t) => completeCmd(t)),
               '```',
               '',
             ]

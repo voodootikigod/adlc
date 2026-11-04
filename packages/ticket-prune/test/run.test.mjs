@@ -1239,3 +1239,30 @@ test('#210: runTicketPrune fails closed on dry-run and empty store when the dire
     assert.match(badTxRes.error, /is not a safe transaction directory/);
   });
 });
+
+test('#209: runTicketPrune threads a 64-hex ticketHash onto every needsCeremony entry', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prune-expect-hash-'));
+  try {
+    execFileSync('git', ['init'], { cwd: dir, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, 'README.md'), 'hi\n');
+    writeFileSync(
+      join(dir, '.adlc', 'tickets.json'),
+      JSON.stringify({
+        tickets: [
+          { id: 'T1', title: 'done railed', status: 'done', scope: ['README.md'], rails: ['README.md'] },
+        ],
+      }),
+    );
+    execFileSync('git', ['add', '.'], { cwd: dir });
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: dir, stdio: 'ignore' });
+    const res = runTicketPrune({ cwd: dir });
+    assert.equal(res.ok, true);
+    assert.equal(res.needsCeremony.length, 1);
+    assert.match(res.needsCeremony[0].ticketHash, /^[0-9a-f]{64}$/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

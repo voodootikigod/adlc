@@ -72,8 +72,7 @@ adlc ticket-prune --json
   ```
 
   Per-ticket by design: it names one id (no bulk recompute, no cross-ticket blast
-  radius — though the id's own version is still resolved at run time, so verify it is
-  still genuinely done before completing), goes through the ticket-store transaction,
+  radius; pass `--expect <ticket-hash>` to bind the completion to the exact reviewed version), goes through the ticket-store transaction,
   records completion evidence to `.adlc/manifest.jsonl`, and works on both the legacy
   and directory stores. Completing a ticket adds `completed: true` and expires its
   rails (T36). A `preexisting-completed-field` ticket carries a value someone set on

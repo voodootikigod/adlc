@@ -1,0 +1,33 @@
+{
+  "body": "## Context\nIssue #209: `adlc ticket complete <id>` does not accept `--expect <ticketHash>`, leaving a same-ticket TOCTOU window between when the ceremony-drift issue is rendered and when an admin executes the completion command.\n\n## Acceptance Criteria\n- `TicketService.planComplete(id, { expect, authorized })` and `adlc ticket complete <id> [--expect <ticket-hash>]` refuse with `conflict('STALE_TICKET', `ticket ${id} hash changed`)` (exit code 2, no mutation) when `expect` is provided and does not match the current `snapshot.ticketHashes[id]`.\n- `packages/ticket-prune` threads `ticketHash` (`ticketHash(ticket)` from `@adlc/tickets`) onto `needsCeremony` entries.\n- `scripts/ceremony-drift.mjs` renders `--expect <ticketHash>` in `completeCmd` when `t.ticketHash` is a valid 64-hex sha256 digest.\n- `packages/ticket-prune/README.md` and the `adlc-maintain` docs drop the `\"planned follow-up\"` caveat and document `--expect <ticket-hash>`.\n\n## Verification\n`node --test packages/tickets/test/service.test.mjs packages/tickets/test/help.test.mjs packages/ticket-prune/test/detect.test.mjs packages/ticket-prune/test/run.test.mjs scripts/test/ceremony-drift.test.mjs scripts/test/ceremony-drift-exit.test.mjs scripts/test/ceremony-command-safety.test.mjs`",
+  "category": "bug",
+  "id": "T-01M6J6T161R02KYPCNGB4XGN31",
+  "rails": [
+    "packages/tickets/test/bypass-audit.test.mjs",
+    "packages/tickets/test/canonical.test.mjs",
+    "packages/ticket-prune/test/list-tracked-files.test.mjs",
+    "scripts/test/ceremony-command-safety.test.mjs"
+  ],
+  "scope": [
+    "packages/tickets/bin/adlc-tickets.mjs",
+    "packages/tickets/lib/service.mjs",
+    "packages/tickets/lib/help.mjs",
+    "packages/tickets/index.d.ts",
+    "packages/tickets/test/service.test.mjs",
+    "packages/tickets/test/help.test.mjs",
+    "packages/ticket-prune/lib/detect.mjs",
+    "packages/ticket-prune/lib/run.mjs",
+    "packages/ticket-prune/README.md",
+    "packages/ticket-prune/test/detect.test.mjs",
+    "packages/ticket-prune/test/run.test.mjs",
+    "scripts/ceremony-drift.mjs",
+    "scripts/test/ceremony-drift.test.mjs",
+    "scripts/test/ceremony-drift-exit.test.mjs",
+    "plugins/adlc-claude-code/commands/adlc-maintain.md",
+    "plugins/adlc-cursor/command/adlc-maintain.md",
+    "plugins/adlc-opencode/command/adlc-maintain.md",
+    "plugins/adlc-pi/prompts/adlc-maintain.md",
+    "plugins/adlc-copilot/skills/adlc-maintain/SKILL.md"
+  ],
+  "title": "tickets,ticket-prune: add adlc ticket complete --expect <hash> and render it in ceremony-drift (#209)"
+}
