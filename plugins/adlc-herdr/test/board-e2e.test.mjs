@@ -108,3 +108,18 @@ test('a non-repo directory refuses with the no-repo message', () => {
   assert.equal(res.status, 0);
   assert.ok(res.stdout.includes('does not resolve to a git repository'));
 });
+
+test('board renders the untested version banner when herdr --version exceeds the tested minor ceiling (#831)', () => {
+  writeFileSync(join(dir, 'herdr'), [
+    '#!/bin/sh',
+    'case "$1 $2" in',
+    '  "--version ") echo "herdr 0.8.0" ;;',
+    `  "pane get") echo '{"result":{"pane":{"foreground_cwd":"${repo}"}}}' ;;`,
+    `  "api snapshot") echo '{"result":{"snapshot":{"panes":[]}}}' ;;`,
+    '  *) exit 0 ;;',
+    'esac',
+  ].join('\n'));
+  const res = runBoard(JSON.stringify({ focused_pane_id: 'w1:p1', focused_pane_cwd: repo }));
+  assert.equal(res.status, 0);
+  assert.ok(res.stdout.includes('! untested herdr version 0.8.0 (tested <= 0.7.4)'), `missing warning in: ${res.stdout}`);
+});

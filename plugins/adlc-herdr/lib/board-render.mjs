@@ -296,7 +296,7 @@ export function composeFrame(body, footer, terminalRows) {
  *  uses cursor-home (not an alternate screen), so a frame taller than the pane
  *  would scroll and duplicate every refresh. A truncated frame ends with a
  *  "...N more" marker. */
-export function renderBoard({ width, height, repoRoot, active, phase, groups, paneRows, ledger, selected, fleetRows }) {
+export function renderBoard({ width, height, repoRoot, active, phase, groups, paneRows, ledger, selected, fleetRows, warning }) {
   const emit = emitWidth(width); // never write past the real pane, floor or not
   // Truncate by terminal CELLS. sanitizeToken's cap is code units, so a row of
   // CJK text passed its check at `w` characters and then occupied 2w columns.
@@ -333,6 +333,10 @@ export function renderBoard({ width, height, repoRoot, active, phase, groups, pa
   // Ambiguous test in display-width.test.mjs); the separator is the one
   // character the renderer CHOOSES, so it can simply be unambiguous.
   push(`${DIM}${'-'.repeat(Math.min(emit, 80))}${RESET}`);
+  const hasWarning = typeof warning === 'string' && warning !== '';
+  if (hasWarning) {
+    push(`${BOLD}${cut(`! ${warning}`)}${RESET}`);
+  }
 
   const sections = [
     ['ready', groups?.ready ?? []],
@@ -403,6 +407,7 @@ export function renderBoard({ width, height, repoRoot, active, phase, groups, pa
   // than measured from `lines`, because construction now stops at the budget and
   // never builds the hidden rows — which is the whole point.
   const plannedRows = 2 // header + separator
+    + (hasWarning ? 1 : 0)
     + (total === 0 ? 1 : sections.length + total)
     + 1 + Math.max(1, Array.isArray(paneRows) ? paneRows.length : 0)
     + 1 + Math.max(1, Array.isArray(ledger) ? ledger.length : 0)

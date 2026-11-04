@@ -218,3 +218,12 @@ test('versionGate: a non-semver ceiling throws a clear TypeError, not an unguard
   assert.throws(() => versionGate('herdr 0.7.4', 'not-a-version'), TypeError);
   assert.throws(() => versionGate('herdr 0.7.4', null), TypeError);
 });
+
+test('versionGate: patch bumps within the tested major.minor series remain supported (#831)', () => {
+  assert.deepEqual(versionGate('herdr 0.7.5', '0.7.4'), { supported: true });
+  assert.deepEqual(versionGate('herdr 0.7.99', '0.7.4'), { supported: true });
+  assert.deepEqual(versionGate('herdr 0.6.99', '0.7.4'), { supported: true });
+  const majorBump = versionGate('herdr 1.0.0', '0.7.4');
+  assert.equal(majorBump.supported, false);
+  assert.equal(majorBump.token, 'untested herdr version 1.0.0 (tested <= 0.7.4)');
+});
