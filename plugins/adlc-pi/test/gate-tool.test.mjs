@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync , readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
 import { makeGateExecute, registerGateTool, tokenizeArgs } from '../lib/gate-tool.mjs';
@@ -270,4 +270,14 @@ test('tokenizeArgs: whitespace split with quote stripping; empty → []', () => 
   assert.deepEqual(tokenizeArgs('  '), []);
   assert.deepEqual(tokenizeArgs('--ticket T1 --tickets .adlc/tickets.json'), ['--ticket', 'T1', '--tickets', '.adlc/tickets.json']);
   assert.deepEqual(tokenizeArgs(`--rails "test/**" 'a b'`), ['--rails', 'test/**', 'a b']);
+});
+
+test('pi README and docs describe adlc_gate as invoking the adlc CLI under a rails-aware argv policy (#842)', () => {
+  const repoRoot = new URL('../../../', import.meta.url).pathname;
+  const readme = readFileSync(join(repoRoot, 'plugins/adlc-pi/README.md'), 'utf8');
+  const doc = readFileSync(join(repoRoot, 'docs/integrations/pi.md'), 'utf8');
+  assert.match(readme, /`adlc_gate` runs deterministic ADLC gates by invoking the `adlc` CLI under a rails-aware argv policy/);
+  assert.doesNotMatch(readme, /keyless through your session model/);
+  assert.match(doc, /deterministic ADLC gates via the `adlc` CLI under a rails-aware argv policy/);
+  assert.doesNotMatch(doc, /LLM-backed gates keyless via the session model/);
 });
