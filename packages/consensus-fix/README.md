@@ -39,9 +39,9 @@ consensus-fix --test-cmd "..." --files a.mjs,b.mjs [options]
 
 | Code | Meaning |
 |------|---------|
-| `0` | Gate passes: at least one candidate survived and there is a consensus group with 2+ members (or `--n < 3`). |
+| `0` | Gate passes: at least one candidate survived and there is a consensus group with 2+ members (or effective fan width `< 3` — i.e. `--n < 3` or `--providers` with fewer than 3 providers). |
 | `1` | Operational error: bad arguments, unreadable files, dirty tree (without `--allow-dirty`), no LLM provider. |
-| `2` | Gate fails: no candidates survived OR all survivors are singletons and `--n >= 3` (all-divergent, spec ambiguity). |
+| `2` | Gate fails: no candidates survived OR all survivors are singletons and effective fan width `>= 3` (all-divergent, spec ambiguity). |
 
 ---
 

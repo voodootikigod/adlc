@@ -13,7 +13,7 @@ kill whole-codebase mutation testing.
 ## Usage
 
 ```
-hollow-test --test-cmd "node --test test/" [options]
+hollow-test --test-cmd "node --test test/*.test.mjs" [options]
 ```
 
 ### Flags
@@ -79,7 +79,7 @@ hollow-test --test-cmd "node --test test/foo-rails.test.mjs" --base main \
 
 ```bash
 # Check the last commit
-hollow-test --test-cmd "node --test test/" --base HEAD~1
+hollow-test --test-cmd "node --test test/*.test.mjs" --base HEAD~1
 
 # Check staged changes vs main
 hollow-test --test-cmd "npm test" --base main --max 30
