@@ -206,12 +206,16 @@ export function shellIsPositivelyReadOnly(text) {
   const normalized = String(text ?? '').trim();
   if (normalized === '') return true;
   const readOnlyPrefix = /^(?:git\s+(?:status|diff|show|log|rev-parse|branch|ls-files)\b|pwd\b|ls\b|rg\b|grep\b|cat\b|sed\s+-n\b|head\b|tail\b|wc\b|nl\b|node\s+(?:--check|--test)\b|npm\s+(?:test|run\s+test)\b|adlc\s+(?:hollow-test|rails-guard|flail-detector|preflight|run\s+p[34])\b)/;
+  // `adlc flail-detector --record` and `adlc rails-guard --record` append a
+  // signed entry to the manifest ledger (#626). Reject any `--record` token
+  // on an `adlc` segment so a ledger write is never classified read-only.
+  const adlcRecordOption = /^adlc\s+.*(?:^|[\s"'])--record(?:$|=[\s\S]*|[\s"'])/;
   const segments = splitOnUnquotedSeparators(normalized);
   if (segments === null) return false; // unparseable → not positively read-only
   return segments
     .map((s) => s.trim())
     .filter((s) => s !== '')
-    .every((segment) => readOnlyPrefix.test(segment));
+    .every((segment) => readOnlyPrefix.test(segment) && !adlcRecordOption.test(segment));
 }
 
 /** A nominally read-only command smuggling a write via an output option. */

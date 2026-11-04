@@ -85,6 +85,30 @@ test('non-opaque mutation: echo > file', () => assert.equal(shellHasOpaqueMutati
 for (const cmd of ['git status', 'git diff HEAD', 'ls', 'rg pattern', 'cat a.txt', 'sed -n 1,10p f', 'head -5 f', 'npm test', '']) {
   test(`read-only: "${cmd}"`, () => assert.equal(shellIsPositivelyReadOnly(cmd), true));
 }
+for (const cmd of [
+  'adlc flail-detector build.log --json',
+  'adlc rails-guard --ticket T1 --json',
+  'adlc hollow-test --test-cmd "npm test"',
+  'adlc preflight --json',
+  'adlc run p3 --ticket T1 --json',
+  'adlc run p4 --ticket T1 --json',
+  'grep --record file.txt',
+]) {
+  test(`read-only adlc/non-adlc command (#626): "${cmd}"`, () => assert.equal(shellIsPositivelyReadOnly(cmd), true));
+}
+for (const cmd of [
+  'adlc flail-detector build.log --record --ticket T1',
+  'adlc rails-guard --ticket T1 --record --json',
+  'adlc rails-guard --record=true',
+  'adlc flail-detector "--record" build.log',
+  "adlc flail-detector '--record' build.log",
+  'git status && adlc flail-detector build.log --record',
+]) {
+  test(`adlc --record is NOT positively read-only (#626): ${cmd}`, () => {
+    assert.equal(shellIsPositivelyReadOnly(cmd), false);
+    assert.equal(classifyShellCommand(cmd).readOnly, false);
+  });
+}
 for (const cmd of ['echo hello', 'make', 'npm install', 'cargo build']) {
   test(`NOT positively read-only: ${cmd}`, () => assert.equal(shellIsPositivelyReadOnly(cmd), false));
 }
