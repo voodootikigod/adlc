@@ -125,3 +125,11 @@ test("#854: context-handoff README documents Exit codes table (0, 1, 2)", () => 
   assert.match(readme, /\| `1` \|/);
   assert.match(readme, /\| `2` \|/);
 });
+
+test("#607: context-handoff README documents signed one-shot .bypass-grant.json and audit-only manifest entry", () => {
+  const readme = readFileSync(join(REPO_ROOT, "packages", "context-handoff", "README.md"), "utf8");
+  assert.doesNotMatch(readme, /grant on stdout is scoped to the calling adapter invocation/);
+  assert.match(readme, /\.bypass-grant\.json/);
+  assert.match(readme, /BYPASS_GRANT_TTL_MS/);
+  assert.match(readme, /not itself consulted for authorization/);
+});
