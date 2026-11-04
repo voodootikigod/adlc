@@ -71,6 +71,14 @@ test('AC1: no pi-runtime core package leaks into dependencies (all five)', () =>
   }
 });
 
+test('AC1: all @adlc/* runtime deps in plugins/adlc-pi/package.json use consistent caret ranges (#872)', () => {
+  const adlcDeps = Object.entries(pkg.dependencies ?? {}).filter(([name]) => name.startsWith('@adlc/'));
+  assert.ok(adlcDeps.length >= 7, 'expected at least 7 @adlc/* runtime dependencies');
+  for (const [name, range] of adlcDeps) {
+    assert.match(range, /^\^\d+\.\d+\.\d+/, `${name} must use a caret range to avoid duplicate @adlc/tickets copies, got ${range}`);
+  }
+});
+
 test('AC1: @adlc/* runtime deps stay in dependencies (installed under --omit=dev)', () => {
   for (const name of ['@adlc/core', '@adlc/rails-guard', '@adlc/build-gate', '@adlc/flail-detector', '@adlc/gate-manifest']) {
     assert.ok(pkg.dependencies?.[name], `${name} must be a runtime dependency`);

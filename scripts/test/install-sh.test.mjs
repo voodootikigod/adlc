@@ -595,6 +595,32 @@ test('install.sh delegates the Gemini install to the package helper, never agy/j
   }
 });
 
+test('install.sh detects Google Gemini and delegates to the package helper when only jetski is present (agy absent, #458)', () => {
+  const box = sandbox({ bins: ['node', 'npm', 'jetski'] });
+  try {
+    const helperDir = path.join(box.root, 'npmroot', '@adlc', 'gemini', 'bin');
+    mkdirSync(helperDir, { recursive: true });
+    writeFileSync(path.join(helperDir, 'cli.mjs'), '// helper\n');
+
+    const result = runInstaller(box);
+    assert.equal(result.status, 0, `installer failed: ${result.stderr}`);
+
+    const commands = box.commands();
+    const nodeLine = commands
+      .split('\n')
+      .find((line) => line.startsWith('node ') && line.includes('cli.mjs'));
+    assert.ok(nodeLine, `the helper was never invoked when only jetski is present; log was:\n${commands}`);
+    assert.match(nodeLine, /bin\/cli\.mjs install$/, `expected \`<helper> install\`: ${nodeLine}`);
+    assert.ok(
+      !/(^|\n)agy /.test(commands) && !/(^|\n)jetski /.test(commands),
+      `install.sh must not invoke agy/jetski directly; it delegates:\n${commands}`,
+    );
+    assert.match(result.stdout, /installed for: .*Google Gemini/);
+  } finally {
+    box.cleanup();
+  }
+});
+
 test('install.sh refuses to run on native Windows but allows WSL', () => {
   // Git Bash / MSYS / Cygwin give a POSIX shell on a platform where the toolkit
   // passes 6 of 28 suites, so the script would install a broken toolkit and
