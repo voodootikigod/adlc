@@ -1,0 +1,15 @@
+{
+  "body": "Context: Issue #589. packages/build-gate/lib/override.mjs recordOverride() calls @adlc/gate-manifest record() with key: getKey(). When ADLC_MANIFEST_KEY is unset (key is null/empty), record() appends an unsigned build-gate-bypass entry even if the repository ledger already contains signed entries, allowing a signed repo to be downgraded to an unsigned bypass.\nChanges:\n1. In packages/build-gate/lib/override.mjs, before appending the override entry, when key is null/undefined/empty, inspect readManifestForest(dir).entries and return false (refusing the override without writing) if any existing entry carries a non-empty string sig field.\n2. Update packages/build-gate/README.md to document that an unsigned override is refused when the ledger already carries signed entries.\n3. Add unit and CLI tests in packages/build-gate/test/cli.test.mjs verifying that keyless recordOverride / ADLC_BUILD_GATE_BYPASS=1 still works on an unsigned ledger, succeeds when a valid signing key is provided on a signed ledger, and is refused (returns false / exits 2 without appending) when key is absent and the ledger already has a signed entry.\nAcceptance Criteria:\n- AC1: recordOverride({ ..., key: null }) returns false and does not append to the ledger when readManifestForest(dir) contains any signed entry.\n- AC2: recordOverride({ ..., key: validKey }) succeeds and appends a signed entry on a signed ledger; keyless recordOverride continues to succeed on an unsigned ledger.\n- AC3: node --test packages/build-gate/test/*.test.mjs and mutation-gate pass.",
+  "category": "bug",
+  "id": "T-01M6J34JB4CWJ3NFX99204YR54",
+  "rails": [
+    "packages/build-gate/test/decide.test.mjs",
+    "packages/build-gate/test/risk.test.mjs"
+  ],
+  "scope": [
+    "packages/build-gate/lib/override.mjs",
+    "packages/build-gate/README.md",
+    "packages/build-gate/test/cli.test.mjs"
+  ],
+  "title": "fix(build-gate): refuse unsigned override when manifest ledger already contains signed entries (#589)"
+}

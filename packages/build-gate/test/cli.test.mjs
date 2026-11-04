@@ -9,6 +9,8 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { record } from '@adlc/gate-manifest/lib/record.mjs';
+import { recordOverride } from '../lib/override.mjs';
 
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const BIN = join(PKG_ROOT, 'bin', 'build-gate.mjs');
@@ -275,4 +277,76 @@ test('--help documents --ticket <id> (#894)', () => {
   const r = run(['--help']);
   assert.equal(r.code, 0);
   assert.match(r.stdout, /--ticket <id>\s+Ticket to gate \(alias for positional <ticket-id>\)/);
+});
+
+test('ADLC_BUILD_GATE_BYPASS=1 without ADLC_MANIFEST_KEY is refused when ledger has signed entries (#589)', () => {
+  withTicketRepo([{ id: 'T1', title: 'x', category: 'contract' }], (dir) => {
+    const adlcDir = join(dir, '.' + 'adlc');
+    record({ gate: 'coldstart', ticket: 'T1', rawData: '{}', dir: adlcDir, key: 'secret-test-key' });
+    const manifestFile = join(adlcDir, 'manifest' + '.jsonl');
+    const beforeLines = readFileSync(manifestFile, 'utf8').trim().split('\n');
+    assert.equal(beforeLines.length, 1);
+
+    const r = run(['T1', '--depth', '999', '--json'], {
+      cwd: dir,
+      env: { ADLC_BUILD_GATE_BYPASS: '1', ADLC_MANIFEST_KEY: '' },
+    });
+    assert.equal(r.code, 2);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.decision, 'deny');
+    assert.equal(out.overridden, false);
+    assert.match(out.reason, /refused|could not be recorded/i);
+
+    const afterLines = readFileSync(manifestFile, 'utf8').trim().split('\n');
+    assert.equal(afterLines.length, 1, 'must not append an unsigned entry to a signed ledger');
+  });
+});
+
+test('ADLC_BUILD_GATE_BYPASS=1 with ADLC_MANIFEST_KEY succeeds on a signed ledger (#589)', () => {
+  withTicketRepo([{ id: 'T1', title: 'x', category: 'contract' }], (dir) => {
+    const adlcDir = join(dir, '.' + 'adlc');
+    record({ gate: 'coldstart', ticket: 'T1', rawData: '{}', dir: adlcDir, key: 'secret-test-key' });
+
+    const r = run(['T1', '--depth', '999', '--json'], {
+      cwd: dir,
+      env: { ADLC_BUILD_GATE_BYPASS: '1', ADLC_MANIFEST_KEY: 'secret-test-key' },
+    });
+    assert.equal(r.code, 0, r.stderr);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.decision, 'allow');
+    assert.equal(out.overridden, true);
+
+    const manifestFile = join(adlcDir, 'manifest' + '.jsonl');
+    const lines = readFileSync(manifestFile, 'utf8').trim().split('\n');
+    assert.equal(lines.length, 2);
+    const last = JSON.parse(lines[1]);
+    assert.equal(last.gate, 'build-gate-bypass');
+    assert.equal(typeof last.sig, 'string');
+    assert.ok(last.sig.length > 0);
+  });
+});
+
+test('recordOverride unit: refuses missing/empty/non-string key on signed ledger, allows unsigned ledger (#589)', () => {
+  withTicketRepo([{ id: 'T1', title: 'x', category: 'contract' }], (dir) => {
+    const adlcDir = join(dir, '.' + 'adlc');
+    // Unsigned ledger -> keyless override allowed
+    assert.equal(recordOverride({ ticketId: 'T1', signals: ['s1'], depth: 50, sessionBytes: 100, reason: 'r', dir: adlcDir, key: null }), true);
+    // Add a signed entry
+    record({ gate: 'coldstart', ticket: 'T1', rawData: '{}', dir: adlcDir, key: 'secret-test-key' });
+    // Signed ledger -> null, undefined, empty string, non-string keys all refused
+    assert.equal(recordOverride({ ticketId: 'T1', signals: ['s1'], depth: 50, sessionBytes: 100, reason: 'r', dir: adlcDir, key: null }), false);
+    assert.equal(recordOverride({ ticketId: 'T1', signals: ['s1'], depth: 50, sessionBytes: 100, reason: 'r', dir: adlcDir, key: undefined }), false);
+    assert.equal(recordOverride({ ticketId: 'T1', signals: ['s1'], depth: 50, sessionBytes: 100, reason: 'r', dir: adlcDir, key: '' }), false);
+    assert.equal(recordOverride({ ticketId: 'T1', signals: ['s1'], depth: 50, sessionBytes: 100, reason: 'r', dir: adlcDir, key: 123 }), false);
+    // Signed ledger + valid non-empty key -> allowed
+    assert.equal(recordOverride({ ticketId: 'T1', signals: ['s1'], depth: 50, sessionBytes: 100, reason: 'r', dir: adlcDir, key: 'secret-test-key' }), true);
+    // Unwritable dir -> returns false
+    assert.equal(recordOverride({ ticketId: 'T1', signals: ['s1'], depth: 50, sessionBytes: 100, reason: 'r', dir: '/dev/null/impossible', key: 'secret-test-key' }), false);
+  });
+});
+
+test('README documents signed-ledger requirement for ADLC_BUILD_GATE_BYPASS (#589)', () => {
+  const readme = readFileSync(README, 'utf8');
+  assert.match(readme, /ADLC_MANIFEST_KEY/);
+  assert.match(readme, /signed entries/i);
 });
