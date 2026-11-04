@@ -895,3 +895,25 @@ test('frameGeometry reports no height when the terminal reports no rows', () => 
   }
   assert.deepEqual(frameGeometry(), { width: 80, height: null }, 'and no argument at all is safe');
 });
+
+test('renderBoard renders the version warning banner below the separator and counts it in plannedRows (#831)', () => {
+  const state = baseState();
+  state.width = 60;
+  state.warning = 'untested herdr version 0.8.0 (tested <= 0.7.4)';
+  const out = renderBoard(state);
+  const plainLines = out.split('\n').map((l) => l.replace(/\x1b\[[0-9;]*m/g, ''));
+  assert.equal(plainLines[2], '! untested herdr version 0.8.0 (tested <= 0.7.4)');
+
+  // Empty string or null warning renders no banner row
+  const noWarn = renderBoard({ ...baseState(), warning: '' }).split('\n').map((l) => l.replace(/\x1b\[[0-9;]*m/g, ''));
+  assert.ok(!noWarn.some((l) => l.startsWith('! ')));
+  const oneCharWarn = renderBoard({ ...baseState(), warning: 'X' }).split('\n').map((l) => l.replace(/\x1b\[[0-9;]*m/g, ''));
+  assert.equal(oneCharWarn[2], '! X');
+
+  // Height budget accounts for the warning row in the "...N more" marker
+  const clamped = renderBoard({ ...state, height: 6 }).split('\n');
+  assert.equal(clamped.length, 6);
+  const marker = clamped[clamped.length - 1].replace(/\x1b\[[0-9;]*m/g, '');
+  // 2 chrome + 1 warning + 3 section headers + 3 tickets + 2 panes + 2 ledger = 13 plannedRows -> 13 - 6 + 1 = 8 more
+  assert.match(marker, /\.\.\.8 more/);
+});

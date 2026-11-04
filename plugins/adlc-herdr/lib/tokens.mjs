@@ -81,18 +81,21 @@ export function buildWorkspaceClearArgs(workspaceId) {
   return args;
 }
 
+export const TESTED_CEILING = '0.7.4';
+
 /**
- * Version gate (plan §6.5): supported at or below the tested ceiling;
- * anything newer — or unparseable — degrades to a single warning token.
+ * Version gate (plan §6.5, issue #831): supported within the tested
+ * major.minor series (tolerates patch bumps above the ceiling) or older;
+ * a newer major/minor — or unparseable output — degrades to a warning token.
  */
 export function versionGate(versionOutput, ceiling) {
   const match = typeof versionOutput === 'string' ? versionOutput.match(/(\d+)\.(\d+)\.(\d+)/) : null;
   if (!match) return { supported: false, token: 'untested herdr version (unparseable)' };
   const ceilMatch = typeof ceiling === 'string' ? ceiling.match(/(\d+)\.(\d+)\.(\d+)/) : null;
   if (!ceilMatch) throw new TypeError(`versionGate ceiling must be an x.y.z string, got ${ceiling}`);
-  const version = match.slice(1, 4).map(Number);
-  const ceil = ceilMatch.slice(1, 4).map(Number);
-  for (let i = 0; i < 3; i += 1) {
+  const version = match.slice(1, 3).map(Number);
+  const ceil = ceilMatch.slice(1, 3).map(Number);
+  for (let i = 0; i < 2; i += 1) {
     if (version[i] > ceil[i]) {
       return { supported: false, token: `untested herdr version ${match[0]} (tested <= ${ceiling})` };
     }

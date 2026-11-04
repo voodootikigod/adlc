@@ -39,8 +39,10 @@ Node and declares no `[[build]]` commands — installation executes nothing.
 At startup the watcher probes `herdr --version`; a probe that fails (herdr not
 yet on the plugin's PATH, a transient IPC hiccup) is logged to stderr and
 retried on the heartbeat rather than disabling the watcher for the session —
-only a probe that succeeds with a version newer than the tested ceiling takes
-the single-warning-token degrade path.
+a probe that succeeds within the tested major.minor series (tolerating patch
+bumps above `TESTED_CEILING`) runs normally, while a newer major or minor
+version publishes the warning token and renders the same warning banner on the
+board.
 
 ### About the npm package
 

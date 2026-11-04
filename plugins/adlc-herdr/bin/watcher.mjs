@@ -13,14 +13,13 @@ import { resolveRepoRoot } from '../lib/repo-root.mjs';
 import { readActiveTicket, readLatestPhase, backlogCounts, readTicketsViaExport, readFleetStatus } from '../lib/adlc-state.mjs';
 import {
   buildReportArgs, buildWorkspaceReportArgs, diffPublishes, droppedKeys,
-  buildPaneClearArgs, buildWorkspaceClearArgs,
+  buildPaneClearArgs, buildWorkspaceClearArgs, TESTED_CEILING,
 } from '../lib/tokens.mjs';
 import { probeOutcome } from '../lib/probe.mjs';
 import { planTokens, pendingWatchDirs, staleWatchDirs, deadWatchDirs, mapLimit, once } from '../lib/watch-plan.mjs';
 import { runFleetBridgeBeat, fleetTabArgs, fleetPaneCloseArgs, tabIdFromResponse, paneIdFromResponse } from '../lib/fleet-bridge.mjs';
 import { notifyArgs } from '../lib/actions.mjs';
 
-const TESTED_CEILING = '0.7.4';
 const TOKEN_TTL_MS = 90_000;
 const HEARTBEAT_MS = 45_000;
 const DEBOUNCE_MS = 400;

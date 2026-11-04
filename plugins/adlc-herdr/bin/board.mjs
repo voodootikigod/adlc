@@ -15,6 +15,8 @@ import {
   readTicketsViaExport, storeCacheKey, makeKeyedCache, readFleetStatus,
 } from '../lib/adlc-state.mjs';
 import { buildPaneMap } from '../lib/panemap.mjs';
+import { probeOutcome } from '../lib/probe.mjs';
+import { TESTED_CEILING } from '../lib/tokens.mjs';
 import { renderBoard, boardFooter, composeFrame, frameGeometry, withCurrentGeometry } from '../lib/board-render.mjs';
 import { planFleetBridge, KNOWN_FLEET_SCHEMA_VERSION } from '../lib/fleet-bridge.mjs';
 import { flattenGroups, nextSelectedId, focusSelected, classifyKey, redrawBoard } from '../lib/board-nav.mjs';
@@ -49,6 +51,8 @@ async function resolveRepo() {
 }
 
 async function gather(repoRoot) {
+  const versionProbe = probeOutcome(await runHerdr(['--version']), TESTED_CEILING);
+  const warning = versionProbe.kind === 'unsupported' ? versionProbe.token : null;
   const active = readActiveTicket(repoRoot);
   const phase = active.state === 'active' ? readLatestPhase(repoRoot, active.id) : null;
   const tickets = await readBacklogTickets(repoRoot);
@@ -67,6 +71,7 @@ async function gather(repoRoot) {
   return {
     ...frameGeometry({ columns: process.stdout.columns, rows: process.stdout.rows }),
     repoRoot,
+    warning,
     active,
     phase,
     groups,
