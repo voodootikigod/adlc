@@ -15,7 +15,7 @@ PreToolUse call when: the active ticket is risk-tier `'high'`
 (`packages/build-gate/lib/risk.mjs`'s `computeRiskTier`) **and** the current
 session is context-degraded (`packages/build-gate/lib/depth-signal.mjs`'s
 `isDegraded`: tool-call count over a bounded transcript window > 40, or
-transcript byte size > 256 KiB). A normal-risk ticket is always allowed; a
+transcript byte size > 8 MiB). A normal-risk ticket is always allowed; a
 high-risk ticket in a shallow/fresh session is allowed; only the
 high-risk-and-degraded combination denies, and only until the operator
 resumes fresh or records an audited override.

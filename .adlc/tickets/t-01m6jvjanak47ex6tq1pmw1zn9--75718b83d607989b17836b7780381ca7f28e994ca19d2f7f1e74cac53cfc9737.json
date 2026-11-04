@@ -1,0 +1,17 @@
+{
+  "body": "1. (#457) In apps/docs/lib/integration-facts.mjs, update GEMINI_INTEGRATION surfacesSection.title, phaseRoutesHeader.entryHeader, and installSection.title from Antigravity to Gemini, and add a regression test in apps/docs/test/integration-facts.test.mjs.\n2. (#547) In .adlc/specs/codex-build-gate.md, update the stale 256 KiB byte threshold claim to 8 MiB.\n3. (#864) In docs/integrations/harness-capability-matrix.md, update the shared invariant to state that primitives are either imported from @adlc/core or carried as generated/drift-pinned copies (naming the drift tests), and rename the agy = Antigravity column/tier labels to gemini = Gemini (Antigravity & JetSki).\n\n## Acceptance Criteria\n- Verify: `node --test apps/docs/test/integration-facts.test.mjs`\n\nallow-suppression: none",
+  "category": "docs",
+  "duration": 1,
+  "edges": [],
+  "id": "T-01M6JVJANAK47EX6TQ1PMW1ZN9",
+  "rails": [
+    "packages/core/test/shell.test.mjs"
+  ],
+  "scope": [
+    "apps/docs/lib/integration-facts.mjs",
+    "apps/docs/test/integration-facts.test.mjs",
+    ".adlc/specs/codex-build-gate.md",
+    "docs/integrations/harness-capability-matrix.md"
+  ],
+  "title": "Fix Gemini integration-facts strings, codex-build-gate spec byte threshold, and harness-capability-matrix drift (#457, #547, #864)"
+}
