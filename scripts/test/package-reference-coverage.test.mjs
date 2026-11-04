@@ -63,3 +63,8 @@ test('every recorded LICENSE gap is still a gap — remove an entry once it is f
   assert.deepEqual(closed, []);
   assert.ok(LICENSE_GAPS.size <= 1, 'the gap list only shrinks');
 });
+
+test('root README Use it in other editors list links GitHub Copilot integration guide (#853)', () => {
+  const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
+  assert.match(readme, /\[GitHub Copilot\]\(\.\/docs\/integrations\/copilot\.md\)/);
+});

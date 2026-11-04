@@ -5,14 +5,14 @@ description: Asserts that each ADLC phase's required manifest evidence is presen
 
 # runner
 
-**ADLC phase: cross-phase (P3–P6 assertions)** · **Gate:** a phase is only complete when its required manifest evidence exists and still matches the reviewed content.
+**ADLC phase: cross-phase (P0–P7 assertions)** · **Gate:** a phase is only complete when its required manifest evidence exists and still matches the reviewed content.
 
 ## What it defends against
 
 "A command ran" is not a gate. An orchestrator can call a tool, ignore its result,
 and march on, or edit the code after it was reviewed. The runner refuses that: it
 reads `.adlc/manifest.jsonl` and asserts the specific evidence each phase requires,
-scoped to a ticket for P3–P6. P5 and P6 bind to the current content fingerprint and
+scoped to a ticket for P0–P6. P5 and P6 bind to the current content fingerprint and
 fail closed if reviewed content changes after the fact, so committing the exact
 content reviewed at P5 keeps P6 green while any tampering turns it red. It gives CI
 and Codex skills one stable command for asserting phase completion.
@@ -47,6 +47,19 @@ file) when any of those files has changed since. `flail-check` is bound the same
 with `flail-detector --record --files <changed files>`, and the run is rejected (exit 2, naming the
 marker and file) when it binds no files or any of them has changed since. The latest entry of each
 marker is judged, in any order.
+
+## Per-phase required evidence
+
+| Phase | `--ticket` required | Required manifest markers | How recorded |
+| --- | --- | --- | --- |
+| `p0` | yes | `coldstart` | `adlc coldstart <id> --prompt-only --record-verdict <file\|->` |
+| `p1` | yes | `spec-lint`, `premortem`, `spec-approval` | `adlc spec-lint <spec.md> --record --ticket <id>`, `adlc premortem <spec.md> --prompt-only --record-verdict <file\|-> --ticket <id>`, `adlc gate-manifest record spec-approval --ticket <id> --files <spec.md> --data '{...}'` |
+| `p2` | yes | `coldstart`, `merge-forecast` | `adlc coldstart <id> --prompt-only --record-verdict <file\|->`, `adlc gate-manifest record merge-forecast --ticket <id>` |
+| `p3` | yes | `rails-red`, `hollow-test`, `rails-frozen` | `adlc gate-manifest record rails-red --ticket <id>`, `adlc hollow-test --record --ticket <id> ...`, `adlc gate-manifest record rails-frozen --ticket <id>` |
+| `p4` | yes | `p4-build`, `rails-check`, `flail-check` | `adlc gate-manifest record p4-build --ticket <id> --files <changed-files>`, `adlc rails-guard --record --ticket <id> ...`, `adlc flail-detector <log> --record --ticket <id> --files <changed-files>` |
+| `p5` | yes | `p5-complete` | `adlc prosecute --input <passes.json>` (after dry-pass convergence across >=3 lenses) |
+| `p6` | yes | `p5-complete`, `p6-acceptance-packet` | `adlc accept --ticket <id> --packet .adlc/packet.json [--before ... --after ...]` |
+| `p7` | no | `lesson-foundry`, `rejection-mining`, `skill-rot` | `adlc gate-manifest record lesson-foundry`, `adlc gate-manifest record rejection-mining`, `adlc gate-manifest record skill-rot` |
 
 ## Exit codes
 
