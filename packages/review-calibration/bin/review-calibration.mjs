@@ -35,9 +35,13 @@ import { printScorecard, buildJsonReport } from '../lib/report.mjs';
 
 // ── arg parsing ──────────────────────────────────────────────────────────────
 
+const DEFAULT_REVIEW_TIMEOUT_SEC = 300;
+const TIMEOUT_UNIT_MS = 1000;
+
 const { values } = parseArgs({
   options: {
     'review-cmd':   { type: 'string' },
+    'review-timeout': { type: 'string', default: String(DEFAULT_REVIEW_TIMEOUT_SEC) },
     commit:         { type: 'string', default: 'HEAD' },
     plants:         { type: 'string', default: '8' },
     'min-recall':   { type: 'string', default: '0.5' },
@@ -69,6 +73,9 @@ Options:
   --review-cmd <cmd>    (required) Command to run the reviewer. {base} is the
                         commit ref. Emit JSON findings (adversarial-review --json
                         shape) for rigorous scoring; prose is consumed weakly.
+                        Spawned directly without a shell; on Windows invoke Node
+                        entrypoints (e.g. "node path/to/cli.mjs") rather than .cmd shims.
+  --review-timeout <s>  Timeout in seconds for --review-cmd (default: ${DEFAULT_REVIEW_TIMEOUT_SEC})
   --commit <ref>        Commit to target for plant selection (default: HEAD)
   --plants <n>          Number of bugs to plant (default: 8)
   --min-recall <f>      Minimum recall to pass the gate (default: 0.5)
@@ -147,6 +154,11 @@ if (!values['review-cmd']) {
 }
 
 const reviewCmd  = values['review-cmd'];
+const reviewTimeoutRaw = values['review-timeout'];
+if (!/^[1-9]\d*$/.test(String(reviewTimeoutRaw))) {
+  opError(`--review-timeout must be a positive integer (seconds), got: ${reviewTimeoutRaw}`);
+}
+const reviewTimeout = Number(reviewTimeoutRaw);
 const commitRef  = values.commit;
 const maxPlants  = parseInt(values.plants, 10);
 const minRecall  = parseFloat(values['min-recall']);
@@ -350,7 +362,8 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, handleSignal)
 
 let runResult;
 try {
-  runResult = runWithPlants(validPlants, reviewCmd, commitRef, cwd, 300_000, { journal });
+  const reviewTimeoutMs = reviewTimeout * TIMEOUT_UNIT_MS;
+  runResult = runWithPlants(validPlants, reviewCmd, commitRef, cwd, reviewTimeoutMs, { journal });
 } catch (err) {
   plantedFiles = null;
   opError(`planting or review command failed: ${err.message}`);

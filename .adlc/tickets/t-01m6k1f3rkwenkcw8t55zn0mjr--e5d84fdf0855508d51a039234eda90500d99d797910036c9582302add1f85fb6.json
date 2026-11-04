@@ -1,0 +1,21 @@
+{
+  "acceptance_criteria": [
+    "packages/review-calibration/bin/review-calibration.mjs accepts --review-timeout <seconds> (default 300), rejects non-integer or non-positive values with opError (exit 1), and passes reviewTimeout * 1000 ms to runWithPlants.",
+    "HELP_TEXT and packages/review-calibration/README.md document --review-timeout <seconds> and note that shell:false requires invoking Node entrypoints directly on Windows rather than .cmd/.bat shims."
+  ],
+  "category": "bugfix",
+  "description": "Resolves #758. Add --review-timeout <seconds> (default 300) to packages/review-calibration/bin/review-calibration.mjs, validate it as a positive integer, pass reviewTimeout * 1000 to runWithPlants, and document --review-timeout and Windows .cmd invocation in HELP_TEXT and packages/review-calibration/README.md.",
+  "id": "T-01M6K1F3RKWENKCW8T55ZN0MJR",
+  "rails": [
+    "packages/review-calibration/test/review-calibration.test.mjs"
+  ],
+  "scope": [
+    "packages/review-calibration/bin/review-calibration.mjs",
+    "packages/review-calibration/README.md",
+    "packages/review-calibration/test/review-calibration.test.mjs"
+  ],
+  "title": "review-calibration: add --review-timeout flag and document Windows .cmd invocation (#758)",
+  "verify": [
+    "node --test packages/review-calibration/test/review-calibration.test.mjs"
+  ]
+}

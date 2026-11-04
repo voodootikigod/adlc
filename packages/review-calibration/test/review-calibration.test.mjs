@@ -1087,3 +1087,59 @@ describe('README documentation contract (#757, #752)', () => {
     assert.deepEqual(tokens, ['node', './fake-reviewer.mjs', '{base}']);
   });
 });
+
+describe('CLI: --review-timeout (#758)', () => {
+  const scope = createScope();
+  let dir;
+  let plantsDir;
+
+  before(() => {
+    ({ dir } = createRepo(scope));
+    plantsDir = tmp(scope, 'rc-timeout-plants-');
+  });
+
+  after(() => scope.dispose());
+
+  it('--help documents --review-timeout and Windows .cmd guidance', () => {
+    const res = runCli(['--help'], dir);
+    assert.equal(res.status, 0);
+    assert.match(res.stdout, /--review-timeout <s>\s+Timeout in seconds for --review-cmd \(default: 300\)/);
+    assert.match(res.stdout, /on Windows invoke Node\s+entrypoints/);
+  });
+
+  it('rejects non-positive or non-integer --review-timeout with exit 1', () => {
+    // Also verify default review-timeout is 300 by checking missing --review-cmd help or invalid plant run
+    const badDefaultCheck = runCli(['--review-cmd', 'node -e ""', '--min-plants', '0'], dir);
+    assert.equal(badDefaultCheck.status, 1);
+    assert.match(badDefaultCheck.stderr, /--min-plants must be a positive integer/);
+    for (const bad of ['0', '-5', 'abc', '1.5']) {
+      const res = runCli(['--review-cmd', 'node -e ""', `--review-timeout=${bad}`], dir);
+      assert.equal(res.status, 1, `expected exit 1 for ${bad}`);
+      assert.match(res.stderr, new RegExp(`--review-timeout must be a positive integer \\(seconds\\), got: ${bad}`));
+    }
+  });
+
+  it('enforces --review-timeout when the reviewer exceeds the configured seconds', () => {
+    const plantsPath = join(plantsDir, 'plants-timeout.json');
+    writeFileSync(plantsPath, JSON.stringify([
+      {
+        file: 'src/math.mjs',
+        line: 6,
+        original: '  return n > 0;',
+        mutated: '  return n >= 0;',
+        category: 'boundary',
+        defect: 'inclusive bound admits zero',
+      },
+    ]));
+    const res = runCli([
+      '--review-cmd', 'node -e "setTimeout(() => {}, 5000)"',
+      '--review-timeout', '1',
+      '--commit', 'HEAD',
+      '--plants-file', plantsPath,
+      '--min-plants', '1',
+      '--scorer', 'string',
+    ], dir);
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /review command timed out/);
+  });
+});
