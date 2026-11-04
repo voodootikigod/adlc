@@ -25,7 +25,7 @@ test('running fleet.mjs directly DISPATCHES the CLI (--help prints usage)', () =
   assert.match(r.stdout, /fleet — parallel ADLC ticket orchestration/, 'the entry-point guard dispatches when run directly');
   // The documented exit-code contract is part of the CLI's interface (CONVENTIONS rule 4):
   // 0 = ok, 1 = operational error, 2 = a ticket failed/blocked/paused.
-  assert.match(r.stdout, /Exit codes: 0 ok · 1 operational error · 2 a ticket failed\/blocked\/paused \(see --json "reason"\)\./);
+  assert.match(r.stdout, /Exit codes: 0 ok · 1 operational error · 2 >= 1 ticket failed\/blocked\/paused, quarantined, or pr-open-failed \(see --json "reason"\)\./);
 });
 
 // ── the argv slice is a real boundary (#530 mutation gate) ───────────────────
@@ -161,8 +161,9 @@ test('README and USAGE document adlc-fleet binary, all 9 adapters, bwrap-only Li
   assert.match(readme, /`bwrap`/);
   const r = spawnSync(process.execPath, [BIN, '--help'], { encoding: 'utf8' });
   assert.equal(r.status, 0);
-  assert.match(r.stdout, /or: adlc fleet <subcommand>/);
+  assert.match(r.stdout, /or: adlc fleet \.\.\./);
   assert.match(r.stdout, /adlc-fleet run/);
+  assert.match(r.stdout, /quarantined, or pr-open-failed/);
   assert.match(r.stdout, /adlc-fleet status/);
   assert.match(r.stdout, /adlc-fleet unlock/);
 });

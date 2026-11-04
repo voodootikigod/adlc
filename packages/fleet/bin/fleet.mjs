@@ -32,7 +32,7 @@ import { Sandbox } from '../lib/sandbox.mjs';
 import { SYSTEM_ROOTS } from '../lib/bounded-model-plane.mjs';
 import { repoCommandEnv } from '../lib/env-scrub.mjs';
 
-const USAGE = `adlc-fleet — parallel ADLC ticket orchestration (or: adlc fleet <subcommand> ...)
+const USAGE = `adlc-fleet — parallel ADLC ticket orchestration (or: adlc fleet ...)
 
 Usage:
   adlc-fleet run [--concurrency N] [--dry-run] [--tickets T1,T2] [--base B] [--json]
@@ -47,7 +47,7 @@ Usage:
   adlc-fleet status [--json]
   adlc-fleet unlock [--force]
 
-Exit codes: 0 ok · 1 operational error · 2 a ticket failed/blocked/paused (see --json "reason").`;
+Exit codes: 0 ok · 1 operational error · 2 >= 1 ticket failed/blocked/paused, quarantined, or pr-open-failed (see --json "reason").`;
 
 // Exported so a test can observe that a REPEATABLE flag actually accumulates.
 // `multiple: false` does not error on a repeated flag — it silently keeps the last
