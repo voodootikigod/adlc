@@ -716,6 +716,10 @@ export const PI_INTEGRATION = {
   ],
 };
 
+const GEMINI_SURFACES_TITLE = 'What the Gemini plugin installs';
+const GEMINI_ENTRY_HEADER = 'Gemini entry';
+const GEMINI_OPERATE_TITLE = 'operate: Gemini plugin';
+
 /** @type {IntegrationFact} */
 export const GEMINI_INTEGRATION = {
   slug: 'gemini',
@@ -798,7 +802,7 @@ export const GEMINI_INTEGRATION = {
   ],
   surfacesSection: {
     kicker: 'Native surfaces',
-    title: 'What the Antigravity plugin installs',
+    title: GEMINI_SURFACES_TITLE,
   },
   phaseRoutes: [
     { phase: 'P0', entry: '/adlc-init · adlc-ticket', evidence: 'ticket in .adlc/tickets.json' },
@@ -811,7 +815,7 @@ export const GEMINI_INTEGRATION = {
     kicker: 'Phase routing',
     title: 'Skills route, CI enforces',
     intro: 'Skills and commands route work. The hook is only an in-session nudge. Treat CI as required before you rely on this integration for enforcement.',
-    entryHeader: 'Antigravity entry',
+    entryHeader: GEMINI_ENTRY_HEADER,
   },
   enforcement: {
     session: {
@@ -834,7 +838,7 @@ export const GEMINI_INTEGRATION = {
     title: 'Install via npx or global npm',
   },
   operate: {
-    title: 'operate: Antigravity plugin',
+    title: GEMINI_OPERATE_TITLE,
     lines: [
       '# Recommended one-liner via npx',
       '(cd "$(mktemp -d)" && npx --package=@adlc/gemini adlc-gemini install)',

@@ -422,3 +422,19 @@ test('each marketing install command appears in the matching docs-site mdx guide
     }
   }
 });
+
+test('Gemini integration facts, codex-build-gate spec, and harness-capability-matrix stay aligned (#457, #547, #864)', () => {
+  const gemini = integrationFor('gemini');
+  assert.equal(gemini?.surfacesSection?.title, 'What the Gemini plugin installs');
+  assert.equal(gemini?.phaseSection?.entryHeader, 'Gemini entry');
+  assert.equal(gemini?.operate?.title, 'operate: Gemini plugin');
+  const spec = readFileSync(path.join(repoRoot, '.' + 'adlc/specs/codex-build-gate.md'), 'utf8');
+  assert.match(spec, /transcript byte size > 8 MiB/);
+  assert.doesNotMatch(spec, /transcript byte size > 256 KiB/);
+  const matrix = readFileSync(path.join(repoRoot, 'docs/integrations/harness-capability-matrix.md'), 'utf8');
+  assert.match(matrix, /either imports rail\/glob\/ticket\/shell primitives from `@adlc\/core` or carries generated\/drift-pinned copies/);
+  assert.doesNotMatch(matrix, /nothing re-implemented/);
+  assert.match(matrix, /gemini =\s*Google Gemini/);
+  assert.match(matrix, /\| Capability \| CC \| Codex \| OC \| Pi \| Cursor \| gemini \| Copilot \|/);
+  assert.doesNotMatch(matrix, /\| Capability \| CC \| Codex \| OC \| Pi \| Cursor \| agy \| Copilot \|/);
+});
