@@ -21,4 +21,3 @@
   "title": "coldstart,premortem: document --tier, cached JSON field, and forest-mode manifest.d ledger destination",
   "verify": "node --test packages/coldstart/test/cli-options.test.mjs packages/premortem/test/cli.test.mjs packages/premortem/test/premortem.test.mjs"
 }
-

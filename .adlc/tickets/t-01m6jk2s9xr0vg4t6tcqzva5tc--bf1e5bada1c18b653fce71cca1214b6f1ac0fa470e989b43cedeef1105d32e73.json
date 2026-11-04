@@ -22,4 +22,3 @@
   "title": "behavior-diff,lesson-foundry,gate-fuzzing: align README exit codes, sample outputs, and CLI help with implementation",
   "verify": "node --test packages/behavior-diff/test/behavior-diff.test.mjs packages/lesson-foundry/test/cli.test.mjs packages/gate-fuzzing/test/bin.test.mjs packages/behavior-diff/test/compare.test.mjs"
 }
-

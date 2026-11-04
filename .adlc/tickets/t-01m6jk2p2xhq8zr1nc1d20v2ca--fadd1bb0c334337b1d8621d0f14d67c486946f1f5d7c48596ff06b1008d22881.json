@@ -17,4 +17,3 @@
   "title": "prosecute: fix README lens list, merge-base tiering description, and readManifestForest reference",
   "verify": "node --test packages/prosecute/test/prosecute-cli.test.mjs packages/prosecute/test/prosecute-schema-validation.test.mjs"
 }
-

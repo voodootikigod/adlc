@@ -16,4 +16,3 @@
   "title": "core: update README import examples to @adlc/core and document all 8 mutation operators and comment-prefix rule",
   "verify": "node --test packages/core/test/core.test.mjs packages/core/test/primitives.test.mjs"
 }
-
