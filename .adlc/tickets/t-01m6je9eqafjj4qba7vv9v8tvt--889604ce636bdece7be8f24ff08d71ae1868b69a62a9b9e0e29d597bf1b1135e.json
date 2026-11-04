@@ -1,0 +1,17 @@
+{
+  "body": "## Objective\nResolve #777, #772, and #771 by updating `packages/spec-lint/README.md` and `packages/skill-rot/README.md` to match the shipped behavior.\n\n## Acceptance Criteria\n1. `packages/spec-lint/README.md` documents `--tier` and `--dir` in Usage and the Flags table, and states that `--record` writes to `.adlc/manifest.jsonl` or the active `.adlc/manifest.d/` segment in a segmented repo — verify: `node --test packages/spec-lint/test/readme-exit-codes.test.mjs`\n2. `packages/skill-rot/README.md` removes `npx X` from the Script references list (explaining that `npx` runs registry packages rather than `package.json` scripts) and accurately states that `--write` stamps when a skill has at least one `ok` claim and zero `stale` claims — verify: `node --test packages/skill-rot/test/skill-rot.test.mjs`",
+  "category": "bugfix",
+  "cpm_float": 0,
+  "deps": [],
+  "id": "T-01M6JE9EQAFJJ4QBA7VV9V8TVT",
+  "priority": 1,
+  "rails": [],
+  "scope": [
+    "packages/spec-lint/README.md",
+    "packages/spec-lint/test/readme-exit-codes.test.mjs",
+    "packages/skill-rot/README.md",
+    "packages/skill-rot/test/skill-rot.test.mjs"
+  ],
+  "title": "spec-lint, skill-rot: document manifest.d segment recording, --tier/--dir flags, npx exclusion, and --write non-stale condition (#777, #772, #771)",
+  "verify": "node --test packages/spec-lint/test/readme-exit-codes.test.mjs packages/skill-rot/test/skill-rot.test.mjs"
+}

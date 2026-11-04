@@ -26,7 +26,7 @@ Symlinked skill directories and symlinked `SKILL.md` files are followed, with cy
 
 | Flag | Description |
 |------|-------------|
-| `--write` | When **all** claims in a skill are ok, upsert `last-verified: <YYYY-MM-DD>` into the skill's frontmatter (created if absent). Skills with stale claims or zero claims are never stamped. |
+| `--write` | When a skill has at least one `ok` claim and zero `stale` claims (`ok > 0 && stale === 0`), upsert `last-verified: <YYYY-MM-DD>` into the skill's frontmatter (created if absent). Skills with stale claims, zero claims, or only unverifiable claims are never stamped. |
 | `--json` | Machine-readable output for orchestrators. Prints a JSON object with `skills[]` and `summary`. |
 
 ## What gets verified
@@ -45,9 +45,10 @@ For each `SKILL.md` file found recursively (skipping `node_modules` and `.git`):
    `src/index.mjs`). Checked via `existsSync` from the repo root and from the
    skill's own directory.
 
-3. **Script references** — `npm run X`, `npx X`, `pnpm X`, `yarn X` patterns.
+3. **Script references** — `npm run X`, `pnpm X`, `yarn X` patterns.
    Key `X` is looked up in `scripts` of the root `package.json`. If no
-   `package.json` exists, the claim is `unverifiable`.
+   `package.json` exists, the claim is `unverifiable`. (`npx` is intentionally
+   excluded — it runs registry packages rather than `package.json` scripts.)
 
 **Claim statuses:**
 - `ok` — verifiable and passes

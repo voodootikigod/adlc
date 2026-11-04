@@ -246,3 +246,12 @@ describe('spec-lint documented exit codes match the binary (issue #525)', () => 
     assert.deepEqual(offenders, [], `stale zero-criteria pass claims remain:\n${offenders.join('\n')}`);
   });
 });
+
+describe('spec-lint README flags and segmented manifest path (#777)', () => {
+  it('documents --tier, --dir, and .adlc/manifest.d/ segment recording', () => {
+    const readme = readFileSync(README, 'utf8');
+    assert.match(readme, /--tier <tier>/);
+    assert.match(readme, /--dir <path>/);
+    assert.match(readme, /\.adlc\/manifest\.d\//);
+  });
+});

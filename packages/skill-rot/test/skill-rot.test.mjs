@@ -774,3 +774,13 @@ describe('verifyClaim — Windows PATH/PATHEXT lookup and missing POSIX shell ha
     assert.equal(okNmCmd.status, 'ok');
   });
 });
+
+describe('README documentation contract (#772, #771)', () => {
+  it('excludes npx X from script reference patterns and documents ok > 0 && stale === 0 stamp rule', () => {
+    const readme = readFileSync(join(__dirname, '..', 'README.md'), 'utf8');
+    assert.doesNotMatch(readme, /`npm run X`, `npx X`/);
+    assert.match(readme, /`npx` is intentionally\s+excluded/);
+    assert.doesNotMatch(readme, /When \*\*all\*\* claims in a skill are ok/);
+    assert.match(readme, /ok > 0 && stale === 0/);
+  });
+});
