@@ -15,5 +15,6 @@
   ],
   "size": "S",
   "title": "fix(packaging): ship LICENSE in ticket-sync and declare engines.node >=18 in cursor/gemini/herdr (#788, #817, #824)",
-  "verify": "node --test plugins/adlc-cursor/test/packaging.test.mjs packages/ticket-sync/test/schema.test.mjs plugins/adlc-herdr/test/manifest.test.mjs"
+  "verify": "node --test plugins/adlc-cursor/test/packaging.test.mjs packages/ticket-sync/test/schema.test.mjs plugins/adlc-herdr/test/manifest.test.mjs",
+  "completed": true
 }

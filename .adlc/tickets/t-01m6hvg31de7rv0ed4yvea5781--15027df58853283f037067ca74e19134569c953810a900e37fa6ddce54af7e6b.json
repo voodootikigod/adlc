@@ -14,5 +14,6 @@
   ],
   "size": "S",
   "title": "fix(adlc-herdr,fleet): honor relocated status logDir in fleet tail panes and clarify --tab comment (#836, #837)",
-  "verify": "node --test packages/fleet/test/status.test.mjs packages/fleet/test/status-schema.test.mjs plugins/adlc-herdr/test/fleet-bridge.test.mjs plugins/adlc-herdr/test/manifest.test.mjs"
+  "verify": "node --test packages/fleet/test/status.test.mjs packages/fleet/test/status-schema.test.mjs plugins/adlc-herdr/test/fleet-bridge.test.mjs plugins/adlc-herdr/test/manifest.test.mjs",
+  "completed": true
 }

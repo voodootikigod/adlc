@@ -12,5 +12,6 @@
   ],
   "size": "S",
   "title": "fix(core): reclaim stale orphaned ledger locks and add remediation hint (#621)",
-  "verify": "node --test packages/core/test/core.test.mjs packages/core/test/proc.test.mjs"
+  "verify": "node --test packages/core/test/core.test.mjs packages/core/test/proc.test.mjs",
+  "completed": true
 }

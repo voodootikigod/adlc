@@ -10,5 +10,6 @@
   ],
   "size": "S",
   "title": "fix(preflight): reap stale test branch/worktree and fail if cleanup fails (#496)",
-  "verify": "node --test packages/preflight/test/unit.test.mjs packages/preflight/test/empty-test-cmd.test.mjs"
+  "verify": "node --test packages/preflight/test/unit.test.mjs packages/preflight/test/empty-test-cmd.test.mjs",
+  "completed": true
 }
