@@ -27,9 +27,11 @@ export function renderHelp(version) {
   lines.push('');
   lines.push('Note: "ticket" routes local/store verbs to @adlc/tickets; pull/push/sync');
   lines.push('      remain delegated to @adlc/ticket-sync.');
-  lines.push('Note: "review" is a passthrough to `npx adversarial-review`, an external');
+  lines.push('Note: "review" is a passthrough to `npx adversarial-review@^2.6.0`, an external');
   lines.push('      package (not a workspace tool). `prosecute` only records the P5');
   lines.push('      evidence a review like this one produces -- it does not review.');
+  lines.push('Note: "mcp-server" honours operator-only `ADLC_CLI_BIN` (must be an absolute');
+  lines.push('      path to an existing regular file) to override the `adlc.mjs` entrypoint.');
 
   return lines.join('\n');
 }

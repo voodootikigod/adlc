@@ -452,7 +452,7 @@ export function resolveNpxInvocation(env = {}) {
 // instead -- this is how `adlc review` reaches the separate `adversarial-review` CLI
 // without vendoring it into this monorepo (issue #65). The npx to run is resolved from
 // the running node rather than from PATH (issue #233); see resolveNpxInvocation.
-function runExternal(packageName, args, spawnFn, npxEnv) {
+function runExternal(packageName, packageSpec, args, spawnFn, npxEnv) {
   const { command, prefixArgs, resolved, probed } = resolveNpxInvocation(npxEnv);
   // Unresolved means we are about to spawn a bare PATH name, which on Windows cannot
   // succeed at all. Naming what was probed -- and what would fix it -- keeps that
@@ -463,7 +463,7 @@ function runExternal(packageName, args, spawnFn, npxEnv) {
   const failPrefix = resolved
     ? `failed to run npx ${packageName}`
     : `failed to run npx ${packageName} (no npx-cli.js found near this node, so npx must come from PATH; probed ${probed.join(', ')} — install npm into the directory holding this node to fix it)`;
-  return runChild(packageName, spawnFn, command, [...prefixArgs, packageName, ...args], failPrefix);
+  return runChild(packageName, spawnFn, command, [...prefixArgs, packageSpec, ...args], failPrefix);
 }
 
 export function dispatch(toolName, args, opts = {}) {
@@ -474,7 +474,7 @@ export function dispatch(toolName, args, opts = {}) {
     return runBin('@adlc/ticket-sync', bin, args, spawnFn, code);
   }
   if (tool?.external) {
-    return runExternal(tool.packageName, args, spawnFn, opts.npxEnv);
+    return runExternal(tool.packageName, tool.packageSpec ?? tool.packageName, args, spawnFn, opts.npxEnv);
   }
   const { bin, code } = resolveBinDiagnostic(toolName);
   return runBin(tool?.packageName ?? `@adlc/${toolName}`, bin, args, spawnFn, code);

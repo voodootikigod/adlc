@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -165,8 +165,23 @@ function validateGateInvocation(gate, args) {
   }
 }
 
+export function resolveCliBin(envBin = process.env.ADLC_CLI_BIN) {
+  if (envBin === undefined || envBin === '') return CLI_BIN;
+  const raw = assertString(envBin, 'ADLC_CLI_BIN');
+  if (!isAbsolute(raw)) throw invalid('ADLC_CLI_BIN must be an absolute path');
+  const bin = resolve(raw);
+  let stat;
+  try {
+    stat = statSync(bin);
+  } catch {
+    throw invalid('ADLC_CLI_BIN must point to an existing regular file');
+  }
+  if (!stat.isFile()) throw invalid('ADLC_CLI_BIN must point to an existing regular file');
+  return bin;
+}
+
 function command() {
-  const bin = process.env.ADLC_CLI_BIN ? resolve(process.env.ADLC_CLI_BIN) : CLI_BIN;
+  const bin = resolveCliBin();
   return { file: process.execPath, prefix: [bin] };
 }
 

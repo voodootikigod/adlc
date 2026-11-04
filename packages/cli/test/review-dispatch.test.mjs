@@ -32,6 +32,7 @@ test('registry registers "review" as an external npx-routed verb, not a workspac
   assert.ok(tool);
   assert.equal(tool.external, true);
   assert.equal(tool.packageName, 'adversarial-review');
+  assert.equal(tool.packageSpec, 'adversarial-review@^2.6.0');
   assert.equal(tool.name, 'review');
 });
 
@@ -62,7 +63,7 @@ test('dispatching "review" shells out to `npx adversarial-review` with full argu
   assert.equal(code, 0);
   assert.equal(calls.length, 1, 'expected exactly one spawn call (no network access)');
   assert.equal(calls[0].cmd, execPath);
-  assert.deepEqual(calls[0].args, [npxCli, 'adversarial-review', '--scope', 'working-tree', '--include-files']);
+  assert.deepEqual(calls[0].args, [npxCli, 'adversarial-review@^2.6.0', '--scope', 'working-tree', '--include-files']);
   assert.equal(calls[0].options.stdio, 'inherit');
 });
 

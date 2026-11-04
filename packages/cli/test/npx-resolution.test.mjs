@@ -367,7 +367,7 @@ test('dispatch("review") on win32 spawns node with npx-cli.js ahead of the packa
   assert.equal(code, 0);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].cmd, WIN_EXEC_PATH);
-  assert.deepEqual(calls[0].args, [WIN_NPX_CLI, 'adversarial-review', '--base', 'origin/main']);
+  assert.deepEqual(calls[0].args, [WIN_NPX_CLI, 'adversarial-review@^2.6.0', '--base', 'origin/main']);
 });
 
 test('dispatch("review") on posix spawns node with npx-cli.js ahead of the package', async () => {
@@ -378,7 +378,7 @@ test('dispatch("review") on posix spawns node with npx-cli.js ahead of the packa
   });
 
   assert.equal(calls[0].cmd, POSIX_EXEC_PATH);
-  assert.deepEqual(calls[0].args, [POSIX_PREFIX_CLI, 'adversarial-review', '--scope', 'working-tree']);
+  assert.deepEqual(calls[0].args, [POSIX_PREFIX_CLI, 'adversarial-review@^2.6.0', '--scope', 'working-tree']);
 });
 
 test('no dispatch path ever asks for a shell', async () => {
@@ -411,7 +411,7 @@ test('shell metacharacters in user args survive as literal separate argv entries
     npxEnv: { platform: 'win32', execPath: WIN_EXEC_PATH, isFile: only(WIN_NPX_CLI) },
   });
 
-  assert.deepEqual(calls[0].args, [WIN_NPX_CLI, 'adversarial-review', ...hostile]);
+  assert.deepEqual(calls[0].args, [WIN_NPX_CLI, 'adversarial-review@^2.6.0', ...hostile]);
 });
 
 test('an unresolved npx names the probed paths so the failure is not mistaken for a missing package', async () => {
