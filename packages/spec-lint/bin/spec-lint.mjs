@@ -100,9 +100,9 @@ if (noCriteria) {
   // unrecognized heading never parse and land here too — also a gate failure, not
   // a pass. (In --json mode the result body was already printed above.)
   gateFail(
-    'spec-lint: no acceptance criteria found. State at least one criterion under a ' +
-      'recognized heading (Acceptance Criteria / Requirements), each with a ' +
-      'verification method. Zero criteria fails the gate.',
+    'spec-lint: no acceptance criteria found.\n' +
+      'State at least one criterion under a recognized heading (Acceptance Criteria / Requirements).\n' +
+      'Give each criterion a verification method. Zero criteria fails the gate.',
   );
 }
 

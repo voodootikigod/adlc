@@ -341,6 +341,7 @@ export function segmentsOf(p: string): string[];
 
 // lib/text.mjs — shared text-shaping helpers for capping prompt payloads
 export function tail(str: string, maxChars?: number): string;
+export function reasonList(heading: string, reasons: readonly string[]): string;
 export function fence(label: string, content: string, maxChars: number, opts?: { bias?: 'head' | 'tail' }): string;
 
 export type SyntaxLanguage = 'javascript' | 'typescript';
