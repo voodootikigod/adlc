@@ -517,3 +517,18 @@ test('claude-code-plugin-smoke fails closed when the root package version is mis
     rmSync(tmpRepo, { recursive: true, force: true });
   }
 });
+
+test("#798, #801, #802: claude-code docs and manifests disclose PreToolUse gates, P1 commands, and context-handoff fail-closed paths", () => {
+  const doc = readFileSync(join(REPO, "docs/integrations/claude-code.md"), "utf8");
+  assert.match(doc, /cannot load @adlc\/context-handoff/);
+  assert.match(doc, /missing\s+export:/);
+  assert.match(doc, /incomplete_scan_lower_bound/);
+  assert.match(doc, /\| `\/adlc:adlc-spec` \| P1 \|/);
+  assert.match(doc, /\| `\/adlc:adlc-approve-spec` \| P1 \|/);
+  const pluginJson = JSON.parse(readFileSync(join(REPO, "plugins/adlc-claude-code/.claude-plugin/plugin.json"), "utf8"));
+  const mktJson = JSON.parse(readFileSync(join(REPO, ".claude-plugin/marketplace.json"), "utf8"));
+  assert.match(pluginJson.description, /PreToolUse/);
+  assert.match(pluginJson.description, /rails-guard/);
+  assert.match(mktJson.plugins[0].description, /PreToolUse/);
+  assert.match(mktJson.plugins[0].description, /rails-guard/);
+});

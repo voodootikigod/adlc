@@ -1,0 +1,20 @@
+{
+  "acceptance": [
+    "docs/integrations/claude-code.md documents the fail-closed context-handoff deny paths when @adlc/context-handoff cannot be loaded, misses required exports, or hits incomplete_scan_lower_bound (#798).",
+    "plugins/adlc-claude-code/.claude-plugin/plugin.json and .claude-plugin/marketplace.json disclose the enforcing PreToolUse gates (#801).",
+    "docs/integrations/claude-code.md Commands table includes /adlc:adlc-spec and /adlc:adlc-approve-spec (#802)."
+  ],
+  "description": "Document the unconditional fail-closed deny paths of context-handoff in docs/integrations/claude-code.md (#798), disclose the enforcing PreToolUse gates in plugins/adlc-claude-code/.claude-plugin/plugin.json and .claude-plugin/marketplace.json (#801), and add /adlc:adlc-spec and /adlc:adlc-approve-spec to the Commands table in docs/integrations/claude-code.md (#802).",
+  "id": "T-01M6JNFCRT3B15W5EHY57SQ6ME",
+  "rails": [
+    "scripts/test/claude-code-plugin-smoke.test.mjs"
+  ],
+  "scope": [
+    "docs/integrations/claude-code.md",
+    "plugins/adlc-claude-code/.claude-plugin/plugin.json",
+    ".claude-plugin/marketplace.json",
+    "scripts/test/claude-code-plugin-smoke.test.mjs"
+  ],
+  "title": "docs(claude-code): disclose enforcing PreToolUse gates, P1 commands, and context-handoff fail-closed paths (#798, #801, #802)",
+  "verify": "node --test scripts/test/claude-code-plugin-smoke.test.mjs"
+}

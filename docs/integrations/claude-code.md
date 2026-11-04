@@ -63,6 +63,8 @@ install above) and Node 18+.
 | --- | --- | --- |
 | `/adlc:adlc-init` | — | Bootstrap `.adlc/`, split the committable ticket contract from runtime evidence in `.gitignore`, run preflight. |
 | `/adlc:adlc-ticket` | P0 | Author a self-contained, schema-valid ticket (the contract every gate reads), then check it is executable. Ticket schema: [`docs/ticket-authoring.md`](../ticket-authoring.md). |
+| `/adlc:adlc-spec` | P1 | Interrogate a spec before implementation: run `spec-lint`, `premortem`, and `parallax` to surface gaps and failure modes. |
+| `/adlc:adlc-approve-spec` | P1 | Record Gate-1 (`spec-approval`) evidence binding the active ticket and spec file once P1 interrogation is clean. |
 | `/adlc:adlc-prosecute` | P5 | Multi-lens adversarial pre-merge review: fan out five independent lens subagents, dedupe findings, independently verify each via a sixth verifier subagent, loop until two consecutive dry rounds. |
 | `/adlc:adlc-distill` | P7 | Mine repeated findings and PR rejections into deterministic defenses (lint rules, skills, review lenses). |
 | `/adlc:adlc-maintain` | C10/C12 | Decay-driven checks: stale skills, hot files to re-prosecute, gate calibration. |
@@ -151,9 +153,13 @@ no-ops until an active ticket is resolved via `ADLC_TICKET`/
 for that file's schema and read semantics (an unparseable pointer, an object with
 no recognized id key, or a pointer conflicting with `ADLC_TICKET` all fail closed),
 plus [`docs/specs/build-gate-fitness.md`](../specs/build-gate-fitness.md)
-and [`@adlc/build-gate`](../../packages/build-gate/README.md). Context-handoff
-no-ops until `.adlc/` exists and a deny store / handoff band applies — see
-[`docs/specs/context-rot-handoff.md`](../specs/context-rot-handoff.md) and
+and [`@adlc/build-gate`](../../packages/build-gate/README.md). When wired, context-handoff no-ops if `.adlc/` is absent; once `.adlc/` exists
+it evaluates D1–D3 when a deny store or handoff band applies AND fails closed
+(denying Edit/Write/MultiEdit/NotebookEdit and Bash) if `@adlc/context-handoff`
+cannot be loaded (`cannot load @adlc/context-handoff — install @adlc/cli`), if a
+stale install is missing a required export (`@adlc/context-handoff missing
+export: <name>`), or if the transcript scan hits `incomplete_scan_lower_bound` —
+see [`docs/specs/context-rot-handoff.md`](../specs/context-rot-handoff.md) and
 [`@adlc/context-handoff`](../../packages/context-handoff/README.md).
 
 **Build-gate bypass.** `ADLC_BUILD_GATE_BYPASS=1` overrides a build-gate deny
