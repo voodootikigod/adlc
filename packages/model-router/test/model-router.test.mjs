@@ -845,3 +845,11 @@ test('buildPriors deduplicates identical build entries (#702)', async (t) => {
   assert.equal(t1.tier, "mid");
   assert.equal(t1.mode, "direct");
 });
+
+test('README documents assignment budget field and forest-aware manifest.d priors (#704, #703)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+  assert.match(readme, /"budget": 50000/);
+  assert.match(readme, /manifest\.d/);
+  assert.match(readme, /readManifestForest/);
+});

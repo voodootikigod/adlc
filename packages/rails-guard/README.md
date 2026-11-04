@@ -26,17 +26,18 @@ planning) and P4 (builder execution). Guards two invariants simultaneously:
 
 ```
 rails-guard [--base <ref>] [--ticket <id>] [--tickets <path>] \
-            [--rails <glob>...] [--record] [--json]
+            [--rails <glob>...] [--sanctioned-add <path>...] [--record] [--json]
 ```
 
 ### Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--base <ref>` | `HEAD` | Git ref to diff against |
+| `--base <ref>` | merge-base with trunk | Git ref to diff against. When omitted, resolves the merge-base of `HEAD` with trunk (`main`/`master`/`origin/main`/`origin/master`) and fails closed (exit 1) if no trunk ref exists — never defaults to `HEAD` |
 | `--ticket <id>` | — | The ticket being built: selects whose `allow-suppression` declarations apply and is echoed as the result's `ticket`. It does not narrow which rails are checked |
 | `--tickets <path>` | `.adlc/tickets.json` | Path to tickets file (the whole store is read, with or without `--ticket`) |
 | `--rails <glob>` | — | One or more frozen-path globs (repeatable; overrides the store's rails entirely) |
+| `--sanctioned-add <path>` | — | Exact file path whose rail match is a sanctioned authoring addition (repeatable; CI plumbing — do not pass by hand) |
 | `--record` | off | On a clean pass, append a manifest entry to `.adlc/manifest.jsonl` |
 | `--json` | off | Emit machine-readable JSON result |
 | `--help` | — | Print this help and exit 0 |
@@ -107,7 +108,7 @@ rails-guard: 2 violation(s) found
 ```json
 {
   "tool": "rails-guard",
-  "base": "HEAD",
+  "base": "origin/main",
   "ticket": "T42",
   "railGlobs": ["test/**"],
   "railGlobError": null,
@@ -136,7 +137,7 @@ Appended to `.adlc/manifest.jsonl`:
   "ts": "2026-06-10T12:00:00.000Z",
   "type": "rails-check",
   "ticket": "T42",
-  "base": "HEAD",
+  "base": "origin/main",
   "railsDiffEmpty": true,
   "suppressionsClean": true,
   "sanctionedAdditions": ["test/frozen/new.test.mjs"],

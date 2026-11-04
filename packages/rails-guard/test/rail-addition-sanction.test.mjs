@@ -16,7 +16,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runRailFreezeGate } from '../lib/ci/rail-freeze.mjs';
@@ -221,4 +221,12 @@ test('an addition NOT matching any rail is untouched by the sanction machinery',
     assert.equal(res.status, 0);
     assert.doesNotMatch(res.messages.join('\n'), /sanctioned rail authoring/i);
   } finally { cleanup(root); }
+});
+
+test('README documents merge-base --base default (never HEAD) and --sanctioned-add flag (#740, #741)', () => {
+  const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+  assert.match(readme, /--sanctioned-add <path>/);
+  assert.match(readme, /merge-base with trunk/);
+  assert.doesNotMatch(readme, /\| `--base <ref>` \| `HEAD` \|/);
+  assert.doesNotMatch(readme, /"base": "HEAD"/);
 });
