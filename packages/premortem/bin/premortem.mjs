@@ -25,7 +25,7 @@ Failure-first spec stress test (ADLC C2).
 
   <spec.md>        Path to the spec file to analyse (required)
   --tier           Model tier: cheap | mid | frontier  (default: frontier)
-  --max-causes <N> Ask for at most <N> causes (positive integer; default: 5 to 10)
+  --max-causes N   Cap the number of causes requested (positive integer, ranked most likely first)
   --out            Write markdown report to this file instead of stdout
   --json           Emit machine-readable JSON {causes:[...]}
   --prompt-only    Print the exact prompt and exit 0 (no API key needed)
