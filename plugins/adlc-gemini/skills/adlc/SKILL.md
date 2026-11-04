@@ -201,5 +201,7 @@ This plugin installs a `PreToolUse` rails-guard hook. It is **advisory** in-sess
 the host fails OPEN on a non-zero hook exit, so a frozen-rail write can slip through a hook
 crash/timeout. **The unbypassable guarantee is the commit-time CI gate**
 (`scripts/rails-guard-ci.mjs`). Enforcement activates only when `ADLC_P4_ENFORCEMENT=1`
-and an active ticket declares `rails[]`. Shell (`run_command`) writes are not gated
+and an active ticket declares `rails[]` (`ADLC_RAILS_BYPASS=1` overrides only the CLI
+`adlc rails-guard` gate — the in-session Gemini hook has no per-call bypass other than
+unsetting `ADLC_P4_ENFORCEMENT`). Shell (`run_command`) writes are not gated
 in-session; the CI gate catches them.

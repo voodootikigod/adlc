@@ -86,7 +86,7 @@ export const routerModel = {
       includes: ["prose:intro","prose:where-am-i","prose:adversarial-loop","prose:phases","prose:notes"],
       local: {
         "sentinel": "<!-- ADLC_GEMINI_SENTINEL_PHASE_ROUTER_V1 -->\n",
-        "rails-gemini": "\n## Rails in Gemini (Antigravity/JetSki)\n\nThis plugin installs a `PreToolUse` rails-guard hook. It is **advisory** in-session —\nthe host fails OPEN on a non-zero hook exit, so a frozen-rail write can slip through a hook\ncrash/timeout. **The unbypassable guarantee is the commit-time CI gate**\n(`scripts/rails-guard-ci.mjs`). Enforcement activates only when `ADLC_P4_ENFORCEMENT=1`\nand an active ticket declares `rails[]`. Shell (`run_command`) writes are not gated\nin-session; the CI gate catches them.\n",
+        "rails-gemini": "\n## Rails in Gemini (Antigravity/JetSki)\n\nThis plugin installs a `PreToolUse` rails-guard hook. It is **advisory** in-session —\nthe host fails OPEN on a non-zero hook exit, so a frozen-rail write can slip through a hook\ncrash/timeout. **The unbypassable guarantee is the commit-time CI gate**\n(`scripts/rails-guard-ci.mjs`). Enforcement activates only when `ADLC_P4_ENFORCEMENT=1`\nand an active ticket declares `rails[]` (`ADLC_RAILS_BYPASS=1` overrides only the CLI\n`adlc rails-guard` gate — the in-session Gemini hook has no per-call bypass other than\nunsetting `ADLC_P4_ENFORCEMENT`). Shell (`run_command`) writes are not gated\nin-session; the CI gate catches them.\n",
       },
       layout: ["sentinel","prose:intro","prose:where-am-i","prose:adversarial-loop","prose:phases","prose:notes","rails-gemini"],
     },
