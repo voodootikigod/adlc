@@ -175,3 +175,14 @@ test('retired inert flags (--canary-budget, --behavioral-witness, --triage) fail
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("#646: gate-fuzzing README and --help do not claim an unimplemented potency canary in exit-code descriptions", async () => {
+  const { readFileSync } = await import("node:fs");
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  const { code, stdout } = runCli(["--help"]);
+  assert.equal(code, 0);
+  assert.doesNotMatch(stdout, /canary beaten/i);
+  assert.match(stdout, /0\s+Earned clean \(no defeats found, dry streak reached\)/);
+  assert.doesNotMatch(readme, /potency canary beaten/i);
+  assert.doesNotMatch(readme, /canary not beaten/i);
+});

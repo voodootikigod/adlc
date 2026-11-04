@@ -785,3 +785,11 @@ describe("atomic writeSnapshot & reachability gate (#586)", () => {
     assert.equal(existsSync(freshOut), false, "no all-errored snapshot file may be written when 0 routes are reachable");
   });
 });
+
+test("#584: behavior-diff README documents 0/N routes reachable exit 1, N unreachable (both) headline, and unreachable-in-both exit 2", async () => {
+  const { readFileSync } = await import("node:fs");
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.match(readme, /0\/N.*routes reachable/);
+  assert.match(readme, /2 routes identical, 2 changed, 0 errored, 0 unreachable \(both\)/);
+  assert.match(readme, /unreachable in both snapshots/);
+});
