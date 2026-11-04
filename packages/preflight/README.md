@@ -14,9 +14,9 @@ From the ADLC D2 field notes:
 
 ## Platform support
 
-`@adlc/preflight` requires a POSIX environment (`darwin` or `linux`, declared via
-`"os": ["darwin", "linux"]` in `package.json`) because the `bash` (`echo`) and
-`test-cmd` (`sh -c`) checks spawn POSIX utilities directly without a shell.
+`@adlc/preflight` requires a POSIX environment (`darwin`, `linux`, or a POSIX
+shell on Windows such as Git Bash / WSL) because the `bash` (`sh -c 'echo preflight-ok'`) and
+`test-cmd` (`sh -c`) checks invoke POSIX `sh`.
 
 ## Usage
 
