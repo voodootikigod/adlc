@@ -1218,3 +1218,51 @@ test("#687: merge-forecast bin header comment does not claim exit 1 for non-git 
   assert.doesNotMatch(binSrc, /not a git repo for co-change/);
   assert.match(binSrc, /1\s+operational error \(bad tickets file, unresolvable input\)/);
 });
+
+describe('signalsEvaluated and strict mode (#684)', () => {
+  test('reports signalsEvaluated with coChange:false outside git repo, and fails gate under strict:true', async (t) => {
+    const root = tmp(t);
+    writeFile(root, 'src/a.js', 'export const a = 1;\n');
+    writeFile(root, 'src/b.js', 'export const b = 2;\n');
+    const tickets = [
+      mkTicket('A', { scope: ['src/a.js'] }),
+      mkTicket('B', { scope: ['src/b.js'] }),
+    ];
+
+    // Default non-strict: coChange is false, warning emitted, gateFailures empty
+    const nonStrict = await runForecast({ tickets, root });
+    assert.deepEqual(nonStrict.signalsEvaluated, {
+      scopeOverlap: true,
+      namespaceCollision: true,
+      importRadius: true,
+      coChange: false,
+      graphCoupling: false,
+    });
+    assert.deepEqual(nonStrict.gateFailures, []);
+
+    // With graphCouplingData provided, graphCoupling is true
+    const withGraph = await runForecast({ tickets, root, graphCouplingData: { pairs: [] } });
+    assert.equal(withGraph.signalsEvaluated.graphCoupling, true);
+
+    // With strict: true and no git repo -> gate failure
+    const strictRes = await runForecast({ tickets, root, strict: true });
+    assert.equal(strictRes.signalsEvaluated.coChange, false);
+    assert.deepEqual(strictRes.gateFailures, [
+      'co-change signal could not be evaluated (--strict requires git history)',
+    ]);
+
+    // Dependency cycle returns all signalsEvaluated as false
+    const cycleTickets = [
+      mkTicket('X', { edges: [{ to: 'Y' }] }),
+      mkTicket('Y', { edges: [{ to: 'X' }] }),
+    ];
+    const cycleRes = await runForecast({ tickets: cycleTickets, root });
+    assert.deepEqual(cycleRes.signalsEvaluated, {
+      scopeOverlap: false,
+      namespaceCollision: false,
+      importRadius: false,
+      coChange: false,
+      graphCoupling: false,
+    });
+  });
+});

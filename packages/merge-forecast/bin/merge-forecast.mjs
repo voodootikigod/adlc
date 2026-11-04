@@ -5,7 +5,7 @@
  * Usage: merge-forecast [--tickets path] [--width N]
  *                       [--build-min X --merge-min Y]
  *                       [--co-change-limit N] [--conflict-threshold F]
- *                       [--json]
+ *                       [--strict] [--json]
  *
  * Exit codes:
  *   0  gate passes
@@ -27,6 +27,7 @@ const { values } = parseArgs({
     'co-change-limit': { type: 'string' },
     'conflict-threshold': { type: 'string' },
     'graph-coupling': { type: 'string' },
+    strict: { type: 'boolean', default: false },
     json: { type: 'boolean', default: false },
     help: { type: 'boolean', default: false },
   },
@@ -47,6 +48,7 @@ Options:
   --co-change-limit <N>      Git log depth for co-change mining (default: 500)
   --conflict-threshold <F>   Score >= this triggers SEQUENCE verdict (default: 0.5)
   --graph-coupling <path>    Path to semantic call/symbol graph coupling JSON
+  --strict                   Fail the gate (exit 2) if git history is unavailable and co-change is skipped
   --json                     Machine-readable JSON output
   --help                     Show this help
 
@@ -109,7 +111,15 @@ if (ticketErrors.length > 0) {
     const result = {
       pairs: [], waves: [], mergeOrder: [],
       firstWaveWidth: 0, scheduleWidth: 0, certifiedWidth: 0,
-      backpressureWidth: null, recommendedWidth: 0, warnings: [],
+      backpressureWidth: null, recommendedWidth: 0,
+      signalsEvaluated: {
+        scopeOverlap: false,
+        namespaceCollision: false,
+        importRadius: false,
+        coChange: false,
+        graphCoupling: false,
+      },
+      warnings: [],
       gateFailures: [message],
       pullQueueNote: 'idle builders claim next unblocked',
     };
@@ -147,6 +157,7 @@ try {
     width: widthFlag,
     buildMin,
     mergeMin,
+    strict: values.strict,
     graphCouplingFile: values['graph-coupling'] && resolve(values['graph-coupling']),
   });
 } catch (err) {

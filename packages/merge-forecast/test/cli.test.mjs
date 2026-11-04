@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -290,5 +290,46 @@ describe('merge-forecast CLI --help documents the width gate truthfully (#997)',
         `help says wave ${documentedWave}, but the gate is bounded by wave 1`
       );
     });
+  });
+});
+
+describe('merge-forecast --strict and signalsEvaluated (#684)', () => {
+  test('CLI --strict exits 2 outside a git repo and exits 0 in a git repo with history', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mf-strict-cli-'));
+    try {
+      mkdirSync(join(dir, 'src'), { recursive: true });
+      writeFileSync(join(dir, 'src', 'a.js'), 'export const a = 1;\n');
+      writeFileSync(join(dir, 'src', 'b.js'), 'export const b = 2;\n');
+      const ticketsFile = join(dir, 'tickets.json');
+      writeFileSync(ticketsFile, JSON.stringify({
+        tickets: [
+          { id: 'T1', title: 'One', scope: ['src/a.js'] },
+          { id: 'T2', title: 'Two', scope: ['src/b.js'] },
+        ],
+      }));
+
+      // Outside git repo without --strict -> exit 0, signalsEvaluated.coChange === false
+      const rDefault = spawnSync(process.execPath, [CLI, '--tickets', ticketsFile, '--json'], { cwd: dir, encoding: 'utf8' });
+      assert.equal(rDefault.status, 0, rDefault.stderr);
+      const parsedDefault = JSON.parse(rDefault.stdout);
+      assert.equal(parsedDefault.signalsEvaluated.coChange, false);
+
+      // Outside git repo with --strict -> exit 2
+      const rStrictFail = spawnSync(process.execPath, [CLI, '--tickets', ticketsFile, '--strict', '--json'], { cwd: dir, encoding: 'utf8' });
+      assert.equal(rStrictFail.status, 2);
+      const parsedStrictFail = JSON.parse(rStrictFail.stdout);
+      assert.equal(parsedStrictFail.signalsEvaluated.coChange, false);
+      assert.ok(parsedStrictFail.gateFailures.includes('co-change signal could not be evaluated (--strict requires git history)'));
+
+      // Inside git repo (repoRoot) with --strict -> exit 0, signalsEvaluated.coChange === true
+      withTickets((repoTicketsFile) => {
+        const rStrictPass = spawnSync(process.execPath, [CLI, '--tickets', repoTicketsFile, '--strict', '--json'], { cwd: repoRoot, encoding: 'utf8' });
+        assert.equal(rStrictPass.status, 0, rStrictPass.stderr);
+        const parsedPass = JSON.parse(rStrictPass.stdout);
+        assert.equal(parsedPass.signalsEvaluated.coChange, true);
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
