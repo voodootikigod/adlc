@@ -1,0 +1,20 @@
+{
+  "body": "## Context\nIssue #611: In `packages/context-handoff/lib/bypass-grant.mjs` (and its Claude Code / Codex hook twins), `constants.O_NOFOLLOW` and `constants.O_NONBLOCK` are undefined on Windows, coercing `constants.O_RDONLY | undefined` to plain `O_RDONLY` without any guard or lstat check, and `recovery-exception.mjs` (and its hook twins) requires candidate paths to start with `/`, rejecting Windows drive-letter absolute paths (`C:\\...`).\nIssue #609: Disclose in `packages/context-handoff/README.md` next to the `bypass` description that a hard-degraded session whose shell environment inherits `ADLC_MANIFEST_KEY` can clear its own D1/D2 via the allowlisted `bypass --write` command, and note Phase 1 host-owned integrity anchor / operator-TTY follow-up.\n\n## Acceptance Criteria\n- `readBypassGrant` in `packages/context-handoff/lib/bypass-grant.mjs` and `readVerifiedBypassGrant` in the Claude Code / Codex hook twins verify that `O_NOFOLLOW` and `O_NONBLOCK` are finite numbers (falling back to fail-closed `null` when unavailable so symlink/FIFO protection never silently evaporates).\n- `recovery-exception.mjs` and its Claude Code / Codex hook twins accept both POSIX (`/`) and Windows drive-letter (`C:\\` / `C:/`) absolute paths in `matchRecoveryCommand` and `identityMatches`.\n- `packages/context-handoff/README.md` discloses the inherited-`ADLC_MANIFEST_KEY` self-bypass residual next to the `bypass` description.\n\n## Verification\n`node --test packages/context-handoff/test/windows-and-residuals.test.mjs packages/context-handoff/adapter-test/cc-helper-drift.test.mjs packages/context-handoff/adapter-test/codex-helper-drift.test.mjs`",
+  "category": "bug",
+  "id": "T-01M6J6SZEFPE5GTM08D1ZB7NWJ",
+  "rails": [
+    "packages/context-handoff/test/atomic-json.test.mjs",
+    "packages/context-handoff/test/bands.test.mjs",
+    "packages/context-handoff/adapter-test/cc-helper-drift.test.mjs",
+    "packages/context-handoff/adapter-test/codex-helper-drift.test.mjs"
+  ],
+  "scope": [
+    "packages/context-handoff/lib/bypass-grant.mjs",
+    "packages/context-handoff/lib/recovery-exception.mjs",
+    "packages/context-handoff/README.md",
+    "packages/context-handoff/test/windows-and-residuals.test.mjs",
+    "plugins/adlc-claude-code/hooks/handoff-gate.mjs",
+    "plugins/adlc-codex/hooks/adlc-handoff-gate.mjs"
+  ],
+  "title": "context-handoff: guard Windows O_NOFOLLOW/drive-letter recovery and disclose inherited-key bypass residual (#611, #609)"
+}
