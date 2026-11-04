@@ -704,3 +704,21 @@ test('runConsensusFix uses spawnError in message when output is empty on spawn f
     }
   );
 });
+
+test('#604: runConsensusFix returns effective fanWidth for both --n and --providers', async (t) => {
+  const dir = tmp(t, 'consensus-fix-runner-test-');
+  const f = join(dir, 'a.mjs');
+  writeFileSync(f, 'export const x = 1;\n');
+  let call = 0;
+  const res = await runConsensusFix({
+    testCmd: "exit 1",
+    files: [f],
+    n: 3,
+    providerNames: ["anthropic", "openai"],
+    tier: "mid",
+    completeFn: async (_p, prov) => fixResponse(f, `export const x = ${prov === "anthropic" ? 2 : 3};`),
+    runCommandFn: async () => ({ exitCode: call++ === 0 ? 1 : 0, output: "fail" }),
+  });
+  assert.equal(res.fanWidth, 2);
+  assert.equal(res.allDivergent, false);
+});

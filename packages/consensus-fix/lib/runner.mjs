@@ -412,6 +412,7 @@ export async function runConsensusFix({
     failed,
     groups,
     allDivergent,
+    fanWidth,
     selectionResult,
     railsChecked,
     prompt,

@@ -819,3 +819,19 @@ describe("hollow-test README accuracy (#664, #662, #661, #659)", () => {
     assert.match(readme, /"status": "undetermined"[\s\S]*?"reason":/);
   });
 });
+
+describe('#660: hollow-test --help and README use Node 22+ compatible glob test command', () => {
+  it('does not recommend bare directory positional node --test test/', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const { readFileSync } = await import('node:fs');
+    const { dirname, join } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const pkgDir = join(dirname(fileURLToPath(import.meta.url)), '..');
+    const help = execFileSync(process.execPath, [join(pkgDir, 'bin', 'hollow-test.mjs'), '--help'], { encoding: 'utf8' });
+    assert.match(help, /--test-cmd "node --test test\/\*\.test\.mjs"/);
+    assert.doesNotMatch(help, /node --test test\/"/);
+    const readme = readFileSync(join(pkgDir, 'README.md'), 'utf8');
+    assert.match(readme, /--test-cmd "node --test test\/\*\.test\.mjs"/);
+    assert.doesNotMatch(readme, /node --test test\/"/);
+  });
+});

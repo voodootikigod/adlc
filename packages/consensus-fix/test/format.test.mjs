@@ -574,3 +574,63 @@ test('formatReport and formatJson surface dirtyCheckSkipped warning and summary 
   });
   assert.equal(skippedJson.summary.dirtyCheckSkipped, true);
 });
+
+test('#604: formatReport and formatJson surface all-divergent check skipped when fanWidth < 3', () => {
+  const c1 = makeCandidate(0, 'fix1');
+  const c2 = makeCandidate(1, 'fix2');
+  const survivors = [c1, c2];
+  const groups = makeGroups(survivors);
+  const selectionResult = { winner: c1, largestGroupSize: 1 };
+
+  const reportSub3 = formatReport({
+    survivors,
+    discarded: [],
+    failed: [],
+    groups,
+    allDivergent: false,
+    fanWidth: 2,
+    selectionResult,
+    applied: false,
+    dryRun: true,
+  });
+  assert.match(reportSub3, /all-divergent check skipped \(fan width < 3; effective fan width = 2\)/);
+
+  const reportFan3 = formatReport({
+    survivors,
+    discarded: [],
+    failed: [makeCandidate(2, "bad")],
+    groups,
+    allDivergent: false,
+    fanWidth: 3,
+    selectionResult,
+    applied: false,
+    dryRun: true,
+  });
+  assert.doesNotMatch(reportFan3, /all-divergent check skipped/);
+
+  const jsonSub3 = formatJson({
+    survivors,
+    discarded: [],
+    failed: [],
+    groups,
+    allDivergent: false,
+    fanWidth: 2,
+    selectionResult,
+    applied: false,
+  });
+  assert.equal(jsonSub3.summary.fanWidth, 2);
+  assert.equal(jsonSub3.summary.allDivergentCheckSkipped, true);
+
+  const jsonFan3 = formatJson({
+    survivors,
+    discarded: [],
+    failed: [makeCandidate(2, "bad")],
+    groups,
+    allDivergent: false,
+    fanWidth: 3,
+    selectionResult,
+    applied: false,
+  });
+  assert.equal(jsonFan3.summary.fanWidth, 3);
+  assert.equal(jsonFan3.summary.allDivergentCheckSkipped, false);
+});

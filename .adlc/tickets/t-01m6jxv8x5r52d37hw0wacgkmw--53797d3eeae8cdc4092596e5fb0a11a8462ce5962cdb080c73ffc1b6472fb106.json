@@ -1,0 +1,20 @@
+{
+  "body": "## Context\nResolves #604 and #660.\n- #604: `packages/consensus-fix/README.md` states the sub-3 all-divergent exemption only in terms of `--n < 3`, overlooking `--providers` with fewer than 3 providers (`fanWidth < 3`), and `formatReport` in `packages/consensus-fix/lib/format.mjs` prints no notice when the all-divergent check is skipped because `fanWidth < 3`.\n- #660: `packages/hollow-test/README.md` and `packages/hollow-test/bin/hollow-test.mjs` `--help` use `--test-cmd \"node --test test/\"`, which fails on Node 22+ because a bare directory positional is passed to the module loader.\n\n## Acceptance Criteria\n1. `packages/consensus-fix/README.md` states the sub-3 divergence exemption in terms of effective fan width (`fanWidth < 3`), and `runConsensusFix` / `formatReport` / `formatJson` surface `fanWidth` and an explicit `all-divergent check skipped (fan width < 3)` report line when `fanWidth < 3`.\n2. `packages/hollow-test/README.md` and `packages/hollow-test/bin/hollow-test.mjs` `--help` replace `node --test test/` with the test glob form, with unit tests in `packages/consensus-fix/test/format.test.mjs` and `packages/hollow-test/test/unit.test.mjs`.",
+  "id": "T-01M6JXV8X5R52D37HW0WACGKMW",
+  "rails": [
+    "packages/consensus-fix/test/agreement.test.mjs",
+    "packages/hollow-test/test/hollow-test.test.mjs"
+  ],
+  "scope": [
+    "packages/consensus-fix/README.md",
+    "packages/consensus-fix/bin/consensus-fix.mjs",
+    "packages/consensus-fix/lib/format.mjs",
+    "packages/consensus-fix/lib/runner.mjs",
+    "packages/consensus-fix/test/format.test.mjs",
+    "packages/consensus-fix/test/runner.test.mjs",
+    "packages/hollow-test/README.md",
+    "packages/hollow-test/bin/hollow-test.mjs",
+    "packages/hollow-test/test/unit.test.mjs"
+  ],
+  "title": "consensus-fix & hollow-test: clarify sub-3 fan-width divergence exemption and Node 22+ test glob in docs/help (#604, #660)"
+}

@@ -54,12 +54,13 @@ const { values } = parseArgs({
   },
 });
 
+const USAGE_EXAMPLE = 'hollow-test --test-cmd "node --test test/*.test.mjs" [options]';
 if (values.help || !values['test-cmd']) {
   console.log(`
 hollow-test — diff-scoped mutation gate (ADLC C4)
 
 Usage:
-  hollow-test --test-cmd "node --test test/" [options]
+  ${USAGE_EXAMPLE}
 
 Options:
   --test-cmd <cmd>      (required) Shell command to run the test suite

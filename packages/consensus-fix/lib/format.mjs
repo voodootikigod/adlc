@@ -12,12 +12,14 @@ export function formatReport({
   failed,
   groups,
   allDivergent,
+  fanWidth,
   selectionResult,
   railsChecked = true,
   dirtyCheckSkipped = false,
   applied,
   dryRun,
 }) {
+  const effectiveFanWidth = fanWidth ?? (survivors.length + failed.length + discarded.length);
   const lines = [];
   lines.push(`consensus-fix report`);
   lines.push(`--------------------`);
@@ -72,6 +74,9 @@ export function formatReport({
     lines.push('');
     lines.push('⚠  ALL-DIVERGENT: Every survivor is in its own group.');
     lines.push('   This indicates spec ambiguity — escalate to human review.');
+  } else if (effectiveFanWidth < 3) {
+    lines.push('');
+    lines.push(`ℹ  Note: all-divergent check skipped (fan width < 3; effective fan width = ${effectiveFanWidth}).`);
   }
 
   if (selectionResult) {
@@ -112,11 +117,13 @@ export function formatJson({
   failed,
   groups,
   allDivergent,
+  fanWidth,
   selectionResult,
   railsChecked = true,
   dirtyCheckSkipped = false,
   applied,
 }) {
+  const effectiveFanWidth = fanWidth ?? (survivors.length + failed.length + discarded.length);
   const groupSummary = [];
   let gi = 0;
   for (const group of groups.values()) {
@@ -136,8 +143,10 @@ export function formatJson({
       passed: survivors.length,
       failed: failed.length,
       discarded: discarded.length,
+      fanWidth: effectiveFanWidth,
       groups: groups.size,
       allDivergent,
+      allDivergentCheckSkipped: effectiveFanWidth < 3,
       railsChecked,
       dirtyCheckSkipped,
     },

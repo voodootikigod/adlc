@@ -279,6 +279,7 @@ if (values['json']) {
       failed,
       groups,
       allDivergent,
+      fanWidth,
       selectionResult,
       railsChecked,
       dirtyCheckSkipped,
