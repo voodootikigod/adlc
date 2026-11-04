@@ -9,7 +9,7 @@
  *
  * Exit codes:
  *   0  gate passes
- *   1  operational error (bad tickets file, not a git repo for co-change)
+ *   1  operational error (bad tickets file, unresolvable input)
  *   2  gate fails (--width > firstWaveWidth, or vetoed pair concurrent)
  */
 

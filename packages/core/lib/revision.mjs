@@ -97,6 +97,10 @@ function batchWorkingTreeBlobs(cwd, paths) {
   return objects;
 }
 
+// Ticket-store paths (.adlc/tickets.json, .adlc/tickets, .adlc/ticket-archive,
+// .adlc/current-ticket.json) are excluded here because they churn during a build;
+// scripts/rails-guard-ci.mjs enforces the add-vs-alter ticket-store contract at
+// merge so a branch cannot widen scope or remove rails behind a recorded digest (#620).
 const DEFAULT_IGNORED_PATHS = [
   '.adlc/manifest.jsonl',
   '.adlc/manifest.lock',

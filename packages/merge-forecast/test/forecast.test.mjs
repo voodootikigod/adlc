@@ -1211,3 +1211,10 @@ describe('cyclic ticket DAG', () => {
     assert.deepEqual(parsed.waves[0], ['T2']);
   });
 });
+
+test("#687: merge-forecast bin header comment does not claim exit 1 for non-git co-change", async () => {
+  const { readFileSync } = await import("node:fs");
+  const binSrc = readFileSync(new URL("../bin/merge-forecast.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(binSrc, /not a git repo for co-change/);
+  assert.match(binSrc, /1\s+operational error \(bad tickets file, unresolvable input\)/);
+});
