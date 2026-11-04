@@ -12,6 +12,12 @@ From the ADLC D2 field notes:
 > agent × N teammates = N stalls, racing siblings, and half-started state.
 > Environment determinism is a precondition of parallel wall-clock math.
 
+## Platform support
+
+`@adlc/preflight` requires a POSIX environment (`darwin` or `linux`, declared via
+`"os": ["darwin", "linux"]` in `package.json`) because the `bash` (`echo`) and
+`test-cmd` (`sh -c`) checks spawn POSIX utilities directly without a shell.
+
 ## Usage
 
 ```
