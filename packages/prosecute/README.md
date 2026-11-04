@@ -72,8 +72,8 @@ adlc-prosecute --input p5-passes.json --ticket T1 --dir .adlc --json
 `verified_status` must be `verified`, `killed`, `needs-human`, or `deferred` (`deferred` is
 allowed only for `severity: "low"` with `follow_up` and `reason`). Killed findings must
 include `verification.reason`, `verification.method`, and `verification.evidence`.
-Inputs must use the built-in lens names: `security`, `correctness`, `tests`, `behavior`,
-`integration`, or `docs`. Only passes with zero `verified` and zero `needs-human` findings
+Inputs must use the built-in lens names: `security`, `correctness`, `tests`, `contract`,
+`diff`, `behavior`, `integration`, or `docs`. Only passes with zero `verified` and zero `needs-human` findings
 count as dry; convergence requires two consecutive dry passes covering at least three
 distinct dry lenses (killed findings are recorded and close open findings, but a pass
 carrying only killed findings does not advance the dry-pass lens count on its own without
@@ -185,12 +185,14 @@ adversarial-review completed across security and correctness lenses.
 ## Trust-root tier — required cross-model review (T39)
 
 For the **trust-root tier**, a clean same-model P5 is not sufficient. The CLI computes the
-changed-file set from the **WORKING TREE vs `<base>`** (default `--base main`) — the two-dot
-`git diff --name-only <base>` (tracked changes incl. uncommitted) unioned with untracked,
-non-ignored files (`git ls-files --others --exclude-standard`) — and classifies it with
-`lib/tier.mjs`. Working-tree-inclusive is load-bearing: prosecution binds to the working-tree
-revision, so a three-dot `<base>...HEAD` diff (committed only) would miss an **uncommitted**
-edit to a trust-root file and let a converged P5 exit 0 with no attestation. A change is
+changed-file set from the **WORKING TREE vs the MERGE-BASE of `<base>` and `HEAD`** (default
+`--base main`) — resolving `git merge-base --all <base> HEAD` (demanding a single merge-base)
+and running one-commit-arg `git diff --name-only <merge-base>` (tracked changes incl.
+uncommitted, so base-side churn after the branch point never tiers a change) unioned with
+untracked, non-ignored files (`git ls-files --others --exclude-standard`) — and classifies
+it with `lib/tier.mjs`. Working-tree-inclusive is load-bearing: prosecution binds to the
+working-tree revision, so a three-dot `<base>...HEAD` diff (committed only) would miss an
+**uncommitted** edit to a trust-root file and let a converged P5 exit 0 with no attestation. A change is
 trust-root tier iff it touches an enforcement package
 (`packages/rails-guard|prosecute|gate-manifest|build-gate/`), a gated-artifact producer
 (`packages/ticket-prune|ticket-sync/`), a declared rails deny-path of any ticket, a CI
@@ -347,7 +349,7 @@ why the store path must live outside the tree being tiered.
 ## Core gaps
 
 This package records cross-model attestations through `@adlc/gate-manifest`'s chained
-`record()` (see `lib/cross-model.mjs`) and reads them back via `@adlc/core`'s `readEntries`.
+`record()` (see `lib/cross-model.mjs`) and reads them back via `@adlc/gate-manifest/lib/forest.mjs`'s `readManifestForest` (and `readOwnManifestChain` in `lib/run.mjs`).
 The trust-root-tier classifier (`lib/tier.mjs`) lives here rather than in `@adlc/core`
 (frozen) because it is prosecute-specific policy; if a second package ever needs the same
 binary trust-root decision, the enumerated surfaces (enforcement packages, producers,
