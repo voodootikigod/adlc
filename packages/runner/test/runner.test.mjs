@@ -1514,7 +1514,6 @@ describe('coldstart truncation completeness (#1197)', () => {
 });
 
 it('runner docs enumerate the per-phase required evidence contract (#846, #847)', () => {
-  const repoRoot = resolve(import.meta.dirname, '..', '..', '..');
   for (const rel of ['packages/runner/README.md', 'docs/toolkit.md', 'apps/docs/content/docs/toolkit/runner.mdx']) {
     const text = readFileSync(join(repoRoot, rel), 'utf8');
     for (const marker of ['coldstart', 'spec-lint', 'premortem', 'spec-approval', 'merge-forecast', 'rails-red', 'hollow-test', 'rails-frozen', 'p4-build', 'rails-check', 'flail-check', 'p5-complete', 'p6-acceptance-packet', 'lesson-foundry', 'rejection-mining', 'skill-rot']) {
