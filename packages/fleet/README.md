@@ -47,16 +47,17 @@ Design contract: [`docs/specs/fleet-orchestration.md`](../../docs/specs/fleet-or
 ## Usage
 
 ```sh
-fleet run --dry-run                 # preview the plan; no worktrees, no workers
-fleet run --dry-run --json          # machine-readable plan
-fleet run [--concurrency N] [--tickets T1,T2] [--base main] [--json]
-fleet run --tickets T1 --no-pr --no-complete --max-strikes 14 --wall-clock-minutes 60 \
-          --pre-strike-argv '["/abs/adlc","autopilot","quota","--json"]' --pre-strike-env '{"PATH":"/usr/bin","HOME":"/home/me"}' \
-          --model-plane-read bounded --model-plane-read-only /opt/tools/rg \
-          --model-plane-git mirror --model-plane-git-mirror /abs/mirror.git \
-          --model-plane-egress allowlist --worker-deps /abs/worker-deps/node_modules --json
-fleet status [--json]               # show the current run's per-ticket state
-fleet unlock                        # release a stale run lock (guarded)
+# Or invoke via the dispatcher as `adlc fleet <subcommand> ...`
+adlc-fleet run --dry-run                 # preview the plan; no worktrees, no workers
+adlc-fleet run --dry-run --json          # machine-readable plan
+adlc-fleet run [--concurrency N] [--tickets T1,T2] [--base main] [--json]
+adlc-fleet run --tickets T1 --no-pr --no-complete --max-strikes 14 --wall-clock-minutes 60 \
+               --pre-strike-argv '["/abs/adlc","autopilot","quota","--json"]' --pre-strike-env '{"PATH":"/usr/bin","HOME":"/home/me"}' \
+               --model-plane-read bounded --model-plane-read-only /opt/tools/rg \
+               --model-plane-git mirror --model-plane-git-mirror /abs/mirror.git \
+               --model-plane-egress allowlist --worker-deps /abs/worker-deps/node_modules --json
+adlc-fleet status [--json]               # show the current run's per-ticket state
+adlc-fleet unlock                        # release a stale run lock (guarded)
 ```
 
 ### Dry-run smoke (AC5)
@@ -75,7 +76,7 @@ is unchanged).
 
 A live `fleet run` (no `--dry-run`) requires:
 
-1. an **OS sandbox backend** on the host (`bwrap`/`unshare` on Linux,
+1. an **OS sandbox backend** on the host (`bwrap` / `bubblewrap` on Linux — plain `unshare` is deliberately not accepted;
    `sandbox-exec` on macOS), or an operator-local `--i-am-in-a-disposable-container`
    asserting the whole run is already isolated (a committed repo config can never
    set this);
@@ -97,7 +98,7 @@ closed).
 The scheduler is harness-blind: it talks to workers through a `WorkerAdapter`
 seam (`lib/adapters/`), so which coding agent builds a ticket is a config choice,
 not a code change. Registered adapters: `claude-code` (default), `codex`, `agy`
-(Google Antigravity), `opencode`, `pi`, `cursor`. Each is a pure I/O shim that
+(Google Antigravity), `gemini`, `jetski`, `copilot`, `opencode`, `pi`, `cursor`. Each is a pure I/O shim that
 spawns its harness in headless mode on the **model plane** (network egress + its
 own auth, filesystem writes bounded — K2 + #395). Select one with the
 **operator-local** `--adapter` flag (default `claude-code`).
@@ -280,7 +281,9 @@ with its strike handed back: fix the sandbox policy and resume.
 - `1` — operational error (bad config, dirty tree, lock held, missing gate,
   sandbox precondition unmet).
 - `2` — at least one ticket failed, was blocked, or was PAUSED by the pre-strike
-  command / the external wall clock (see `--json` `reason`).
+  command / the external wall clock, the integration branch was quarantined
+  (`quarantined`), or the run-end PR could not be opened (`pr-open-failed` — see
+  `--json` `reason`).
 
 ## ADLC phase
 

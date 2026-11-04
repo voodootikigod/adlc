@@ -144,3 +144,24 @@ test('the production path reads extension files through the bounded single-descr
   // No injected reader: the default (production) reader must refuse the FIFO without blocking.
   assert.throws(() => loadExt({ charterFile: fifo }), /not a regular file/);
 });
+
+test('README and USAGE document adlc-fleet binary, all 9 adapters, bwrap-only Linux backend, and exit-2 causes (#637, #635)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { ADAPTERS } = await import('../lib/adapters/index.mjs');
+  const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+  for (const a of ADAPTERS) {
+    const name = typeof a === 'string' ? a : a.name;
+    assert.match(readme, new RegExp('`' + name + '`'), `README must list adapter ${name}`);
+  }
+  assert.match(readme, /adlc-fleet run/);
+  assert.match(readme, /adlc fleet/);
+  assert.match(readme, /quarantined/);
+  assert.match(readme, /pr-open-failed/);
+  assert.doesNotMatch(readme, /`bwrap`\/`unshare` on Linux/);
+  assert.match(readme, /`bwrap`/);
+  const r = spawnSync(process.execPath, [BIN, '--help'], { encoding: 'utf8' });
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /adlc-fleet run/);
+  assert.match(r.stdout, /adlc-fleet status/);
+  assert.match(r.stdout, /adlc-fleet unlock/);
+});
