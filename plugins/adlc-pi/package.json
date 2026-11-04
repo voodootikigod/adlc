@@ -60,7 +60,7 @@
     "@adlc/flail-detector": "^1.12.0",
     "@adlc/gate-manifest": "^1.12.0",
     "@adlc/rails-guard": "^1.12.0",
-    "@adlc/tickets": "1.12.0"
+    "@adlc/tickets": "^1.12.0"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.80.3"
