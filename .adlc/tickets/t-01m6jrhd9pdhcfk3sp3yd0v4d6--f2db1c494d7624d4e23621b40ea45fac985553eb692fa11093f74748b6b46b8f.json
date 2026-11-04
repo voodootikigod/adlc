@@ -1,0 +1,17 @@
+{
+  "description": "Context: .github/workflows/publish.yml installs floating npm@11 instead of an exact 11.x version (#871), and .claude/release-profile.md, docs/RELEASING.md, and scripts/release.mjs claim core-first publish order and --access public while findPublishMetadataProblems does not gate publishConfig.access=public (#873).\nRequirements:\n1. Pin an exact npm 11.x version (npm@11.11.0) with --ignore-scripts in .github/workflows/publish.yml (#871).\n2. Update .claude/release-profile.md, docs/RELEASING.md, and scripts/release.mjs comments to state that publish order is topological over internal runtime dependencies and public access comes from publishConfig.access=public (no --access flag) (#873).\n3. Extend findPublishMetadataProblems() in scripts/release.mjs to require publishConfig.access === \"public\" on every non-private publish target (#873).\n4. Add regression tests in scripts/test/release.test.mjs.",
+  "id": "T-01M6JRHD9PDHCFK3SP3YD0V4D6",
+  "rails": [
+    "scripts/test/release-artifact.test.mjs"
+  ],
+  "scope": [
+    ".github/workflows/publish.yml",
+    ".claude/release-profile.md",
+    "docs/RELEASING.md",
+    "scripts/release.mjs",
+    "scripts/test/release.test.mjs"
+  ],
+  "size": "S",
+  "title": "fix(release): pin exact npm@11 version in publish.yml, gate publishConfig.access=public, and fix release docs (#871, #873)",
+  "verify": "node --test scripts/test/release.test.mjs scripts/test/release-artifact.test.mjs"
+}

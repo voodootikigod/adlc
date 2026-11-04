@@ -122,9 +122,11 @@ do not commit a partial bump:
 - **Drift gate** — every versioned `package.json`, the root, and `package-lock.json` must read
   the new version. Exists because v1.1.0 shipped with `package-lock.json` stranded at 1.0.2 and
   `plugins/adlc-pi` missed entirely. This repo is why R4 exists.
-- **Publish-metadata gate** — every non-private publish target must carry a `repository.url`.
-  Exists because v1.4.0 stranded a partial publish: `@adlc/tickets` had no `repository` field,
-  so npm's provenance check 422'd after 27 of 34 packages had already shipped.
+- **Publish-metadata gate** — every non-private publish target must carry a `repository.url`
+  (and `scripts/test/release.test.mjs` asserts every non-private target in the repo carries
+  `publishConfig.access: "public"`). Exists because v1.4.0 stranded a partial publish:
+  `@adlc/tickets` had no `repository` field, so npm's provenance check 422'd after 27 of 34
+  packages had already shipped.
 
 The script is idempotent — re-running it is a safe way to confirm no drift before committing.
 
@@ -152,8 +154,10 @@ to a single shot, and do not swap its serialized `npm view` calls for raw HTTP: 
 `curl` requests during the same release self-inflicted rate limiting that parsed as "all 38
 missing," which looks exactly like a catastrophic release failure.
 
-Publish order is `@adlc/core` first, then the phase CLIs, then the `@adlc/cli` umbrella last
-(it depends on every other CLI), each with `--provenance --access public`.
+Publish order is topological over internal runtime dependencies (`packages/*` dependencies
+before their dependents, then the `@adlc/cli` umbrella, then non-private `plugins/*`). Each
+package publishes with `npm publish --provenance` and relies on `publishConfig.access: "public"`
+in its `package.json` (no `--access` CLI flag).
 
 **Pushing the tag publishes every public package immediately and is irreversible.**
 

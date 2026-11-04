@@ -67,10 +67,13 @@ git push && git push --tags
 ```
 
 The `.github/workflows/publish.yml` workflow then installs, tests, and runs
-`scripts/release.mjs <version> --publish`, which publishes **`@adlc/core` first**
-(its consumers resolve it), then the routed tools, and **`@adlc/cli` last**
-because it depends on the dispatcher targets. Each package publishes with
-`--provenance` and `publishConfig.access=public`.
+`scripts/release.mjs <version> --publish`, which publishes targets in
+**topological dependency order** over internal runtime dependencies
+(dependencies always before their dependents, with `@adlc/cli` after the phase
+CLIs and non-private `plugins/*` after `packages/*`). Each package publishes
+with `npm publish --provenance` and `publishConfig.access=public` (no `--access`
+CLI flag; `scripts/test/release.test.mjs` asserts `publishConfig.access: "public"`
+on every non-private target).
 
 There is no manual trigger: the workflow has no `workflow_dispatch`, so the only
 way to publish is to push a `v*` tag (tag creation is restricted to admins by the

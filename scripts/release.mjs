@@ -1024,7 +1024,7 @@ export function releaseMain(
 
   // 4. Fail closed on missing publish metadata. npm provenance validation 422s
   // if a package's repository.url does not match the build's source repo, and it
-  // does so MID-publish (core-first) — stranding a partial release (v1.4.0 shipped
+  // does so MID-publish (topological dependency order) — stranding a partial release (v1.4.0 shipped
   // 27 of 34 because @adlc/tickets had no repository field). Catch it at bump time,
   // before any tag or publish, so the whole suite ships or none of it does.
   const metadataProblems = findPublishMetadataProblems({ packagesDir, pluginsDir });

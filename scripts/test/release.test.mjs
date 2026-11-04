@@ -32,14 +32,16 @@ function makeRepo() {
   // Every non-private publish target must carry a repository.url or npm provenance
   // 422s mid-publish (findPublishMetadataProblems guards this).
   const repository = { type: 'git', url: 'git+https://github.com/voodootikigod/adlc.git' };
+  const publishConfig = { access: 'public', provenance: true };
   write(join(root, 'package.json'), { name: 'adlc', version: '1.0.0', private: true });
   mkdirSync(join(packagesDir, 'core'));
-  write(join(packagesDir, 'core', 'package.json'), { name: '@adlc/core', version: '1.0.0', repository });
+  write(join(packagesDir, 'core', 'package.json'), { name: '@adlc/core', version: '1.0.0', repository, publishConfig });
   mkdirSync(join(packagesDir, 'cli'));
   write(join(packagesDir, 'cli', 'package.json'), {
     name: '@adlc/cli',
     version: '1.0.0',
     repository,
+    publishConfig,
     dependencies: { '@adlc/core': '1.0.0' }, // packages pin exactly
   });
   mkdirSync(join(pluginsDir, 'adlc-pi'));
@@ -56,6 +58,7 @@ function makeRepo() {
     name: '@adlc/codex',
     version: '1.0.0',
     repository,
+    publishConfig,
     dependencies: { '@adlc/cli': '1.0.0' },
   });
   write(join(pluginsDir, 'adlc-codex', '.codex-plugin', 'plugin.json'), {
@@ -67,6 +70,7 @@ function makeRepo() {
     name: '@adlc/cursor',
     version: '1.0.0',
     repository,
+    publishConfig,
     dependencies: { '@adlc/cli': '1.0.0' },
   });
   write(join(pluginsDir, 'adlc-cursor', '.cursor-plugin', 'plugin.json'), {
@@ -410,7 +414,7 @@ test('findPublishMetadataProblems flags a publish target with missing/empty repo
     // Empty repository.url — the exact @adlc/tickets condition that 422'd the
     // v1.4.0 provenance publish mid-flight.
     writeFileSync(join(packagesDir, 'core', 'package.json'), JSON.stringify({
-      name: '@adlc/core', version: '1.0.0', repository: { url: '' },
+      name: '@adlc/core', version: '1.0.0', repository: { url: '' }, publishConfig: { access: 'public' },
     }, null, 2) + '\n');
     const problems = findPublishMetadataProblems({ packagesDir, pluginsDir });
     assert.equal(problems.length, 1);
@@ -757,4 +761,32 @@ test('#869: .claude/release-profile.md verify block fails closed on 0 enumerated
   } finally {
     rmSync(okDir, { recursive: true, force: true });
   }
+});
+
+test('#871/#873: every real non-private publish target declares publishConfig.access=public and release docs/workflow match', () => {
+  const realTargets = publishTargets({
+    packagesDir: join(REAL_REPO, 'packages'),
+    pluginsDir: join(REAL_REPO, 'plugins'),
+  });
+  assert.ok(realTargets.length >= 30, `expected >= 30 real publish targets, got ${realTargets.length}`);
+  for (const target of realTargets) {
+    const pkg = JSON.parse(readFileSync(join(target.dir, 'package.json'), 'utf8'));
+    assert.equal(pkg.publishConfig?.access, 'public', `${target.name} must declare publishConfig.access: "public"`);
+  }
+  assert.deepEqual(findPublishMetadataProblems({
+    packagesDir: join(REAL_REPO, 'packages'),
+    pluginsDir: join(REAL_REPO, 'plugins'),
+  }), [], 'every real non-private publish target must carry repository.url');
+
+  const pubWorkflow = readFileSync(join(REAL_REPO, '.github/workflows/publish.yml'), 'utf8');
+  assert.match(pubWorkflow, /npm install -g --ignore-scripts npm@11\.\d+\.\d+/, 'publish.yml must pin an exact npm 11.x version');
+  assert.doesNotMatch(pubWorkflow, /npm install -g npm@11\b(?!\.)/, 'publish.yml must not float on npm@11');
+
+  const profile = readFileSync(join(REAL_REPO, '.claude/release-profile.md'), 'utf8');
+  const releasing = readFileSync(join(REAL_REPO, 'docs/RELEASING.md'), 'utf8');
+  assert.doesNotMatch(profile, /@adlc\/core` first/);
+  assert.doesNotMatch(profile, /--provenance --access public/);
+  assert.match(profile, /topological over internal runtime dependencies/);
+  assert.doesNotMatch(releasing, /`@adlc\/core` first/);
+  assert.match(releasing, /topological dependency order/);
 });
