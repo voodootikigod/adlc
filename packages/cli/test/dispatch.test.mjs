@@ -588,3 +588,15 @@ test('`adlc <tool> --help` answers for tools that declare no usage of their own 
     assert.match(run.stdout, new RegExp(`^usage: ${tool} \\[options\\]\\n`));
   }
 });
+
+test('renderHelp and README document adlc mcp-server and carve out review npx passthrough (#591, #593)', () => {
+  const help = renderHelp('1.12.0');
+  assert.match(help, /adlc mcp-server\s+run the MCP stdio server entrypoint/);
+  const readme = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'README.md'), 'utf8');
+  assert.match(readme, /adlc mcp-server/);
+  assert.match(readme, /adlc review/);
+  assert.match(readme, /adversarial-review/);
+  assert.match(readme, /not package-local/i);
+  const pkg = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8'));
+  assert.equal(pkg.exports?.['./lib/mcp-server.mjs'], './lib/mcp-server.mjs');
+});

@@ -7,6 +7,7 @@ surface for Codex skills, hooks, CI, and humans:
 adlc <tool> [args...]
 adlc run <phase> [args...]
 adlc accept [args...]
+adlc mcp-server
 ```
 
 The dispatcher is a router. It adds no behavior to a tool run: argv is forwarded
@@ -21,9 +22,16 @@ and makes every gate reachable through `adlc <tool>`.
 
 ## Resolution model
 
-The dispatcher resolves package-local binaries from its own `@adlc/*`
-dependencies. It does not search the user's `PATH` for tool names, so stale
-global binaries cannot silently satisfy a gate.
+For the workspace tools, the dispatcher resolves package-local binaries from
+its own `@adlc/*` dependencies. It does not search the user's `PATH` for
+workspace tool names, so stale global binaries cannot silently satisfy a gate.
+
+**Exception — `review` (`npx` passthrough):** `adlc review` is not a
+package-local `@adlc/*` tool; it is an `npx` passthrough to the external
+`adversarial-review@^2.6.0` package (`npx adversarial-review@^2.6.0`). Its
+resolution is not package-local (the `npx` runner and the resolved
+`adversarial-review` package can come from the repository's `node_modules/.bin`
+or the npm cache/registry).
 
 ## Usage
 
@@ -32,8 +40,10 @@ adlc --help
 adlc --version
 adlc spec-lint spec.md --json
 adlc rails-guard --ticket T1 --record --json
+adlc review --base origin/main
 adlc run p5 --ticket T1 --dir .adlc --json
 adlc accept --ticket T1 --packet .adlc/packet.json --dir .adlc --json
+adlc mcp-server
 ```
 
 ## Exit codes
