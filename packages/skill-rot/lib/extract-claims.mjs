@@ -62,11 +62,13 @@ export function extractClaims(content) {
   }
 
   // --- Backtick code spans (inline) ---
-  // Match single-backtick spans and triple-backtick blocks
+  // Read from prose only: a span inside a fenced block (a template literal in a
+  // `ts` fence, say) belongs to that block, which the fence rules below decide.
+  const prose = content.replace(/```[^\n]*\n[\s\S]*?```/g, '\n');
   const inlineRe = /`([^`\n]+)`/g;
   let m;
-  while ((m = inlineRe.exec(content)) !== null) {
-    if (isAbsoluteLinkText(content, m.index, m[0].length)) continue;
+  while ((m = inlineRe.exec(prose)) !== null) {
+    if (isAbsoluteLinkText(prose, m.index, m[0].length)) continue;
     const inner = m[1].trim();
     processInlineCode(inner, add);
   }

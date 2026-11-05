@@ -241,6 +241,16 @@ describe('extractClaims', () => {
     assert.ok(!claims.some((c) => c.type === 'command' && c.value === 'MY_ENV_VAR'));
   });
 
+  test('a code span inside a non-shell fence gives no claim (R3)', () => {
+    const content = '```ts\nconst cmd = `removed-cli-xyz --flag`;\nconst p = `docs/x.md`;\n```';
+    assert.deepEqual(extractClaims(content), []);
+  });
+
+  test('a code span after a fence is still read', () => {
+    const content = '```ts\nconst x = 1;\n```\nThen run `removed-cli-xyz --flag`.';
+    assert.deepEqual(extractClaims(content).map((c) => c.value), ['removed-cli-xyz']);
+  });
+
   test('deduplicates repeated claims', () => {
     const content = 'Use `git` here and `git` there.';
     const claims = extractClaims(content);

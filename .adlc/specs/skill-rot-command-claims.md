@@ -40,7 +40,7 @@ Measured after the change with the real CLI: `skill-rot --json` to a file, befor
 | this repo (`skills plugins .claude/skills`, 30 skills) | 275 → 6 | 3 → 10 | 27 → 19 |
 | mm-js `.agents/skills` (47 skills) | 1094 → 19 | 0 → 19 | 46 → 25 |
 
-Path and script claims are unchanged: 32 and 1 here, 31 and 23 in mm-js. They are what keeps the remaining skills stale here, mostly repo-doc mentions that T-01M6MX13GCQYV7VGD9VRQHE35V lists.
+Script claims are unchanged: 1 here, 23 in mm-js. Path claims are unchanged here (32). In mm-js they go from 31 to 30: one sat inside a non-shell fence. They are what keeps the remaining skills stale here, mostly repo-doc mentions that T-01M6MX13GCQYV7VGD9VRQHE35V lists.
 
 The six left here are:
 - `adversarial-review --prompt-only`: intended, since it is not on PATH;
@@ -100,6 +100,7 @@ In mm-js, the rest are subcommand fragments with flags (`check --table`), JavaSc
 - `packages/skill-rot/lib/extract-claims.mjs`:
   - `COMMAND_WORD_RE`, `LAUNCHERS` and `SHELL_FENCE_LANGS` constants.
   - `processInlineCode` applies R1/R2. The inline scan skips a span that is the whole text of an absolute-URL link (R4).
+  - The inline scan reads prose only, with fenced blocks removed, so a span inside a non-shell fence (a template literal in a `ts` block) yields nothing (R3).
   - The fence scan reads the info string and skips non-shell fences (R3). `processCodeLine` requires a command-shaped first token.
 - `packages/skill-rot/test/command-claims.test.mjs` (new): AC 1–6.
 - Existing tests: input text only, per AC 7.
