@@ -135,6 +135,14 @@ forge a `## Evidence` section that reads as the tool's own. The ledger digest
 is taken over the same artifact rendered under a fixed placeholder tag, so
 approvals still verify against the action alone.
 
+**Upgrading from 1.12.x: reset the ledger.** The reviewed artifact now includes the
+issue title and body, so `artifactDigest` differs from the one recorded in a
+1.12.x ledger entry. The one-shot rule is deliberately *not* bound to the digest
+(rewording must not buy a second review), so a signed entry that was approved
+but never applied stays a refusal rather than being re-reviewed. Delete
+`.adlc/backlog-groom-ledger.json` after upgrading; the next `--apply` reviews
+each action afresh.
+
 ## The gate ledger is signed
 
 Each entry in `.adlc/backlog-groom-ledger.json` carries an HMAC over its whole
