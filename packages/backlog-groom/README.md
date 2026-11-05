@@ -121,6 +121,18 @@ the profile or move a local ref; it does not stop one who can rewrite
 `.git/config`. Against that caller the ledger key is the boundary: without
 `ADLC_MANIFEST_KEY` nothing is written, however the policy check went.
 
+**`GH_REPO` and `GH_HOST` must agree with `origin`.** `--apply` writes to the
+repository the checkout's `origin` names, so it exits 1 when `GH_REPO` or
+`GH_HOST` is set to anything else (#1037). Before this check a fork whose
+`origin` is the fork but whose `GH_REPO` named upstream would have written to
+upstream. If you hit the error, run from a checkout whose `origin` is the
+repository you mean to groom, or unset the variable. The read path is unaffected.
+
+**Issue text is data to the reviewer, not instructions.** The issue title and
+body are wrapped in `<<UNTRUSTED:…>>` / `<<END:…>>` markers whose tag is a hash
+of the wrapped text, so an issue author cannot write a closing marker or a
+forged `## Evidence` section that reads as the tool's own.
+
 ## The gate ledger is signed
 
 Each entry in `.adlc/backlog-groom-ledger.json` carries an HMAC over its whole
