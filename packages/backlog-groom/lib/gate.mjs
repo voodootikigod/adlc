@@ -318,7 +318,7 @@ export function artifactName(action) {
  * the author, who would have to embed the hash of text that contains it.
  */
 function fenceIssueText(label, text) {
-  const tag = createHash('sha256').update(text).digest('hex').slice(0, 16);
+  const tag = createHash('sha256').update(text).digest('hex');
   return `<<UNTRUSTED:${label}:${tag}>>\n${text}\n<<END:${label}:${tag}>>`;
 }
 
