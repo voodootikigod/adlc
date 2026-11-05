@@ -379,10 +379,10 @@ test('buildActionArtifact includes issue title, current labels, verified paths, 
       body: '  **Location** `src/a.mjs:1`\n\nThe snippet was removed.  ',
     })
   );
-  assert.match(art, /<<UNTRUSTED:issue title:([0-9a-f]{64})>>\nFix stale snippet check\n<<END:issue title:\1>>/);
+  assert.match(art, /<<UNTRUSTED:issue title:([0-9a-f-]{36})>>\nFix stale snippet check\n<<END:issue title:\1>>/);
   assert.match(art, /^- current labels: P2-medium, area:review$/m);
   assert.match(art, /^- verified paths: src\/a\.mjs, src\/b\.mjs$/m);
-  assert.match(art, /<<UNTRUSTED:issue body:([0-9a-f]{64})>>\n\*\*Location\*\* `src\/a\.mjs:1`\n\nThe snippet was removed\.\n<<END:issue body:\1>>/);
+  assert.match(art, /<<UNTRUSTED:issue body:([0-9a-f-]{36})>>\n\*\*Location\*\* `src\/a\.mjs:1`\n\nThe snippet was removed\.\n<<END:issue body:\1>>/);
 });
 
 test('buildActionArtifact truncates issue body only when it exceeds MAX_ARTIFACT_BODY_CHARS', () => {

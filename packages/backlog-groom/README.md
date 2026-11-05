@@ -129,9 +129,11 @@ upstream. If you hit the error, run from a checkout whose `origin` is the
 repository you mean to groom, or unset the variable. The read path is unaffected.
 
 **Issue text is data to the reviewer, not instructions.** The issue title and
-body are wrapped in `<<UNTRUSTED:…>>` / `<<END:…>>` markers whose tag is a hash
-of the wrapped text, so an issue author cannot write a closing marker or a
-forged `## Evidence` section that reads as the tool's own.
+body are wrapped in `<<UNTRUSTED:…>>` / `<<END:…>>` markers carrying a fresh
+random tag per rendering, so an issue author cannot know the closing marker or
+forge a `## Evidence` section that reads as the tool's own. The ledger digest
+is taken over the same artifact rendered under a fixed placeholder tag, so
+approvals still verify against the action alone.
 
 ## The gate ledger is signed
 
