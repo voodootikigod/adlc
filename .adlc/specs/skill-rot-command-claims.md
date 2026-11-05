@@ -1,6 +1,6 @@
-# T-01M6MX48CNWXSXRSQ7R9Y5GVHW — skill-rot: count an inline code span as a command claim only when it is shaped like an invocation
+# T-01M6MX48CNWXSXRSQ7R9Y5GVHW, part 1 — skill-rot: count an inline code span as a command claim only when it is shaped like an invocation
 
-Tier: ordinary (`packages/skill-rot` is not a trust-root package). Blocks: T-01M6MX13GCQYV7VGD9VRQHE35V (deployed doc links), which relies on R4.
+Tier: ordinary (`packages/skill-rot` is not a trust-root package). Part 2 of the same ticket (deployed doc links, `.adlc/specs/deployed-doc-links.md`) relies on R4.
 
 Gate 1: spec approved by Rafael Belliard on 2026-11-05. Not recorded in the manifest: the approval entry must be signed, and this branch has no signing key for this repository.
 
@@ -10,19 +10,19 @@ Gate 1: spec approved by Rafael Belliard on 2026-11-05. Not recorded in the mani
 
 ## Evidence
 
-Measured with the in-tree extractor and verifier at upstream/main 780c3400 (throwaway scripts, not committed).
+Measured with the in-tree extractor and verifier at upstream/main 780c3400 (throwaway scripts, not committed). "The consumer repo" is a private application repository that deploys the ADLC skills and keeps 47 more under `.agents/skills`. Example names from it are replaced below by generic names of the same shape.
 
 | corpus | source | ok | stale |
 | --- | --- | ---: | ---: |
 | this repo, 30 tracked SKILL.md | inline spans | 131 | 167 |
 | this repo | unlabelled fences | 10 | 42 |
 | this repo | `bash`/`sh` fences | 80 | 2 |
-| mm-js, 48 SKILL.md | inline spans | 167 | 905 |
-| mm-js | all fences | 217 | 106 |
+| consumer repo, 48 SKILL.md | inline spans | 167 | 905 |
+| consumer repo | all fences | 217 | 106 |
 
-- **Inline false positives:** API and field names (`execute.before`, `advisoryHooks`, `followUp.implementationSkill`, `github.blobBaseUrl`); tool names (`edit`, `adversarial-review`); enum values and labels (`bug`, `pending`, `main`); model ids (`gpt-5.6-terra-high`, `claude-opus-4-8-thinking-high`); file names (`SKILL.md`, `untranslated-string-audit.profile.yml`); snake_case keys (`spec_hash`, `transcript_path`); quoted messages (`refname is ambiguous`); subcommand fragments (`compare before.json after.json`).
+- **Inline false positives:** API and field names (`execute.before`, `advisoryHooks`, `retry.maxAttempts`, `server.baseUrl`); tool names (`edit`, `adversarial-review`); enum values and labels (`bug`, `pending`, `main`); model ids (`gpt-4.1-mini`, `claude-sonnet-4-5`); file names (`SKILL.md`, `lint-rules.profile.yml`); snake_case keys (`spec_hash`, `transcript_path`); quoted messages (`refname is ambiguous`); subcommand fragments (`compare before.json after.json`).
 - **Fence false positives:** box-drawing router diagrams in unlabelled fences (`Vague request, no ticket yet? ───→ P0`); TypeScript, TSX and JavaScript in `ts`/`tsx`/`js` fences (`const`, `await`); prose in `text`/`md` fences.
-- **The reported case:** the deployed OpenCode router (`plugins/adlc-opencode/skill/adlc.md`) is stale on `adversarial-review`, `execute.before`, `edit` and `advisoryHooks`. These are 4 of its 6 stale claims; the other two are the doc paths T-01M6MX13GCQYV7VGD9VRQHE35V fixes.
+- **The reported case:** the deployed OpenCode router (`plugins/adlc-opencode/skill/adlc.md`) is stale on `adversarial-review`, `execute.before`, `edit` and `advisoryHooks`. These are 4 of its 6 stale claims; the other two are the doc paths that part 2 fixes.
 
 ## Rules
 
@@ -40,20 +40,20 @@ Measured after the change with the real CLI: `skill-rot --json` to a file, befor
 | corpus | stale command claims | clean skills | stale skills |
 | --- | --- | --- | --- |
 | this repo (`skills plugins .claude/skills`, 30 skills) | 275 → 6 | 3 → 10 | 27 → 19 |
-| mm-js `.agents/skills` (47 skills) | 1094 → 19 | 0 → 19 | 46 → 25 |
+| consumer repo `.agents/skills` (47 skills) | 1094 → 19 | 0 → 19 | 46 → 25 |
 
-Script claims are unchanged: 1 here, 23 in mm-js. Path claims are unchanged here (32). In mm-js they go from 31 to 30: one sat inside a non-shell fence. They are what keeps the remaining skills stale here, mostly repo-doc mentions that T-01M6MX13GCQYV7VGD9VRQHE35V lists.
+Script claims are unchanged: 1 here, 23 in the consumer repo. Path claims are unchanged here (32). In the consumer repo they go from 31 to 30: one sat inside a non-shell fence. They are what keeps the remaining skills stale here, mostly repo-doc mentions that part 2 lists.
 
 The six left here are:
 - `adversarial-review --prompt-only`: intended, since it is not on PATH;
 - `ls-remote --symref`: a subcommand fragment;
 - two shell-function lines.
 
-In mm-js, the rest are subcommand fragments with flags (`check --table`), JavaScript in fences mislabelled `bash`, and Windows `winget`.
+In the consumer repo, the rest are subcommand fragments with flags (`check --table`), JavaScript in fences mislabelled `bash`, and Windows `winget`.
 
 ## Acceptance criteria
 
-1. Name-shaped inline spans give no command claim. The cases: `execute.before`, `advisoryHooks`, `edit`, `write`, `adversarial-review`, `followUp.implementationSkill`, `typescript`, `node_modules`, `SKILL.md`, `github.blobBaseUrl`, `untranslated-string-audit.profile.yml`, `gpt-5.6-terra-high`, `claude-opus-4-8-thinking-high`, `spec_hash`, `PreToolUse`, `compare before.json after.json`, `refname is ambiguous`. Verify: `node --test packages/skill-rot/test/command-claims.test.mjs`
+1. Name-shaped inline spans give no command claim. The cases: `execute.before`, `advisoryHooks`, `edit`, `write`, `adversarial-review`, `retry.maxAttempts`, `typescript`, `node_modules`, `SKILL.md`, `server.baseUrl`, `lint-rules.profile.yml`, `gpt-4.1-mini`, `claude-sonnet-4-5`, `spec_hash`, `PreToolUse`, `compare before.json after.json`, `refname is ambiguous`. Verify: `node --test packages/skill-rot/test/command-claims.test.mjs`
 2. Invocation-shaped inline spans still give a command claim on their first token: `ls -la` → `ls`; `definitely-not-a-binary-xyz --flag` → `definitely-not-a-binary-xyz`; `npx adversarial-review` → `npx`; `git` → `git`; `$ removed-cli-xyz` → `removed-cli-xyz`; `pg_dump -Fc db` → `pg_dump`. Verify: `node --test packages/skill-rot/test/command-claims.test.mjs`
 3. Fences give no claim from ` ```ts ` `const x = 1`, from ` ```json `, ` ```text ` or ` ```yaml ` lines, or from a box-drawing line in an unlabelled fence. They do give a claim from ` ```bash ` `removed-cli-xyz build`, from ` ```console ` `$ git status`, and from `git status` in an unlabelled fence. Verify: `node --test packages/skill-rot/test/command-claims.test.mjs`
 4. `` [`docs/x.md`](https://github.com/o/r/blob/main/docs/x.md) `` gives no path claim. `` [`docs/x.md`](../docs/x.md) `` and a bare `` `docs/x.md` `` still do. Verify: `node --test packages/skill-rot/test/command-claims.test.mjs`
@@ -66,8 +66,8 @@ In mm-js, the rest are subcommand fragments with flags (`check --table`), JavaSc
 ## Decisions
 
 - **decided:** a bare single word is a name unless it is a launcher, over keeping single tokens. It is the largest false-positive class in both corpora, and the only way to remove `edit`, `adversarial-review`, `typescript` and the model ids (AC 1).
-- **decided:** a flag, a launcher or an explicit `$ ` is what makes a span an invocation, over "two or more tokens". Measured: two-or-more still leaves `refname is ambiguous`, `commit or stash first`, `show <id>` and `ticket update` (15 stale here, 68 in mm-js) (AC 1, AC 2).
-- **decided:** no "run `x`" prose cue. Measured: in mm-js it turns `lint`, `tc`, `knip` and `push` back into stale claims. "Run `lint`" usually means a package script, which script claims already cover (AC 1).
+- **decided:** a flag, a launcher or an explicit `$ ` is what makes a span an invocation, over "two or more tokens". Measured: two-or-more still leaves `refname is ambiguous`, `commit or stash first`, `show <id>` and `ticket update` (15 stale here, 68 in the consumer repo) (AC 1, AC 2).
+- **decided:** no "run `x`" prose cue. Measured: in the consumer repo it turns `lint`, `tc`, `knip` and `push` back into stale claims. "Run `lint`" usually means a package script, which script claims already cover (AC 1).
 - **decided:** `$ ` is the explicit opt-in. A per-span opt-out marker is not added: it would be new syntax that renders visibly in every harness, and the measured corpora no longer need it. To keep a block out, label it `text` (AC 2, AC 3).
 - **decided:** non-shell fences yield no claims at all, over scanning every fence. TypeScript and diagrams are the fence false positives, and the 80 `bash`/`sh` claims here are unaffected (AC 3).
 - **decided:** a code span that is an absolute-URL link's whole text is not a claim. Linking a repo file by URL is how a skill says the file lives elsewhere; #1377 uses that form for `docs/interrogation-protocol.md` (AC 4).
@@ -78,7 +78,7 @@ In mm-js, the rest are subcommand fragments with flags (`check --table`), JavaSc
 1. **Inline rule.**
    - Chosen: command-shaped first token, plus a launcher, a flag or `$ `.
    - Rejected: two or more tokens (see Decisions).
-   - Rejected: dropping only dotted or camelCase first tokens. Measured: 111 stale left here, 573 in mm-js.
+   - Rejected: dropping only dotted or camelCase first tokens. Measured: 111 stale left here, 573 in the consumer repo.
    - Rejected: inline spans never claim commands. It loses `definitely-not-a-binary-xyz --flag` and every inline invocation of a removed CLI.
 2. **Opt-out.**
    - Chosen: none; `$ ` to opt in, a `text` label to keep a block out.

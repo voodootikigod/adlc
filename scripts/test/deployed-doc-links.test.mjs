@@ -1,5 +1,5 @@
 // deployed-doc-links.test.mjs — links in deployed plugin markdown must resolve
-// where the file is read (T-01M6MX13GCQYV7VGD9VRQHE35V,
+// where the file is read (T-01M6MX48CNWXSXRSQ7R9Y5GVHW part 2,
 // .adlc/specs/deployed-doc-links.md).
 //
 // Plugin markdown is copied out of this repository: into a consumer's

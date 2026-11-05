@@ -1,6 +1,6 @@
-# T-01M6MX13GCQYV7VGD9VRQHE35V — Deployed plugin markdown: link ADLC repo docs by absolute GitHub URL
+# T-01M6MX48CNWXSXRSQ7R9Y5GVHW, part 2 — Deployed plugin markdown: link ADLC repo docs by absolute GitHub URL
 
-Tier: ordinary. `scripts/router/**` and plugin markdown are not trust-root paths; the trust-root plugin paths are `plugins/adlc-opencode/lib`, the hook directories and `rails-checker.mjs`. Depends on: T-01M6MX48CNWXSXRSQ7R9Y5GVHW (skill-rot R4).
+Tier: ordinary. `scripts/router/**` and plugin markdown are not trust-root paths; the trust-root plugin paths are `plugins/adlc-opencode/lib`, the hook directories and `rails-checker.mjs`. Depends on part 1 (`.adlc/specs/skill-rot-command-claims.md`, rule R4).
 
 Gate 1: spec approved by Rafael Belliard on 2026-11-05. Not recorded in the manifest: the approval entry must be signed, and this branch has no signing key for this repository.
 
@@ -11,7 +11,7 @@ A file a plugin deploys must not point at a file only this repository has. Its l
 ## Evidence
 
 - **The OpenCode deploy copies verbatim.** `npx @adlc/opencode init` (and `/adlc-init`) copies `plugins/adlc-opencode/skill/adlc.md` to `.opencode/skills/adlc/SKILL.md`, in `deploySkills` in `plugins/adlc-opencode/lib/scaffold.mjs`.
-- **That file points at repo-only paths.** Its "Rail enforcement in this harness" section names `docs/ci/rails-guard.yml` and links `../../../docs/integrations/opencode.md`. Neither path exists in a consumer, and in mm-js `adlc skill-rot .opencode/skills` reports both as stale.
+- **That file points at repo-only paths.** Its "Rail enforcement in this harness" section names `docs/ci/rails-guard.yml` and links `../../../docs/integrations/opencode.md`. Neither path exists in a consumer, and in a consumer repo `adlc skill-rot .opencode/skills` reports both as stale.
 - **Only four relative links exist in deployed files.** Scan: `git ls-files 'plugins/**/*.md' 'plugins/**/*.mdc' 'skills/**/*.md'`, minus `README.md`, `CHANGELOG.md` and `test/`. All four escape their plugin directory:
 
   | file | link |

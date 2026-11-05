@@ -38,7 +38,7 @@ For each `SKILL.md` file found recursively (skipping `node_modules` and `.git`):
    file), not something to run, so most spans are not command claims.
 
    A word is **command-shaped** when it matches `^[a-z][a-z0-9_-]*$`: a
-   dot (`SKILL.md`, `execute.before`, `gpt-5.6-terra-high`) or an uppercase
+   dot (`SKILL.md`, `execute.before`, `gpt-4.1-mini`) or an uppercase
    letter (`advisoryHooks`, `PreToolUse`) means a name.
 
    - **Inline spans.** A span is a command claim only when its first word is
