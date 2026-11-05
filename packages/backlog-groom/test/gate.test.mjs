@@ -379,22 +379,22 @@ test('buildActionArtifact includes issue title, current labels, verified paths, 
       body: '  **Location** `src/a.mjs:1`\n\nThe snippet was removed.  ',
     })
   );
-  assert.match(art, /^- title: Fix stale snippet check$/m);
+  assert.match(art, /<<UNTRUSTED:issue title:([0-9a-f-]{36})>>\nFix stale snippet check\n<<END:issue title:\1>>/);
   assert.match(art, /^- current labels: P2-medium, area:review$/m);
   assert.match(art, /^- verified paths: src\/a\.mjs, src\/b\.mjs$/m);
-  assert.match(art, /## Issue body\n\*\*Location\*\* `src\/a\.mjs:1`\n\nThe snippet was removed\./);
+  assert.match(art, /<<UNTRUSTED:issue body:([0-9a-f-]{36})>>\n\*\*Location\*\* `src\/a\.mjs:1`\n\nThe snippet was removed\.\n<<END:issue body:\1>>/);
 });
 
 test('buildActionArtifact truncates issue body only when it exceeds MAX_ARTIFACT_BODY_CHARS', () => {
   assert.equal(MAX_ARTIFACT_BODY_CHARS, 4000);
   const exactBody = 'a' + 'x'.repeat(MAX_ARTIFACT_BODY_CHARS - 1);
   const exactArt = buildActionArtifact(action({ body: exactBody }));
-  assert.ok(exactArt.includes(`## Issue body\n${exactBody}\n## Evidence`));
+  assert.ok(exactArt.includes(`>>\n${exactBody}\n<<END:issue body:`));
   assert.ok(!exactArt.includes('...(truncated)'));
 
   const overBody = 'a' + 'x'.repeat(MAX_ARTIFACT_BODY_CHARS - 1) + 'z';
   const overArt = buildActionArtifact(action({ body: overBody }));
-  assert.ok(overArt.includes(`## Issue body\n${exactBody}\n...(truncated)\n## Evidence`));
+  assert.ok(overArt.includes(`>>\n${exactBody}\n...(truncated)\n<<END:issue body:`));
 });
 
 test('artifactDigest binds to title, labels, verifiedPaths, and body', () => {

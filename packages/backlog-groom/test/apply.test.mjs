@@ -562,10 +562,10 @@ test('applyRun threads verified issue context into the review artifact so a cont
     runReview: (action) => {
       seenArtifact = buildActionArtifact(action);
       const hasContext =
-        seenArtifact.includes('- title: Remove obsolete helper in src/a.mjs') &&
+        /issue title:[0-9a-f-]{36}>>\nRemove obsolete helper in src\/a\.mjs\n<<END/.test(seenArtifact) &&
         seenArtifact.includes('- current labels: P2-medium, area:review') &&
         seenArtifact.includes('- verified paths: src/a.mjs') &&
-        seenArtifact.includes('## Issue body\n**Location** `src/a.mjs:1`');
+        /issue body:[0-9a-f-]{36}>>\n\*\*Location\*\* `src\/a\.mjs:1`/.test(seenArtifact);
       return { code: hasContext ? REVIEW_APPROVE : REVIEW_NEEDS_ATTENTION };
     },
     gh,
