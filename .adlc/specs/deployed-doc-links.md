@@ -2,6 +2,8 @@
 
 Tier: ordinary. `scripts/router/**` and plugin markdown are not trust-root paths; the trust-root plugin paths are `plugins/adlc-opencode/lib`, the hook directories and `rails-checker.mjs`. Depends on: T-01M6MX48CNWXSXRSQ7R9Y5GVHW (skill-rot R4).
 
+Gate 1: spec approved by Rafael Belliard on 2026-11-05. Not recorded in the manifest: the approval entry must be signed, and this branch has no signing key for this repository.
+
 ## Intent
 
 A file a plugin deploys must not point at a file only this repository has. Its links should work wherever the file is read: a consumer's `.opencode/skills/`, `.cursor/`, the Claude Code plugin cache, or a skills.sh install.

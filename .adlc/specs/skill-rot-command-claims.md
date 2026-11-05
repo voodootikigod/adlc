@@ -2,6 +2,8 @@
 
 Tier: ordinary (`packages/skill-rot` is not a trust-root package). Blocks: T-01M6MX13GCQYV7VGD9VRQHE35V (deployed doc links), which relies on R4.
 
+Gate 1: spec approved by Rafael Belliard on 2026-11-05. Not recorded in the manifest: the approval entry must be signed, and this branch has no signing key for this repository.
+
 ## Intent
 
 `skill-rot` exists so a skill that tells an agent to run a command that is gone goes stale. Today it also goes stale on almost every name written in backticks, so a real finding is buried and the gate cannot be used. Narrow what counts as a command claim to what is shaped like an invocation. A skill that documents a removed CLI must still fail the gate.
