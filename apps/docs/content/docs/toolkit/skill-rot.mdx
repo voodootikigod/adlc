@@ -17,6 +17,26 @@ repo. Verifiable-but-failing claims are `stale` and fail the gate; claims it
 cannot adjudicate (URLs, missing `package.json`) are `unverifiable` and never
 counted against you. Skills with zero checkable claims are reported as `[NO-CLAIMS]` and are never stamped under `--write`. A skill whose claims are all unverifiable is reported as `[UNVERIFIED]`, is not counted clean, and is never stamped. Run it weekly in CI to keep the skill corpus honest.
 
+## What counts as a command
+
+A word in backticks is usually a name (an option, a tool, a model id, a file),
+not something to run, so only invocations become command claims. A word is
+**command-shaped** when it matches `^[a-z][a-z0-9_-]*$`; a dot or an uppercase
+letter means a name.
+
+- **Inline spans** claim their first word only when it is command-shaped and
+  either it is a known **launcher** (`adlc`, `npx`, `npm`, `pnpm`, `yarn`,
+  `bun`, `bunx`, `node`, `deno`, `git`, `gh`, `docker`, `make`, `python`,
+  `python3`, `pip`, `cargo`, `go`, `curl`, `sh`, `bash`), a later word is a
+  flag (`mytool --version`), or the span starts with `$ ` (`$ mytool`).
+  `edit` or `typescript` alone claim nothing; `ls -la` and `npx adversarial-review` do.
+- **Fenced blocks** count only when the info string is empty or a shell
+  language: `sh`, `bash`, `zsh`, `shell`, `console`, `shell-session`,
+  `terminal`, `fish`, `ksh`. A line needs a command-shaped first word, so
+  diagrams and prose lines are skipped. Label a block `text` to keep it out.
+- **Linked spans**: a code span that is the whole text of a link to an
+  absolute `http(s)` URL is not a claim. The link says the file lives elsewhere.
+
 ## Usage
 
 ```sh

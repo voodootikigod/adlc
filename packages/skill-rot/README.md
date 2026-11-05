@@ -33,8 +33,37 @@ Symlinked skill directories and symlinked `SKILL.md` files are followed, with cy
 
 For each `SKILL.md` file found recursively (skipping `node_modules` and `.git`):
 
-1. **Commands** — backtick-enclosed spans and fenced code block lines whose
-   first token looks like a command name. Verified via:
+1. **Commands** — the first word of something shaped like an invocation.
+   A word in backticks is usually a name (an option, a tool, a model id, a
+   file), not something to run, so most spans are not command claims.
+
+   A word is **command-shaped** when it matches `^[a-z][a-z0-9_-]*$`: a
+   dot (`SKILL.md`, `execute.before`, `gpt-5.6-terra-high`) or an uppercase
+   letter (`advisoryHooks`, `PreToolUse`) means a name.
+
+   - **Inline spans.** A span is a command claim only when its first word is
+     command-shaped **and** one of these holds:
+     - the word is a known **launcher**: `adlc`, `npx`, `npm`, `pnpm`,
+       `yarn`, `bun`, `bunx`, `node`, `deno`, `git`, `gh`, `docker`, `make`,
+       `python`, `python3`, `pip`, `cargo`, `go`, `curl`, `sh`, `bash`;
+     - a later word is a flag (`-x`, `--x`), as in `mytool --version`;
+     - the span starts with an explicit `$ ` prompt, as in `$ mytool`. Use
+       this to make any span a claim.
+
+     So `edit`, `typescript` or `adversarial-review` alone claim nothing,
+     while `ls -la`, `npx adversarial-review` and `$ mytool` do.
+   - **Fenced blocks.** Lines count only in a fence whose info string is
+     empty or a shell language: `sh`, `bash`, `zsh`, `shell`, `console`,
+     `shell-session`, `terminal`, `fish`, `ksh`. `ts`, `json`, `yaml`,
+     `text` and other fences yield no claims; label a block `text` to keep
+     it out. Inside a shell fence a line is a command claim when its first
+     word is command-shaped, so a diagram line such as
+     `Vague request? ──→ P0` is skipped.
+   - **Linked spans.** A code span that is the whole text of a link to an
+     absolute `http(s)` URL, as in ``[`docs/x.md`](https://…)``, is not a
+     claim of any kind: the link says the file lives elsewhere.
+
+   Verified via:
    - `./node_modules/.bin/<cmd>` presence, OR
    - `sh -c 'command -v <cmd>'`
 
@@ -42,8 +71,8 @@ For each `SKILL.md` file found recursively (skipping `node_modules` and `.git`):
    (3+ chars, all caps/underscores/digits) are never counted as stale.
 
 2. **File paths** — tokens containing `/` and a file extension (e.g.
-   `src/index.mjs`). Checked via `existsSync` from the repo root and from the
-   skill's own directory.
+   `src/index.mjs`), in inline spans and shell fences. Checked via
+   `existsSync` from the repo root and from the skill's own directory.
 
 3. **Script references** — `npm run X`, `pnpm X`, `yarn X` patterns.
    Key `X` is looked up in `scripts` of the root `package.json`. If no

@@ -24,7 +24,7 @@ describe('symlink skill discovery (issue #765)', () => {
       const targetDir = join(dir, 'shared', 'my-skill');
       mkdirSync(targetDir, { recursive: true });
       const skillFile = join(targetDir, 'SKILL.md');
-      writeFileSync(skillFile, '# My Linked Skill\n- `ls`\n', 'utf8');
+      writeFileSync(skillFile, '# My Linked Skill\n- `ls -la`\n', 'utf8');
 
       const skillsDir = join(dir, 'skills');
       mkdirSync(skillsDir, { recursive: true });
@@ -49,7 +49,7 @@ describe('symlink skill discovery (issue #765)', () => {
       const sharedDir = join(dir, 'shared');
       mkdirSync(sharedDir, { recursive: true });
       const targetFile = join(sharedDir, 'actual-skill.md');
-      writeFileSync(targetFile, '# Shared Skill File\n- `ls`\n', 'utf8');
+      writeFileSync(targetFile, '# Shared Skill File\n- `ls -la`\n', 'utf8');
 
       const skillDir = join(dir, 'skills', 'skill-b');
       mkdirSync(skillDir, { recursive: true });
@@ -74,7 +74,7 @@ describe('symlink skill discovery (issue #765)', () => {
     try {
       const skillDir = join(dir, 'skills', 'cyclic-skill');
       mkdirSync(skillDir, { recursive: true });
-      writeFileSync(join(skillDir, 'SKILL.md'), '# Cyclic Skill\n- `ls`\n', 'utf8');
+      writeFileSync(join(skillDir, 'SKILL.md'), '# Cyclic Skill\n- `ls -la`\n', 'utf8');
 
       // Create self-referential loop inside cyclic-skill
       symlinkSync(skillDir, join(skillDir, 'self-loop'));
@@ -101,7 +101,7 @@ describe('symlink skill discovery (issue #765)', () => {
       const skillsDir = join(dir, 'skills');
       const validSkillDir = join(skillsDir, 'valid');
       mkdirSync(validSkillDir, { recursive: true });
-      writeFileSync(join(validSkillDir, 'SKILL.md'), '# Valid Skill\n- `ls`\n', 'utf8');
+      writeFileSync(join(validSkillDir, 'SKILL.md'), '# Valid Skill\n- `ls -la`\n', 'utf8');
 
       symlinkSync(join(dir, 'nonexistent-target'), join(skillsDir, 'broken-link'));
 
@@ -152,7 +152,7 @@ describe('symlink skill discovery (issue #765)', () => {
     try {
       const targetDir = join(dir, 'shared', 'cli-skill');
       mkdirSync(targetDir, { recursive: true });
-      writeFileSync(join(targetDir, 'SKILL.md'), '# CLI Skill\n- `ls`\n', 'utf8');
+      writeFileSync(join(targetDir, 'SKILL.md'), '# CLI Skill\n- `ls -la`\n', 'utf8');
 
       const skillsDir = join(dir, 'skills');
       mkdirSync(skillsDir, { recursive: true });
@@ -204,7 +204,7 @@ describe('symlink skill discovery (issue #765)', () => {
       const targetDir = join(dir, 'shared', 'target-skill');
       mkdirSync(targetDir, { recursive: true });
       const targetFile = join(targetDir, 'SKILL.md');
-      writeFileSync(targetFile, '# Target Skill\n- `ls`\n', 'utf8');
+      writeFileSync(targetFile, '# Target Skill\n- `ls -la`\n', 'utf8');
 
       const skillsDir = join(dir, 'skills', 'link-dir');
       mkdirSync(skillsDir, { recursive: true });
@@ -232,7 +232,7 @@ describe('symlink skill discovery (issue #765)', () => {
       const nmDir = join(dir, 'shared', 'node_modules');
       const vendorDir = join(nmDir, 'vendor-skill');
       mkdirSync(vendorDir, { recursive: true });
-      writeFileSync(join(vendorDir, 'SKILL.md'), '# Hidden Vendor\n- `ls`\n', 'utf8');
+      writeFileSync(join(vendorDir, 'SKILL.md'), '# Hidden Vendor\n- `ls -la`\n', 'utf8');
 
       const skillsDir = join(dir, 'skills');
       mkdirSync(skillsDir, { recursive: true });
@@ -252,7 +252,7 @@ describe('symlink skill discovery (issue #765)', () => {
       const gitDir = join(dir, 'shared', '.git');
       const hooksDir = join(gitDir, 'hooks');
       mkdirSync(hooksDir, { recursive: true });
-      writeFileSync(join(hooksDir, 'SKILL.md'), '# Hidden Git\n- `ls`\n', 'utf8');
+      writeFileSync(join(hooksDir, 'SKILL.md'), '# Hidden Git\n- `ls -la`\n', 'utf8');
 
       const skillsDir = join(dir, 'skills');
       mkdirSync(skillsDir, { recursive: true });

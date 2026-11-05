@@ -15,7 +15,7 @@ import { findSkills } from '../lib/find-skills.mjs';
 
 const BIN = fileURLToPath(new URL('../bin/skill-rot.mjs', import.meta.url));
 
-function skill(path, body = '# S\nRun `ls`.\n') {
+function skill(path, body = '# S\nRun `ls -la`.\n') {
   mkdirSync(path, { recursive: true });
   writeFileSync(join(path, 'SKILL.md'), body);
   return join(path, 'SKILL.md');
@@ -66,7 +66,7 @@ test('CLI: an explicit root holding a link into node_modules exits 1 instead of 
   const dir = tmp(t, 'skill-rot-excl-');
   skill(join(dir, 'skills', 'real'));
   const target = join(dir, 'node_modules', '@vendor', 'pkg', 'skills', 'bar');
-  skill(target, '# Bar\nRun `definitely-not-a-real-cmd-xyz`.\n');
+  skill(target, '# Bar\nRun `definitely-not-a-real-cmd-xyz --help`.\n');
   symlinkSync(target, join(dir, 'skills', 'vendor'));
   const res = spawnSync(process.execPath, [BIN, 'skills'], { cwd: dir, encoding: 'utf8' });
   assert.equal(res.status, 1, `stdout=${res.stdout} stderr=${res.stderr}`);
@@ -76,7 +76,7 @@ test('CLI: an explicit root holding a link into node_modules exits 1 instead of 
 test('CLI: the linked target named explicitly is checked', (t) => {
   const dir = tmp(t, 'skill-rot-excl-');
   const target = join(dir, 'node_modules', '@vendor', 'pkg', 'skills');
-  skill(join(target, 'bar'), '# Bar\nRun `definitely-not-a-real-cmd-xyz`.\n');
+  skill(join(target, 'bar'), '# Bar\nRun `definitely-not-a-real-cmd-xyz --help`.\n');
   const res = spawnSync(process.execPath, [BIN, 'node_modules/@vendor/pkg/skills'], { cwd: dir, encoding: 'utf8' });
   assert.equal(res.status, 2, `stdout=${res.stdout} stderr=${res.stderr}`);
   assert.match(res.stdout, /\[STALE\]/);

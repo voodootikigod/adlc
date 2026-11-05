@@ -85,7 +85,7 @@ describe('zero-claim skills (issue #766)', () => {
       // 2. Skill with valid command claims
       const goodSkillPath = writeSkill(tmp, 'skills/good/SKILL.md', [
         '# Good Claims',
-        'Run `ls` to list directory contents.',
+        'Run `ls -la` to list directory contents.',
       ].join('\n'));
 
       const goodResult = checkSkill(goodSkillPath, tmp);
@@ -96,7 +96,7 @@ describe('zero-claim skills (issue #766)', () => {
       // 3. Skill with stale claim
       const badSkillPath = writeSkill(tmp, 'skills/bad/SKILL.md', [
         '# Bad Claims',
-        'Run `totally-bogus-command-never-exists-xyz` here.',
+        'Run `totally-bogus-command-never-exists-xyz --help` here.',
       ].join('\n'));
 
       const badResult = checkSkill(badSkillPath, tmp);
@@ -143,8 +143,8 @@ describe('zero-claim skills (issue #766)', () => {
     const tmp = mkdtempSync(join(tmpdir(), 'skill-rot-zero-claims-test-'));
     try {
       const zeroSkillPath = writeSkill(tmp, 'skills/zero/SKILL.md', '# Zero\nJust prose.');
-      const goodSkillPath = writeSkill(tmp, 'skills/good/SKILL.md', '# Good\nRun `ls`.');
-      const badSkillPath = writeSkill(tmp, 'skills/bad/SKILL.md', '# Bad\nRun `definitely-not-a-command-xyz`.');
+      const goodSkillPath = writeSkill(tmp, 'skills/good/SKILL.md', '# Good\nRun `ls -la`.');
+      const badSkillPath = writeSkill(tmp, 'skills/bad/SKILL.md', '# Bad\nRun `definitely-not-a-command-xyz --help`.');
 
       const results = [
         checkSkill(zeroSkillPath, tmp),
@@ -167,7 +167,7 @@ describe('zero-claim skills (issue #766)', () => {
       );
 
       // Verify counts with multiple clean skills and zero stale
-      const good2SkillPath = writeSkill(tmp, 'skills/good2/SKILL.md', '# Good 2\nRun `cat`.');
+      const good2SkillPath = writeSkill(tmp, 'skills/good2/SKILL.md', '# Good 2\nRun `cat -n`.');
       const resultsMultipleClean = [
         checkSkill(zeroSkillPath, tmp),
         checkSkill(goodSkillPath, tmp),
@@ -181,7 +181,7 @@ describe('zero-claim skills (issue #766)', () => {
       );
 
       // Verify counts with multiple stale skills and zero no-claims
-      const bad2SkillPath = writeSkill(tmp, 'skills/bad2/SKILL.md', '# Bad 2\nRun `fake-tool-xyz`.');
+      const bad2SkillPath = writeSkill(tmp, 'skills/bad2/SKILL.md', '# Bad 2\nRun `fake-tool-xyz --help`.');
       const resultsMultipleStale = [
         checkSkill(goodSkillPath, tmp),
         checkSkill(badSkillPath, tmp),
@@ -202,7 +202,7 @@ describe('zero-claim skills (issue #766)', () => {
     const tmp = mkdtempSync(join(tmpdir(), 'skill-rot-zero-claims-test-'));
     try {
       const zeroSkillPath = writeSkill(tmp, 'skills/zero/SKILL.md', '# Zero\nJust prose.');
-      const goodSkillPath = writeSkill(tmp, 'skills/good/SKILL.md', '# Good\nRun `ls`.');
+      const goodSkillPath = writeSkill(tmp, 'skills/good/SKILL.md', '# Good\nRun `ls -la`.');
 
       const results = [
         checkSkill(zeroSkillPath, tmp),

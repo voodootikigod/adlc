@@ -33,7 +33,21 @@ Measured with the in-tree extractor and verifier at upstream/main 780c3400 (thro
 - **R4. Linked code span.** A code span that is the entire text of a markdown link with an absolute `http(s)` target yields no claim, for example `` [`docs/x.md`](https://…) ``. The link says where the file lives, not that it exists here. A relative target is unchanged.
 - **R5.** Script references (`npm run X`, `pnpm X`, `yarn X`) are unchanged.
 
-With R1–R4, the inline stale count falls from 167 to 2 in this repo and from 905 to 9 in mm-js. Fence stale falls from 14 to 2 here and from 106 to 14 in mm-js; the rest in mm-js are JavaScript in fences mislabelled `bash`, plus shell functions.
+Measured after the change with the real CLI: `skill-rot --json` to a file, before and after on the same trees.
+
+| corpus | stale command claims | clean skills | stale skills |
+| --- | --- | --- | --- |
+| this repo (`skills plugins .claude/skills`, 30 skills) | 275 → 6 | 3 → 10 | 27 → 19 |
+| mm-js `.agents/skills` (47 skills) | 1094 → 19 | 0 → 19 | 46 → 25 |
+
+Path and script claims are unchanged: 32 and 1 here, 31 and 23 in mm-js. They are what keeps the remaining skills stale here, mostly repo-doc mentions that T-01M6MX13GCQYV7VGD9VRQHE35V lists.
+
+The six left here are:
+- `adversarial-review --prompt-only`: intended, since it is not on PATH;
+- `ls-remote --symref`: a subcommand fragment;
+- two shell-function lines.
+
+In mm-js, the rest are subcommand fragments with flags (`check --table`), JavaScript in fences mislabelled `bash`, and Windows `winget`.
 
 ## Acceptance criteria
 

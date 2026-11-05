@@ -139,7 +139,7 @@ describe('CLI explicit path validation', () => {
 
   test('fails with exit 1 when explicit positional does not exist alongside valid root', (t) => {
     const dir = tmp(t, 'skill-rot-test-');
-    writeSkill(dir, 'valid-skills/a/SKILL.md', '# Valid Skill\nRun `ls` to list.');
+    writeSkill(dir, 'valid-skills/a/SKILL.md', '# Valid Skill\nRun `ls -la` to list.');
     const r = spawnSync(process.execPath, [BIN, 'valid-skills', 'missing-dir'], {
       cwd: dir,
       encoding: 'utf8',
@@ -175,7 +175,7 @@ describe('CLI explicit path validation', () => {
     if (typeof t?.after === 'function') t.after(() => { if (locked) { try { chmodSync(locked, 0o755); } catch {} } });
     const dir = tmp(t, 'skill-rot-test-');
     locked = join(dir, 'skills', 'locked');
-    writeSkill(dir, 'skills/ok/SKILL.md', '# ok\nRun `ls` to list.');
+    writeSkill(dir, 'skills/ok/SKILL.md', '# ok\nRun `ls -la` to list.');
     mkdirSync(locked, { recursive: true });
     chmodSync(locked, 0o000);
     const r = spawnSync(process.execPath, [BIN, 'skills'], { cwd: dir, encoding: 'utf8' });
@@ -186,7 +186,7 @@ describe('CLI explicit path validation', () => {
 
   test('succeeds when explicit paths all exist', (t) => {
     const dir = tmp(t, 'skill-rot-test-');
-    writeSkill(dir, 'custom/my-skill/SKILL.md', '# Valid Skill\nRun `ls` to list.');
+    writeSkill(dir, 'custom/my-skill/SKILL.md', '# Valid Skill\nRun `ls -la` to list.');
     const r = spawnSync(process.execPath, [BIN, 'custom'], {
       cwd: dir,
       encoding: 'utf8',
@@ -447,7 +447,7 @@ describe('checkSkill', () => {
     const dir = tmp(t, 'skill-rot-test-');
     const skillPath = writeSkill(dir, 'skills/good/SKILL.md', [
       '# Good Skill',
-      'Use `ls` and `cat` to explore files.',
+      'Use `ls -la` and `cat -n` to explore files.',
     ].join('\n'));
 
     const result = checkSkill(skillPath, dir);
@@ -531,7 +531,7 @@ describe('checkSkill', () => {
     const dir = tmp(t, 'skill-rot-test-');
     const skillPath = writeSkill(dir, 'skills/write-test/SKILL.md', [
       '# Write Test',
-      'Use `ls` to list files.',
+      'Use `ls -la` to list files.',
     ].join('\n'));
 
     checkSkill(skillPath, dir, { write: true });
@@ -546,7 +546,7 @@ describe('checkSkill', () => {
     const dir = tmp(t, 'skill-rot-test-');
     const skillPath = writeSkill(dir, 'skills/write-stale/SKILL.md', [
       '# Stale Write Test',
-      'Run `definitely-not-a-binary-xyz` for magic.',
+      'Run `definitely-not-a-binary-xyz --help` for magic.',
     ].join('\n'));
 
     checkSkill(skillPath, dir, { write: true });
@@ -559,7 +559,7 @@ describe('checkSkill', () => {
     const dir = tmp(t, 'skill-rot-test-');
     const skillPath = writeSkill(dir, 'skills/idempotent/SKILL.md', [
       '# Idempotent',
-      'Use `ls` to list.',
+      'Use `ls -la` to list.',
     ].join('\n'));
 
     checkSkill(skillPath, dir, { write: true });
