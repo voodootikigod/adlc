@@ -65,5 +65,5 @@ the advisory buildgate; `afterFileEdit` surfaces a post-edit audit + flail notic
 never denies. The rails path is **best-effort / advisory** in-session — Cursor's
 `permission: "deny"` is not guaranteed. The buildgate is **advisory, default-off,
 with NO unbypassable backstop**. The **unbypassable** layer (rails only) is the
-commit-time CI gate (`docs/ci/rails-guard.yml`). See
-[`docs/integrations/cursor.md`](../../../docs/integrations/cursor.md).
+commit-time CI gate ([`docs/ci/rails-guard.yml`](https://github.com/voodootikigod/adlc/blob/main/docs/ci/rails-guard.yml) in the ADLC
+repo). See [`docs/integrations/cursor.md`](https://github.com/voodootikigod/adlc/blob/main/docs/integrations/cursor.md).

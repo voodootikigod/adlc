@@ -81,7 +81,7 @@ adlc review-calibration --review-cmd "<review command with {base} placeholder>"
 If the change reads source text and decides something from it — a security gate
 scanning for markers (suppressions, secrets, banned/bare commands, rail paths), a
 linter, or any parser that exempts "inert" regions — apply the
-[text-scanning-gate lens](../../../docs/review-lenses/text-scanning-gates.md).
+[text-scanning-gate lens](https://github.com/voodootikigod/adlc/blob/main/docs/review-lenses/text-scanning-gates.md).
 This class ships past unit tests and is only caught by attacking the
 operative-vs-inert boundary. Try, concretely, to smuggle an operative marker past
 each check — every construction that works is a prosecution hit:
