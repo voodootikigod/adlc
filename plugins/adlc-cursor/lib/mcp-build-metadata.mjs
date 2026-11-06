@@ -3,10 +3,10 @@
 // package.json read and no node_modules tree.
 
 const SOURCE_MCP_BUILD_METADATA = Object.freeze({
-  pluginVersion: '1.12.0',
+  pluginVersion: '1.13.0',
   bundledDependencies: Object.freeze({
-    "@adlc/core": "1.12.0",
-    "@adlc/tickets": "1.12.0"
+    "@adlc/core": "1.13.0",
+    "@adlc/tickets": "1.13.0"
   }),
   esbuildVersion: '0.28.1',
 });
