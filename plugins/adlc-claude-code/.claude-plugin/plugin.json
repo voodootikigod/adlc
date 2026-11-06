@@ -1,6 +1,6 @@
 {
   "name": "adlc",
-  "version": "1.12.0",
+  "version": "1.13.0",
   "description": "Embrace the Agentic Development Lifecycle from inside Claude Code — phase-routing discovery skill, commands (/adlc:adlc-*), and enforcing PreToolUse gates (rails-guard, build-gate) that can deny edits in ADLC-initialized repositories. Wraps the @adlc/cli gate toolkit.",
   "author": {
     "name": "Chris Williams",

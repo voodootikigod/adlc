@@ -11,8 +11,35 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-11-05
+
 ### Breaking
 - **opencode:** `@adlc/opencode` now targets the OpenCode v2 plugin API only (default export `{ id: "adlc", setup(ctx) }`) and requires OpenCode >= 2.0.20; it no longer loads on OpenCode 1.x. The optional peer dependency moves from `@opencode-ai/plugin` to `@opencode/plugin` `>=2.0.20 <3`, `/adlc-init` writes the v2 `"plugins"` key (migrating an existing v1 `"plugin"` entry), and notices go to stderr instead of TUI toasts. Fixes "Plugin must export a default definition with an id and an effect or setup function".
+
+### Added
+- **decision-layer:** `ai-gateway` provider over Vercel AI Gateway's Decisions API (#1211).
+- **hollow-test:** mutates TypeScript, TSX and JSX; review-calibration syntax-checks TypeScript plants (#313, #1224).
+- **tickets:** `adlc ticket complete --expect <hash>`, rendered by ceremony-drift (#209, #1352).
+- **premortem:** ranks failure causes by likelihood; `--max-causes` (#1292, #1392).
+- **review-calibration:** `--review-timeout`; documented Windows node invocation (#758, #1387).
+- **consensus-fix, gate-fuzzing:** `--require-rails`, `scaffoldPath` in `--json` (#603, #606, #650, #1388).
+- **model-router:** `--ticket <id>` scopes routing to one ticket (#1238, #1243).
+- **gate-manifest:** `--require-entries` so `verify` fails closed on an empty ledger (#656, #1389).
+- **merge-forecast:** `signalsEvaluated` and `--strict` (#684, #1391).
+- **core:** generated hook classifiers, trusted-binary resolvers and shared primitives replace hand-inlined copies across plugins (#1239-#1242).
+
+### Changed
+- **backlog-groom:** the reviewer artifact now includes the issue title, body and verified paths (#1061). Issue-author text is fenced as untrusted data with a per-render random tag; `artifactDigest` renders the same artifact under a fixed tag so ledger approvals still verify (#1395). **Upgrading from 1.12.x: delete `.adlc/backlog-groom-ledger.json`** — an approved-but-unapplied entry is not re-reviewed, because the one-shot rule is deliberately not bound to the digest.
+- **backlog-groom:** ranking re-weighted so valid issues can rank low and `fixed` outranks nothing live (#1058). `--apply` now exits 1 when `GH_REPO`/`GH_HOST` disagrees with `origin` (#1037); documented in the README (#1395).
+- **runner:** exits 2 instead of 1 on content-level P4/P5/P6 rejections (#764, #1321).
+
+### Fixed
+Hardening, fail-closed behaviour and portability across the suite (about 130 fixes, each referenced by issue and PR in the git log). Highlights:
+- **Fail closed:** an absent or unreadable protected control file fails the fleet integrity scan (#632); a transcript with no tool calls is could-not-measure, never a fresh-session allow (#588); build-gate refuses a keyless override when the manifest ledger is signed (#589); gate-fuzzing and consensus-fix reject malformed or unimplemented input instead of passing (#645, #602); the Cursor rails guard never falls back to the plugin cwd (#815).
+- **Trust boundaries:** `ADLC_*` trust-root variables withheld from the repo-command plane (#634); credentials masked on removed diff lines before lens prompts (#1277); `GEMINI_API_KEY` sent in a header, not the URL (#618); `.gitignore` changes classified trust-root tier (#619); behavior-diff enforces http(s) origin containment (#585).
+- **Windows and cross-platform:** cmd shell, backslash paths and PATHEXT lookup in consensus-fix and skill-rot; Windows recovery paths and `--dir` in context-handoff (#605, #770, #1232, #1353).
+- **Data integrity:** atomic rewrites in init and behavior-diff capture (#668, #586); stale orphaned ledger locks reclaimed (#621); `--json` output no longer truncated when piped (#625).
+- **Plugins:** herdr, gemini, copilot, cursor, codex and pi docs and packaging corrections (LICENSE, `engines`, dependency ranges).
 
 ## [1.12.0] - 2026-10-09
 
