@@ -384,8 +384,12 @@ describe('createScopeIndex caches by scope content', () => {
   });
 
   test('a sparse scope skips its holes, as some() does', () => {
-    // eslint-disable-next-line no-sparse-arrays
-    const sparse = ['a/a', , 'a/b'];
+    // ['a/a', <hole>, 'a/b'], built by assignment so no linter rule needs silencing.
+    const sparse = [];
+    sparse[0] = 'a/a';
+    sparse[2] = 'a/b';
+    assert.equal(sparse.length, 3);
+    assert.ok(!(1 in sparse), 'index 1 must be a hole');
     for (const files of [FILES, []]) {
       const index = createScopeIndex(files);
       assert.deepEqual(outcome(() => index.files(sparse)), outcome(() => oldFiles(sparse, files)));
