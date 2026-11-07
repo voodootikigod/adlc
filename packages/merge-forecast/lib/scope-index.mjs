@@ -4,7 +4,8 @@
  * Every signal needs "the repo files inside this ticket's scope". Before this
  * module, each one recomputed it for both tickets of every pair, as
  * |files| × |scope| fresh globMatch calls, which made globMatch 77% of a
- * merge-forecast run. Here each distinct scope is matched once per run.
+ * merge-forecast run. Here each distinct scope is compiled once per run, and
+ * filtered once per run for each view (raw, and backslash-normalized).
  *
  * Nothing here decides what a glob means: core's globMatch stays the only
  * definition. compileGlob answers the two trivial shapes directly and, for
@@ -36,8 +37,8 @@ export function compileGlob(pattern) {
   // No wildcard at all: the pattern is the path.
   if (literals.length === tokens.length) return (path) => path === pattern;
 
-  // `literal**` or `**`: the split alternates literals and wildcards, so a
-  // single wildcard that is the last token leaves at most one literal before it.
+  // `literal**` or `**`: the split never yields two literals in a row, so when
+  // the only wildcard token is the last one, at most one literal precedes it.
   if (tokens.length - literals.length === 1 && tokens[tokens.length - 1] === '**') {
     const prefix = literals.length === 1 ? literals[0] : '';
     return (path) => path.startsWith(prefix);

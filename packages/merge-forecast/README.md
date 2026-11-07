@@ -51,7 +51,7 @@ Tickets with no scope or an empty scope emit a warning (`ticket "<id>" has no sc
 
 ### Performance
 
-The repository is walked once per run, and each ticket's matched files are computed once per run (`lib/scope-index.mjs`), not again for every pair the ticket is in. Per-pair work remains: import-radius candidates are still checked against the other ticket's scope, and each scope file is still read once per pair. Globs mean exactly what `globMatch` in `@adlc/core` says they mean. To reproduce the measurement offline:
+The repository is walked once per run, and each ticket's matched files are computed once per run for each of the two views the signals use (raw paths, and backslash-normalized paths for import radius) (`lib/scope-index.mjs`), not again for every pair the ticket is in. Per-pair work remains: import-radius candidates are still checked against the other ticket's scope, and each scope file is still read once per pair. Globs mean exactly what `globMatch` in `@adlc/core` says they mean. To reproduce the measurement offline:
 
 ```sh
 node packages/merge-forecast/test/bench/scope-index.bench.mjs [--files N] [--forecast <other>/lib/forecast.mjs] [--json]

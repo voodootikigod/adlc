@@ -3,8 +3,9 @@
 **Approval (P1):** approved by Rafael Belliard on 2026-11-07, as written at
 that point (after P5 round 1). The P1 gate ran late: the build started from
 his task brief before he had seen this spec. Edits after the approval (P5
-round 2) correct wording, state the `repoFiles` and rail-coverage limits, and
-strengthen criterion 5; none changes the design.
+rounds 2 and 3) correct wording, state the `repoFiles` and rail-coverage
+limits, describe the literal `Set`, and strengthen criterion 5; none changes
+the design.
 
 **Phase:** P1 contract for a behavior-preserving speed-up of
 `merge-forecast` (D2). No output changes. Single package:
@@ -81,7 +82,11 @@ exports.
      `index.matches(scope, path)` is `index.matcher(scope)(path)`.
    - Results are cached by scope **content** (the JSON of a scope made only
      of strings), so equal scopes share one entry and a second call returns
-     the same array.
+     the same array. Each view is filtered once per scope content, so a scope
+     is filtered over the repository at most twice per run.
+   - Inside one scope, literal globs (no `*`) go into a `Set`, the others
+     through `compileGlob`. For a scope of strings this cannot change the
+     answer: `some()` over globs that never throw does not depend on order.
    - A scope that is not an array, or holds a non-string, is never cached
      and never reordered: it takes the shared old expression
      `(scope ?? []).some(...)`, so it throws (or does not) in the same cases
@@ -121,7 +126,8 @@ pairs, rather than letting `pairScore` build one per pair, changes no output
 and has no injection point, so no test can see it. It is a speed property,
 measured by criterion 8 and 9, not proven by a rail. Per-pair indexes would
 still compile each scope once per pair, so the cost of losing the sharing is
-small (P5 measured no difference on the benchmark corpus).
+small: P5 measured about 200 ms more user CPU on the benchmark corpus with
+per-pair indexes, and no difference on the mentimeter/adlc run.
 
 **Out of scope.**
 - `packages/core/lib/glob.mjs` is not touched. It is generated source, copied
@@ -179,9 +185,11 @@ Each criterion names its verification.
    unscoped ticket and a zero-match ticket), `runForecast` returns a result
    deep-equal to a golden recorded with the code **before** this change, and
    `merge-forecast --json` prints a second golden byte for byte and exits 2.
-   The CLI's stdout is captured through a file: piped, Node 18 on macOS cuts
-   it at ~8 KB (`printJson` then `process.exit`, a bug older than this
-   change and reported separately).
+   The CLI's stdout is captured through a file. On macOS with Node 18, a
+   reader that does not drain a pipe fast enough loses the tail of it (a
+   `spawnSync` reader got the first ~8 KB), because the CLI calls
+   `process.exit` right after `printJson`. That bug is older than this
+   change; an issue for it is drafted, to be filed separately.
    *Verify:* `node --test packages/merge-forecast/test/forecast-unchanged.test.mjs`.
 7. **The existing suite still passes, on Node 18 and current.** *Verify:*
    `node --test packages/merge-forecast/test/*.test.mjs`.

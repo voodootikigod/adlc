@@ -80,14 +80,20 @@ for (let t = 0; t < 10; t++) {
 // ─── 1. Filtering ────────────────────────────────────────────────────────────
 
 const oldFiles = (scope) => repoFiles.filter((f) => (scope ?? []).some((g) => globMatch(g, f)));
+// Import radius filtered on the backslash-normalized path.
+const oldFilesNormalized = (scope) =>
+  repoFiles.filter((f) => {
+    const fNorm = f.replace(/\\/g, '/');
+    return (scope ?? []).some((g) => globMatch(g, fNorm));
+  });
 
 // How often the old code computed a ticket's file set: the zero-match check
 // once per ticket, then, per scored pair and per side, once each in namespace
-// routes, migrations and import radius. That is the case part 2 runs: no git
-// history and no graph-coupling data. Co-change data adds one more per side
-// and graph-coupling data another, so a real repository pays 4 or 5; 3 keeps
-// this side of the comparison conservative.
-const SETS_PER_PAIR_SIDE = 3;
+// routes and migrations, and once on normalized paths in import radius. That is
+// the case part 2 runs: no git history and no graph-coupling data. Co-change
+// data adds one more per side and graph-coupling data another, so a real
+// repository pays 4 or 5; 3 keeps this side of the comparison conservative.
+// The index side builds both of its views, as a real run does.
 const pairs = [];
 for (let i = 0; i < tickets.length; i++) {
   for (let j = i + 1; j < tickets.length; j++) pairs.push([tickets[i], tickets[j]]);
@@ -100,11 +106,12 @@ function time(fn) {
 }
 
 const before = time(() => {
-  const sets = tickets.map((t) => oldFiles(t.scope));
+  const sets = tickets.map((t) => [oldFiles(t.scope), oldFilesNormalized(t.scope)]);
   for (const [a, b] of pairs) {
-    for (let k = 0; k < SETS_PER_PAIR_SIDE; k++) {
-      oldFiles(a.scope);
-      oldFiles(b.scope);
+    for (const t of [a, b]) {
+      oldFiles(t.scope); // namespace routes
+      oldFiles(t.scope); // migrations
+      oldFilesNormalized(t.scope); // import radius
     }
   }
   return sets;
@@ -112,18 +119,19 @@ const before = time(() => {
 
 const after = time(() => {
   const index = createScopeIndex(repoFiles);
-  const sets = tickets.map((t) => index.files(t.scope));
+  const sets = tickets.map((t) => [index.files(t.scope), index.filesNormalized(t.scope)]);
   for (const [a, b] of pairs) {
-    for (let k = 0; k < SETS_PER_PAIR_SIDE; k++) {
-      index.files(a.scope);
-      index.files(b.scope);
+    for (const t of [a, b]) {
+      index.files(t.scope);
+      index.files(t.scope);
+      index.filesNormalized(t.scope);
     }
   }
   return sets;
 });
 
 const filteringAgrees = isDeepStrictEqual(before.value, after.value);
-const matched = after.value.reduce((n, set) => n + set.length, 0);
+const matched = after.value.reduce((n, [raw]) => n + raw.length, 0);
 
 // ─── 2. End to end ───────────────────────────────────────────────────────────
 
