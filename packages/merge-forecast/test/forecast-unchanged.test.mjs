@@ -7,7 +7,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -26,14 +26,22 @@ const CLI_GOLDEN = readFileSync(
   'utf8',
 );
 const CLI = fileURLToPath(new URL('../bin/merge-forecast.mjs', import.meta.url));
+// No inherited GIT_* variable may point the CLI's git calls at another
+// repository, and no ambient graph-coupling file may add a signal.
+const CLI_ENV = {
+  ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_'))),
+  ADLC_GRAPH_COUPLING_FILE: '',
+};
 
-function withFixture(fn) {
+// Awaits fn before cleaning up, so an async callback never runs against a
+// fixture that has already been deleted.
+async function withFixture(fn) {
   const dir = mkdtempSync(join(tmpdir(), 'mf-unchanged-'));
   try {
     const root = join(dir, 'repo');
     mkdirSync(root);
     buildFixtureRepo(root);
-    return fn({ dir, root });
+    return await fn({ dir, root });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -70,20 +78,31 @@ describe('merge-forecast output is unchanged by the scope index', () => {
     });
   }
 
-  test('merge-forecast --json prints the golden byte for byte, and exits 2 on its gate failure', () => {
-    withFixture(({ dir, root }) => {
+  test('merge-forecast --json prints the golden byte for byte, and exits 2 on its gate failure', async () => {
+    await withFixture(({ dir, root }) => {
       // Inputs live OUTSIDE the walked tree, so they add no file to it.
       const ticketsFile = join(dir, 'tickets.json');
       const graphFile = join(dir, 'graph.json');
       writeFileSync(ticketsFile, JSON.stringify({ tickets: FIXTURE_TICKETS }));
       writeFileSync(graphFile, JSON.stringify(FIXTURE_GRAPH));
-      const res = spawnSync(
-        process.execPath,
-        [CLI, '--json', '--tickets', ticketsFile, '--graph-coupling', graphFile],
-        { cwd: root, encoding: 'utf8', env: { ...process.env, ADLC_GRAPH_COUPLING_FILE: '' } },
-      );
+      // stdout goes to a FILE, not a pipe. On macOS a piped stdout is written
+      // asynchronously, and the CLI calls process.exit(2) right after printing,
+      // so Node 18 drops everything past the first ~8 KB. That is a bug in the
+      // CLI, older than this test; a file write is synchronous everywhere.
+      const outFile = join(dir, 'stdout.json');
+      const fd = openSync(outFile, 'w');
+      let res;
+      try {
+        res = spawnSync(
+          process.execPath,
+          [CLI, '--json', '--tickets', ticketsFile, '--graph-coupling', graphFile],
+          { cwd: root, encoding: 'utf8', stdio: ['ignore', fd, 'pipe'], env: CLI_ENV },
+        );
+      } finally {
+        closeSync(fd);
+      }
       assert.equal(res.stderr, '');
-      assert.equal(res.stdout, CLI_GOLDEN);
+      assert.equal(readFileSync(outFile, 'utf8'), CLI_GOLDEN);
       assert.equal(res.status, 2);
     });
   });

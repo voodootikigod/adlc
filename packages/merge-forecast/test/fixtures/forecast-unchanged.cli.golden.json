@@ -100,6 +100,24 @@
       "hardVeto": false
     },
     {
+      "pair": "CO_A–REV_A",
+      "a": "CO_A",
+      "b": "REV_A",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
+      "pair": "CO_A–REV_B",
+      "a": "CO_A",
+      "b": "REV_B",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
       "pair": "CO_A–ROUTE_A",
       "a": "CO_A",
       "b": "ROUTE_A",
@@ -235,6 +253,24 @@
       "hardVeto": false
     },
     {
+      "pair": "CO_B–REV_A",
+      "a": "CO_B",
+      "b": "REV_A",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
+      "pair": "CO_B–REV_B",
+      "a": "CO_B",
+      "b": "REV_B",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
       "pair": "CO_B–ROUTE_A",
       "a": "CO_B",
       "b": "ROUTE_A",
@@ -361,6 +397,24 @@
       "hardVeto": false
     },
     {
+      "pair": "ED_A–REV_A",
+      "a": "ED_A",
+      "b": "REV_A",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
+      "pair": "ED_A–REV_B",
+      "a": "ED_A",
+      "b": "REV_B",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
       "pair": "ED_A–ROUTE_A",
       "a": "ED_A",
       "b": "ROUTE_A",
@@ -478,6 +532,24 @@
       "hardVeto": false
     },
     {
+      "pair": "ED_B–REV_A",
+      "a": "ED_B",
+      "b": "REV_A",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
+      "pair": "ED_B–REV_B",
+      "a": "ED_B",
+      "b": "REV_B",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
       "pair": "ED_B–ROUTE_A",
       "a": "ED_B",
       "b": "ROUTE_A",
@@ -586,6 +658,24 @@
       "hardVeto": false
     },
     {
+      "pair": "GR_A–REV_A",
+      "a": "GR_A",
+      "b": "REV_A",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
+      "pair": "GR_A–REV_B",
+      "a": "GR_A",
+      "b": "REV_B",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
       "pair": "GR_A–ROUTE_A",
       "a": "GR_A",
       "b": "ROUTE_A",
@@ -685,6 +775,24 @@
       "hardVeto": false
     },
     {
+      "pair": "GR_B–REV_A",
+      "a": "GR_B",
+      "b": "REV_A",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
+      "pair": "GR_B–REV_B",
+      "a": "GR_B",
+      "b": "REV_B",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
       "pair": "GR_B–ROUTE_A",
       "a": "GR_B",
       "b": "ROUTE_A",
@@ -775,6 +883,24 @@
       "hardVeto": true
     },
     {
+      "pair": "IMP_A–REV_A",
+      "a": "IMP_A",
+      "b": "REV_A",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
+      "pair": "IMP_A–REV_B",
+      "a": "IMP_A",
+      "b": "REV_B",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
       "pair": "IMP_A–ROUTE_A",
       "a": "IMP_A",
       "b": "ROUTE_A",
@@ -856,6 +982,24 @@
       "hardVeto": false
     },
     {
+      "pair": "IMP_B–REV_A",
+      "a": "IMP_B",
+      "b": "REV_A",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
+      "pair": "IMP_B–REV_B",
+      "a": "IMP_B",
+      "b": "REV_B",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
       "pair": "IMP_B–ROUTE_A",
       "a": "IMP_B",
       "b": "ROUTE_A",
@@ -928,6 +1072,24 @@
       "hardVeto": false
     },
     {
+      "pair": "LATE–REV_A",
+      "a": "LATE",
+      "b": "REV_A",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
+      "pair": "LATE–REV_B",
+      "a": "LATE",
+      "b": "REV_B",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
       "pair": "LATE–ROUTE_B",
       "a": "LATE",
       "b": "ROUTE_B",
@@ -967,6 +1129,24 @@
       "pair": "MIG_A–OVER",
       "a": "MIG_A",
       "b": "OVER",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
+      "pair": "MIG_A–REV_A",
+      "a": "MIG_A",
+      "b": "REV_A",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
+      "pair": "MIG_A–REV_B",
+      "a": "MIG_A",
+      "b": "REV_B",
       "score": 0,
       "signal": "none",
       "verdict": "PARALLEL",
@@ -1027,6 +1207,24 @@
       "hardVeto": false
     },
     {
+      "pair": "MIG_B–REV_A",
+      "a": "MIG_B",
+      "b": "REV_A",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
+      "pair": "MIG_B–REV_B",
+      "a": "MIG_B",
+      "b": "REV_B",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
       "pair": "MIG_B–ROUTE_A",
       "a": "MIG_B",
       "b": "ROUTE_A",
@@ -1072,6 +1270,24 @@
       "hardVeto": false
     },
     {
+      "pair": "OVER–REV_A",
+      "a": "OVER",
+      "b": "REV_A",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
+      "pair": "OVER–REV_B",
+      "a": "OVER",
+      "b": "REV_B",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
       "pair": "OVER–ROUTE_A",
       "a": "OVER",
       "b": "ROUTE_A",
@@ -1110,6 +1326,105 @@
     {
       "pair": "OVER–ZERO",
       "a": "OVER",
+      "b": "ZERO",
+      "score": 1,
+      "signal": "unscoped",
+      "verdict": "SEQUENCE",
+      "hardVeto": false
+    },
+    {
+      "pair": "REV_A–REV_B",
+      "a": "REV_A",
+      "b": "REV_B",
+      "score": 0.6,
+      "signal": "import-radius",
+      "verdict": "SEQUENCE",
+      "hardVeto": false
+    },
+    {
+      "pair": "REV_A–ROUTE_A",
+      "a": "REV_A",
+      "b": "ROUTE_A",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
+      "pair": "REV_A–ROUTE_B",
+      "a": "REV_A",
+      "b": "ROUTE_B",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
+      "pair": "REV_A–SOLO",
+      "a": "REV_A",
+      "b": "SOLO",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
+      "pair": "REV_A–UNSCOPED",
+      "a": "REV_A",
+      "b": "UNSCOPED",
+      "score": 1,
+      "signal": "unscoped",
+      "verdict": "SEQUENCE",
+      "hardVeto": false
+    },
+    {
+      "pair": "REV_A–ZERO",
+      "a": "REV_A",
+      "b": "ZERO",
+      "score": 1,
+      "signal": "unscoped",
+      "verdict": "SEQUENCE",
+      "hardVeto": false
+    },
+    {
+      "pair": "REV_B–ROUTE_A",
+      "a": "REV_B",
+      "b": "ROUTE_A",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
+      "pair": "REV_B–ROUTE_B",
+      "a": "REV_B",
+      "b": "ROUTE_B",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
+      "pair": "REV_B–SOLO",
+      "a": "REV_B",
+      "b": "SOLO",
+      "score": 0,
+      "signal": "none",
+      "verdict": "PARALLEL",
+      "hardVeto": false
+    },
+    {
+      "pair": "REV_B–UNSCOPED",
+      "a": "REV_B",
+      "b": "UNSCOPED",
+      "score": 1,
+      "signal": "unscoped",
+      "verdict": "SEQUENCE",
+      "hardVeto": false
+    },
+    {
+      "pair": "REV_B–ZERO",
+      "a": "REV_B",
       "b": "ZERO",
       "score": 1,
       "signal": "unscoped",
@@ -1220,6 +1535,8 @@
       "MIG_A",
       "MIG_B",
       "OVER",
+      "REV_A",
+      "REV_B",
       "ROUTE_A",
       "ROUTE_B",
       "SOLO",
@@ -1242,6 +1559,8 @@
     "MIG_A",
     "MIG_B",
     "OVER",
+    "REV_A",
+    "REV_B",
     "ROUTE_A",
     "ROUTE_B",
     "SOLO",
@@ -1249,11 +1568,11 @@
     "ZERO",
     "LATE"
   ],
-  "firstWaveWidth": 8,
-  "scheduleWidth": 8,
-  "certifiedWidth": 8,
+  "firstWaveWidth": 9,
+  "scheduleWidth": 9,
+  "certifiedWidth": 9,
   "backpressureWidth": null,
-  "recommendedWidth": 8,
+  "recommendedWidth": 9,
   "signalsEvaluated": {
     "scopeOverlap": true,
     "namespaceCollision": true,
@@ -1266,7 +1585,7 @@
     "ticket \"ZERO\" scope matches 0 files in repo"
   ],
   "gateFailures": [
-    "7 high-risk pair(s) would run concurrently: CO_A–CO_B (score 0.5, co-change), ED_A–ED_B (score 0.63, graph-coupling), GR_A–GR_B (score 0.56, graph-coupling), IMP_A–IMP_B (score 0.6, import-radius), IMP_A–OVER (score 1, scope-overlap), MIG_A–MIG_B (score 0.8, namespace-collision), ROUTE_A–ROUTE_B (score 0.8, namespace-collision)"
+    "8 high-risk pair(s) would run concurrently: CO_A–CO_B (score 0.5, co-change), ED_A–ED_B (score 0.63, graph-coupling), GR_A–GR_B (score 0.56, graph-coupling), IMP_A–IMP_B (score 0.6, import-radius), IMP_A–OVER (score 1, scope-overlap), MIG_A–MIG_B (score 0.8, namespace-collision), REV_A–REV_B (score 0.6, import-radius), ROUTE_A–ROUTE_B (score 0.8, namespace-collision)"
   ],
   "pullQueueNote": "idle builders claim next unblocked"
 }

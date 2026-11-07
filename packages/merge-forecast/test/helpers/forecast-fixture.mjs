@@ -32,6 +32,10 @@ export const FIXTURE_TICKETS = [
   // graph-coupling via edges (no fileCoupling entry for this pair)
   { id: 'ED_A', title: 'edge a', scope: ['src/ed-a/m.mjs'], edges: [] },
   { id: 'ED_B', title: 'edge b', scope: ['src/ed-b/**/n.mjs'], edges: [] },
+  // import-radius in the REVERSE direction: within the pair (REV_A, REV_B),
+  // only the second ticket's files import the first's
+  { id: 'REV_A', title: 'rev a', scope: ['src/rev-a/**'], edges: [] },
+  { id: 'REV_B', title: 'rev b', scope: ['src/rev-b/*.mjs'], edges: [] },
   // scope-overlap hard veto with IMP_A
   { id: 'OVER', title: 'overlap', scope: ['src/imp-a/sub/**'], edges: [] },
   // unscoped, and a scope that matches no file
@@ -61,6 +65,8 @@ const FILES = {
   'src/imp-a/main.mjs': "import { u } from '../imp-b/util.mjs';\nexport const x = u;\n",
   'src/imp-a/sub/leaf.mjs': 'export const leaf = 1;\n',
   'src/imp-b/util.mjs': 'export const u = 1;\n',
+  'src/rev-a/lib.mjs': 'export const r = 1;\n',
+  'src/rev-b/main.mjs': "import { r } from '../rev-a/lib.mjs';\nexport const s = r;\n",
   'src/co-a/x.mjs': 'export const x = 0;\n',
   'src/co-b/y.mjs': 'export const y = 0;\n',
   'src/gr-a/a.mjs': 'export const a = 1;\n',
@@ -78,8 +84,15 @@ function write(root, rel, content) {
   writeFileSync(full, content, 'utf8');
 }
 
+// An inherited GIT_DIR, GIT_WORK_TREE or GIT_INDEX_FILE (a hook, `git rebase -x`)
+// would point these commands at SOMEONE ELSE'S repository. Drop every GIT_*
+// variable so the fixture only ever writes to its own temp dir.
+const GIT_ENV = Object.fromEntries(
+  Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')),
+);
+
 function git(root, args) {
-  execFileSync('git', args, { cwd: root, stdio: 'ignore' });
+  execFileSync('git', args, { cwd: root, stdio: 'ignore', env: GIT_ENV });
 }
 
 /** Populate `root` (an empty temp dir) with the fixture files and history. */

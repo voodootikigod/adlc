@@ -195,6 +195,7 @@ const FILES = [
   'src\\a.b',
   'a/a',
   'a/a',
+  'a,b',
   '',
 ];
 
@@ -211,6 +212,8 @@ const SCOPE_PATTERNS = [
   'a\\b',
   'a/b/c',
   'nothing/**',
+  'a,b',
+  'a,*',
 ];
 
 function generatedScopes(count, seed) {
@@ -289,6 +292,63 @@ describe('createScopeIndex caches by scope content', () => {
     assert.deepEqual(index.files(['a', 'a']), oldFiles(['a', 'a'], FILES));
   });
 
+  test('the raw and normalized views of one scope never answer for each other', () => {
+    // Same index, same scope, both views, in both orders: a cache that served
+    // one view's result for the other would only show up here, because the
+    // raw and normalized answers differ only when a path holds a backslash.
+    const scopes = [['a/**'], ['a/b'], ['src/a.b'], ['a/*'], ['**/c']];
+    for (const order of ['raw-first', 'normalized-first']) {
+      const index = createScopeIndex(FILES);
+      for (const scope of scopes) {
+        if (order === 'raw-first') index.files(scope);
+        else index.filesNormalized(scope);
+        assert.deepEqual(index.files(scope), oldFiles(scope, FILES), `${order} files(${scope})`);
+        assert.deepEqual(
+          index.filesNormalized(scope),
+          oldFilesNormalized(scope, FILES),
+          `${order} filesNormalized(${scope})`,
+        );
+      }
+    }
+    assert.notDeepEqual(oldFiles(['a/**'], FILES), oldFilesNormalized(['a/**'], FILES));
+  });
+
+  test('scopes that differ only by where a comma falls are different entries', () => {
+    const index = createScopeIndex(FILES);
+    assert.deepEqual(index.files(['a', 'b']), oldFiles(['a', 'b'], FILES));
+    assert.deepEqual(index.files(['a,b']), oldFiles(['a,b'], FILES));
+    assert.deepEqual(index.files(['a,b']), ['a,b']);
+  });
+
+  test('a sparse scope skips its holes, as some() does', () => {
+    // eslint-disable-next-line no-sparse-arrays
+    const sparse = ['a/a', , 'a/b'];
+    for (const files of [FILES, []]) {
+      const index = createScopeIndex(files);
+      assert.deepEqual(outcome(() => index.files(sparse)), outcome(() => oldFiles(sparse, files)));
+      assert.deepEqual(
+        outcome(() => index.filesNormalized(sparse)),
+        outcome(() => oldFilesNormalized(sparse, files)),
+      );
+      assert.deepEqual(outcome(() => index.matcher(sparse)('a/b')), outcome(() => oldMatches(sparse, 'a/b')));
+    }
+    // Not vacuous: both globs after and before the hole do match.
+    assert.deepEqual(new Set(createScopeIndex(FILES).files(sparse)), new Set(['a/a', 'a/b']));
+  });
+
+  test('matcher() answers as matches() does, and is built once per scope content', () => {
+    const index = createScopeIndex(FILES);
+    const paths = [...FILES, ...REAL_PATHS, 'a/b/index.mjs'];
+    for (const scope of generatedScopes(100, 4)) {
+      const match = index.matcher(scope);
+      for (const path of paths) {
+        assert.equal(match(path), oldMatches(scope, path), `${JSON.stringify(scope)} / ${path}`);
+      }
+    }
+    assert.equal(index.matcher(['a/**', 'b']), index.matcher(['a/**', 'b']));
+    assert.notEqual(index.matcher(['a/**']), index.matcher(['b/**']));
+  });
+
   test('a returned array is not shared with the next index', () => {
     const one = createScopeIndex(FILES).files(['a/**']);
     const two = createScopeIndex(FILES).files(['a/**']);
@@ -309,6 +369,11 @@ describe('odd scopes keep the old failure behavior', () => {
     ['**', 42],
     [null],
     [undefined, '**'],
+    // Falsy but not nullish: `scope ?? []` keeps them, so they throw.
+    '',
+    0,
+    false,
+    NaN,
   ];
 
   for (const files of [FILES, ['a'], []]) {
@@ -325,11 +390,20 @@ describe('odd scopes keep the old failure behavior', () => {
           outcome(() => oldFilesNormalized(scope, files)),
           `filesNormalized(${JSON.stringify(scope)})`,
         );
+        // Like the old `const bScope = b.scope ?? []`, building the matcher
+        // never throws; any error comes when it is called.
+        const built = outcome(() => index.matcher(scope));
+        assert.ok(!('error' in built), `matcher(${JSON.stringify(scope)}) threw when built`);
         for (const path of ['a', 'b', '']) {
           assert.deepEqual(
             outcome(() => index.matches(scope, path)),
             outcome(() => oldMatches(scope, path)),
             `matches(${JSON.stringify(scope)}, ${path})`,
+          );
+          assert.deepEqual(
+            outcome(() => built.value(path)),
+            outcome(() => oldMatches(scope, path)),
+            `matcher(${JSON.stringify(scope)})(${path})`,
           );
         }
       }
