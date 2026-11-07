@@ -8,7 +8,8 @@ import { join, resolve } from 'node:path';
 import { parallelEligiblePairs, topoWaves, mergeOrder } from './reachability.mjs';
 import { pairScore } from './signals.mjs';
 import { walkTree } from './signals.mjs';
-import { isGitRepo, coChange, topoSort, globMatch } from '@adlc/core';
+import { createScopeIndex } from './scope-index.mjs';
+import { isGitRepo, coChange, topoSort } from '@adlc/core';
 
 /**
  * Run the full forecast.
@@ -68,6 +69,9 @@ export async function runForecast(opts) {
 
   // Walk the repo tree once and normalize to POSIX separators for glob matching
   const repoFiles = walkTree(root).map((f) => f.replaceAll('\\', '/'));
+  // Each ticket's matched files, computed once for the whole run instead of
+  // once per pair: re-filtering every file per pair dominated the run time.
+  const scopeIndex = createScopeIndex(repoFiles);
 
   // Validate ticket scopes (#680)
   const warnings = [];
@@ -76,7 +80,7 @@ export async function runForecast(opts) {
     if (!Array.isArray(t.scope) || t.scope.length === 0) {
       warnings.push(`ticket "${t.id}" has no scope defined`);
       unscopedTicketIds.add(t.id);
-    } else if (repoFiles.filter((f) => t.scope.some((g) => globMatch(g, f))).length === 0) {
+    } else if (scopeIndex.files(t.scope).length === 0) {
       warnings.push(`ticket "${t.id}" scope matches 0 files in repo`);
       unscopedTicketIds.add(t.id);
     }
@@ -148,6 +152,7 @@ export async function runForecast(opts) {
       root,
       coChangeData,
       graphCouplingData,
+      scopeIndex,
     });
     const verdict = hardVeto
       ? 'VETO'

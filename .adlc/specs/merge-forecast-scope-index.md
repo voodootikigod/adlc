@@ -36,7 +36,9 @@ A new module, `packages/merge-forecast/lib/scope-index.mjs`, with two
 exports.
 
 1. **`compileGlob(pattern)` → `(path) => boolean`.** Same answer as
-   `globMatch(pattern, path)` for every input. Tokenises once, with the same
+   `globMatch(pattern, path)` for every pattern and every string path (the
+   only paths merge-forecast has: `walkTree` output and resolved import
+   specifiers). Tokenises once, with the same
    split `globMatch` uses (`/(\*\*\/|\*\*|\*)/`, empty parts dropped), then:
    - no wildcard token: `path === pattern`;
    - one literal followed by a single `**`, or `**` alone:
@@ -128,11 +130,14 @@ Each criterion names its verification.
    *Verify:* `node --test packages/merge-forecast/test/forecast-unchanged.test.mjs`.
 6. **The existing suite still passes.** *Verify:*
    `node --test packages/merge-forecast/test/*.test.mjs`.
-7. **It is much faster, offline.** `node packages/merge-forecast/bench/scope-index.bench.mjs`
+7. **It is much faster, offline.** `node packages/merge-forecast/test/bench/scope-index.bench.mjs`
    builds a synthetic corpus (10,000 files, 10 tickets, one with 108 globs),
    times the old per-pair filtering against the index, checks they agree,
-   and times `runForecast` end to end.
-   *Verify:* run it on this branch and on `origin/main`.
+   and times `runForecast` end to end. `--forecast <path>` also runs another
+   implementation's `runForecast` on the same corpus and requires the same
+   result.
+   *Verify:* `node packages/merge-forecast/test/bench/scope-index.bench.mjs --forecast <origin/main checkout>/packages/merge-forecast/lib/forecast.mjs`
+   exits 0.
 8. **It is much faster on real data, with byte-identical output.** The
    reference repository is a checkout of `mentimeter/adlc` at commit
    `d01b1f6c` (10 active tickets, 9,967 files), where the 7.8 s was measured.
