@@ -11,6 +11,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+import { pairKey } from '@adlc/core';
+
 import { createScopeIndex } from '../lib/scope-index.mjs';
 import {
   pairScore,
@@ -85,6 +87,66 @@ describe('signals use the scope index they are given', () => {
       assert.equal(signalImportRadius(A, B, REPO_FILES, root, spy), 0);
       assert.deepEqual(calls, { files: 0, filesNormalized: 2, matches: 0, matcher: 2 });
       assert.equal(signalImportRadius(A, B, REPO_FILES, root), 0);
+    });
+  });
+
+  test('a signal that fires gives the same score with the index as without it', () => {
+    // With tickets that collide on nothing, "same answer without an index"
+    // could not fail: everything is 0 either way. Here each signal fires.
+    const fa = 'src/fa.mjs';
+    const fb = 'src/fb.mjs';
+    const FA = { id: 'FA', scope: [fa] };
+    const FB = { id: 'FB', scope: [fb] };
+    const routeA = { id: 'RA', scope: ['app/v/[pk]/**'] };
+    const routeB = { id: 'RB', scope: ['app/v/[id]/page.tsx'] };
+    const migA = { id: 'MA', scope: ['drizzle/0005_a.sql'] };
+    const migB = { id: 'MB', scope: ['migrations/0005_b.sql'] };
+    const files = [fa, fb, 'app/v/[pk]/page.tsx', 'app/v/[id]/page.tsx', 'drizzle/0005_a.sql', 'migrations/0005_b.sql'];
+    const coChange = { pairCounts: { [pairKey(fa, fb)]: 4 }, fileCounts: { [fa]: 4, [fb]: 4 } };
+    const cases = [
+      ['routes', (i) => signalNamespaceRoutes(routeA, routeB, files, i), true],
+      ['migrations', (i) => signalMigrationCollision(migA, migB, files, i), true],
+      ['namespace via routes', (i) => signalNamespace(routeA, routeB, files, i), 0.8],
+      ['namespace via migrations', (i) => signalNamespace(migA, migB, files, i), 0.8],
+      ['co-change', (i) => signalCoChange(FA, FB, coChange, files, i), 0.5],
+      ['graph coupling', (i) => signalGraphCoupling(FA, FB, { fileCoupling: { [`${fa}|${fb}`]: 1 } }, files, i), 0.7],
+    ];
+    for (const [name, run, expected] of cases) {
+      const { spy, calls } = spyIndex(files);
+      assert.equal(run(spy), expected, `${name} with an index`);
+      assert.ok(calls.files > 0, `${name} looked nothing up through the index`);
+      assert.equal(run(undefined), expected, `${name} without an index`);
+    }
+    // pairScore without a scopeIndex builds its own, and it must see the files.
+    const firing = { score: 0.8, signal: 'namespace-collision', hardVeto: false };
+    assert.deepEqual(pairScore(routeA, routeB, { repoFiles: files }), firing);
+    const { spy } = spyIndex(files);
+    assert.deepEqual(pairScore(routeA, routeB, { repoFiles: files, scopeIndex: spy }), firing);
+  });
+
+  test('graph coupling keeps the direction of a one-sided fileCoupling entry', () => {
+    // `a|b` is read first and wins over the undirected pairKey entry; `b|a` is
+    // read separately. Swapping which ticket's files are "a" changes the score.
+    const fa = 'src/fa.mjs';
+    const fb = 'src/fb.mjs';
+    const graph = { fileCoupling: { [`${fa}|${fb}`]: 0.1, [pairKey(fa, fb)]: 0.9 } };
+    const files = [fa, fb];
+    const FA = { id: 'FA', scope: [fa] };
+    const FB = { id: 'FB', scope: [fb] };
+    assert.equal(signalGraphCoupling(FA, FB, graph, files, createScopeIndex(files)), 0.1 * 0.7);
+    assert.equal(signalGraphCoupling(FB, FA, graph, files, createScopeIndex(files)), 0.9 * 0.7);
+  });
+
+  test('import radius that fires gives the same score with the index as without it', () => {
+    withRepo((root) => {
+      const Z = { id: 'Z', scope: ['src/z/*.mjs'] };
+      const { spy, calls } = spyIndex(REPO_FILES);
+      assert.equal(signalImportRadius(A, Z, REPO_FILES, root, spy), 0.6);
+      assert.ok(calls.filesNormalized > 0 && calls.matcher > 0);
+      assert.equal(signalImportRadius(A, Z, REPO_FILES, root), 0.6);
+      // Pair order reversed: Z's files import nothing, so the score comes from
+      // the second direction, A importing into Z.
+      assert.equal(signalImportRadius(Z, A, REPO_FILES, root, createScopeIndex(REPO_FILES)), 0.6);
     });
   });
 

@@ -86,10 +86,14 @@ function write(root, rel, content) {
 
 // An inherited GIT_DIR, GIT_WORK_TREE or GIT_INDEX_FILE (a hook, `git rebase -x`)
 // would point these commands at SOMEONE ELSE'S repository. Drop every GIT_*
-// variable so the fixture only ever writes to its own temp dir.
-const GIT_ENV = Object.fromEntries(
-  Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')),
-);
+// variable so the fixture only ever writes to its own temp dir, and ignore the
+// user's global and system config, so a global core.hooksPath or commit
+// template cannot fail or change a fixture commit.
+export const GIT_ENV = {
+  ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_'))),
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_CONFIG_NOSYSTEM: '1',
+};
 
 function git(root, args) {
   execFileSync('git', args, { cwd: root, stdio: 'ignore', env: GIT_ENV });
@@ -103,16 +107,16 @@ export function buildFixtureRepo(root) {
   git(root, ['config', 'commit.gpgsign', 'false']);
   for (const [rel, content] of Object.entries(FILES)) write(root, rel, content);
   git(root, ['add', '-A']);
-  git(root, ['commit', '-q', '-m', 'initial']);
+  git(root, ['commit', '-q', '--no-verify', '-m', 'initial']);
   // Four commits touching the co-change pair together, above
   // MIN_COCHANGE_SUPPORT, and one touching only one side.
   for (let i = 1; i <= 4; i++) {
     write(root, 'src/co-a/x.mjs', `export const x = ${i};\n`);
     write(root, 'src/co-b/y.mjs', `export const y = ${i};\n`);
     git(root, ['add', '-A']);
-    git(root, ['commit', '-q', '-m', `co-change ${i}`]);
+    git(root, ['commit', '-q', '--no-verify', '-m', `co-change ${i}`]);
   }
   write(root, 'src/co-a/x.mjs', 'export const x = 99;\n');
   git(root, ['add', '-A']);
-  git(root, ['commit', '-q', '-m', 'one side only']);
+  git(root, ['commit', '-q', '--no-verify', '-m', 'one side only']);
 }

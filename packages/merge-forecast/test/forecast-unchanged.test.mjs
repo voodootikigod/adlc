@@ -1,11 +1,11 @@
 // Rail: the forecast is unchanged (spec: .adlc/specs/merge-forecast-scope-index.md,
-// acceptance criterion 5).
+// acceptance criterion 6).
 //
 // The golden was recorded with merge-forecast as it was BEFORE the scope index,
 // on a fixture that fires every signal. A speed-up that changes any score,
 // verdict, wave, width, warning or gate failure fails here.
 
-import { test, describe } from 'node:test';
+import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -14,7 +14,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { runForecast } from '../lib/forecast.mjs';
-import { buildFixtureRepo, FIXTURE_TICKETS, FIXTURE_GRAPH } from './helpers/forecast-fixture.mjs';
+import { buildFixtureRepo, FIXTURE_TICKETS, FIXTURE_GRAPH, GIT_ENV } from './helpers/forecast-fixture.mjs';
 
 const GOLDEN = JSON.parse(
   readFileSync(new URL('./fixtures/forecast-unchanged.golden.json', import.meta.url), 'utf8'),
@@ -28,10 +28,7 @@ const CLI_GOLDEN = readFileSync(
 const CLI = fileURLToPath(new URL('../bin/merge-forecast.mjs', import.meta.url));
 // No inherited GIT_* variable may point the CLI's git calls at another
 // repository, and no ambient graph-coupling file may add a signal.
-const CLI_ENV = {
-  ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_'))),
-  ADLC_GRAPH_COUPLING_FILE: '',
-};
+const CLI_ENV = { ...GIT_ENV, ADLC_GRAPH_COUPLING_FILE: '' };
 
 // Awaits fn before cleaning up, so an async callback never runs against a
 // fixture that has already been deleted.
@@ -48,6 +45,17 @@ async function withFixture(fn) {
 }
 
 describe('merge-forecast output is unchanged by the scope index', () => {
+  // runForecast reads ADLC_GRAPH_COUPLING_FILE when no graph data is passed,
+  // so an exported one would add a signal to the graph: false runs.
+  let savedGraphFile;
+  before(() => {
+    savedGraphFile = process.env.ADLC_GRAPH_COUPLING_FILE;
+    delete process.env.ADLC_GRAPH_COUPLING_FILE;
+  });
+  after(() => {
+    if (savedGraphFile !== undefined) process.env.ADLC_GRAPH_COUPLING_FILE = savedGraphFile;
+  });
+
   test('the golden covers every signal, so equality means something', () => {
     const signals = new Set(GOLDEN.flatMap((run) => run.result.pairs.map((p) => p.signal)));
     for (const signal of [

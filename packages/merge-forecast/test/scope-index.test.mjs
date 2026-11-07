@@ -192,6 +192,7 @@ const FILES = [
   ...build(SEGMENTS.map((s) => `${s}/`), 2).flatMap((dir) => SEGMENTS.map((s) => dir + s)),
   'a\\b',
   'a\\b/c',
+  'a\\b\\c',
   'src\\a.b',
   'a/a',
   'a/a',
@@ -369,6 +370,9 @@ describe('odd scopes keep the old failure behavior', () => {
     ['**', 42],
     [null],
     [undefined, '**'],
+    // Matches `a\\b` only once its backslash is normalized, then hits the
+    // non-string: the two views must stop, or not stop, where the old ones did.
+    ['a/b', 42],
     // Falsy but not nullish: `scope ?? []` keeps them, so they throw.
     '',
     0,
@@ -376,7 +380,7 @@ describe('odd scopes keep the old failure behavior', () => {
     NaN,
   ];
 
-  for (const files of [FILES, ['a'], []]) {
+  for (const files of [FILES, ['a'], ['a\\b'], []]) {
     test(`files(), filesNormalized() and matches() over ${files.length} file(s)`, () => {
       const index = createScopeIndex(files);
       for (const scope of ODD) {
