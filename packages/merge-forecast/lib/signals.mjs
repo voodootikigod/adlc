@@ -104,6 +104,8 @@ export function resolveSpecifier(specifier, importingFile, root) {
  */
 function importRadiusIntersects(a, b, repoFiles, root, index) {
   const aFiles = index.filesNormalized(a.scope);
+  // Resolved once, not per candidate: building it serialises the whole scope.
+  const inB = index.matcher(b.scope);
   const rootNorm = root.replace(/\\/g, '/').replace(/\/+$/, '');
   for (const af of aFiles) {
     const afNorm = af.replace(/\\/g, '/');
@@ -122,7 +124,7 @@ function importRadiusIntersects(a, b, repoFiles, root, index) {
         resolved + '/index.ts',
       ];
       for (const candidate of candidates) {
-        if (index.matches(b.scope, candidate)) return true;
+        if (inB(candidate)) return true;
       }
     }
   }

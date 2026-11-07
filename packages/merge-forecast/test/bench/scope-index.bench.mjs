@@ -81,9 +81,12 @@ for (let t = 0; t < 10; t++) {
 const oldFiles = (scope) => repoFiles.filter((f) => (scope ?? []).some((g) => globMatch(g, f)));
 
 // How often the old code computed a ticket's file set: the zero-match check
-// once per ticket, then per pair, for each side, in namespace routes,
-// migrations, graph coupling, co-change and import radius (both directions).
-const SETS_PER_PAIR_SIDE = 5;
+// once per ticket, then, per scored pair and per side, once each in namespace
+// routes, migrations and import radius. That is the case part 2 runs: no git
+// history and no graph-coupling data. Co-change data adds one more per side
+// and graph-coupling data another, so a real repository pays 4 or 5; 3 keeps
+// this side of the comparison conservative.
+const SETS_PER_PAIR_SIDE = 3;
 const pairs = [];
 for (let i = 0; i < tickets.length; i++) {
   for (let j = i + 1; j < tickets.length; j++) pairs.push([tickets[i], tickets[j]]);

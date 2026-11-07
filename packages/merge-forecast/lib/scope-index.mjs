@@ -82,6 +82,7 @@ function cacheKey(scope) {
 /**
  * A per-run memo of scope matches over one file list. The list is a snapshot:
  * do not mutate it, or the arrays this returns, while the index is in use.
+ * Nothing is evicted, so the index lives as long as one forecast run.
  *
  * @param {string[]} repoFiles
  */
@@ -100,10 +101,24 @@ export function createScopeIndex(repoFiles) {
     return match;
   }
 
-  // The uncached branches spell `(scope ?? []).some` out in full rather than
-  // reusing `globs`: V8 builds a TypeError's message from the source
-  // expression, so this is what keeps the old error text, not just the old
-  // error type.
+  /**
+   * Exactly `(path) => (scope ?? []).some((g) => globMatch(g, path))`, built
+   * once per scope content. Building it never throws: like the expression it
+   * replaces, any error comes when it is called.
+   */
+  function matcher(scope) {
+    const globs = scope ?? [];
+    const key = cacheKey(globs);
+    if (key === null) return (path) => (scope ?? []).some((g) => globMatch(g, path));
+    return matcherFor(key, globs);
+  }
+
+  // The uncached branches below spell `(scope ?? []).some` out in full, so a
+  // scope that is not an array fails with the same TypeError as the shared
+  // expression they replace. The message names `(scope ?? [])` where each
+  // signal used to name its own variable (`(a.scope ?? [])`, `bScope`, ...):
+  // V8 builds it from the source text. runForecast never gets here, because it
+  // marks a ticket whose scope is not a non-empty array as unscoped first.
   return {
     /** Exactly `repoFiles.filter((f) => (scope ?? []).some((g) => globMatch(g, f)))`. */
     files(scope) {
@@ -142,12 +157,11 @@ export function createScopeIndex(repoFiles) {
       return hits;
     },
 
+    matcher,
+
     /** Exactly `(scope ?? []).some((g) => globMatch(g, path))`, for any path. */
     matches(scope, path) {
-      const globs = scope ?? [];
-      const key = cacheKey(globs);
-      if (key === null) return (scope ?? []).some((g) => globMatch(g, path));
-      return matcherFor(key, globs)(path);
+      return matcher(scope)(path);
     },
   };
 }

@@ -23,10 +23,13 @@ repoFiles.filter((f) => scope.some((g) => globMatch(g, f)))
 for both tickets of every pair: `signalNamespaceRoutes`,
 `signalMigrationCollision`, `signalGraphCoupling`, `signalCoChange` and
 `importRadiusIntersects` (twice, once per direction) in
-`lib/signals.mjs`, plus the zero-match validation in `lib/forecast.mjs`. A
-ticket in k pairs has its file set recomputed about 10·k times, and each
-computation is |files| × |scope| fresh `globMatch` calls, each of which
-re-tokenises its pattern with a regex.
+`lib/signals.mjs`, plus the zero-match validation in `lib/forecast.mjs`. Per
+scored pair, each side's file set is recomputed 3 to 5 times (namespace
+routes, migrations and import radius always; co-change with git history;
+graph coupling with graph data). A ticket in k pairs has it recomputed up to
+5·k + 1 times, about 4·k in a repository with history. Each computation is
+|files| × |scope| fresh `globMatch` calls, each of which re-tokenises its
+pattern with a regex.
 
 It is an algorithmic problem. No rewrite in another language is proposed.
 
@@ -63,17 +66,28 @@ exports.
    - `index.filesNormalized(scope)` returns exactly the filter
      `importRadiusIntersects` uses today, which tests the
      backslash-normalized path but keeps the original string.
-   - `index.matches(scope, path)` answers
-     `scope.some((g) => globMatch(g, path))` for a path that need not be in
-     `repoFiles` (the import-radius candidates).
+   - `index.matcher(scope)` returns a predicate answering
+     `(scope ?? []).some((g) => globMatch(g, path))` for a path that need not
+     be in `repoFiles` (the import-radius candidates). It is built once per
+     scope content, and building it never throws: like the old
+     `const bScope = b.scope ?? []`, any error comes when it is called.
+     `index.matches(scope, path)` is `index.matcher(scope)(path)`.
    - Results are cached by scope **content** (the JSON of a scope made only
      of strings), so equal scopes share one entry and a second call returns
      the same array.
    - A scope that is not an array, or holds a non-string, is never cached
-     and never reordered: it takes the old expression verbatim, so it throws
-     (or does not) exactly as before. `scope ?? []` is kept.
+     and never reordered: it takes the shared old expression
+     `(scope ?? []).some(...)`, so it throws (or does not) in the same cases
+     and with the same error type as before. `scope ?? []` is kept, so a
+     falsy scope that is not `null` or `undefined` still throws. The
+     message names `(scope ?? [])` where each signal used to name its own
+     variable (`(a.scope ?? [])`, `bScope`): V8 builds it from the source
+     text. `runForecast` and the CLI never reach this path, because a ticket
+     whose scope is not a non-empty array is marked unscoped first.
+   - Holes in a sparse scope are skipped, as `some()` skips them.
    - The index treats `repoFiles` as a snapshot. It is created by
      `runForecast` from the array it builds itself and never mutates.
+     Nothing is evicted, so an index lives for one forecast run.
 
 **Wiring.**
 - `runForecast` builds one index right after `walkTree`, uses it for the
@@ -84,7 +98,12 @@ exports.
   is absent, builds a throwaway index over the `repoFiles` it was given, so
   every existing caller and test keeps working unchanged.
 - `importRadiusIntersects` uses `filesNormalized` for the importing side and
-  `matches` for the resolved candidates.
+  one `matcher` for the resolved candidates, built before the loop (building
+  it serialises the whole scope, so doing it per candidate would make a large
+  scope cost time per import).
+- New exported parameters are optional. A caller that already passed an
+  extra argument in that position, or `scopeIndex: null`, now gets an
+  error; no caller in this repository does.
 
 **Out of scope.**
 - `packages/core/lib/glob.mjs` is not touched. It is generated source, copied
@@ -110,41 +129,62 @@ Each criterion names its verification.
    (more than 1,000), so it cannot pass vacuously.
    *Verify:* `node --test packages/merge-forecast/test/scope-index.test.mjs`.
 2. **The scope index returns exactly the old file sets.** For many generated
-   scopes over a generated file list (with backslashes and duplicates in it),
-   `index.files(scope)` deep-equals the old filter expression and
-   `index.filesNormalized(scope)` deep-equals the old import-radius filter.
+   scopes over a generated file list (with backslashes, duplicates and a
+   comma in it), `index.files(scope)` deep-equals the old filter
+   expression, `index.filesNormalized(scope)` deep-equals the old
+   import-radius filter, and `index.matcher(scope)` and `index.matches`
+   answer as the old `some()`. Both views of one scope, asked of one index in
+   either order, still give their own answers.
    *Verify:* `node --test packages/merge-forecast/test/scope-index.test.mjs`.
-3. **The index caches by content.** A second `files` call with an equal scope
-   (same content, different array) returns the identical array (`===`).
+3. **The index caches by content.** A second `files` or `filesNormalized`
+   call with an equal scope (same content, different array) returns the
+   identical array (`===`), and `matcher` the identical function; scopes
+   that differ only in where a comma falls are different entries.
    *Verify:* `node --test packages/merge-forecast/test/scope-index.test.mjs`.
-4. **Odd scopes keep their old failure behavior.** A non-array scope, and a
-   scope holding a non-string after a glob that does or does not match,
-   throws or returns exactly as the old expression does.
+4. **Odd scopes keep their old failure behavior.** For a scope that is
+   `null`, `undefined`, a string, a number, `''`, `0`, `false`, `NaN`, an
+   array-like object, sparse, or an array holding a non-string before or
+   after a glob that matches, every method throws or returns exactly as the
+   old expression `(scope ?? []).some((g) => globMatch(g, f))` does, and
+   `matcher()` never throws when built.
    *Verify:* `node --test packages/merge-forecast/test/scope-index.test.mjs`.
-5. **The forecast is unchanged.** On a fixture repository built in a temp
+5. **Every signal uses the index it is given.** A spy index passed to each
+   exported signal, and to `pairScore`, sees the lookups the signal makes,
+   and the answers equal those without an index.
+   *Verify:* `node --test packages/merge-forecast/test/scope-index-wiring.test.mjs`.
+6. **The forecast is unchanged.** On a fixture repository built in a temp
    dir, with a git history, that triggers every signal (scope overlap,
-   namespace route, migration prefix, import radius, co-change, graph
-   coupling via both `fileCoupling` and `edges`, an unscoped ticket and a
-   zero-match ticket), `runForecast` returns a result deep-equal to a golden
-   JSON recorded with the code **before** this change.
+   namespace route, migration prefix, import radius in both directions,
+   co-change, graph coupling via both `fileCoupling` and `edges`, an
+   unscoped ticket and a zero-match ticket), `runForecast` returns a result
+   deep-equal to a golden recorded with the code **before** this change, and
+   `merge-forecast --json` prints a second golden byte for byte and exits 2.
+   The CLI's stdout is captured through a file: piped, Node 18 on macOS cuts
+   it at ~8 KB (`printJson` then `process.exit`, a bug older than this
+   change and reported separately).
    *Verify:* `node --test packages/merge-forecast/test/forecast-unchanged.test.mjs`.
-6. **The existing suite still passes.** *Verify:*
+7. **The existing suite still passes, on Node 18 and current.** *Verify:*
    `node --test packages/merge-forecast/test/*.test.mjs`.
-7. **It is much faster, offline.** `node packages/merge-forecast/test/bench/scope-index.bench.mjs`
-   builds a synthetic corpus (10,000 files, 10 tickets, one with 108 globs),
-   times the old per-pair filtering against the index, checks they agree,
-   and times `runForecast` end to end. `--forecast <path>` also runs another
-   implementation's `runForecast` on the same corpus and requires the same
-   result.
-   *Verify:* `node packages/merge-forecast/test/bench/scope-index.bench.mjs --forecast <origin/main checkout>/packages/merge-forecast/lib/forecast.mjs`
+8. **It is much faster, offline.**
+   `node packages/merge-forecast/test/bench/scope-index.bench.mjs [--files N] [--forecast <path>] [--json]`
+   builds a synthetic corpus (10,000 files by default, 10 tickets, one with
+   108 globs), times the old per-pair filtering (counted conservatively: 3
+   file sets per pair side, the case without git history or graph data)
+   against the index, checks they agree, and times `runForecast` end to end.
+   `--forecast <path>` also runs another implementation's `runForecast` on
+   the same corpus and requires the same result. To get `origin/main`'s:
+   `git archive origin/main packages/merge-forecast | tar -x -C <dir>`, then
+   `ln -s $PWD/node_modules <dir>/node_modules`.
+   *Verify:* `node packages/merge-forecast/test/bench/scope-index.bench.mjs --forecast <dir>/packages/merge-forecast/lib/forecast.mjs`
    exits 0.
-8. **It is much faster on real data, with byte-identical output.** The
+9. **It is much faster on real data, with byte-identical output.** The
    reference repository is a checkout of `mentimeter/adlc` at commit
    `d01b1f6c` (10 active tickets, 9,967 files), where the 7.8 s was measured.
    Any repository with an `.adlc` ticket store and a git history works the
-   same way. From its root, run
-   `node <this-worktree>/packages/merge-forecast/bin/merge-forecast.mjs --json`
-   with the `origin/main` code and with this branch's code: both print the
-   same bytes and exit with the same code.
-   *Verify:* `shasum` of both outputs, `/usr/bin/time -p` for both runs.
-9. **Every gate that blocks a PR passes.** *Verify:* `npm run preflight`.
+   same way. With `origin/main`'s merge-forecast extracted to `<dir>` as in
+   criterion 8, run from that repository's root
+   `node <dir>/packages/merge-forecast/bin/merge-forecast.mjs --json > before.json`
+   and `node <this-worktree>/packages/merge-forecast/bin/merge-forecast.mjs --json > after.json`:
+   both print the same bytes and exit with the same code.
+   *Verify:* `shasum before.json after.json`, and `/usr/bin/time -p` for both runs.
+10. **Every gate that blocks a PR passes.** *Verify:* `npm run preflight`.
