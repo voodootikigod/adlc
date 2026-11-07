@@ -133,8 +133,13 @@ Each criterion names its verification.
    times the old per-pair filtering against the index, checks they agree,
    and times `runForecast` end to end.
    *Verify:* run it on this branch and on `origin/main`.
-8. **It is much faster on real data, with byte-identical output.** In the
-   reference repository, `node packages/merge-forecast/bin/merge-forecast.mjs --json`
-   prints the same bytes and exits with the same code before and after.
+8. **It is much faster on real data, with byte-identical output.** The
+   reference repository is a checkout of `mentimeter/adlc` at commit
+   `d01b1f6c` (10 active tickets, 9,967 files), where the 7.8 s was measured.
+   Any repository with an `.adlc` ticket store and a git history works the
+   same way. From its root, run
+   `node <this-worktree>/packages/merge-forecast/bin/merge-forecast.mjs --json`
+   with the `origin/main` code and with this branch's code: both print the
+   same bytes and exit with the same code.
    *Verify:* `shasum` of both outputs, `/usr/bin/time -p` for both runs.
 9. **Every gate that blocks a PR passes.** *Verify:* `npm run preflight`.
