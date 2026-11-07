@@ -23,7 +23,7 @@ export const FIXTURE_TICKETS = [
   // import-radius: src/imp-a/main.mjs imports ../imp-b/util.mjs
   { id: 'IMP_A', title: 'imp a', scope: ['src/imp-a/**'], edges: [] },
   { id: 'IMP_B', title: 'imp b', scope: ['src/imp-b/*.mjs'], edges: [] },
-  // co-change: src/co-a/x.mjs and src/co-b/y.mjs committed together 4 times
+  // co-change: src/co-a/x.mjs and src/co-b/y.mjs committed together 5 times (the initial commit, then 4 more)
   { id: 'CO_A', title: 'co a', scope: ['src/co-a/x.mjs'], edges: [] },
   { id: 'CO_B', title: 'co b', scope: ['src/co-b/**/*.mjs'], edges: [] },
   // graph-coupling via fileCoupling

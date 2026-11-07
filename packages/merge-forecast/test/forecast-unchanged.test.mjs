@@ -92,6 +92,30 @@ describe('merge-forecast output is unchanged by the scope index', () => {
     });
   }
 
+  test('a dead glob before and after every live one changes nothing', async () => {
+    // Every fixture scope above has its deciding glob alone, or first. A
+    // lookup that read only part of a scope, or a zero-match check that fired
+    // when ANY glob is dead, would still pass the goldens. Wrapping each scope
+    // in globs that match nothing must give the same result, warnings
+    // included. Each ticket gets its own dead directory, so scope overlap
+    // (which compares glob text) sees nothing new.
+    const golden = GOLDEN.find((run) => run.graph);
+    await withFixture(async ({ root }) => {
+      const tickets = structuredClone(FIXTURE_TICKETS).map((ticket) =>
+        Array.isArray(ticket.scope)
+          ? { ...ticket, scope: [`dead-${ticket.id}/**`, ...ticket.scope, `dead-${ticket.id}/none.txt`] }
+          : ticket,
+      );
+      const result = await runForecast({
+        tickets,
+        root,
+        graphCouplingData: FIXTURE_GRAPH,
+        conflictThreshold: golden.threshold,
+      });
+      assert.deepEqual(result, golden.result);
+    });
+  });
+
   test('runForecast compiles each scope once for the whole run: one index shared by every pair', async () => {
     // Sharing the index changes no output, so only a count can show it. Each
     // scope gets an own forEach that counts and delegates; compileScope is the

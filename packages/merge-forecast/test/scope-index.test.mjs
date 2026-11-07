@@ -1,9 +1,10 @@
 // Rails for the scope index (spec: .adlc/specs/merge-forecast-scope-index.md).
 //
 // The index exists only to make merge-forecast faster, so its whole contract is
-// "the same answers as before". Every test here compares it against the exact
-// expression it replaces, built on core's globMatch, never against remembered
-// outputs.
+// "the same answers as before". The differential tests compare it against the
+// exact expression it replaces, built on core's globMatch. A few tests also
+// assert hand-written expectations, such as the glob shapes the matcher
+// special-cases (checked against globMatch as well).
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -344,6 +345,42 @@ describe('createScopeIndex caches by scope content', () => {
     bothOrders(['src/', '**'], ['src/**'], files);
     bothOrders(['src', '**'], ['src/**'], files);
     bothOrders(['packages/core', 'lib/**'], ['packages/core/lib/**'], files);
+  });
+
+  test('every scope of up to three near-miss globs gets its own answer, on one index', () => {
+    // Globs that a lossy key or a lossy literal lookup would confuse: case,
+    // surrounding spaces, a trailing slash, NFC against NFD, anagrams, commas
+    // and backslashes inside globs, the empty glob, a classic 32-bit hash
+    // collision ('Aa'/'BB'), and long globs that share a prefix or a suffix.
+    // Every ordered scope of 0 to 3 of them goes through ONE index, so any
+    // two scopes that shared an entry while their answers differ fail here.
+    const long = 'deep/'.repeat(14);
+    const near = [
+      '', 'a', 'a ', ' a', 'b', 'c', 'ab', 'ba', 'a,b', 'b,c', 'a\\', 'Aa', 'BB',
+      'README.md', 'readme.md', 'docs', 'docs/', 'caf\u00e9.md', 'cafe\u0301.md',
+      `${long}one.mjs`, `${long}two.mjs`, `one/${long}x.mjs`, `two/${long}x.mjs`, 'a*',
+    ];
+    const files = [...near.filter((g) => !g.includes('*')), 'docs/x.md', 'a\\b', 'abc'];
+    const scopes = [[]];
+    for (const g of near) scopes.push([g]);
+    for (const g of near) for (const h of near) scopes.push([g, h]);
+    for (const g of near) for (const h of near) for (const k of near) scopes.push([g, h, k]);
+    const index = createScopeIndex(files);
+    const answers = new Set();
+    for (const scope of scopes) {
+      const expected = oldFiles(scope, files);
+      const raw = index.files(scope);
+      if (JSON.stringify(raw) !== JSON.stringify(expected)) {
+        assert.deepEqual(raw, expected, JSON.stringify(scope));
+      }
+      const norm = index.filesNormalized(scope);
+      const expectedNorm = oldFilesNormalized(scope, files);
+      if (JSON.stringify(norm) !== JSON.stringify(expectedNorm)) {
+        assert.deepEqual(norm, expectedNorm, `normalized ${JSON.stringify(scope)}`);
+      }
+      answers.add(JSON.stringify(expected));
+    }
+    assert.ok(answers.size > 1000, `only ${answers.size} distinct answers: the scopes barely differ`);
   });
 
   test('a sparse scope skips its holes, as some() does', () => {

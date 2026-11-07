@@ -135,6 +135,10 @@ describe('signals use the scope index they are given', () => {
     const FB = { id: 'FB', scope: [fb] };
     assert.equal(signalGraphCoupling(FA, FB, graph, files, createScopeIndex(files)), 0.1 * 0.7);
     assert.equal(signalGraphCoupling(FB, FA, graph, files, createScopeIndex(files)), 0.9 * 0.7);
+    // ...and pairScore passes the tickets on in the order it got them.
+    const opts = { repoFiles: files, graphCouplingData: graph };
+    assert.deepEqual(pairScore(FA, FB, opts), { score: 0.1 * 0.7, signal: 'graph-coupling', hardVeto: false });
+    assert.deepEqual(pairScore(FB, FA, opts), { score: 0.9 * 0.7, signal: 'graph-coupling', hardVeto: false });
   });
 
   test('import radius that fires gives the same score with the index as without it', () => {
