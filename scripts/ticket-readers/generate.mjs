@@ -74,6 +74,15 @@ const ARTIFACTS = [
       'plugins/adlc-copilot/hooks/generated-trusted-binary.mjs',
     ],
   },
+  {
+    source: 'packages/core/lib/railpath.mjs',
+    marker: '// GENERATED-RAILPATH SOURCE.',
+    outputs: [
+      'plugins/adlc-gemini/generated-railpath.mjs',
+      'plugins/adlc-codex/hooks/generated-railpath.mjs',
+      'plugins/adlc-copilot/hooks/generated-railpath.mjs',
+    ],
+  },
 ];
 
 const check = process.argv.includes('--check');

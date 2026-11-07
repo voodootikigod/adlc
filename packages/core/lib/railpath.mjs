@@ -1,3 +1,5 @@
+// GENERATED-RAILPATH SOURCE. Run `node scripts/ticket-readers/generate.mjs` after edits.
+//
 // railpath.mjs — symlink-aware rail-path canonicalization.
 //
 // Maps a tool-supplied path to the forward-slash, root-relative path a write

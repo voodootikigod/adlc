@@ -2,6 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fetchSignals, buildClusters } from '../lib/mine.mjs';
+import { runGh } from '../lib/gh.mjs';
 
 // ---------------------------------------------------------------------------
 // Fixture data
@@ -198,4 +199,22 @@ test('buildClusters: each cluster has slug, indices, count, prNumbers', () => {
 
 test('buildClusters: empty signals → empty clusters', () => {
   assert.deepStrictEqual(buildClusters([], 2), []);
+});
+
+test('runGh: enforces 64 MiB maxBuffer, 60s timeout, and SIGKILL on execFileSync', () => {
+  let seenBin = null;
+  let seenArgs = null;
+  let seenOpts = null;
+  const out = runGh(['pr', 'list'], (bin, args, opts) => {
+    seenBin = bin;
+    seenArgs = args;
+    seenOpts = opts;
+    return '[]';
+  });
+  assert.strictEqual(out, '[]');
+  assert.strictEqual(seenBin, 'gh');
+  assert.deepStrictEqual(seenArgs, ['pr', 'list']);
+  assert.strictEqual(seenOpts.maxBuffer, 64 * 1024 * 1024);
+  assert.strictEqual(seenOpts.timeout, 60_000);
+  assert.strictEqual(seenOpts.killSignal, 'SIGKILL');
 });

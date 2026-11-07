@@ -541,6 +541,36 @@ test('acquireDirLock: recovers stale lock directory when owner.json is missing a
   }
 });
 
+test('acquireDirLock: recovers stale lock when owner PID is reused (pidStartTime mismatch)', (t) => {
+  const dir = tmp(t, 'lock-pid-reuse-');
+  const lockDir = join(dir, 'test.lock');
+  mkdirSync(lockDir);
+  writeFileSync(
+    join(lockDir, 'owner.json'),
+    JSON.stringify({
+      pid: process.pid,
+      pidStartTime: '0000-reused-start-time',
+      token: 'old-reused-token',
+      createdAt: Date.now() - 50_000,
+    })
+  );
+  const release = acquireDirLock(lockDir, { staleMs: 100 });
+  try {
+    const owner = JSON.parse(readFileSync(join(lockDir, 'owner.json'), 'utf8'));
+    assert.notEqual(owner.token, 'old-reused-token');
+  } finally {
+    release();
+  }
+});
+
+test('redactSecrets: redacts fine-grained GitHub, GitLab, AWS ASIA, Slack, and JWT tokens', () => {
+  assert.equal(redactSecrets('github_pat_12345678901234567890_abc'), '[REDACTED]');
+  assert.equal(redactSecrets('glpat-12345678901234567890'), '[REDACTED]');
+  assert.equal(redactSecrets('ASIA1234567890ABCDEF'), '[REDACTED]');
+  assert.equal(redactSecrets('xoxb-123456789012-abcdef'), '[REDACTED]');
+  assert.equal(redactSecrets('eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig'), '[REDACTED]');
+});
+
 test('redactSecrets: redacts Error message/stack and preserves Date/RegExp/Buffer instances', () => {
   const err = new Error('leaked sk-12345678901234567890 in error');
   const redactedErr = redactSecrets(err);

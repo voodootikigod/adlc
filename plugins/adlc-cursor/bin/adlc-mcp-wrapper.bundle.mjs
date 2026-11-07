@@ -1690,28 +1690,65 @@ function isAgyTimeout(out) {
   const last = lines.at(-1) ?? "";
   return /^Error: timed out waiting for response\.?$/.test(last) && out.length < 200;
 }
-function agySend({ apiKey, model, system, prompt }, env = process.env) {
+var DEFAULT_HTTP_TIMEOUT_MS = 3e5;
+function parseAgyTimeoutMs(spec = "300s") {
+  const m = String(spec).trim().match(/^(\d+(?:\.\d+)?)\s*(ms|s|m)?$/i);
+  if (!m) return DEFAULT_HTTP_TIMEOUT_MS;
+  const val = Number(m[1]);
+  const unit = (m[2] ?? "s").toLowerCase();
+  if (unit === "ms") return Math.max(1, Math.round(val));
+  if (unit === "m") return Math.max(1, Math.round(val * 6e4));
+  return Math.max(1, Math.round(val * 1e3));
+}
+function resolveHttpTimeoutMs(timeoutMs, env = process.env) {
+  if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0) return timeoutMs;
+  const fromEnv = Number(env?.ADLC_HTTP_TIMEOUT_MS);
+  if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv;
+  return DEFAULT_HTTP_TIMEOUT_MS;
+}
+function agySend({ apiKey, model, system, prompt, timeoutMs }, env = process.env) {
   const bin = apiKey === "1" || apiKey === "true" ? "agy" : apiKey;
-  const args = ["--print", "--print-timeout", env.ADLC_AGY_TIMEOUT ?? "300s", "--model", model];
+  const timeoutSpec = env.ADLC_AGY_TIMEOUT ?? "300s";
+  const args = ["--print", "--print-timeout", timeoutSpec, "--model", model];
   if (env.ADLC_AGY_SANDBOX === "1") args.push("--sandbox");
   const input = system ? `${system}
 
 ---
 
 ${prompt}` : prompt;
+  const hostTimeoutMs = typeof timeoutMs === "number" && timeoutMs > 0 ? timeoutMs : parseAgyTimeoutMs(timeoutSpec) + 5e3;
   return new Promise((resolve6, reject) => {
     const p = spawn(bin, args, { stdio: ["pipe", "pipe", "pipe"] });
     let out = "";
     let err = "";
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try {
+        p.kill("SIGKILL");
+      } catch {
+      }
+      reject(new Error("agy: timed out waiting for response"));
+    }, hostTimeoutMs);
+    timer.unref?.();
     p.stdout.on("data", (d) => out += d);
     p.stderr.on("data", (d) => err += d);
-    p.on("error", (e) => reject(new Error(`agy spawn failed: ${e.message}`)));
+    p.on("error", (e) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error(`agy spawn failed: ${e.message}`));
+    });
     let stdinError = null;
     p.stdin.on("error", (e) => {
       stdinError = e;
     });
     p.stdin.end(input);
     p.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       if (code !== 0) return reject(new Error(`agy exit ${code}: ${(err || out).slice(-400)}`));
       if (stdinError) return reject(new Error(`agy did not read the full prompt: ${stdinError.message}`));
       if (isAgyTimeout(out)) {
@@ -1757,9 +1794,10 @@ var PROVIDERS = [
       mid: "claude-sonnet-4-6",
       frontier: "claude-opus-4-8"
     },
-    async send({ apiKey, model, system, prompt, maxTokens, cacheable }) {
+    async send({ apiKey, model, system, prompt, maxTokens, cacheable, timeoutMs }, env = process.env) {
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
+        signal: AbortSignal.timeout(resolveHttpTimeoutMs(timeoutMs, env)),
         headers: {
           "content-type": "application/json",
           "x-api-key": apiKey,
@@ -1789,9 +1827,10 @@ var PROVIDERS = [
       mid: "gpt-5.1",
       frontier: "gpt-5.1"
     },
-    async send({ apiKey, model, system, prompt, maxTokens }) {
+    async send({ apiKey, model, system, prompt, maxTokens, timeoutMs }, env = process.env) {
       const res = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
+        signal: AbortSignal.timeout(resolveHttpTimeoutMs(timeoutMs, env)),
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${apiKey}`
@@ -1819,10 +1858,11 @@ var PROVIDERS = [
       mid: "gemini-2.5-pro",
       frontier: "gemini-2.5-pro"
     },
-    async send({ apiKey, model, system, prompt, maxTokens }) {
+    async send({ apiKey, model, system, prompt, maxTokens, timeoutMs }, env = process.env) {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
       const res = await fetch(url, {
         method: "POST",
+        signal: AbortSignal.timeout(resolveHttpTimeoutMs(timeoutMs, env)),
         headers: {
           "content-type": "application/json",
           "x-goog-api-key": apiKey
@@ -1873,6 +1913,9 @@ var SECRET_PATTERNS = [
   [INLINE_ASSIGNMENT, "an inline credential assignment"],
   [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\./, "a JWT"]
 ];
+
+// packages/core/lib/ledger.mjs
+var SLEEP_BUF = new Int32Array(new SharedArrayBuffer(4));
 
 // packages/core/lib/tickets.mjs
 import { existsSync as existsSync11, lstatSync as lstatSync6 } from "node:fs";

@@ -10,9 +10,12 @@
 
 import { existsSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
-import { loadTickets, globMatch, ticketStoreExists } from './core-inline.mjs';
+import { globMatch, ticketStoreExists } from './core-inline.mjs';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
+import { resolveRailPath } from './generated-railpath.mjs';
 import { ticketHash, loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
+
+export { resolveRailPath };
 
 // The ticket file and the active-ticket pointer are the rail trust root: they are
 // frozen whenever enforcement is active, even if no ticket declares them, so the
@@ -200,36 +203,6 @@ function realpathOr(p) {
 }
 
 /**
- * Symlink-aware canonicalization (security-relevant): resolve symlinks on the
- * target and on its existing parent segments before comparing to the frozen rail
- * set, so a symlink whose real target is a frozen rail cannot slip a write past a
- * lexical name check. Falls back to the lexical path for anything unresolvable.
- */
-export function resolveRailPath(filePath, root) {
-  const abs = isAbsolute(filePath) ? filePath : join(root, filePath);
-  let resolved;
-  if (existsSync(abs)) {
-    resolved = realpathOr(abs);
-  } else {
-    // The file may not exist yet (a `write` creating it) and several parent
-    // segments may also be missing. Walk up to the DEEPEST EXISTING ancestor,
-    // realpath THAT (catching a symlinked ancestor like repoB/link -> repoA), then
-    // re-append the not-yet-existing tail. A single-level dirname would miss a
-    // symlink two or more levels above a new file.
-    const tail = [];
-    let cur = abs;
-    while (!existsSync(cur)) {
-      const parent = dirname(cur);
-      if (parent === cur) break; // filesystem root
-      tail.unshift(basename(cur));
-      cur = parent;
-    }
-    resolved = tail.length ? join(realpathOr(cur), ...tail) : realpathOr(cur);
-  }
-  return relative(realpathOr(root), resolved).split('\\').join('/');
-}
-
-/**
  * Resolve the active ticket id from process.env.ADLC_TICKET OR
  * .adlc/current-ticket.json. If both are set and disagree, that is a tamper
  * signal — return { conflict: true } so the caller fails closed.
@@ -259,8 +232,6 @@ export function railPreconditions({ root = process.cwd(), env = process.env } = 
   if (env.ADLC_P4_ENFORCEMENT !== '1') {
     return { state: 'inactive', reason: 'enforcement inactive (ADLC_P4_ENFORCEMENT !== "1")' };
   }
-  const override = env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null;
-  const ticketsPath = override ? (isAbsolute(override) ? override : join(root, override)) : join(root, '.adlc', 'tickets.json');
   if (!ticketStoreExists(root, env)) {
     return { state: 'inactive', reason: 'repo not ADLC-initialized (no supported ticket store)' };
   }

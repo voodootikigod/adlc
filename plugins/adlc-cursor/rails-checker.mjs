@@ -8,14 +8,15 @@
 // Cursor-specific tool classifier. The Cursor wire-format mapping (preToolUse
 // stdin/stdout) lives in hooks/adlc-rails-guard.mjs; this file is editor-agnostic.
 
-import { existsSync, realpathSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative } from 'node:path';
-import { globMatch, TICKET_TRUST_ROOT_RAILS } from '@adlc/core';
+import { isAbsolute, join, relative } from 'node:path';
+import { globMatch, resolveRailPath, TICKET_TRUST_ROOT_RAILS } from '@adlc/core';
 import { detectTicketStore } from '@adlc/tickets';
 import {
   resolveActiveTicketAgainst,
   resolveActiveTicketId as resolveActiveTicketIdCanonical,
 } from './generated-active-ticket.mjs';
+
+export { resolveRailPath };
 
 // The ticket file and the active-ticket pointer are the rail trust root: they are
 // frozen whenever enforcement is active, even if no ticket declares them, so the
@@ -124,40 +125,6 @@ export function classifyTool(name) {
 export function canonicalizePath(filePath, root) {
   const abs = isAbsolute(filePath) ? filePath : join(root, filePath);
   return relative(root, abs).split('\\').join('/');
-}
-
-function realpathOr(p) {
-  try { return realpathSync(p); } catch { return p; }
-}
-
-/**
- * Symlink-aware canonicalization (security-relevant): resolve symlinks on the
- * target and on its existing parent segments before comparing to the frozen rail
- * set, so a symlink whose real target is a frozen rail cannot slip a write past a
- * lexical name check. Falls back to the lexical path for anything unresolvable.
- */
-export function resolveRailPath(filePath, root) {
-  const abs = isAbsolute(filePath) ? filePath : join(root, filePath);
-  let resolved;
-  if (existsSync(abs)) {
-    resolved = realpathOr(abs);
-  } else {
-    // The file may not exist yet (a `write` creating it) and several parent
-    // segments may also be missing. Walk up to the DEEPEST EXISTING ancestor,
-    // realpath THAT (catching a symlinked ancestor like repoB/link -> repoA), then
-    // re-append the not-yet-existing tail. A single-level dirname would miss a
-    // symlink two or more levels above a new file.
-    const tail = [];
-    let cur = abs;
-    while (!existsSync(cur)) {
-      const parent = dirname(cur);
-      if (parent === cur) break; // filesystem root
-      tail.unshift(basename(cur));
-      cur = parent;
-    }
-    resolved = tail.length ? join(realpathOr(cur), ...tail) : realpathOr(cur);
-  }
-  return relative(realpathOr(root), resolved).split('\\').join('/');
 }
 
 /**

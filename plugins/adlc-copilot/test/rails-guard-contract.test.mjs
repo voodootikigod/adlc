@@ -13,7 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -202,5 +202,29 @@ test('an unrecognized opaque structured mutator with no path → still denies (f
     const out = parseStdout(result);
     assert.ok(out && out.reason, `expected a deny, got: ${result.stdout || '(empty=ALLOW)'}`);
     assert.match(out.reason, /did not include any editable paths/);
+  });
+});
+
+test('dangling symlink pointing to a not-yet-existing frozen rail → deny', () => {
+  fixture((root) => {
+    mkdirSync(join(root, 'src'), { recursive: true });
+    symlinkSync('../test/frozen.test.mjs', join(root, 'src/dangling-link.mjs'));
+    const result = runCopilot(root, { toolName: 'write', toolArgs: { path: 'src/dangling-link.mjs' } });
+    assert.equal(result.status, 0);
+    const out = parseStdout(result);
+    assert.ok(out && out.reason, `expected a deny for dangling symlink to rail, got: ${result.stdout || '(empty=ALLOW)'}`);
+    assert.match(out.reason, /blocked rail edit for T1/);
+  });
+});
+
+test('deeply nested payload exceeding MAX_PAYLOAD_DEPTH (64) → deny', () => {
+  fixture((root) => {
+    let deep = { path: 'src/app.mjs' };
+    for (let i = 0; i < 70; i += 1) deep = { child: deep };
+    const result = runCopilot(root, { toolName: 'write', toolArgs: deep });
+    assert.equal(result.status, 0);
+    const out = parseStdout(result);
+    assert.ok(out && out.reason, 'deeply nested payload must deny');
+    assert.match(out.reason, /exceeds 64 levels/);
   });
 });

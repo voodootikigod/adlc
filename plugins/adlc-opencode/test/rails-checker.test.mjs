@@ -1379,3 +1379,19 @@ test("execute.before denies empty or missing tool name while rails are in force 
   );
   await plugin.before("read", { path: "test/x.mjs" });
 });
+
+test("resolveRailsInForce denies when .adlc/current-ticket.json pins a mismatched ticketHash", (t) => {
+  const dir = repo(t, { tickets: T1_RAILED });
+  writeFileSync(
+    join(dir, ".adlc", "current-ticket.json"),
+    JSON.stringify({ id: "T1", ticketHash: "0".repeat(64) })
+  );
+  const r = checkToolCall({
+    tool: "write",
+    args: { filePath: "src/ok.mjs" },
+    root: dir,
+    env: { ADLC_P4_ENFORCEMENT: "1" },
+  });
+  assert.equal(r.decision, "deny");
+  assert.match(r.reason, /changed after selection|pointer pins/i);
+});

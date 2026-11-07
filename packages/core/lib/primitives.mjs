@@ -18,9 +18,10 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { opError, readStdin } from './cli.mjs';
 import { appendEntry } from './ledger.mjs';
+import { procStartTimeOf } from './proc.mjs';
 
 const SECRET_REGEX =
-  /sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|Bearer\s+[A-Za-z0-9._~+/-]{20,}/g;
+  /sk-(?:proj-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|(?:AKIA|ASIA)[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|Bearer\s+[A-Za-z0-9._~+/-]{20,}=*|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*/g;
 
 /**
  * Write a file atomically via a unique sibling temporary file and rename.
@@ -73,6 +74,7 @@ export function acquireDirLock(lockDir, options = {}) {
     mkdirSync(lockDir);
     const owner = {
       pid: process.pid,
+      pidStartTime: procStartTimeOf(process.pid),
       token: randomUUID(),
       createdAt: Date.now(),
     };
@@ -85,8 +87,16 @@ export function acquireDirLock(lockDir, options = {}) {
       } catch {}
       throw writeErr;
     }
+    let ino = null;
+    try {
+      ino = lstatSync(lockDir).ino;
+    } catch {}
     return () => {
       try {
+        if (ino !== null) {
+          const st = lstatSync(lockDir);
+          if (st.ino !== ino) return;
+        }
         const current = JSON.parse(readFileSync(ownerPath, 'utf8'));
         if (current && current.token === owner.token) {
           try {
@@ -111,6 +121,12 @@ export function acquireDirLock(lockDir, options = {}) {
         if (typeof owner.createdAt === 'number' && Date.now() - owner.createdAt > options.staleMs) {
           try {
             process.kill(owner.pid, 0);
+            if (owner.pidStartTime != null) {
+              const liveStart = procStartTimeOf(owner.pid);
+              if (liveStart != null && String(liveStart) !== String(owner.pidStartTime)) {
+                isStale = true;
+              }
+            }
           } catch (killErr) {
             if (killErr.code === 'ESRCH') {
               isStale = true;

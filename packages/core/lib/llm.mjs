@@ -31,19 +31,55 @@ function envEnabled(v) {
   return v !== undefined && v !== '' && !['0', 'false', 'no', 'off', 'disabled'].includes(v.toLowerCase());
 }
 
-function agySend({ apiKey, model, system, prompt }, env = process.env) {
+const DEFAULT_HTTP_TIMEOUT_MS = 300_000;
+
+export function parseAgyTimeoutMs(spec = '300s') {
+  const m = String(spec).trim().match(/^(\d+(?:\.\d+)?)\s*(ms|s|m)?$/i);
+  if (!m) return DEFAULT_HTTP_TIMEOUT_MS;
+  const val = Number(m[1]);
+  const unit = (m[2] ?? 's').toLowerCase();
+  if (unit === 'ms') return Math.max(1, Math.round(val));
+  if (unit === 'm') return Math.max(1, Math.round(val * 60_000));
+  return Math.max(1, Math.round(val * 1_000));
+}
+
+function resolveHttpTimeoutMs(timeoutMs, env = process.env) {
+  if (typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0) return timeoutMs;
+  const fromEnv = Number(env?.ADLC_HTTP_TIMEOUT_MS);
+  if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv;
+  return DEFAULT_HTTP_TIMEOUT_MS;
+}
+
+function agySend({ apiKey, model, system, prompt, timeoutMs }, env = process.env) {
   // apiKey carries the binary path ('1'/'true' mean default 'agy').
   const bin = apiKey === '1' || apiKey === 'true' ? 'agy' : apiKey;
-  const args = ['--print', '--print-timeout', env.ADLC_AGY_TIMEOUT ?? '300s', '--model', model];
+  const timeoutSpec = env.ADLC_AGY_TIMEOUT ?? '300s';
+  const args = ['--print', '--print-timeout', timeoutSpec, '--model', model];
   if (env.ADLC_AGY_SANDBOX === '1') args.push('--sandbox');
   const input = system ? `${system}\n\n---\n\n${prompt}` : prompt;
+  const hostTimeoutMs = (typeof timeoutMs === 'number' && timeoutMs > 0)
+    ? timeoutMs
+    : parseAgyTimeoutMs(timeoutSpec) + 5_000;
   return new Promise((resolve, reject) => {
     const p = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'] });
     let out = '';
     let err = '';
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { p.kill('SIGKILL'); } catch {}
+      reject(new Error('agy: timed out waiting for response'));
+    }, hostTimeoutMs);
+    timer.unref?.();
     p.stdout.on('data', (d) => (out += d));
     p.stderr.on('data', (d) => (err += d));
-    p.on('error', (e) => reject(new Error(`agy spawn failed: ${e.message}`)));
+    p.on('error', (e) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error(`agy spawn failed: ${e.message}`));
+    });
     // An agy that exits before draining a prompt larger than the pipe buffer
     // makes this write fail with EPIPE. Unhandled, that is an uncaught
     // exception in the caller; handled, the exit status below reports it.
@@ -51,6 +87,9 @@ function agySend({ apiKey, model, system, prompt }, env = process.env) {
     p.stdin.on('error', (e) => { stdinError = e; });
     p.stdin.end(input);
     p.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       // agy exits 0 even on print-timeout; the error surfaces in the output.
       if (code !== 0) return reject(new Error(`agy exit ${code}: ${(err || out).slice(-400)}`));
       // A clean exit that never read the whole prompt answered something else.
@@ -112,7 +151,7 @@ const PROVIDERS = [
       mid: 'claude-sonnet-4-6',
       frontier: 'claude-opus-4-8',
     },
-    async send({ apiKey, model, system, prompt, maxTokens, cacheable }) {
+    async send({ apiKey, model, system, prompt, maxTokens, cacheable, timeoutMs }, env = process.env) {
       // Prompt caching (issue #273): only worth marking when the SAME
       // {system, prompt} pair will be sent again — a cache write costs more
       // than a plain input token, and only pays off on a later read. fan()
@@ -127,6 +166,7 @@ const PROVIDERS = [
       // there is no need to size-check the prompt here.
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
+        signal: AbortSignal.timeout(resolveHttpTimeoutMs(timeoutMs, env)),
         headers: {
           'content-type': 'application/json',
           'x-api-key': apiKey,
@@ -158,9 +198,10 @@ const PROVIDERS = [
       mid: 'gpt-5.1',
       frontier: 'gpt-5.1',
     },
-    async send({ apiKey, model, system, prompt, maxTokens }) {
+    async send({ apiKey, model, system, prompt, maxTokens, timeoutMs }, env = process.env) {
       const res = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
+        signal: AbortSignal.timeout(resolveHttpTimeoutMs(timeoutMs, env)),
         headers: {
           'content-type': 'application/json',
           authorization: `Bearer ${apiKey}`,
@@ -188,10 +229,11 @@ const PROVIDERS = [
       mid: 'gemini-2.5-pro',
       frontier: 'gemini-2.5-pro',
     },
-    async send({ apiKey, model, system, prompt, maxTokens }) {
+    async send({ apiKey, model, system, prompt, maxTokens, timeoutMs }, env = process.env) {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
       const res = await fetch(url, {
         method: 'POST',
+        signal: AbortSignal.timeout(resolveHttpTimeoutMs(timeoutMs, env)),
         headers: {
           'content-type': 'application/json',
           'x-goog-api-key': apiKey,
@@ -312,6 +354,7 @@ export async function complete(opts, env = process.env) {
       prompt: opts.prompt,
       maxTokens: opts.maxTokens ?? 4096,
       cacheable: opts.cacheable ?? false,
+      timeoutMs: opts.timeoutMs,
     },
     env
   );
@@ -378,35 +421,72 @@ export async function fanProviders(opts, providerNames, env = process.env) {
   );
 }
 
+function scanBalancedJson(cleaned) {
+  let searchFrom = 0;
+  let sawOpener = false;
+  let sawUnbalanced = false;
+  let lastParseError = null;
+  while (searchFrom < cleaned.length) {
+    const rel = cleaned.slice(searchFrom).search(/[[{]/);
+    if (rel === -1) break;
+    sawOpener = true;
+    const start = searchFrom + rel;
+    const open = cleaned[start];
+    const close = open === '{' ? '}' : ']';
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let balancedEnd = -1;
+    for (let i = start; i < cleaned.length; i++) {
+      const ch = cleaned[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === '\\') escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') inString = true;
+      else if (ch === open) depth++;
+      else if (ch === close) {
+        depth--;
+        if (depth === 0) {
+          balancedEnd = i;
+          break;
+        }
+      }
+    }
+    if (balancedEnd === -1) {
+      sawUnbalanced = true;
+      searchFrom = start + 1;
+      continue;
+    }
+    try {
+      return { ok: true, value: JSON.parse(cleaned.slice(start, balancedEnd + 1)) };
+    } catch (err) {
+      lastParseError = err;
+      searchFrom = start + 1;
+    }
+  }
+  return { ok: false, sawOpener, sawUnbalanced, lastParseError };
+}
+
 /**
  * Extract the first JSON value ({...} or [...]) from model output.
- * Strips code fences, balances braces while respecting strings.
- * Throws if nothing parseable is found.
+ * Prefers fenced code blocks when present, balances braces while respecting
+ * strings, and skips non-JSON bracketed prose (e.g. "[note 1]") before a valid
+ * JSON value. Throws if nothing parseable is found.
  */
 export function extractJson(text) {
   if (typeof text !== 'string') throw new Error('extractJson: input is not a string');
-  const cleaned = text.replace(/```(?:json)?/g, '');
-  const start = cleaned.search(/[[{]/);
-  if (start === -1) throw new Error('extractJson: no JSON object or array found');
-  const open = cleaned[start];
-  const close = open === '{' ? '}' : ']';
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < cleaned.length; i++) {
-    const ch = cleaned[i];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (ch === '\\') escaped = true;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') inString = true;
-    else if (ch === open) depth++;
-    else if (ch === close) {
-      depth--;
-      if (depth === 0) return JSON.parse(cleaned.slice(start, i + 1));
-    }
+  const fenceRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
+  for (const match of text.matchAll(fenceRegex)) {
+    const fenced = scanBalancedJson(match[1]);
+    if (fenced.ok) return fenced.value;
   }
+  const cleaned = text.replace(/```(?:json)?/gi, '');
+  const res = scanBalancedJson(cleaned);
+  if (res.ok) return res.value;
+  if (!res.sawOpener) throw new Error('extractJson: no JSON object or array found');
+  if (res.lastParseError && !res.sawUnbalanced) throw res.lastParseError;
   throw new Error('extractJson: unbalanced JSON in model output');
 }

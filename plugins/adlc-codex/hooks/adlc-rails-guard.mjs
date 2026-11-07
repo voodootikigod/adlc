@@ -3,10 +3,10 @@
 // ./generated-shell.mjs (generated from packages/core/lib/shell.mjs by
 // scripts/ticket-readers/generate.mjs) so this hook runs standalone without
 // resolving @adlc/core from node_modules at runtime.
-import { readFileSync, realpathSync } from 'node:fs';
-import { isAbsolute, relative, resolve, dirname, basename, join } from 'node:path';
+import { isAbsolute, resolve, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
+import { resolveRailPath } from './generated-railpath.mjs';
 import {
   resolveActiveTicketId as resolveActiveTicketIdCanonical,
   resolveActiveTicketAgainst,
@@ -64,51 +64,10 @@ function notice(message) {
   console.error(`adlc-rails-guard: ${message}`);
 }
 
-function parseJson(path) {
-  try {
-    return JSON.parse(readFileSync(path, 'utf8'));
-  } catch (err) {
-    if (err?.code === 'ENOENT') throw err;
-    fail(`malformed JSON in ${path}: ${err.message}`);
-  }
-}
-
-function readRequiredJson(path) {
-  try {
-    return parseJson(path);
-  } catch (err) {
-    if (err?.code === 'ENOENT') fail(`file not found: ${path}`);
-    throw err;
-  }
-}
-
-
 // The rail/scope glob matcher is a GENERATED verbatim copy of
 // packages/core/lib/glob.mjs: this file is installed without node_modules, so it
 // cannot import @adlc/core, and a hand-kept copy is what drifted before.
 import { globMatch } from './generated-glob-match.mjs';
-
-function loadTickets(path) {
-  const data = readRequiredJson(path);
-  if (!Array.isArray(data.tickets)) fail(`${path} must contain a tickets array`);
-  const ids = new Set();
-  const errors = [];
-  for (const ticket of data.tickets) {
-    if (!ticket || typeof ticket !== 'object') {
-      errors.push('ticket is not an object');
-      continue;
-    }
-    if (!ticket.id || typeof ticket.id !== 'string') errors.push('ticket missing string id');
-    if (!ticket.title || typeof ticket.title !== 'string') errors.push(`${ticket.id ?? '?'}: missing string title`);
-    if (ticket.rails !== undefined && !Array.isArray(ticket.rails)) errors.push(`${ticket.id}: rails must be an array`);
-    if (ticket.id) {
-      if (ids.has(ticket.id)) errors.push(`duplicate ticket id: ${ticket.id}`);
-      ids.add(ticket.id);
-    }
-  }
-  if (errors.length > 0) fail(`ticket file errors: ${errors.join('; ')}`);
-  return data.tickets;
-}
 
 function collectPaths(value, out = new Set()) {
   if (typeof value === 'string') {
@@ -264,25 +223,10 @@ function resolveActiveTicketId() {
   return { id: resolved.value?.id ?? undefined };
 }
 
-function safeRealpath(fp) {
-  try {
-    return realpathSync(fp);
-  } catch {
-    const parent = dirname(fp);
-    if (parent === fp) return fp;
-    try {
-      return resolve(safeRealpath(parent), basename(fp));
-    } catch {
-      return fp;
-    }
-  }
-}
-
 function normalizePath(path, baseCwd = process.cwd()) {
   const normalized = path.replaceAll('\\', '/');
-  const absolute = safeRealpath(isAbsolute(normalized) ? normalized : resolve(baseCwd, normalized));
-  const projectRoot = safeRealpath(process.cwd());
-  const projectRelative = relative(projectRoot, absolute).replaceAll('\\', '/');
+  const candidate = isAbsolute(normalized) ? normalized : resolve(baseCwd, normalized);
+  const projectRelative = resolveRailPath(candidate, process.cwd());
   return projectRelative.startsWith('..') ? normalized : projectRelative;
 }
 
