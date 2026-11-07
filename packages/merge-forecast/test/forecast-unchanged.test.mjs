@@ -92,6 +92,35 @@ describe('merge-forecast output is unchanged by the scope index', () => {
     });
   }
 
+  test('runForecast compiles each scope once for the whole run: one index shared by every pair', async () => {
+    // Sharing the index changes no output, so only a count can show it. Each
+    // scope gets an own forEach that counts and delegates; compileScope is the
+    // only reader that calls forEach, once per scope content per index. A run
+    // that let every pair build its own index would compile a scope once per
+    // pair it is in.
+    const golden = GOLDEN.find((run) => !run.graph && run.threshold === 0.5);
+    await withFixture(async ({ root }) => {
+      const compiles = {};
+      const tickets = structuredClone(FIXTURE_TICKETS).map((ticket) => {
+        if (!Array.isArray(ticket.scope)) return ticket;
+        compiles[ticket.id] = 0;
+        Object.defineProperty(ticket.scope, 'forEach', {
+          value(...args) {
+            compiles[ticket.id] += 1;
+            return Array.prototype.forEach.apply(this, args);
+          },
+        });
+        return ticket;
+      });
+      const result = await runForecast({ tickets, root, conflictThreshold: 0.5 });
+      assert.deepEqual(result, golden.result);
+      assert.ok(Object.keys(compiles).length > 10, 'too few scoped tickets to prove sharing');
+      for (const [id, count] of Object.entries(compiles)) {
+        assert.equal(count, 1, `${id} compiled ${count} times: ${JSON.stringify(compiles)}`);
+      }
+    });
+  });
+
   test('merge-forecast --json prints the golden byte for byte, and exits 2 on its gate failure', async () => {
     await withFixture(({ dir, root }) => {
       // Inputs live OUTSIDE the walked tree, so they add no file to it.

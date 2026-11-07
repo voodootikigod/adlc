@@ -316,16 +316,27 @@ describe('createScopeIndex caches by scope content', () => {
 
   test('scopes whose globs join to the same text are different entries', () => {
     // A key built by joining the globs with any separator, or none, would
-    // merge each of these pairs into one entry. Both orders, on one index.
-    const files = ['a', 'b', 'a,b', 'a b', 'a|b', 'a\nb', 'a\0b', 'ab', 'src/', 'src/a.mjs', 'src/**'];
+    // merge each of these pairs into one entry. Every separator in 0..127,
+    // plus the shapes real scopes take. Both orders, on one index.
+    const separators = Array.from({ length: 128 }, (_, code) => String.fromCharCode(code));
+    const files = [
+      'a',
+      'b',
+      'ab',
+      ...separators.map((sep) => `a${sep}b`),
+      'src/',
+      'src/a.mjs',
+      'src/**',
+      'packages/core/x.mjs',
+      'packages/core/lib/a.mjs',
+      'lib/b.mjs',
+    ];
     const pairs = [
-      [['a', 'b'], ['a,b']],
-      [['a', 'b'], ['a b']],
-      [['a', 'b'], ['a|b']],
-      [['a', 'b'], ['a\nb']],
-      [['a', 'b'], ['a\0b']],
       [['a', 'b'], ['ab']],
+      ...separators.map((sep) => [['a', 'b'], [`a${sep}b`]]),
       [['src/', '**'], ['src/**']],
+      [['src', '**'], ['src/**']],
+      [['packages/core', 'lib/**'], ['packages/core/lib/**']],
     ];
     for (const [one, two] of pairs) {
       for (const [first, second] of [[one, two], [two, one]]) {
