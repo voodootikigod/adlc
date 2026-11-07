@@ -3,8 +3,8 @@
 **Approval (P1):** approved by Rafael Belliard on 2026-11-07, as written at
 that point (after P5 round 1). The P1 gate ran late: the build started from
 his task brief before he had seen this spec. Edits after the approval (P5
-rounds 2 to 5) correct wording, state the input contract, describe the
-literal `Set`, and strengthen criteria 5 and 6; none changes the design.
+rounds 2 to 6) correct wording, state the input contract, describe the
+literal `Set`, and strengthen criteria 3, 5 and 6; none changes the design.
 
 **Phase:** P1 contract for a behavior-preserving speed-up of
 `merge-forecast` (D2). No output changes. Single package:
@@ -164,8 +164,12 @@ Each criterion names its verification.
    *Verify:* `node --test packages/merge-forecast/test/scope-index.test.mjs`.
 3. **The index caches by content.** A second `files` or `filesNormalized`
    call with an equal scope (same content, different array) returns the
-   identical array (`===`), and `matcher` the identical function; scopes
-   that differ only in where a comma falls are different entries.
+   identical array (`===`), and `matcher` the identical function. Scopes
+   whose globs join to the same text, for every single UTF-16 separator,
+   are different entries; and every ordered scope of up to three near-miss
+   globs (case, spaces, trailing slash, NFC/NFD, anagrams, commas, the
+   empty glob, a 32-bit hash collision, long shared prefixes and suffixes)
+   gets the old answer from ONE shared index.
    *Verify:* `node --test packages/merge-forecast/test/scope-index.test.mjs`.
 4. **Odd scopes keep their old failure behavior.** For a scope that is
    `null`, `undefined`, a string, a number, `''`, `0`, `false`, `NaN`, an
@@ -178,7 +182,7 @@ Each criterion names its verification.
    exported signal, and to `pairScore`, sees the lookups the signal makes.
    For each signal a case that FIRES (score above 0) gives the same score
    with the index as without it, and graph coupling keeps the direction of a
-   one-sided `fileCoupling` entry.
+   one-sided `fileCoupling` entry, called directly and through `pairScore`.
    *Verify:* `node --test packages/merge-forecast/test/scope-index-wiring.test.mjs`.
 6. **The forecast is unchanged.** On a fixture repository built in a temp
    dir, with a git history, that triggers every signal (scope overlap,
@@ -189,7 +193,9 @@ Each criterion names its verification.
    `merge-forecast --json` prints a second golden byte for byte and exits 2.
    In that run every scope is compiled exactly once (one index for the
    whole run, shared by every pair), counted through an own `forEach` on
-   each fixture scope that delegates to the real one.
+   each fixture scope that delegates to the real one. Wrapping every fixture
+   scope in globs that match nothing, before and after its live globs,
+   gives the same result, warnings included.
    The CLI's stdout is captured through a file. On macOS with Node 18, a
    reader that does not drain a pipe fast enough loses the tail of it (a
    `spawnSync` reader got the first ~8 KB), because the CLI calls
