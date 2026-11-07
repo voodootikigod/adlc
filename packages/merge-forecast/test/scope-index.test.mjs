@@ -316,36 +316,34 @@ describe('createScopeIndex caches by scope content', () => {
 
   test('scopes whose globs join to the same text are different entries', () => {
     // A key built by joining the globs with any separator, or none, would
-    // merge each of these pairs into one entry. Every separator in 0..127,
-    // plus the shapes real scopes take. Both orders, on one index.
-    const separators = Array.from({ length: 128 }, (_, code) => String.fromCharCode(code));
-    const files = [
-      'a',
-      'b',
-      'ab',
-      ...separators.map((sep) => `a${sep}b`),
-      'src/',
-      'src/a.mjs',
-      'src/**',
-      'packages/core/x.mjs',
-      'packages/core/lib/a.mjs',
-      'lib/b.mjs',
-    ];
-    const pairs = [
-      [['a', 'b'], ['ab']],
-      ...separators.map((sep) => [['a', 'b'], [`a${sep}b`]]),
-      [['src/', '**'], ['src/**']],
-      [['src', '**'], ['src/**']],
-      [['packages/core', 'lib/**'], ['packages/core/lib/**']],
-    ];
-    for (const [one, two] of pairs) {
-      for (const [first, second] of [[one, two], [two, one]]) {
-        const index = createScopeIndex(files);
-        assert.deepEqual(index.files(first), oldFiles(first, files), JSON.stringify(first));
-        assert.deepEqual(index.files(second), oldFiles(second, files), `${JSON.stringify(second)} after ${JSON.stringify(first)}`);
-        assert.notDeepEqual(oldFiles(first, files), oldFiles(second, files), 'the pair must differ to prove anything');
-      }
+    // merge each of these pairs into one entry. Both orders, on one index.
+    const differ = (first, second, files) => {
+      const index = createScopeIndex(files);
+      assert.deepEqual(index.files(first), oldFiles(first, files), JSON.stringify(first));
+      assert.deepEqual(index.files(second), oldFiles(second, files), `${JSON.stringify(second)} after ${JSON.stringify(first)}`);
+      assert.notDeepEqual(oldFiles(first, files), oldFiles(second, files), 'the pair must differ to prove anything');
+    };
+    const bothOrders = (one, two, files) => {
+      differ(one, two, files);
+      differ(two, one, files);
+    };
+    // Every single UTF-16 code unit as the separator, lone surrogates included,
+    // each on its own three-file index, plus no separator at all.
+    for (let code = 0; code <= 0xffff; code++) {
+      const joined = `a${String.fromCharCode(code)}b`;
+      bothOrders(['a', 'b'], [joined], ['a', 'b', joined]);
     }
+    bothOrders(['a', 'b'], ['ab'], ['a', 'b', 'ab']);
+    // Multi-character separators, including ones that mimic JSON's own.
+    for (const sep of ['","', '", "', ', ', '/ ', '\u0000\u0000', '\r\n']) {
+      const joined = `a${sep}b`;
+      bothOrders(['a', 'b'], [joined], ['a', 'b', joined]);
+    }
+    // The shapes real scopes take.
+    const files = ['src/', 'src/a.mjs', 'src/**', 'packages/core/x.mjs', 'packages/core/lib/a.mjs', 'lib/b.mjs'];
+    bothOrders(['src/', '**'], ['src/**'], files);
+    bothOrders(['src', '**'], ['src/**'], files);
+    bothOrders(['packages/core', 'lib/**'], ['packages/core/lib/**'], files);
   });
 
   test('a sparse scope skips its holes, as some() does', () => {
