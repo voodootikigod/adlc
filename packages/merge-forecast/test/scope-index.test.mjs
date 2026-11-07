@@ -314,11 +314,27 @@ describe('createScopeIndex caches by scope content', () => {
     assert.notDeepEqual(oldFiles(['a/**'], FILES), oldFilesNormalized(['a/**'], FILES));
   });
 
-  test('scopes that differ only by where a comma falls are different entries', () => {
-    const index = createScopeIndex(FILES);
-    assert.deepEqual(index.files(['a', 'b']), oldFiles(['a', 'b'], FILES));
-    assert.deepEqual(index.files(['a,b']), oldFiles(['a,b'], FILES));
-    assert.deepEqual(index.files(['a,b']), ['a,b']);
+  test('scopes whose globs join to the same text are different entries', () => {
+    // A key built by joining the globs with any separator, or none, would
+    // merge each of these pairs into one entry. Both orders, on one index.
+    const files = ['a', 'b', 'a,b', 'a b', 'a|b', 'a\nb', 'a\0b', 'ab', 'src/', 'src/a.mjs', 'src/**'];
+    const pairs = [
+      [['a', 'b'], ['a,b']],
+      [['a', 'b'], ['a b']],
+      [['a', 'b'], ['a|b']],
+      [['a', 'b'], ['a\nb']],
+      [['a', 'b'], ['a\0b']],
+      [['a', 'b'], ['ab']],
+      [['src/', '**'], ['src/**']],
+    ];
+    for (const [one, two] of pairs) {
+      for (const [first, second] of [[one, two], [two, one]]) {
+        const index = createScopeIndex(files);
+        assert.deepEqual(index.files(first), oldFiles(first, files), JSON.stringify(first));
+        assert.deepEqual(index.files(second), oldFiles(second, files), `${JSON.stringify(second)} after ${JSON.stringify(first)}`);
+        assert.notDeepEqual(oldFiles(first, files), oldFiles(second, files), 'the pair must differ to prove anything');
+      }
+    }
   });
 
   test('a sparse scope skips its holes, as some() does', () => {

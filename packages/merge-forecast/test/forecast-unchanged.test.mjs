@@ -45,15 +45,21 @@ async function withFixture(fn) {
 }
 
 describe('merge-forecast output is unchanged by the scope index', () => {
-  // runForecast reads ADLC_GRAPH_COUPLING_FILE when no graph data is passed,
-  // so an exported one would add a signal to the graph: false runs.
-  let savedGraphFile;
+  // runForecast runs in THIS process, so it sees this process's environment:
+  // an exported ADLC_GRAPH_COUPLING_FILE would add a signal to the graph: false
+  // runs, and an inherited GIT_* variable would point core's git calls at
+  // another repository. Clear both for the suite, then restore them.
+  const saved = {};
   before(() => {
-    savedGraphFile = process.env.ADLC_GRAPH_COUPLING_FILE;
-    delete process.env.ADLC_GRAPH_COUPLING_FILE;
+    for (const name of Object.keys(process.env)) {
+      if (name === 'ADLC_GRAPH_COUPLING_FILE' || name.startsWith('GIT_')) {
+        saved[name] = process.env[name];
+        delete process.env[name];
+      }
+    }
   });
   after(() => {
-    if (savedGraphFile !== undefined) process.env.ADLC_GRAPH_COUPLING_FILE = savedGraphFile;
+    Object.assign(process.env, saved);
   });
 
   test('the golden covers every signal, so equality means something', () => {
@@ -95,8 +101,9 @@ describe('merge-forecast output is unchanged by the scope index', () => {
       writeFileSync(graphFile, JSON.stringify(FIXTURE_GRAPH));
       // stdout goes to a FILE, not a pipe. On macOS a piped stdout is written
       // asynchronously, and the CLI calls process.exit(2) right after printing,
-      // so Node 18 drops everything past the first ~8 KB. That is a bug in the
-      // CLI, older than this test; a file write is synchronous everywhere.
+      // so on Node 18 whatever the reader has not drained by then is lost: a
+      // spawnSync reader gets the first ~8 KB. That is a bug in the CLI, older
+      // than this test; a file write is synchronous everywhere.
       const outFile = join(dir, 'stdout.json');
       const fd = openSync(outFile, 'w');
       let res;
