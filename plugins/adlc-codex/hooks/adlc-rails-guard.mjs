@@ -225,7 +225,7 @@ function resolveActiveTicketId() {
 
 function normalizePath(path, baseCwd = process.cwd()) {
   const normalized = path.replaceAll('\\', '/');
-  const candidate = isAbsolute(normalized) ? normalized : resolve(baseCwd, normalized);
+  const candidate = resolve(baseCwd, normalized);
   const projectRelative = resolveRailPath(candidate, process.cwd());
   return projectRelative.startsWith('..') ? normalized : projectRelative;
 }

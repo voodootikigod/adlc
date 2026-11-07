@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -15,6 +16,7 @@ import { join } from 'node:path';
 import { tmp } from '../lib/test-kit.mjs';
 import {
   writeFileAtomic,
+  readBoundedRegularFile,
   acquireDirLock,
   redactSecrets,
   readVerdictSource,
@@ -561,6 +563,16 @@ test('acquireDirLock: recovers stale lock when owner PID is reused (pidStartTime
   } finally {
     release();
   }
+
+  // Verify release() refuses to delete a recreated lockDir with a different inode even if owner.json is copied
+  const releaseFirst = acquireDirLock(lockDir);
+  const savedOwner = readFileSync(join(lockDir, 'owner.json'), 'utf8');
+  const movedDir = join(dir, 'moved.lock');
+  renameSync(lockDir, movedDir);
+  mkdirSync(lockDir);
+  writeFileSync(join(lockDir, 'owner.json'), savedOwner, 'utf8');
+  releaseFirst();
+  assert.equal(existsSync(join(lockDir, 'owner.json')), true, 'release must not delete a lock directory with a different inode');
 });
 
 test('redactSecrets: redacts fine-grained GitHub, GitLab, AWS ASIA, Slack, and JWT tokens', () => {
@@ -601,4 +613,35 @@ test('recordPromptOnlyVerdict: canonical fields cannot be overwritten by extra',
   assert.equal(recorded.verdict, 'real-verdict');
   assert.equal(recorded.custom, 1);
 });
+
+test('readBoundedRegularFile: reads regular file, rejects over-cap and symlinks, and loops short reads', (t) => {
+  const dir = tmp(t, 'rbrf-');
+  const file = join(dir, 'ok.txt');
+  writeFileSync(file, 'bounded-content', 'utf8');
+  assert.equal(readBoundedRegularFile(file, 1024), 'bounded-content');
+
+  assert.throws(() => readBoundedRegularFile(file, 4), /exceeds 4/);
+
+  const link = join(dir, 'link.txt');
+  symlinkSync(file, link);
+  assert.throws(() => readBoundedRegularFile(link, 1024));
+
+  // Short-read loop simulation
+  const payload = Buffer.from('abcdef');
+  let offset = 0;
+  const text = readBoundedRegularFile(file, 1024, {
+    openSync: () => 42,
+    fstatSync: () => ({ isFile: () => true, size: payload.length }),
+    readSync: (_fd, buf, pos) => {
+      if (offset >= payload.length) return 0;
+      const chunk = payload.subarray(offset, offset + 2);
+      chunk.copy(buf, pos);
+      offset += chunk.length;
+      return chunk.length;
+    },
+    closeSync: () => {},
+  });
+  assert.equal(text, 'abcdef');
+});
+
 

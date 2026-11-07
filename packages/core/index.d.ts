@@ -361,6 +361,11 @@ export function writeFileAtomic(
   content: string | NodeJS.ArrayBufferView,
   options?: { mode?: number }
 ): void;
+export function readBoundedRegularFile(
+  path: string,
+  maxBytes?: number,
+  deps?: Record<string, unknown>
+): string;
 export function acquireDirLock(
   lockDir: string,
   options?: { staleMs?: number }

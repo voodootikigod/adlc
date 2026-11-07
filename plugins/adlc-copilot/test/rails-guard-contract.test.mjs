@@ -217,14 +217,19 @@ test('dangling symlink pointing to a not-yet-existing frozen rail → deny', () 
   });
 });
 
-test('deeply nested payload exceeding MAX_PAYLOAD_DEPTH (64) → deny', () => {
+test('deeply nested payload exceeding MAX_PAYLOAD_DEPTH (64) → deny, while exact boundary (63) → allow', () => {
   fixture((root) => {
-    let deep = { path: 'src/app.mjs' };
-    for (let i = 0; i < 70; i += 1) deep = { child: deep };
-    const result = runCopilot(root, { toolName: 'write', toolArgs: deep });
+    let within = { path: 'src/app.mjs' };
+    for (let i = 0; i < 62; i += 1) within = { child: within };
+    const allowRes = runCopilot(root, { toolName: 'write', toolArgs: within });
+    assert.equal(allowRes.status, 0);
+    assert.equal(allowRes.stdout.trim(), '', `expected allow at depth 63, got: ${allowRes.stdout}`);
+
+    const exceeded = { child: within };
+    const result = runCopilot(root, { toolName: 'write', toolArgs: exceeded });
     assert.equal(result.status, 0);
     const out = parseStdout(result);
-    assert.ok(out && out.reason, 'deeply nested payload must deny');
+    assert.ok(out && out.reason, 'deeply nested payload at depth 64 must deny');
     assert.match(out.reason, /exceeds 64 levels/);
   });
 });

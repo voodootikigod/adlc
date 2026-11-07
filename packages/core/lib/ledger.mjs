@@ -23,10 +23,8 @@ const LOCK_RETRY_DELAY_MS = 5;
 const LOCK_MAX_RETRIES = 400; // ~2s ceiling
 const LOCK_STALE_MS = 60_000;
 
-const SLEEP_BUF = new Int32Array(new SharedArrayBuffer(4));
-
 function sleepSync(ms) {
-  Atomics.wait(SLEEP_BUF, 0, 0, ms);
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 function isStaleLockOwner(current, { isPidAlive, staleMs, now }) {

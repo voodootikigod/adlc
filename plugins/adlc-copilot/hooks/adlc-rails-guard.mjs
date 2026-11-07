@@ -315,7 +315,7 @@ function exceedsDepth(rootNode, maxDepth) {
 
 function normalizePath(path, baseCwd = root) {
   const normalized = path.replaceAll('\\', '/');
-  const candidate = isAbsolute(normalized) ? normalized : resolve(baseCwd, normalized);
+  const candidate = resolve(baseCwd, normalized);
   const projectRelative = resolveRailPath(candidate, root);
   return projectRelative.startsWith('..') ? normalized : projectRelative;
 }

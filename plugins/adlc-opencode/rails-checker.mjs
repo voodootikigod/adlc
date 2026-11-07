@@ -153,11 +153,8 @@ export function resolveRailsInForce(root, env) {
   const { snapshot, errors } = loadTickets(ticketsPath);
   if (errors.length) return { active: true, conflict: true, reason: `ticket store failed to load: ${errors[0]}` };
   const against = resolveActiveTicketAgainst(snapshot, { root, env, allowLegacyPointer: true });
-  if (!against.ok) {
-    return { active: true, conflict: true, reason: against.message ?? 'conflicting active-ticket signal (ADLC_TICKET vs .adlc/current-ticket.json)' };
-  }
-  const ticket = against.value?.ticket;
-  if (!ticket) return { active: true, conflict: true, reason: `active ticket ${active.id} not found in ticket store` };
+  if (!against.ok) return { active: true, conflict: true, reason: against.message };
+  const { ticket } = against.value;
   return { active: true, conflict: false, ticketId: active.id, ticket, rails: normalizeRails([...(ticket?.rails ?? []), ...TRUST_ROOT_RAILS]) };
 }
 

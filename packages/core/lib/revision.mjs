@@ -130,7 +130,8 @@ function canonicalize(absPath) {
 // process.cwd() reports /private/var/...) yields a spurious '../'-escaping relative
 // path, silently drops out of the ignore set, and makes the worktree revision
 // self-referential (it would hash evidence that itself embeds the revision).
-function normalizeRelativePath(cwd, path, base = canonicalize(resolve(cwd))) {
+function normalizeRelativePath(cwd, path) {
+  const base = canonicalize(resolve(cwd));
   const target = canonicalize(resolve(cwd, path));
   const normalized = relative(base, target).replaceAll('\\', '/');
   if (!normalized || normalized.startsWith('../') || normalized === '..') return null;
@@ -138,10 +139,9 @@ function normalizeRelativePath(cwd, path, base = canonicalize(resolve(cwd))) {
 }
 
 function ignoredPathSet(cwd, paths) {
-  const base = canonicalize(resolve(cwd));
   return new Set(
     [...DEFAULT_IGNORED_PATHS, ...paths]
-      .map((path) => normalizeRelativePath(cwd, path, base))
+      .map((path) => normalizeRelativePath(cwd, path))
       .filter(Boolean)
   );
 }

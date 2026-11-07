@@ -3,11 +3,14 @@
 
 import {
   closeSync,
+  constants as fsConstants,
+  fstatSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   renameSync,
   rmdirSync,
   rmSync,
@@ -87,16 +90,10 @@ export function acquireDirLock(lockDir, options = {}) {
       } catch {}
       throw writeErr;
     }
-    let ino = null;
-    try {
-      ino = lstatSync(lockDir).ino;
-    } catch {}
+    const { ino } = lstatSync(lockDir);
     return () => {
       try {
-        if (ino !== null) {
-          const st = lstatSync(lockDir);
-          if (st.ino !== ino) return;
-        }
+        if (lstatSync(lockDir).ino !== ino) return;
         const current = JSON.parse(readFileSync(ownerPath, 'utf8'));
         if (current && current.token === owner.token) {
           try {
@@ -237,4 +234,39 @@ export function recordPromptOnlyVerdict({ gate, ticket, verdict, extra = {}, dir
     return recordFn({ gate, ticket, rawData: JSON.stringify(data), dir });
   }
   return appendEntry('manifest', { gate, ticket, data }, dir);
+}
+
+/**
+ * Read a REGULAR file without blocking or following symlinks: open with
+ * O_RDONLY | O_NOFOLLOW | O_NONBLOCK, fstat the open fd to verify regular file
+ * and size cap, and read at most maxBytes.
+ *
+ * @param {string} path
+ * @param {number} [maxBytes=8388608]
+ * @param {{ openSync?: typeof openSync; fstatSync?: typeof fstatSync; readSync?: typeof readSync; closeSync?: typeof closeSync }} [deps]
+ * @returns {string}
+ */
+export function readBoundedRegularFile(
+  path,
+  maxBytes = 8 * 1024 * 1024,
+  { openSync: open = openSync, fstatSync: fstat = fstatSync, readSync: read = readSync, closeSync: close = closeSync } = {},
+) {
+  const fd = open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+  try {
+    const st = fstat(fd);
+    if (!st.isFile()) throw new Error('not a regular file');
+    if (st.size > maxBytes) throw new Error(`${st.size} bytes exceeds ${maxBytes}`);
+    const buf = Buffer.alloc(maxBytes + 1);
+    let total = 0;
+    for (;;) {
+      const n = read(fd, buf, total, buf.length - total, null);
+      if (n === 0) break;
+      total += n;
+      if (total > maxBytes) throw new Error(`more than ${maxBytes} bytes (the file grew while it was read)`);
+      if (total === buf.length) break;
+    }
+    return buf.subarray(0, total).toString('utf8');
+  } finally {
+    try { close(fd); } catch {}
+  }
 }

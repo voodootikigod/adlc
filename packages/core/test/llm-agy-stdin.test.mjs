@@ -73,7 +73,7 @@ test('agy that reads the whole prompt and exits 0 resolves with its output', (t)
 test('agy that hangs past timeoutMs is killed and rejected by host-side timer', async (t) => {
   const dir = tmp(t, 'adlc-agy-hang-');
   const fake = join(dir, 'fake-agy');
-  writeFileSync(fake, '#!/bin/sh\ncat > /dev/null\nsleep 30\n');
+  writeFileSync(fake, '#!/bin/sh\ncat > /dev/null\nexec sleep 5\n');
   chmodSync(fake, 0o755);
   const { complete } = await import('../lib/llm.mjs');
   await assert.rejects(

@@ -1914,9 +1914,6 @@ var SECRET_PATTERNS = [
   [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\./, "a JWT"]
 ];
 
-// packages/core/lib/ledger.mjs
-var SLEEP_BUF = new Int32Array(new SharedArrayBuffer(4));
-
 // packages/core/lib/tickets.mjs
 import { existsSync as existsSync11, lstatSync as lstatSync6 } from "node:fs";
 import { dirname as dirname9, isAbsolute as isAbsolute3, join as join9 } from "node:path";
