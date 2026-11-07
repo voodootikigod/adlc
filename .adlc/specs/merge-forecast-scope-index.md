@@ -3,9 +3,8 @@
 **Approval (P1):** approved by Rafael Belliard on 2026-11-07, as written at
 that point (after P5 round 1). The P1 gate ran late: the build started from
 his task brief before he had seen this spec. Edits after the approval (P5
-rounds 2 and 3) correct wording, state the `repoFiles` and rail-coverage
-limits, describe the literal `Set`, and strengthen criterion 5; none changes
-the design.
+rounds 2 to 4) correct wording, state the input contract, describe the
+literal `Set`, and strengthen criteria 5 and 6; none changes the design.
 
 **Phase:** P1 contract for a behavior-preserving speed-up of
 `merge-forecast` (D2). No output changes. Single package:
@@ -99,8 +98,12 @@ exports.
      there it throws or returns exactly as before. The CLI never reaches it:
      `loadTickets` rejects a scope that is not an array of strings.
    - Holes in a sparse scope are skipped, as `some()` skips them.
-   - `repoFiles` is an array of strings, as `walkTree` produces. For anything
-     else, a direct caller may see a different error message.
+   - The contract's inputs are what JSON tickets and `walkTree` produce:
+     `repoFiles` is an array of strings, each ticket is an object, and a scope
+     is a plain array (no own `some`, `forEach` or `toJSON`, no subclass or
+     Proxy). Outside that, a direct caller, `runForecast` included, may get
+     a different answer, or throw where the old code returned (or the
+     reverse). The CLI cannot produce such inputs.
    - The index treats `repoFiles` as a snapshot. It is created by
      `runForecast` from the array it builds itself and never mutates.
      Nothing is evicted, so an index lives for one forecast run.
@@ -121,13 +124,11 @@ exports.
   extra argument in that position, or `scopeIndex: null`, now gets an
   error; no caller in this repository does.
 
-**Not covered by a rail.** That `runForecast` shares ONE index across all
-pairs, rather than letting `pairScore` build one per pair, changes no output
-and has no injection point, so no test can see it. It is a speed property,
-measured by criterion 8 and 9, not proven by a rail. Per-pair indexes would
-still compile each scope once per pair, so the cost of losing the sharing is
-small: P5 measured about 200 ms more user CPU on the benchmark corpus with
-per-pair indexes, and no difference on the mentimeter/adlc run.
+**Sharing one index per run.** That `runForecast` shares ONE index across
+all pairs, rather than letting `pairScore` build one per pair, changes no
+output, so only a count can show it: criterion 6 counts how often each scope
+is compiled. Losing the sharing would cost about 200 ms of user CPU on the
+benchmark corpus and nothing measurable on the mentimeter/adlc run.
 
 **Out of scope.**
 - `packages/core/lib/glob.mjs` is not touched. It is generated source, copied
@@ -185,6 +186,9 @@ Each criterion names its verification.
    unscoped ticket and a zero-match ticket), `runForecast` returns a result
    deep-equal to a golden recorded with the code **before** this change, and
    `merge-forecast --json` prints a second golden byte for byte and exits 2.
+   In that run every scope is compiled exactly once (one index for the
+   whole run, shared by every pair), counted through an own `forEach` on
+   each fixture scope that delegates to the real one.
    The CLI's stdout is captured through a file. On macOS with Node 18, a
    reader that does not drain a pipe fast enough loses the tail of it (a
    `spawnSync` reader got the first ~8 KB), because the CLI calls

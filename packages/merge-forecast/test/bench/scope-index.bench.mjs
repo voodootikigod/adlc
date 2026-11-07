@@ -90,10 +90,11 @@ const oldFilesNormalized = (scope) =>
 // How often the old code computed a ticket's file set: the zero-match check
 // once per ticket, then, per scored pair and per side, once each in namespace
 // routes and migrations, and once on normalized paths in import radius. That is
-// the case part 2 runs: no git history and no graph-coupling data. Co-change
-// data adds one more per side and graph-coupling data another, so a real
-// repository pays 4 or 5; 3 keeps this side of the comparison conservative.
-// The index side builds both of its views, as a real run does.
+// the case part 2 runs, no git history and no graph-coupling data, where this
+// is exactly what the old code did (no import crosses tickets here, so both
+// directions run). Co-change data adds one more per side and graph-coupling
+// data another, so against a real repository, which pays 4 or 5, this side is
+// conservative. The index side builds both of its views, as a real run does.
 const pairs = [];
 for (let i = 0; i < tickets.length; i++) {
   for (let j = i + 1; j < tickets.length; j++) pairs.push([tickets[i], tickets[j]]);
@@ -106,7 +107,7 @@ function time(fn) {
 }
 
 const before = time(() => {
-  const sets = tickets.map((t) => [oldFiles(t.scope), oldFilesNormalized(t.scope)]);
+  const sets = tickets.map((t) => oldFiles(t.scope)); // the zero-match check: raw only
   for (const [a, b] of pairs) {
     for (const t of [a, b]) {
       oldFiles(t.scope); // namespace routes
@@ -117,9 +118,10 @@ const before = time(() => {
   return sets;
 });
 
+let index;
 const after = time(() => {
-  const index = createScopeIndex(repoFiles);
-  const sets = tickets.map((t) => [index.files(t.scope), index.filesNormalized(t.scope)]);
+  index = createScopeIndex(repoFiles);
+  const sets = tickets.map((t) => index.files(t.scope));
   for (const [a, b] of pairs) {
     for (const t of [a, b]) {
       index.files(t.scope);
@@ -130,8 +132,11 @@ const after = time(() => {
   return sets;
 });
 
-const filteringAgrees = isDeepStrictEqual(before.value, after.value);
-const matched = after.value.reduce((n, [raw]) => n + raw.length, 0);
+// Agreement on both views, outside the timed runs.
+const filteringAgrees =
+  isDeepStrictEqual(before.value, after.value) &&
+  tickets.every((t) => isDeepStrictEqual(index.filesNormalized(t.scope), oldFilesNormalized(t.scope)));
+const matched = after.value.reduce((n, set) => n + set.length, 0);
 
 // ─── 2. End to end ───────────────────────────────────────────────────────────
 
