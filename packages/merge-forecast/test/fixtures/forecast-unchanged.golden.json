@@ -1,0 +1,5106 @@
+[
+  {
+    "graph": true,
+    "threshold": 0.5,
+    "result": {
+      "pairs": [
+        {
+          "pair": "ROUTE_A–ROUTE_B",
+          "a": "ROUTE_A",
+          "b": "ROUTE_B",
+          "score": 0.8,
+          "signal": "namespace-collision",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–MIG_A",
+          "a": "ROUTE_A",
+          "b": "MIG_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–MIG_B",
+          "a": "ROUTE_A",
+          "b": "MIG_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–IMP_A",
+          "a": "ROUTE_A",
+          "b": "IMP_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–IMP_B",
+          "a": "ROUTE_A",
+          "b": "IMP_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–CO_A",
+          "a": "ROUTE_A",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–CO_B",
+          "a": "ROUTE_A",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–GR_A",
+          "a": "ROUTE_A",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–GR_B",
+          "a": "ROUTE_A",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–ED_A",
+          "a": "ROUTE_A",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–ED_B",
+          "a": "ROUTE_A",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–OVER",
+          "a": "ROUTE_A",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–UNSCOPED",
+          "a": "ROUTE_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–ZERO",
+          "a": "ROUTE_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–SOLO",
+          "a": "ROUTE_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–MIG_A",
+          "a": "ROUTE_B",
+          "b": "MIG_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–MIG_B",
+          "a": "ROUTE_B",
+          "b": "MIG_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–IMP_A",
+          "a": "ROUTE_B",
+          "b": "IMP_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–IMP_B",
+          "a": "ROUTE_B",
+          "b": "IMP_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–CO_A",
+          "a": "ROUTE_B",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–CO_B",
+          "a": "ROUTE_B",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–GR_A",
+          "a": "ROUTE_B",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–GR_B",
+          "a": "ROUTE_B",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–ED_A",
+          "a": "ROUTE_B",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–ED_B",
+          "a": "ROUTE_B",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–OVER",
+          "a": "ROUTE_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–UNSCOPED",
+          "a": "ROUTE_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–ZERO",
+          "a": "ROUTE_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–LATE",
+          "a": "ROUTE_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–SOLO",
+          "a": "ROUTE_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–MIG_B",
+          "a": "MIG_A",
+          "b": "MIG_B",
+          "score": 0.8,
+          "signal": "namespace-collision",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–IMP_A",
+          "a": "MIG_A",
+          "b": "IMP_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–IMP_B",
+          "a": "MIG_A",
+          "b": "IMP_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–CO_A",
+          "a": "MIG_A",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–CO_B",
+          "a": "MIG_A",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–GR_A",
+          "a": "MIG_A",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–GR_B",
+          "a": "MIG_A",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–ED_A",
+          "a": "MIG_A",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–ED_B",
+          "a": "MIG_A",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–OVER",
+          "a": "MIG_A",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–UNSCOPED",
+          "a": "MIG_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–ZERO",
+          "a": "MIG_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–LATE",
+          "a": "MIG_A",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–SOLO",
+          "a": "MIG_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–IMP_A",
+          "a": "MIG_B",
+          "b": "IMP_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–IMP_B",
+          "a": "MIG_B",
+          "b": "IMP_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–CO_A",
+          "a": "MIG_B",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–CO_B",
+          "a": "MIG_B",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–GR_A",
+          "a": "MIG_B",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–GR_B",
+          "a": "MIG_B",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–ED_A",
+          "a": "MIG_B",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–ED_B",
+          "a": "MIG_B",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–OVER",
+          "a": "MIG_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–UNSCOPED",
+          "a": "MIG_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–ZERO",
+          "a": "MIG_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–LATE",
+          "a": "MIG_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–SOLO",
+          "a": "MIG_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–IMP_B",
+          "a": "IMP_A",
+          "b": "IMP_B",
+          "score": 0.6,
+          "signal": "import-radius",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–CO_A",
+          "a": "IMP_A",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–CO_B",
+          "a": "IMP_A",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–GR_A",
+          "a": "IMP_A",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–GR_B",
+          "a": "IMP_A",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–ED_A",
+          "a": "IMP_A",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–ED_B",
+          "a": "IMP_A",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–OVER",
+          "a": "IMP_A",
+          "b": "OVER",
+          "score": 1,
+          "signal": "scope-overlap",
+          "verdict": "VETO",
+          "hardVeto": true
+        },
+        {
+          "pair": "IMP_A–UNSCOPED",
+          "a": "IMP_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–ZERO",
+          "a": "IMP_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–LATE",
+          "a": "IMP_A",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–SOLO",
+          "a": "IMP_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–CO_A",
+          "a": "IMP_B",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–CO_B",
+          "a": "IMP_B",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–GR_A",
+          "a": "IMP_B",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–GR_B",
+          "a": "IMP_B",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–ED_A",
+          "a": "IMP_B",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–ED_B",
+          "a": "IMP_B",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–OVER",
+          "a": "IMP_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–UNSCOPED",
+          "a": "IMP_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–ZERO",
+          "a": "IMP_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–LATE",
+          "a": "IMP_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–SOLO",
+          "a": "IMP_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–CO_B",
+          "a": "CO_A",
+          "b": "CO_B",
+          "score": 0.5,
+          "signal": "co-change",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–GR_A",
+          "a": "CO_A",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–GR_B",
+          "a": "CO_A",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–ED_A",
+          "a": "CO_A",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–ED_B",
+          "a": "CO_A",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–OVER",
+          "a": "CO_A",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–UNSCOPED",
+          "a": "CO_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–ZERO",
+          "a": "CO_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–LATE",
+          "a": "CO_A",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–SOLO",
+          "a": "CO_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–GR_A",
+          "a": "CO_B",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–GR_B",
+          "a": "CO_B",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–ED_A",
+          "a": "CO_B",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–ED_B",
+          "a": "CO_B",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–OVER",
+          "a": "CO_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–UNSCOPED",
+          "a": "CO_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–ZERO",
+          "a": "CO_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–LATE",
+          "a": "CO_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–SOLO",
+          "a": "CO_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–GR_B",
+          "a": "GR_A",
+          "b": "GR_B",
+          "score": 0.56,
+          "signal": "graph-coupling",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–ED_A",
+          "a": "GR_A",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–ED_B",
+          "a": "GR_A",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–OVER",
+          "a": "GR_A",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–UNSCOPED",
+          "a": "GR_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–ZERO",
+          "a": "GR_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–LATE",
+          "a": "GR_A",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–SOLO",
+          "a": "GR_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–ED_A",
+          "a": "GR_B",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–ED_B",
+          "a": "GR_B",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–OVER",
+          "a": "GR_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–UNSCOPED",
+          "a": "GR_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–ZERO",
+          "a": "GR_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–LATE",
+          "a": "GR_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–SOLO",
+          "a": "GR_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–ED_B",
+          "a": "ED_A",
+          "b": "ED_B",
+          "score": 0.63,
+          "signal": "graph-coupling",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–OVER",
+          "a": "ED_A",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–UNSCOPED",
+          "a": "ED_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–ZERO",
+          "a": "ED_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–LATE",
+          "a": "ED_A",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–SOLO",
+          "a": "ED_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_B–OVER",
+          "a": "ED_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_B–UNSCOPED",
+          "a": "ED_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_B–ZERO",
+          "a": "ED_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_B–LATE",
+          "a": "ED_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_B–SOLO",
+          "a": "ED_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "OVER–UNSCOPED",
+          "a": "OVER",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "OVER–ZERO",
+          "a": "OVER",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "OVER–LATE",
+          "a": "OVER",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "OVER–SOLO",
+          "a": "OVER",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "UNSCOPED–ZERO",
+          "a": "UNSCOPED",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "UNSCOPED–LATE",
+          "a": "UNSCOPED",
+          "b": "LATE",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "UNSCOPED–SOLO",
+          "a": "UNSCOPED",
+          "b": "SOLO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ZERO–LATE",
+          "a": "ZERO",
+          "b": "LATE",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ZERO–SOLO",
+          "a": "ZERO",
+          "b": "SOLO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        }
+      ],
+      "waves": [
+        [
+          "ROUTE_A",
+          "ROUTE_B",
+          "MIG_A",
+          "MIG_B",
+          "IMP_A",
+          "IMP_B",
+          "CO_A",
+          "CO_B",
+          "GR_A",
+          "GR_B",
+          "ED_A",
+          "ED_B",
+          "OVER",
+          "UNSCOPED",
+          "ZERO",
+          "SOLO"
+        ],
+        [
+          "LATE"
+        ]
+      ],
+      "mergeOrder": [
+        "ROUTE_A",
+        "ROUTE_B",
+        "MIG_A",
+        "MIG_B",
+        "IMP_A",
+        "IMP_B",
+        "CO_A",
+        "CO_B",
+        "GR_A",
+        "GR_B",
+        "ED_A",
+        "ED_B",
+        "OVER",
+        "UNSCOPED",
+        "ZERO",
+        "SOLO",
+        "LATE"
+      ],
+      "firstWaveWidth": 8,
+      "scheduleWidth": 8,
+      "certifiedWidth": 8,
+      "backpressureWidth": null,
+      "recommendedWidth": 8,
+      "signalsEvaluated": {
+        "scopeOverlap": true,
+        "namespaceCollision": true,
+        "importRadius": true,
+        "coChange": true,
+        "graphCoupling": true
+      },
+      "warnings": [
+        "ticket \"UNSCOPED\" has no scope defined",
+        "ticket \"ZERO\" scope matches 0 files in repo"
+      ],
+      "gateFailures": [
+        "7 high-risk pair(s) would run concurrently: ROUTE_A–ROUTE_B (score 0.8, namespace-collision), MIG_A–MIG_B (score 0.8, namespace-collision), IMP_A–IMP_B (score 0.6, import-radius), IMP_A–OVER (score 1, scope-overlap), CO_A–CO_B (score 0.5, co-change), GR_A–GR_B (score 0.56, graph-coupling), ED_A–ED_B (score 0.63, graph-coupling)"
+      ],
+      "pullQueueNote": "idle builders claim next unblocked"
+    }
+  },
+  {
+    "graph": true,
+    "threshold": 0.65,
+    "result": {
+      "pairs": [
+        {
+          "pair": "ROUTE_A–ROUTE_B",
+          "a": "ROUTE_A",
+          "b": "ROUTE_B",
+          "score": 0.8,
+          "signal": "namespace-collision",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–MIG_A",
+          "a": "ROUTE_A",
+          "b": "MIG_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–MIG_B",
+          "a": "ROUTE_A",
+          "b": "MIG_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–IMP_A",
+          "a": "ROUTE_A",
+          "b": "IMP_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–IMP_B",
+          "a": "ROUTE_A",
+          "b": "IMP_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–CO_A",
+          "a": "ROUTE_A",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–CO_B",
+          "a": "ROUTE_A",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–GR_A",
+          "a": "ROUTE_A",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–GR_B",
+          "a": "ROUTE_A",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–ED_A",
+          "a": "ROUTE_A",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–ED_B",
+          "a": "ROUTE_A",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–OVER",
+          "a": "ROUTE_A",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–UNSCOPED",
+          "a": "ROUTE_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–ZERO",
+          "a": "ROUTE_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–SOLO",
+          "a": "ROUTE_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–MIG_A",
+          "a": "ROUTE_B",
+          "b": "MIG_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–MIG_B",
+          "a": "ROUTE_B",
+          "b": "MIG_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–IMP_A",
+          "a": "ROUTE_B",
+          "b": "IMP_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–IMP_B",
+          "a": "ROUTE_B",
+          "b": "IMP_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–CO_A",
+          "a": "ROUTE_B",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–CO_B",
+          "a": "ROUTE_B",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–GR_A",
+          "a": "ROUTE_B",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–GR_B",
+          "a": "ROUTE_B",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–ED_A",
+          "a": "ROUTE_B",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–ED_B",
+          "a": "ROUTE_B",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–OVER",
+          "a": "ROUTE_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–UNSCOPED",
+          "a": "ROUTE_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–ZERO",
+          "a": "ROUTE_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–LATE",
+          "a": "ROUTE_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–SOLO",
+          "a": "ROUTE_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–MIG_B",
+          "a": "MIG_A",
+          "b": "MIG_B",
+          "score": 0.8,
+          "signal": "namespace-collision",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–IMP_A",
+          "a": "MIG_A",
+          "b": "IMP_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–IMP_B",
+          "a": "MIG_A",
+          "b": "IMP_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–CO_A",
+          "a": "MIG_A",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–CO_B",
+          "a": "MIG_A",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–GR_A",
+          "a": "MIG_A",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–GR_B",
+          "a": "MIG_A",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–ED_A",
+          "a": "MIG_A",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–ED_B",
+          "a": "MIG_A",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–OVER",
+          "a": "MIG_A",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–UNSCOPED",
+          "a": "MIG_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–ZERO",
+          "a": "MIG_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–LATE",
+          "a": "MIG_A",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–SOLO",
+          "a": "MIG_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–IMP_A",
+          "a": "MIG_B",
+          "b": "IMP_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–IMP_B",
+          "a": "MIG_B",
+          "b": "IMP_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–CO_A",
+          "a": "MIG_B",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–CO_B",
+          "a": "MIG_B",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–GR_A",
+          "a": "MIG_B",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–GR_B",
+          "a": "MIG_B",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–ED_A",
+          "a": "MIG_B",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–ED_B",
+          "a": "MIG_B",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–OVER",
+          "a": "MIG_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–UNSCOPED",
+          "a": "MIG_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–ZERO",
+          "a": "MIG_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–LATE",
+          "a": "MIG_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–SOLO",
+          "a": "MIG_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–IMP_B",
+          "a": "IMP_A",
+          "b": "IMP_B",
+          "score": 0.6,
+          "signal": "import-radius",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–CO_A",
+          "a": "IMP_A",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–CO_B",
+          "a": "IMP_A",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–GR_A",
+          "a": "IMP_A",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–GR_B",
+          "a": "IMP_A",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–ED_A",
+          "a": "IMP_A",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–ED_B",
+          "a": "IMP_A",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–OVER",
+          "a": "IMP_A",
+          "b": "OVER",
+          "score": 1,
+          "signal": "scope-overlap",
+          "verdict": "VETO",
+          "hardVeto": true
+        },
+        {
+          "pair": "IMP_A–UNSCOPED",
+          "a": "IMP_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–ZERO",
+          "a": "IMP_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–LATE",
+          "a": "IMP_A",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–SOLO",
+          "a": "IMP_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–CO_A",
+          "a": "IMP_B",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–CO_B",
+          "a": "IMP_B",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–GR_A",
+          "a": "IMP_B",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–GR_B",
+          "a": "IMP_B",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–ED_A",
+          "a": "IMP_B",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–ED_B",
+          "a": "IMP_B",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–OVER",
+          "a": "IMP_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–UNSCOPED",
+          "a": "IMP_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–ZERO",
+          "a": "IMP_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–LATE",
+          "a": "IMP_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–SOLO",
+          "a": "IMP_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–CO_B",
+          "a": "CO_A",
+          "b": "CO_B",
+          "score": 0.5,
+          "signal": "co-change",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–GR_A",
+          "a": "CO_A",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–GR_B",
+          "a": "CO_A",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–ED_A",
+          "a": "CO_A",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–ED_B",
+          "a": "CO_A",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–OVER",
+          "a": "CO_A",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–UNSCOPED",
+          "a": "CO_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–ZERO",
+          "a": "CO_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–LATE",
+          "a": "CO_A",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–SOLO",
+          "a": "CO_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–GR_A",
+          "a": "CO_B",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–GR_B",
+          "a": "CO_B",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–ED_A",
+          "a": "CO_B",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–ED_B",
+          "a": "CO_B",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–OVER",
+          "a": "CO_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–UNSCOPED",
+          "a": "CO_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–ZERO",
+          "a": "CO_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–LATE",
+          "a": "CO_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–SOLO",
+          "a": "CO_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–GR_B",
+          "a": "GR_A",
+          "b": "GR_B",
+          "score": 0.56,
+          "signal": "graph-coupling",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–ED_A",
+          "a": "GR_A",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–ED_B",
+          "a": "GR_A",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–OVER",
+          "a": "GR_A",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–UNSCOPED",
+          "a": "GR_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–ZERO",
+          "a": "GR_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–LATE",
+          "a": "GR_A",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–SOLO",
+          "a": "GR_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–ED_A",
+          "a": "GR_B",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–ED_B",
+          "a": "GR_B",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–OVER",
+          "a": "GR_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–UNSCOPED",
+          "a": "GR_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–ZERO",
+          "a": "GR_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–LATE",
+          "a": "GR_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–SOLO",
+          "a": "GR_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–ED_B",
+          "a": "ED_A",
+          "b": "ED_B",
+          "score": 0.63,
+          "signal": "graph-coupling",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–OVER",
+          "a": "ED_A",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–UNSCOPED",
+          "a": "ED_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–ZERO",
+          "a": "ED_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–LATE",
+          "a": "ED_A",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–SOLO",
+          "a": "ED_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_B–OVER",
+          "a": "ED_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_B–UNSCOPED",
+          "a": "ED_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_B–ZERO",
+          "a": "ED_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_B–LATE",
+          "a": "ED_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_B–SOLO",
+          "a": "ED_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "OVER–UNSCOPED",
+          "a": "OVER",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "OVER–ZERO",
+          "a": "OVER",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "OVER–LATE",
+          "a": "OVER",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "OVER–SOLO",
+          "a": "OVER",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "UNSCOPED–ZERO",
+          "a": "UNSCOPED",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "UNSCOPED–LATE",
+          "a": "UNSCOPED",
+          "b": "LATE",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "UNSCOPED–SOLO",
+          "a": "UNSCOPED",
+          "b": "SOLO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ZERO–LATE",
+          "a": "ZERO",
+          "b": "LATE",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ZERO–SOLO",
+          "a": "ZERO",
+          "b": "SOLO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        }
+      ],
+      "waves": [
+        [
+          "ROUTE_A",
+          "ROUTE_B",
+          "MIG_A",
+          "MIG_B",
+          "IMP_A",
+          "IMP_B",
+          "CO_A",
+          "CO_B",
+          "GR_A",
+          "GR_B",
+          "ED_A",
+          "ED_B",
+          "OVER",
+          "UNSCOPED",
+          "ZERO",
+          "SOLO"
+        ],
+        [
+          "LATE"
+        ]
+      ],
+      "mergeOrder": [
+        "ROUTE_A",
+        "ROUTE_B",
+        "MIG_A",
+        "MIG_B",
+        "IMP_A",
+        "IMP_B",
+        "CO_A",
+        "CO_B",
+        "GR_A",
+        "GR_B",
+        "ED_A",
+        "ED_B",
+        "OVER",
+        "UNSCOPED",
+        "ZERO",
+        "SOLO",
+        "LATE"
+      ],
+      "firstWaveWidth": 11,
+      "scheduleWidth": 11,
+      "certifiedWidth": 11,
+      "backpressureWidth": null,
+      "recommendedWidth": 11,
+      "signalsEvaluated": {
+        "scopeOverlap": true,
+        "namespaceCollision": true,
+        "importRadius": true,
+        "coChange": true,
+        "graphCoupling": true
+      },
+      "warnings": [
+        "ticket \"UNSCOPED\" has no scope defined",
+        "ticket \"ZERO\" scope matches 0 files in repo"
+      ],
+      "gateFailures": [
+        "3 high-risk pair(s) would run concurrently: ROUTE_A–ROUTE_B (score 0.8, namespace-collision), MIG_A–MIG_B (score 0.8, namespace-collision), IMP_A–OVER (score 1, scope-overlap)"
+      ],
+      "pullQueueNote": "idle builders claim next unblocked"
+    }
+  },
+  {
+    "graph": false,
+    "threshold": 0.5,
+    "result": {
+      "pairs": [
+        {
+          "pair": "ROUTE_A–ROUTE_B",
+          "a": "ROUTE_A",
+          "b": "ROUTE_B",
+          "score": 0.8,
+          "signal": "namespace-collision",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–MIG_A",
+          "a": "ROUTE_A",
+          "b": "MIG_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–MIG_B",
+          "a": "ROUTE_A",
+          "b": "MIG_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–IMP_A",
+          "a": "ROUTE_A",
+          "b": "IMP_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–IMP_B",
+          "a": "ROUTE_A",
+          "b": "IMP_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–CO_A",
+          "a": "ROUTE_A",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–CO_B",
+          "a": "ROUTE_A",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–GR_A",
+          "a": "ROUTE_A",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–GR_B",
+          "a": "ROUTE_A",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–ED_A",
+          "a": "ROUTE_A",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–ED_B",
+          "a": "ROUTE_A",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–OVER",
+          "a": "ROUTE_A",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–UNSCOPED",
+          "a": "ROUTE_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–ZERO",
+          "a": "ROUTE_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–SOLO",
+          "a": "ROUTE_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–MIG_A",
+          "a": "ROUTE_B",
+          "b": "MIG_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–MIG_B",
+          "a": "ROUTE_B",
+          "b": "MIG_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–IMP_A",
+          "a": "ROUTE_B",
+          "b": "IMP_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–IMP_B",
+          "a": "ROUTE_B",
+          "b": "IMP_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–CO_A",
+          "a": "ROUTE_B",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–CO_B",
+          "a": "ROUTE_B",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–GR_A",
+          "a": "ROUTE_B",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–GR_B",
+          "a": "ROUTE_B",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–ED_A",
+          "a": "ROUTE_B",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–ED_B",
+          "a": "ROUTE_B",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–OVER",
+          "a": "ROUTE_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–UNSCOPED",
+          "a": "ROUTE_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–ZERO",
+          "a": "ROUTE_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–LATE",
+          "a": "ROUTE_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–SOLO",
+          "a": "ROUTE_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–MIG_B",
+          "a": "MIG_A",
+          "b": "MIG_B",
+          "score": 0.8,
+          "signal": "namespace-collision",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–IMP_A",
+          "a": "MIG_A",
+          "b": "IMP_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–IMP_B",
+          "a": "MIG_A",
+          "b": "IMP_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–CO_A",
+          "a": "MIG_A",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–CO_B",
+          "a": "MIG_A",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–GR_A",
+          "a": "MIG_A",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–GR_B",
+          "a": "MIG_A",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–ED_A",
+          "a": "MIG_A",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–ED_B",
+          "a": "MIG_A",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–OVER",
+          "a": "MIG_A",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–UNSCOPED",
+          "a": "MIG_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–ZERO",
+          "a": "MIG_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–LATE",
+          "a": "MIG_A",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–SOLO",
+          "a": "MIG_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–IMP_A",
+          "a": "MIG_B",
+          "b": "IMP_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–IMP_B",
+          "a": "MIG_B",
+          "b": "IMP_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–CO_A",
+          "a": "MIG_B",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–CO_B",
+          "a": "MIG_B",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–GR_A",
+          "a": "MIG_B",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–GR_B",
+          "a": "MIG_B",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–ED_A",
+          "a": "MIG_B",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–ED_B",
+          "a": "MIG_B",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–OVER",
+          "a": "MIG_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–UNSCOPED",
+          "a": "MIG_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–ZERO",
+          "a": "MIG_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–LATE",
+          "a": "MIG_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–SOLO",
+          "a": "MIG_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–IMP_B",
+          "a": "IMP_A",
+          "b": "IMP_B",
+          "score": 0.6,
+          "signal": "import-radius",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–CO_A",
+          "a": "IMP_A",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–CO_B",
+          "a": "IMP_A",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–GR_A",
+          "a": "IMP_A",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–GR_B",
+          "a": "IMP_A",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–ED_A",
+          "a": "IMP_A",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–ED_B",
+          "a": "IMP_A",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–OVER",
+          "a": "IMP_A",
+          "b": "OVER",
+          "score": 1,
+          "signal": "scope-overlap",
+          "verdict": "VETO",
+          "hardVeto": true
+        },
+        {
+          "pair": "IMP_A–UNSCOPED",
+          "a": "IMP_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–ZERO",
+          "a": "IMP_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–LATE",
+          "a": "IMP_A",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–SOLO",
+          "a": "IMP_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–CO_A",
+          "a": "IMP_B",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–CO_B",
+          "a": "IMP_B",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–GR_A",
+          "a": "IMP_B",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–GR_B",
+          "a": "IMP_B",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–ED_A",
+          "a": "IMP_B",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–ED_B",
+          "a": "IMP_B",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–OVER",
+          "a": "IMP_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–UNSCOPED",
+          "a": "IMP_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–ZERO",
+          "a": "IMP_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–LATE",
+          "a": "IMP_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–SOLO",
+          "a": "IMP_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–CO_B",
+          "a": "CO_A",
+          "b": "CO_B",
+          "score": 0.5,
+          "signal": "co-change",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–GR_A",
+          "a": "CO_A",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–GR_B",
+          "a": "CO_A",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–ED_A",
+          "a": "CO_A",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–ED_B",
+          "a": "CO_A",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–OVER",
+          "a": "CO_A",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–UNSCOPED",
+          "a": "CO_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–ZERO",
+          "a": "CO_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–LATE",
+          "a": "CO_A",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–SOLO",
+          "a": "CO_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–GR_A",
+          "a": "CO_B",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–GR_B",
+          "a": "CO_B",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–ED_A",
+          "a": "CO_B",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–ED_B",
+          "a": "CO_B",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–OVER",
+          "a": "CO_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–UNSCOPED",
+          "a": "CO_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–ZERO",
+          "a": "CO_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–LATE",
+          "a": "CO_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–SOLO",
+          "a": "CO_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–GR_B",
+          "a": "GR_A",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–ED_A",
+          "a": "GR_A",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–ED_B",
+          "a": "GR_A",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–OVER",
+          "a": "GR_A",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–UNSCOPED",
+          "a": "GR_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–ZERO",
+          "a": "GR_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–LATE",
+          "a": "GR_A",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–SOLO",
+          "a": "GR_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–ED_A",
+          "a": "GR_B",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–ED_B",
+          "a": "GR_B",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–OVER",
+          "a": "GR_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–UNSCOPED",
+          "a": "GR_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–ZERO",
+          "a": "GR_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–LATE",
+          "a": "GR_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–SOLO",
+          "a": "GR_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–ED_B",
+          "a": "ED_A",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–OVER",
+          "a": "ED_A",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–UNSCOPED",
+          "a": "ED_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–ZERO",
+          "a": "ED_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–LATE",
+          "a": "ED_A",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–SOLO",
+          "a": "ED_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_B–OVER",
+          "a": "ED_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_B–UNSCOPED",
+          "a": "ED_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_B–ZERO",
+          "a": "ED_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_B–LATE",
+          "a": "ED_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_B–SOLO",
+          "a": "ED_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "OVER–UNSCOPED",
+          "a": "OVER",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "OVER–ZERO",
+          "a": "OVER",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "OVER–LATE",
+          "a": "OVER",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "OVER–SOLO",
+          "a": "OVER",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "UNSCOPED–ZERO",
+          "a": "UNSCOPED",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "UNSCOPED–LATE",
+          "a": "UNSCOPED",
+          "b": "LATE",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "UNSCOPED–SOLO",
+          "a": "UNSCOPED",
+          "b": "SOLO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ZERO–LATE",
+          "a": "ZERO",
+          "b": "LATE",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ZERO–SOLO",
+          "a": "ZERO",
+          "b": "SOLO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        }
+      ],
+      "waves": [
+        [
+          "ROUTE_A",
+          "ROUTE_B",
+          "MIG_A",
+          "MIG_B",
+          "IMP_A",
+          "IMP_B",
+          "CO_A",
+          "CO_B",
+          "GR_A",
+          "GR_B",
+          "ED_A",
+          "ED_B",
+          "OVER",
+          "UNSCOPED",
+          "ZERO",
+          "SOLO"
+        ],
+        [
+          "LATE"
+        ]
+      ],
+      "mergeOrder": [
+        "ROUTE_A",
+        "ROUTE_B",
+        "MIG_A",
+        "MIG_B",
+        "IMP_A",
+        "IMP_B",
+        "CO_A",
+        "CO_B",
+        "GR_A",
+        "GR_B",
+        "ED_A",
+        "ED_B",
+        "OVER",
+        "UNSCOPED",
+        "ZERO",
+        "SOLO",
+        "LATE"
+      ],
+      "firstWaveWidth": 10,
+      "scheduleWidth": 10,
+      "certifiedWidth": 10,
+      "backpressureWidth": null,
+      "recommendedWidth": 10,
+      "signalsEvaluated": {
+        "scopeOverlap": true,
+        "namespaceCollision": true,
+        "importRadius": true,
+        "coChange": true,
+        "graphCoupling": false
+      },
+      "warnings": [
+        "ticket \"UNSCOPED\" has no scope defined",
+        "ticket \"ZERO\" scope matches 0 files in repo"
+      ],
+      "gateFailures": [
+        "5 high-risk pair(s) would run concurrently: ROUTE_A–ROUTE_B (score 0.8, namespace-collision), MIG_A–MIG_B (score 0.8, namespace-collision), IMP_A–IMP_B (score 0.6, import-radius), IMP_A–OVER (score 1, scope-overlap), CO_A–CO_B (score 0.5, co-change)"
+      ],
+      "pullQueueNote": "idle builders claim next unblocked"
+    }
+  },
+  {
+    "graph": false,
+    "threshold": 0.65,
+    "result": {
+      "pairs": [
+        {
+          "pair": "ROUTE_A–ROUTE_B",
+          "a": "ROUTE_A",
+          "b": "ROUTE_B",
+          "score": 0.8,
+          "signal": "namespace-collision",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–MIG_A",
+          "a": "ROUTE_A",
+          "b": "MIG_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–MIG_B",
+          "a": "ROUTE_A",
+          "b": "MIG_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–IMP_A",
+          "a": "ROUTE_A",
+          "b": "IMP_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–IMP_B",
+          "a": "ROUTE_A",
+          "b": "IMP_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–CO_A",
+          "a": "ROUTE_A",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–CO_B",
+          "a": "ROUTE_A",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–GR_A",
+          "a": "ROUTE_A",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–GR_B",
+          "a": "ROUTE_A",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–ED_A",
+          "a": "ROUTE_A",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–ED_B",
+          "a": "ROUTE_A",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–OVER",
+          "a": "ROUTE_A",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–UNSCOPED",
+          "a": "ROUTE_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–ZERO",
+          "a": "ROUTE_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_A–SOLO",
+          "a": "ROUTE_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–MIG_A",
+          "a": "ROUTE_B",
+          "b": "MIG_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–MIG_B",
+          "a": "ROUTE_B",
+          "b": "MIG_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–IMP_A",
+          "a": "ROUTE_B",
+          "b": "IMP_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–IMP_B",
+          "a": "ROUTE_B",
+          "b": "IMP_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–CO_A",
+          "a": "ROUTE_B",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–CO_B",
+          "a": "ROUTE_B",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–GR_A",
+          "a": "ROUTE_B",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–GR_B",
+          "a": "ROUTE_B",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–ED_A",
+          "a": "ROUTE_B",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–ED_B",
+          "a": "ROUTE_B",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–OVER",
+          "a": "ROUTE_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–UNSCOPED",
+          "a": "ROUTE_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–ZERO",
+          "a": "ROUTE_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–LATE",
+          "a": "ROUTE_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ROUTE_B–SOLO",
+          "a": "ROUTE_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–MIG_B",
+          "a": "MIG_A",
+          "b": "MIG_B",
+          "score": 0.8,
+          "signal": "namespace-collision",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–IMP_A",
+          "a": "MIG_A",
+          "b": "IMP_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–IMP_B",
+          "a": "MIG_A",
+          "b": "IMP_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–CO_A",
+          "a": "MIG_A",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–CO_B",
+          "a": "MIG_A",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–GR_A",
+          "a": "MIG_A",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–GR_B",
+          "a": "MIG_A",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–ED_A",
+          "a": "MIG_A",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–ED_B",
+          "a": "MIG_A",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–OVER",
+          "a": "MIG_A",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–UNSCOPED",
+          "a": "MIG_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–ZERO",
+          "a": "MIG_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–LATE",
+          "a": "MIG_A",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_A–SOLO",
+          "a": "MIG_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–IMP_A",
+          "a": "MIG_B",
+          "b": "IMP_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–IMP_B",
+          "a": "MIG_B",
+          "b": "IMP_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–CO_A",
+          "a": "MIG_B",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–CO_B",
+          "a": "MIG_B",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–GR_A",
+          "a": "MIG_B",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–GR_B",
+          "a": "MIG_B",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–ED_A",
+          "a": "MIG_B",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–ED_B",
+          "a": "MIG_B",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–OVER",
+          "a": "MIG_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–UNSCOPED",
+          "a": "MIG_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–ZERO",
+          "a": "MIG_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–LATE",
+          "a": "MIG_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "MIG_B–SOLO",
+          "a": "MIG_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–IMP_B",
+          "a": "IMP_A",
+          "b": "IMP_B",
+          "score": 0.6,
+          "signal": "import-radius",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–CO_A",
+          "a": "IMP_A",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–CO_B",
+          "a": "IMP_A",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–GR_A",
+          "a": "IMP_A",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–GR_B",
+          "a": "IMP_A",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–ED_A",
+          "a": "IMP_A",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–ED_B",
+          "a": "IMP_A",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–OVER",
+          "a": "IMP_A",
+          "b": "OVER",
+          "score": 1,
+          "signal": "scope-overlap",
+          "verdict": "VETO",
+          "hardVeto": true
+        },
+        {
+          "pair": "IMP_A–UNSCOPED",
+          "a": "IMP_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–ZERO",
+          "a": "IMP_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–LATE",
+          "a": "IMP_A",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_A–SOLO",
+          "a": "IMP_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–CO_A",
+          "a": "IMP_B",
+          "b": "CO_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–CO_B",
+          "a": "IMP_B",
+          "b": "CO_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–GR_A",
+          "a": "IMP_B",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–GR_B",
+          "a": "IMP_B",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–ED_A",
+          "a": "IMP_B",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–ED_B",
+          "a": "IMP_B",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–OVER",
+          "a": "IMP_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–UNSCOPED",
+          "a": "IMP_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–ZERO",
+          "a": "IMP_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–LATE",
+          "a": "IMP_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "IMP_B–SOLO",
+          "a": "IMP_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–CO_B",
+          "a": "CO_A",
+          "b": "CO_B",
+          "score": 0.5,
+          "signal": "co-change",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–GR_A",
+          "a": "CO_A",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–GR_B",
+          "a": "CO_A",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–ED_A",
+          "a": "CO_A",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–ED_B",
+          "a": "CO_A",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–OVER",
+          "a": "CO_A",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–UNSCOPED",
+          "a": "CO_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–ZERO",
+          "a": "CO_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–LATE",
+          "a": "CO_A",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_A–SOLO",
+          "a": "CO_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–GR_A",
+          "a": "CO_B",
+          "b": "GR_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–GR_B",
+          "a": "CO_B",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–ED_A",
+          "a": "CO_B",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–ED_B",
+          "a": "CO_B",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–OVER",
+          "a": "CO_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–UNSCOPED",
+          "a": "CO_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–ZERO",
+          "a": "CO_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–LATE",
+          "a": "CO_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "CO_B–SOLO",
+          "a": "CO_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–GR_B",
+          "a": "GR_A",
+          "b": "GR_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–ED_A",
+          "a": "GR_A",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–ED_B",
+          "a": "GR_A",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–OVER",
+          "a": "GR_A",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–UNSCOPED",
+          "a": "GR_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–ZERO",
+          "a": "GR_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–LATE",
+          "a": "GR_A",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_A–SOLO",
+          "a": "GR_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–ED_A",
+          "a": "GR_B",
+          "b": "ED_A",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–ED_B",
+          "a": "GR_B",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–OVER",
+          "a": "GR_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–UNSCOPED",
+          "a": "GR_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–ZERO",
+          "a": "GR_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–LATE",
+          "a": "GR_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "GR_B–SOLO",
+          "a": "GR_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–ED_B",
+          "a": "ED_A",
+          "b": "ED_B",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–OVER",
+          "a": "ED_A",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–UNSCOPED",
+          "a": "ED_A",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–ZERO",
+          "a": "ED_A",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–LATE",
+          "a": "ED_A",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_A–SOLO",
+          "a": "ED_A",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_B–OVER",
+          "a": "ED_B",
+          "b": "OVER",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_B–UNSCOPED",
+          "a": "ED_B",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_B–ZERO",
+          "a": "ED_B",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_B–LATE",
+          "a": "ED_B",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "ED_B–SOLO",
+          "a": "ED_B",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "OVER–UNSCOPED",
+          "a": "OVER",
+          "b": "UNSCOPED",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "OVER–ZERO",
+          "a": "OVER",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "OVER–LATE",
+          "a": "OVER",
+          "b": "LATE",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "OVER–SOLO",
+          "a": "OVER",
+          "b": "SOLO",
+          "score": 0,
+          "signal": "none",
+          "verdict": "PARALLEL",
+          "hardVeto": false
+        },
+        {
+          "pair": "UNSCOPED–ZERO",
+          "a": "UNSCOPED",
+          "b": "ZERO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "UNSCOPED–LATE",
+          "a": "UNSCOPED",
+          "b": "LATE",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "UNSCOPED–SOLO",
+          "a": "UNSCOPED",
+          "b": "SOLO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ZERO–LATE",
+          "a": "ZERO",
+          "b": "LATE",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        },
+        {
+          "pair": "ZERO–SOLO",
+          "a": "ZERO",
+          "b": "SOLO",
+          "score": 1,
+          "signal": "unscoped",
+          "verdict": "SEQUENCE",
+          "hardVeto": false
+        }
+      ],
+      "waves": [
+        [
+          "ROUTE_A",
+          "ROUTE_B",
+          "MIG_A",
+          "MIG_B",
+          "IMP_A",
+          "IMP_B",
+          "CO_A",
+          "CO_B",
+          "GR_A",
+          "GR_B",
+          "ED_A",
+          "ED_B",
+          "OVER",
+          "UNSCOPED",
+          "ZERO",
+          "SOLO"
+        ],
+        [
+          "LATE"
+        ]
+      ],
+      "mergeOrder": [
+        "ROUTE_A",
+        "ROUTE_B",
+        "MIG_A",
+        "MIG_B",
+        "IMP_A",
+        "IMP_B",
+        "CO_A",
+        "CO_B",
+        "GR_A",
+        "GR_B",
+        "ED_A",
+        "ED_B",
+        "OVER",
+        "UNSCOPED",
+        "ZERO",
+        "SOLO",
+        "LATE"
+      ],
+      "firstWaveWidth": 11,
+      "scheduleWidth": 11,
+      "certifiedWidth": 11,
+      "backpressureWidth": null,
+      "recommendedWidth": 11,
+      "signalsEvaluated": {
+        "scopeOverlap": true,
+        "namespaceCollision": true,
+        "importRadius": true,
+        "coChange": true,
+        "graphCoupling": false
+      },
+      "warnings": [
+        "ticket \"UNSCOPED\" has no scope defined",
+        "ticket \"ZERO\" scope matches 0 files in repo"
+      ],
+      "gateFailures": [
+        "3 high-risk pair(s) would run concurrently: ROUTE_A–ROUTE_B (score 0.8, namespace-collision), MIG_A–MIG_B (score 0.8, namespace-collision), IMP_A–OVER (score 1, scope-overlap)"
+      ],
+      "pullQueueNote": "idle builders claim next unblocked"
+    }
+  }
+]
