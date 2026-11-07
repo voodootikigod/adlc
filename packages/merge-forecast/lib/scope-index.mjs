@@ -113,12 +113,14 @@ export function createScopeIndex(repoFiles) {
     return matcherFor(key, globs);
   }
 
-  // The uncached branches below spell `(scope ?? []).some` out in full, so a
-  // scope that is not an array fails with the same TypeError as the shared
-  // expression they replace. The message names `(scope ?? [])` where each
-  // signal used to name its own variable (`(a.scope ?? [])`, `bScope`, ...):
-  // V8 builds it from the source text. runForecast never gets here, because it
-  // marks a ticket whose scope is not a non-empty array as unscoped first.
+  // The uncached branches, here and in matcher() above, spell
+  // `(scope ?? []).some` out in full, so a scope that is not an array fails
+  // with the same TypeError as the shared expression they replace. The message
+  // names `(scope ?? [])` where each signal used to name its own variable
+  // (`(a.scope ?? [])`, `bScope`, ...): V8 builds it from the source text.
+  // From runForecast, only a non-empty scope holding a non-string gets here, and
+  // it throws (or not) exactly as before; a non-array scope is marked unscoped
+  // before any of this runs.
   return {
     /** Exactly `repoFiles.filter((f) => (scope ?? []).some((g) => globMatch(g, f)))`. */
     files(scope) {

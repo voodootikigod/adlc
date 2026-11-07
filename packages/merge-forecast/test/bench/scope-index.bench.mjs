@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Offline benchmark for the scope index (spec: .adlc/specs/merge-forecast-scope-index.md, AC7).
+// Offline benchmark for the scope index (spec: .adlc/specs/merge-forecast-scope-index.md,
+// acceptance criterion 8).
 //
 //   node packages/merge-forecast/test/bench/scope-index.bench.mjs
 //        [--files N] [--forecast <path/to/lib/forecast.mjs>] [--json]

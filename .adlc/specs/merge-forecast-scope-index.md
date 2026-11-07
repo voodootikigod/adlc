@@ -1,5 +1,11 @@
 # Spec — merge-forecast: match each ticket's scope once per run
 
+**Approval (P1):** approved by Rafael Belliard on 2026-11-07, as written at
+that point (after P5 round 1). The P1 gate ran late: the build started from
+his task brief before he had seen this spec. Edits after the approval (P5
+round 2) correct wording, state the `repoFiles` and rail-coverage limits, and
+strengthen criterion 5; none changes the design.
+
 **Phase:** P1 contract for a behavior-preserving speed-up of
 `merge-forecast` (D2). No output changes. Single package:
 `packages/merge-forecast`.
@@ -24,9 +30,10 @@ for both tickets of every pair: `signalNamespaceRoutes`,
 `signalMigrationCollision`, `signalGraphCoupling`, `signalCoChange` and
 `importRadiusIntersects` (twice, once per direction) in
 `lib/signals.mjs`, plus the zero-match validation in `lib/forecast.mjs`. Per
-scored pair, each side's file set is recomputed 3 to 5 times (namespace
-routes, migrations and import radius always; co-change with git history;
-graph coupling with graph data). A ticket in k pairs has it recomputed up to
+scored pair, each side's file set is recomputed up to 5 times: namespace
+routes always; migrations unless the routes collide; import radius in the
+first direction always, and in the second unless the first fires; co-change
+with git history; graph coupling with graph data. A ticket in k pairs has it recomputed up to
 5·k + 1 times, about 4·k in a repository with history. Each computation is
 |files| × |scope| fresh `globMatch` calls, each of which re-tokenises its
 pattern with a regex.
@@ -82,9 +89,13 @@ exports.
      falsy scope that is not `null` or `undefined` still throws. The
      message names `(scope ?? [])` where each signal used to name its own
      variable (`(a.scope ?? [])`, `bScope`): V8 builds it from the source
-     text. `runForecast` and the CLI never reach this path, because a ticket
-     whose scope is not a non-empty array is marked unscoped first.
+     text. `runForecast` reaches this path only for a non-empty array that
+     holds a non-string (a non-array scope is marked unscoped first), and
+     there it throws or returns exactly as before. The CLI never reaches it:
+     `loadTickets` rejects a scope that is not an array of strings.
    - Holes in a sparse scope are skipped, as `some()` skips them.
+   - `repoFiles` is an array of strings, as `walkTree` produces. For anything
+     else, a direct caller may see a different error message.
    - The index treats `repoFiles` as a snapshot. It is created by
      `runForecast` from the array it builds itself and never mutates.
      Nothing is evicted, so an index lives for one forecast run.
@@ -104,6 +115,13 @@ exports.
 - New exported parameters are optional. A caller that already passed an
   extra argument in that position, or `scopeIndex: null`, now gets an
   error; no caller in this repository does.
+
+**Not covered by a rail.** That `runForecast` shares ONE index across all
+pairs, rather than letting `pairScore` build one per pair, changes no output
+and has no injection point, so no test can see it. It is a speed property,
+measured by criterion 8 and 9, not proven by a rail. Per-pair indexes would
+still compile each scope once per pair, so the cost of losing the sharing is
+small (P5 measured no difference on the benchmark corpus).
 
 **Out of scope.**
 - `packages/core/lib/glob.mjs` is not touched. It is generated source, copied
@@ -149,8 +167,10 @@ Each criterion names its verification.
    `matcher()` never throws when built.
    *Verify:* `node --test packages/merge-forecast/test/scope-index.test.mjs`.
 5. **Every signal uses the index it is given.** A spy index passed to each
-   exported signal, and to `pairScore`, sees the lookups the signal makes,
-   and the answers equal those without an index.
+   exported signal, and to `pairScore`, sees the lookups the signal makes.
+   For each signal a case that FIRES (score above 0) gives the same score
+   with the index as without it, and graph coupling keeps the direction of a
+   one-sided `fileCoupling` entry.
    *Verify:* `node --test packages/merge-forecast/test/scope-index-wiring.test.mjs`.
 6. **The forecast is unchanged.** On a fixture repository built in a temp
    dir, with a git history, that triggers every signal (scope overlap,
