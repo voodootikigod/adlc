@@ -93,8 +93,9 @@ const oldFilesNormalized = (scope) =>
 // the case part 2 runs, no git history and no graph-coupling data, where this
 // is exactly what the old code did (no import crosses tickets here, so both
 // directions run). Co-change data adds one more per side and graph-coupling
-// data another, so against a real repository, which pays 4 or 5, this side is
-// conservative. The index side builds both of its views, as a real run does.
+// data another, so against a real repository with history, which pays 4 or 5,
+// this side is conservative; one without history (a shallow clone) pays at
+// most 3, as here. The index side builds both of its views, as a real run does.
 const pairs = [];
 for (let i = 0; i < tickets.length; i++) {
   for (let j = i + 1; j < tickets.length; j++) pairs.push([tickets[i], tickets[j]]);

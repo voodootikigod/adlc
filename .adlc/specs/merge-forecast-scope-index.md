@@ -3,7 +3,7 @@
 **Approval (P1):** approved by Rafael Belliard on 2026-11-07, as written at
 that point (after P5 round 1). The P1 gate ran late: the build started from
 his task brief before he had seen this spec. Edits after the approval (P5
-rounds 2 to 4) correct wording, state the input contract, describe the
+rounds 2 to 5) correct wording, state the input contract, describe the
 literal `Set`, and strengthen criteria 5 and 6; none changes the design.
 
 **Phase:** P1 contract for a behavior-preserving speed-up of
@@ -35,7 +35,8 @@ routes always; migrations unless the routes collide; import radius in the
 first direction always, and in the second unless the first fires; co-change
 with git history; graph coupling with graph data. A ticket in k pairs has it recomputed up to
 5·k + 1 times, about 4·k in a repository with history. Each computation is
-|files| × |scope| fresh `globMatch` calls, each of which re-tokenises its
+up to |files| × |scope| fresh `globMatch` calls (`some()` stops at the first
+matching glob), each of which re-tokenises its
 pattern with a regex.
 
 It is an algorithmic problem. No rewrite in another language is proposed.

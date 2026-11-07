@@ -3,7 +3,7 @@
  *
  * Every signal needs "the repo files inside this ticket's scope". Before this
  * module, each one recomputed it for both tickets of every pair, as
- * |files| × |scope| fresh globMatch calls, which made globMatch 77% of a
+ * up to |files| × |scope| fresh globMatch calls, which made globMatch 77% of a
  * merge-forecast run. Here each distinct scope is compiled once per run, and
  * filtered once per run for each view (raw, and backslash-normalized).
  *
