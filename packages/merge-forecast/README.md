@@ -49,6 +49,16 @@ The `--co-change-limit` option must be an integer >= 1. When git history yields 
 
 Tickets with no scope or an empty scope emit a warning (`ticket "<id>" has no scope defined`), and tickets whose declared scope matches zero files in the repository emit a warning (`ticket "<id>" scope matches 0 files in repo`). Any pair involving an unscoped or zero-match ticket is treated as `SEQUENCE` (score 1.0, signal `unscoped`) and excluded from parallel wave width calculations.
 
+### Performance
+
+The repository is walked once per run, and each ticket's matched files are computed once per run for each of the two views the signals use (raw paths, and backslash-normalized paths for import radius) (`lib/scope-index.mjs`), not again for every pair the ticket is in. Per-pair work remains: import-radius candidates are still checked against the other ticket's scope, and each scope file is still read once per pair. Globs mean exactly what `globMatch` in `@adlc/core` says they mean. To reproduce the measurement offline:
+
+```sh
+node packages/merge-forecast/test/bench/scope-index.bench.mjs [--files N] [--forecast <other>/lib/forecast.mjs] [--json]
+```
+
+It times the old per-pair filtering against the index on a synthetic corpus and checks they agree. With `--forecast`, it also runs another implementation's `runForecast` on the same corpus and requires an identical result.
+
 ## Width Analysis
 
 - **firstWaveWidth** — greedy largest independent set among **wave-1** tickets (tickets where all pairs are below threshold). Answers *how wide can I dispatch right now*. This is the number `--width` is gated against.

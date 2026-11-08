@@ -10,7 +10,8 @@
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve, dirname, win32 } from 'node:path';
-import { scopesOverlap, globMatch, pairKey } from '@adlc/core';
+import { scopesOverlap, pairKey } from '@adlc/core';
+import { createScopeIndex } from './scope-index.mjs';
 
 // ─── Signal 1: Declared scope overlap ────────────────────────────────────────
 
@@ -101,12 +102,10 @@ export function resolveSpecifier(specifier, importingFile, root) {
  * imports and resolve them. Return a Set of resolved paths that match
  * ticket b's scope.
  */
-function importRadiusIntersects(a, b, repoFiles, root) {
-  const aFiles = repoFiles.filter((f) => {
-    const fNorm = f.replace(/\\/g, '/');
-    return (a.scope ?? []).some((g) => globMatch(g, fNorm));
-  });
-  const bScope = b.scope ?? [];
+function importRadiusIntersects(a, b, repoFiles, root, index) {
+  const aFiles = index.filesNormalized(a.scope);
+  // Resolved once, not per candidate: building it serialises the whole scope.
+  const inB = index.matcher(b.scope);
   const rootNorm = root.replace(/\\/g, '/').replace(/\/+$/, '');
   for (const af of aFiles) {
     const afNorm = af.replace(/\\/g, '/');
@@ -125,7 +124,7 @@ function importRadiusIntersects(a, b, repoFiles, root) {
         resolved + '/index.ts',
       ];
       for (const candidate of candidates) {
-        if (bScope.some((g) => globMatch(g, candidate))) return true;
+        if (inB(candidate)) return true;
       }
     }
   }
@@ -136,9 +135,9 @@ function importRadiusIntersects(a, b, repoFiles, root) {
  * Returns 0.6 if A's scope files import into B's scope or B's scope files
  * import into A's scope. Returns 0 otherwise.
  */
-export function signalImportRadius(a, b, repoFiles, root) {
-  if (importRadiusIntersects(a, b, repoFiles, root)) return 0.6;
-  if (importRadiusIntersects(b, a, repoFiles, root)) return 0.6;
+export function signalImportRadius(a, b, repoFiles, root, index = createScopeIndex(repoFiles)) {
+  if (importRadiusIntersects(a, b, repoFiles, root, index)) return 0.6;
+  if (importRadiusIntersects(b, a, repoFiles, root, index)) return 0.6;
   return 0;
 }
 
@@ -151,11 +150,11 @@ export function signalImportRadius(a, b, repoFiles, root) {
  */
 export const MIN_COCHANGE_SUPPORT = 3;
 
-export function signalCoChange(a, b, coChangeData, repoFiles) {
+export function signalCoChange(a, b, coChangeData, repoFiles, index = createScopeIndex(repoFiles)) {
   if (!coChangeData) return 0;
   const { pairCounts, fileCounts } = coChangeData;
-  const aFiles = repoFiles.filter((f) => (a.scope ?? []).some((g) => globMatch(g, f)));
-  const bFiles = repoFiles.filter((f) => (b.scope ?? []).some((g) => globMatch(g, f)));
+  const aFiles = index.files(a.scope);
+  const bFiles = index.files(b.scope);
 
   let maxScore = 0;
   for (const fa of aFiles) {
@@ -200,13 +199,11 @@ function extractDynamicSegments(filePath) {
  * Detect namespace collision from dynamic route segments:
  * A and B each have a bracket segment at the same path depth but different names.
  */
-export function signalNamespaceRoutes(a, b, repoFiles) {
+export function signalNamespaceRoutes(a, b, repoFiles, index = createScopeIndex(repoFiles)) {
   const routeDirs = ['app', 'pages'];
   // Collect dynamic segments from A's matched files (only under app/ or pages/)
   function routeSegments(ticket) {
-    const matchedFiles = repoFiles.filter((f) =>
-      (ticket.scope ?? []).some((g) => globMatch(g, f))
-    );
+    const matchedFiles = index.files(ticket.scope);
     const segs = [];
     for (const f of matchedFiles) {
       if (!routeDirs.some((d) => f.startsWith(d + '/'))) continue;
@@ -235,13 +232,11 @@ export function signalNamespaceRoutes(a, b, repoFiles) {
  * Files like drizzle/0005_* or migrations/0005_* with same numeric prefix
  * across A and B scopes.
  */
-export function signalMigrationCollision(a, b, repoFiles) {
+export function signalMigrationCollision(a, b, repoFiles, index = createScopeIndex(repoFiles)) {
   const migPrefixRe = /(?:^|\/)(?:drizzle|migrations)\/(\d+)_/;
 
   function migPrefixes(ticket) {
-    const matchedFiles = repoFiles.filter((f) =>
-      (ticket.scope ?? []).some((g) => globMatch(g, f))
-    );
+    const matchedFiles = index.files(ticket.scope);
     const prefixes = new Set();
     for (const f of matchedFiles) {
       const m = f.match(migPrefixRe);
@@ -261,9 +256,9 @@ export function signalMigrationCollision(a, b, repoFiles) {
 /**
  * Combined namespace signal: 0.8 if any namespace collision detected, else 0.
  */
-export function signalNamespace(a, b, repoFiles) {
-  if (signalNamespaceRoutes(a, b, repoFiles)) return 0.8;
-  if (signalMigrationCollision(a, b, repoFiles)) return 0.8;
+export function signalNamespace(a, b, repoFiles, index = createScopeIndex(repoFiles)) {
+  if (signalNamespaceRoutes(a, b, repoFiles, index)) return 0.8;
+  if (signalMigrationCollision(a, b, repoFiles, index)) return 0.8;
   return 0;
 }
 
@@ -274,12 +269,10 @@ export function signalNamespace(a, b, repoFiles) {
  * Detects semantic cross-ticket dependencies via pre-computed symbol/call graph
  * (e.g. Spanner Graph, mcp__spannercg, or graph coupling export).
  */
-export function signalGraphCoupling(a, b, graphCouplingData, repoFiles) {
+export function signalGraphCoupling(a, b, graphCouplingData, repoFiles, index = createScopeIndex(repoFiles)) {
   if (!graphCouplingData) return 0;
-  const aScope = a.scope ?? [];
-  const bScope = b.scope ?? [];
-  const aFiles = repoFiles.filter((f) => aScope.some((g) => globMatch(g, f)));
-  const bFiles = repoFiles.filter((f) => bScope.some((g) => globMatch(g, f)));
+  const aFiles = index.files(a.scope);
+  const bFiles = index.files(b.scope);
 
   // 1. Direct fileCoupling map: { "fileA|fileB": score }
   if (graphCouplingData.fileCoupling && typeof graphCouplingData.fileCoupling === 'object') {
@@ -335,15 +328,23 @@ export function signalGraphCoupling(a, b, graphCouplingData, repoFiles) {
  * Returns { score, signal, hardVeto }.
  */
 export function pairScore(a, b, opts = {}) {
-  const { repoFiles = [], root = process.cwd(), coChangeData = null, graphCouplingData = null } = opts;
+  const {
+    repoFiles = [],
+    root = process.cwd(),
+    coChangeData = null,
+    graphCouplingData = null,
+    // One index per run, shared by every pair (see scope-index.mjs). A caller
+    // that scores a single pair may omit it.
+    scopeIndex = createScopeIndex(repoFiles),
+  } = opts;
 
   const s1 = signalScopeOverlap(a, b);
   if (s1 >= 1.0) return { score: 1.0, signal: 'scope-overlap', hardVeto: true };
 
-  const s4 = signalNamespace(a, b, repoFiles);
-  const s5 = signalGraphCoupling(a, b, graphCouplingData, repoFiles);
-  const s2 = signalImportRadius(a, b, repoFiles, root);
-  const s3 = signalCoChange(a, b, coChangeData, repoFiles);
+  const s4 = signalNamespace(a, b, repoFiles, scopeIndex);
+  const s5 = signalGraphCoupling(a, b, graphCouplingData, repoFiles, scopeIndex);
+  const s2 = signalImportRadius(a, b, repoFiles, root, scopeIndex);
+  const s3 = signalCoChange(a, b, coChangeData, repoFiles, scopeIndex);
 
   const score = Math.max(s2, s3, s4, s5);
   let signal = 'none';
