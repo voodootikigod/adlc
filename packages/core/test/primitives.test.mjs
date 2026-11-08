@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -15,6 +16,7 @@ import { join } from 'node:path';
 import { tmp } from '../lib/test-kit.mjs';
 import {
   writeFileAtomic,
+  readBoundedRegularFile,
   acquireDirLock,
   redactSecrets,
   readVerdictSource,
@@ -541,6 +543,46 @@ test('acquireDirLock: recovers stale lock directory when owner.json is missing a
   }
 });
 
+test('acquireDirLock: recovers stale lock when owner PID is reused (pidStartTime mismatch)', (t) => {
+  const dir = tmp(t, 'lock-pid-reuse-');
+  const lockDir = join(dir, 'test.lock');
+  mkdirSync(lockDir);
+  writeFileSync(
+    join(lockDir, 'owner.json'),
+    JSON.stringify({
+      pid: process.pid,
+      pidStartTime: '0000-reused-start-time',
+      token: 'old-reused-token',
+      createdAt: Date.now() - 50_000,
+    })
+  );
+  const release = acquireDirLock(lockDir, { staleMs: 100 });
+  try {
+    const owner = JSON.parse(readFileSync(join(lockDir, 'owner.json'), 'utf8'));
+    assert.notEqual(owner.token, 'old-reused-token');
+  } finally {
+    release();
+  }
+
+  // Verify release() refuses to delete a recreated lockDir with a different inode even if owner.json is copied
+  const releaseFirst = acquireDirLock(lockDir);
+  const savedOwner = readFileSync(join(lockDir, 'owner.json'), 'utf8');
+  const movedDir = join(dir, 'moved.lock');
+  renameSync(lockDir, movedDir);
+  mkdirSync(lockDir);
+  writeFileSync(join(lockDir, 'owner.json'), savedOwner, 'utf8');
+  releaseFirst();
+  assert.equal(existsSync(join(lockDir, 'owner.json')), true, 'release must not delete a lock directory with a different inode');
+});
+
+test('redactSecrets: redacts fine-grained GitHub, GitLab, AWS ASIA, Slack, and JWT tokens', () => {
+  assert.equal(redactSecrets('github_pat_12345678901234567890_abc'), '[REDACTED]');
+  assert.equal(redactSecrets('glpat-12345678901234567890'), '[REDACTED]');
+  assert.equal(redactSecrets('ASIA1234567890ABCDEF'), '[REDACTED]');
+  assert.equal(redactSecrets('xoxb-123456789012-abcdef'), '[REDACTED]');
+  assert.equal(redactSecrets('eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig'), '[REDACTED]');
+});
+
 test('redactSecrets: redacts Error message/stack and preserves Date/RegExp/Buffer instances', () => {
   const err = new Error('leaked sk-12345678901234567890 in error');
   const redactedErr = redactSecrets(err);
@@ -571,4 +613,35 @@ test('recordPromptOnlyVerdict: canonical fields cannot be overwritten by extra',
   assert.equal(recorded.verdict, 'real-verdict');
   assert.equal(recorded.custom, 1);
 });
+
+test('readBoundedRegularFile: reads regular file, rejects over-cap and symlinks, and loops short reads', (t) => {
+  const dir = tmp(t, 'rbrf-');
+  const file = join(dir, 'ok.txt');
+  writeFileSync(file, 'bounded-content', 'utf8');
+  assert.equal(readBoundedRegularFile(file, 1024), 'bounded-content');
+
+  assert.throws(() => readBoundedRegularFile(file, 4), /exceeds 4/);
+
+  const link = join(dir, 'link.txt');
+  symlinkSync(file, link);
+  assert.throws(() => readBoundedRegularFile(link, 1024));
+
+  // Short-read loop simulation
+  const payload = Buffer.from('abcdef');
+  let offset = 0;
+  const text = readBoundedRegularFile(file, 1024, {
+    openSync: () => 42,
+    fstatSync: () => ({ isFile: () => true, size: payload.length }),
+    readSync: (_fd, buf, pos) => {
+      if (offset >= payload.length) return 0;
+      const chunk = payload.subarray(offset, offset + 2);
+      chunk.copy(buf, pos);
+      offset += chunk.length;
+      return chunk.length;
+    },
+    closeSync: () => {},
+  });
+  assert.equal(text, 'abcdef');
+});
+
 

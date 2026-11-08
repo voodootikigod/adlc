@@ -32,9 +32,10 @@
 // npm packages at runtime, so it imports the generated sibling copy; a drift
 // test (test/shell-drift.test.mjs) pins that wire-up and behavior against
 // @adlc/core.
-import { readFileSync, realpathSync, writeSync } from 'node:fs';
-import { isAbsolute, relative, resolve, dirname, basename } from 'node:path';
+import { realpathSync, writeSync } from 'node:fs';
+import { isAbsolute, resolve, dirname, basename } from 'node:path';
 import { loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
+import { resolveRailPath } from './generated-railpath.mjs';
 import {
   resolveActiveTicketId as resolveActiveTicketIdCanonical,
   resolveActiveTicketAgainst,
@@ -121,51 +122,10 @@ function normalizeCopilotPayload(raw) {
   return payload;
 }
 
-function parseJson(path) {
-  try {
-    return JSON.parse(readFileSync(path, 'utf8'));
-  } catch (err) {
-    if (err?.code === 'ENOENT') throw err;
-    fail(`malformed JSON in ${path}: ${err.message}`);
-  }
-}
-
-function readRequiredJson(path) {
-  try {
-    return parseJson(path);
-  } catch (err) {
-    if (err?.code === 'ENOENT') fail(`file not found: ${path}`);
-    throw err;
-  }
-}
-
-
 // The rail/scope glob matcher is a GENERATED verbatim copy of
 // packages/core/lib/glob.mjs: this file is installed without node_modules, so it
 // cannot import @adlc/core, and a hand-kept copy is what drifted before.
 import { globMatch } from './generated-glob-match.mjs';
-
-function loadTickets(path) {
-  const data = readRequiredJson(path);
-  if (!Array.isArray(data.tickets)) fail(`${path} must contain a tickets array`);
-  const ids = new Set();
-  const errors = [];
-  for (const ticket of data.tickets) {
-    if (!ticket || typeof ticket !== 'object') {
-      errors.push('ticket is not an object');
-      continue;
-    }
-    if (!ticket.id || typeof ticket.id !== 'string') errors.push('ticket missing string id');
-    if (!ticket.title || typeof ticket.title !== 'string') errors.push(`${ticket.id ?? '?'}: missing string title`);
-    if (ticket.rails !== undefined && !Array.isArray(ticket.rails)) errors.push(`${ticket.id}: rails must be an array`);
-    if (ticket.id) {
-      if (ids.has(ticket.id)) errors.push(`duplicate ticket id: ${ticket.id}`);
-      ids.add(ticket.id);
-    }
-  }
-  if (errors.length > 0) fail(`ticket file errors: ${errors.join('; ')}`);
-  return data.tickets;
-}
 
 function collectPaths(value, out = new Set()) {
   if (typeof value === 'string') {
@@ -334,11 +294,29 @@ function safeRealpath(fp) {
   }
 }
 
+const MAX_PAYLOAD_DEPTH = 64;
+
+function exceedsDepth(rootNode, maxDepth) {
+  const stack = [{ node: rootNode, depth: 0 }];
+  while (stack.length > 0) {
+    const { node, depth } = stack.pop();
+    if (!node || typeof node !== 'object') continue;
+    if (depth >= maxDepth) return true;
+    const children = Array.isArray(node) ? node : Object.values(node);
+    for (let i = 0; i < children.length; i += 1) {
+      const child = children[i];
+      if (child && typeof child === 'object') {
+        stack.push({ node: child, depth: depth + 1 });
+      }
+    }
+  }
+  return false;
+}
+
 function normalizePath(path, baseCwd = root) {
   const normalized = path.replaceAll('\\', '/');
-  const absolute = safeRealpath(isAbsolute(normalized) ? normalized : resolve(baseCwd, normalized));
-  const projectRoot = safeRealpath(root);
-  const projectRelative = relative(projectRoot, absolute).replaceAll('\\', '/');
+  const candidate = resolve(baseCwd, normalized);
+  const projectRelative = resolveRailPath(candidate, root);
   return projectRelative.startsWith('..') ? normalized : projectRelative;
 }
 
@@ -355,6 +333,9 @@ if (raw.trim()) {
   }
 }
 payload = normalizeCopilotPayload(payload);
+if (exceedsDepth(payload, MAX_PAYLOAD_DEPTH)) {
+  fail(`hook payload nesting exceeds ${MAX_PAYLOAD_DEPTH} levels — refusing to classify it`);
+}
 
 const processCwd = process.cwd();
 const root = payloadRoot(payload, processCwd);

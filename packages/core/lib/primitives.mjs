@@ -3,11 +3,14 @@
 
 import {
   closeSync,
+  constants as fsConstants,
+  fstatSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   renameSync,
   rmdirSync,
   rmSync,
@@ -18,9 +21,10 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { opError, readStdin } from './cli.mjs';
 import { appendEntry } from './ledger.mjs';
+import { procStartTimeOf } from './proc.mjs';
 
 const SECRET_REGEX =
-  /sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|Bearer\s+[A-Za-z0-9._~+/-]{20,}/g;
+  /sk-(?:proj-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|(?:AKIA|ASIA)[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|Bearer\s+[A-Za-z0-9._~+/-]{20,}=*|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*/g;
 
 /**
  * Write a file atomically via a unique sibling temporary file and rename.
@@ -73,6 +77,7 @@ export function acquireDirLock(lockDir, options = {}) {
     mkdirSync(lockDir);
     const owner = {
       pid: process.pid,
+      pidStartTime: procStartTimeOf(process.pid),
       token: randomUUID(),
       createdAt: Date.now(),
     };
@@ -85,8 +90,10 @@ export function acquireDirLock(lockDir, options = {}) {
       } catch {}
       throw writeErr;
     }
+    const { ino } = lstatSync(lockDir);
     return () => {
       try {
+        if (lstatSync(lockDir).ino !== ino) return;
         const current = JSON.parse(readFileSync(ownerPath, 'utf8'));
         if (current && current.token === owner.token) {
           try {
@@ -111,6 +118,12 @@ export function acquireDirLock(lockDir, options = {}) {
         if (typeof owner.createdAt === 'number' && Date.now() - owner.createdAt > options.staleMs) {
           try {
             process.kill(owner.pid, 0);
+            if (owner.pidStartTime != null) {
+              const liveStart = procStartTimeOf(owner.pid);
+              if (liveStart != null && String(liveStart) !== String(owner.pidStartTime)) {
+                isStale = true;
+              }
+            }
           } catch (killErr) {
             if (killErr.code === 'ESRCH') {
               isStale = true;
@@ -221,4 +234,39 @@ export function recordPromptOnlyVerdict({ gate, ticket, verdict, extra = {}, dir
     return recordFn({ gate, ticket, rawData: JSON.stringify(data), dir });
   }
   return appendEntry('manifest', { gate, ticket, data }, dir);
+}
+
+/**
+ * Read a REGULAR file without blocking or following symlinks: open with
+ * O_RDONLY | O_NOFOLLOW | O_NONBLOCK, fstat the open fd to verify regular file
+ * and size cap, and read at most maxBytes.
+ *
+ * @param {string} path
+ * @param {number} [maxBytes=8388608]
+ * @param {{ openSync?: typeof openSync; fstatSync?: typeof fstatSync; readSync?: typeof readSync; closeSync?: typeof closeSync }} [deps]
+ * @returns {string}
+ */
+export function readBoundedRegularFile(
+  path,
+  maxBytes = 8 * 1024 * 1024,
+  { openSync: open = openSync, fstatSync: fstat = fstatSync, readSync: read = readSync, closeSync: close = closeSync } = {},
+) {
+  const fd = open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+  try {
+    const st = fstat(fd);
+    if (!st.isFile()) throw new Error('not a regular file');
+    if (st.size > maxBytes) throw new Error(`${st.size} bytes exceeds ${maxBytes}`);
+    const buf = Buffer.alloc(maxBytes + 1);
+    let total = 0;
+    for (;;) {
+      const n = read(fd, buf, total, buf.length - total, null);
+      if (n === 0) break;
+      total += n;
+      if (total > maxBytes) throw new Error(`more than ${maxBytes} bytes (the file grew while it was read)`);
+      if (total === buf.length) break;
+    }
+    return buf.subarray(0, total).toString('utf8');
+  } finally {
+    try { close(fd); } catch {}
+  }
 }

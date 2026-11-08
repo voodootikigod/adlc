@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ghJson } from '../lib/gh.mjs';
+import { ghJson, makeGhRunner } from '../lib/gh.mjs';
 import { assertReadProvider } from '../lib/provider.mjs';
 
 // A fake runner — the seam that keeps every layer above gh.mjs offline.
@@ -27,4 +27,17 @@ test('ghJson reports non-JSON output as an error (does not throw)', async () => 
 test('assertReadProvider requires listIssues', () => {
   assert.throws(() => assertReadProvider({}), /listIssues/);
   assert.doesNotThrow(() => assertReadProvider({ listIssues() {} }));
+});
+
+test('makeGhRunner passes 64 MiB maxBuffer, 60s timeout, and SIGKILL to execFile', async () => {
+  let seenOpts = null;
+  const runner = makeGhRunner((bin, args, opts, cb) => {
+    seenOpts = opts;
+    cb(null, '[{"number":1}]', '');
+  });
+  const res = await runner(['issue', 'list'], { cwd: '/tmp' });
+  assert.equal(res.ok, true);
+  assert.equal(seenOpts.maxBuffer, 64 * 1024 * 1024);
+  assert.equal(seenOpts.timeout, 60_000);
+  assert.equal(seenOpts.killSignal, 'SIGKILL');
 });

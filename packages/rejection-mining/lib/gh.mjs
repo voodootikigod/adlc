@@ -4,14 +4,23 @@
 
 import { execFileSync } from 'node:child_process';
 
+const GH_MAX_BUFFER = 64 * 1024 * 1024;
+const GH_TIMEOUT_MS = 60_000;
+
 /**
  * Default gh runner: calls gh CLI via execFileSync.
  * Returns parsed JSON output.
  * @param {string[]} args
+ * @param {typeof execFileSync} [execFn]
  * @returns {string} raw stdout
  */
-export function runGh(args) {
-  return execFileSync('gh', args, { encoding: 'utf8' });
+export function runGh(args, execFn = execFileSync) {
+  return execFn('gh', args, {
+    encoding: 'utf8',
+    maxBuffer: GH_MAX_BUFFER,
+    timeout: GH_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+  });
 }
 
 /**

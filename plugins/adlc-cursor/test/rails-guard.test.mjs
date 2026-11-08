@@ -432,3 +432,16 @@ test('wire format: the real script reads stdin JSON and writes a {permission} ve
   assert.equal(verdict.permission, 'deny');
   assert.match(verdict.user_message, /frozen rail/);
 });
+
+test('dangling symlink pointing to a not-yet-existing rail file is denied', (t) => {
+  const root = fixture(t, { tickets: RAILED });
+  mkdirSync(join(root, 'src'), { recursive: true });
+  let linked = false;
+  try {
+    symlinkSync('frozen.js', join(root, 'src', 'dangling-alias.js'));
+    linked = true;
+  } catch { /* skip on FS without symlinks */ }
+  if (!linked) return;
+  const v = decide(payload('Write', 'src/dangling-alias.js'), { root, env: env() });
+  assert.equal(v.permission, 'deny', 'dangling symlink whose target is a frozen rail must deny');
+});

@@ -69,6 +69,7 @@ export type CompletionOptions = {
    * it to `true` (it exists specifically to resend one prompt N times).
    */
   readonly cacheable?: boolean;
+  readonly timeoutMs?: number;
 };
 export type CompletionRequest = CompletionOptions & {
   readonly apiKey: string;
@@ -85,6 +86,7 @@ export type FanProvidersResult =
 export const PROVIDER_NAMES: readonly string[];
 
 export function isAgyTimeout(output: string): boolean;
+export function parseAgyTimeoutMs(spec?: string): number;
 /** Map Gemini `usageMetadata` to usage; thinking tokens count as output. */
 export function usageFromGemini(raw: unknown): { inputTokens: number; outputTokens: number; cachedTokens: number } | null;
 export function complete(options: CompletionOptions, env?: Record<string, string | undefined>): Promise<string>;
@@ -157,7 +159,7 @@ export function hashFiles(
 ): Record<string, string | null>;
 
 export function validateTicket(ticket: unknown): string[];
-export function loadTickets(path?: string): { tickets: unknown[]; errors: string[] };
+export function loadTickets(path?: string): { tickets: unknown[]; snapshot: unknown | null; errors: string[] };
 export function ticketStoreExists(root?: string, override?: string | null): boolean;
 export function topoSort(tickets: Array<{ id: string; edges?: Array<{ to: string }> }>): {
   order: string[];
@@ -359,6 +361,11 @@ export function writeFileAtomic(
   content: string | NodeJS.ArrayBufferView,
   options?: { mode?: number }
 ): void;
+export function readBoundedRegularFile(
+  path: string,
+  maxBytes?: number,
+  deps?: Record<string, unknown>
+): string;
 export function acquireDirLock(
   lockDir: string,
   options?: { staleMs?: number }

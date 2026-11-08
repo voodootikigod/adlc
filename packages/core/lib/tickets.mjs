@@ -55,10 +55,11 @@ export function loadTickets(path = TICKETS_PATH) {
       : existsSync(directoryPath)
         ? new DirectoryTicketStore(directoryPath)
         : null;
-    if (!store) return { tickets: [], errors: [`tickets file not found: ${path}`] };
-    return { tickets: store.load().mutableTickets(), errors: [] };
+    if (!store) return { tickets: [], snapshot: null, errors: [`tickets file not found: ${path}`] };
+    const snapshot = store.load();
+    return { tickets: snapshot.mutableTickets(), snapshot, errors: [] };
   } catch (err) {
-    return { tickets: [], errors: Array.isArray(err.details) ? [...err.details] : [err.message] };
+    return { tickets: [], snapshot: null, errors: Array.isArray(err.details) ? [...err.details] : [err.message] };
   }
 }
 

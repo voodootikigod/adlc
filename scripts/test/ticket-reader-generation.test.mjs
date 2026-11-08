@@ -64,6 +64,16 @@ test('every shipped trusted-binary resolver is the canonical one, byte for byte'
   ]) assert.equal(readFileSync(join(ROOT, output), 'utf8'), source, `${output} drifted; run the generator`);
 });
 
+test('every shipped rail-path resolver is the canonical one, byte for byte', () => {
+  const source = readFileSync(join(ROOT, 'packages/core/lib/railpath.mjs'), 'utf8')
+    .replace('// GENERATED-RAILPATH SOURCE.', '// GENERATED FILE — DO NOT EDIT DIRECTLY.');
+  for (const output of [
+    'plugins/adlc-gemini/generated-railpath.mjs',
+    'plugins/adlc-codex/hooks/generated-railpath.mjs',
+    'plugins/adlc-copilot/hooks/generated-railpath.mjs',
+  ]) assert.equal(readFileSync(join(ROOT, output), 'utf8'), source, `${output} drifted; run the generator`);
+});
+
 test('no harness re-implements the glob matcher instead of importing it', () => {
   // Byte-equality above only binds the files that exist. This catches the other
   // direction: a NEW hand-rolled copy, which is how the drift started last time.

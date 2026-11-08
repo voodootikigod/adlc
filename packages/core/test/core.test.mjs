@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 
 import { execFileSync } from 'node:child_process';
 import * as corePublic from '../index.mjs';
-import { extractJson } from '../lib/llm.mjs';
+import { extractJson, parseAgyTimeoutMs } from '../lib/llm.mjs';
 import { appendEntry, canonicalJson, readEntries, sha256, hashFiles, withLedgerLock } from '../lib/ledger.mjs';
 import { resolveBase, refExists, changedFiles } from '../lib/git.mjs';
 import {
@@ -35,6 +35,20 @@ test('extractJson: array form', () => {
 
 test('extractJson: throws on no JSON', () => {
   assert.throws(() => extractJson('nothing here'));
+});
+
+test('extractJson: survives bracketed prose before fenced or raw JSON', () => {
+  const fenced = 'Analysis [see note 1] and {draft}:\n```json\n{"verdict": "approve", "count": 2}\n```';
+  assert.deepEqual(extractJson(fenced), { verdict: 'approve', count: 2 });
+  const unfenced = 'Summary [ticket T-001]: {"verdict": "needs-attention"}';
+  assert.deepEqual(extractJson(unfenced), { verdict: 'needs-attention' });
+});
+
+test('parseAgyTimeoutMs: parses ms, s, m units and falls back on malformed input', () => {
+  assert.equal(parseAgyTimeoutMs('300s'), 300_000);
+  assert.equal(parseAgyTimeoutMs('250ms'), 250);
+  assert.equal(parseAgyTimeoutMs('2m'), 120_000);
+  assert.equal(parseAgyTimeoutMs('invalid'), 300_000);
 });
 
 test('ledger: append + read round-trip, malformed lines reported not swallowed', (t) => {

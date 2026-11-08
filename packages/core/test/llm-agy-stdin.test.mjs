@@ -69,3 +69,15 @@ test('agy that reads the whole prompt and exits 0 resolves with its output', (t)
   assert.equal(r.status, 0, `driver exited ${r.status}: ${r.stdout}${r.stderr}`);
   assert.match(r.stdout, /^RESOLVED$/m);
 });
+
+test('agy that hangs past timeoutMs is killed and rejected by host-side timer', async (t) => {
+  const dir = tmp(t, 'adlc-agy-hang-');
+  const fake = join(dir, 'fake-agy');
+  writeFileSync(fake, '#!/bin/sh\ncat > /dev/null\nexec sleep 5\n');
+  chmodSync(fake, 0o755);
+  const { complete } = await import('../lib/llm.mjs');
+  await assert.rejects(
+    () => complete({ tier: 'cheap', prompt: 'hello', timeoutMs: 150 }, { ADLC_PROVIDER: 'agy', ADLC_AGY: fake }),
+    /agy: timed out waiting for response/
+  );
+});

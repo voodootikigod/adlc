@@ -10,7 +10,10 @@
 import { existsSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { loadTickets, globMatch, classifyShellCommand, collectPatchPaths, resolveRailPath, ticketStoreExists, TICKET_TRUST_ROOT_RAILS } from '@adlc/core';
-import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
+import {
+  resolveActiveTicketAgainst,
+  resolveActiveTicketId as resolveActiveTicketIdCanonical,
+} from './generated-active-ticket.mjs';
 
 // Re-exported for API stability: sibling adapters and tests may import the
 // symlink-aware resolver from this module even though @adlc/core owns it now.
@@ -147,10 +150,11 @@ export function resolveRailsInForce(root, env) {
   if (!active.id) {
     return { active: false, reason: 'no active ticket resolved' };
   }
-  const { tickets, errors } = loadTickets(ticketsPath);
+  const { snapshot, errors } = loadTickets(ticketsPath);
   if (errors.length) return { active: true, conflict: true, reason: `ticket store failed to load: ${errors[0]}` };
-  const ticket = tickets.find((t) => t.id === active.id);
-  if (!ticket) return { active: true, conflict: true, reason: `active ticket ${active.id} not found in ticket store` };
+  const against = resolveActiveTicketAgainst(snapshot, { root, env, allowLegacyPointer: true });
+  if (!against.ok) return { active: true, conflict: true, reason: against.message };
+  const { ticket } = against.value;
   return { active: true, conflict: false, ticketId: active.id, ticket, rails: normalizeRails([...(ticket?.rails ?? []), ...TRUST_ROOT_RAILS]) };
 }
 

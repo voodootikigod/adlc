@@ -5,11 +5,18 @@
 
 import { execFile } from 'node:child_process';
 
+const GH_MAX_BUFFER = 64 * 1024 * 1024;
+const GH_TIMEOUT_MS = 60_000;
+
 /** A real `gh` runner: resolves to {ok, code, stdout, stderr, error}. Never rejects. */
-export function makeGhRunner() {
-  return (args, { cwd } = {}) =>
+export function makeGhRunner(execFileFn = execFile) {
+  return (args, { cwd, timeout = GH_TIMEOUT_MS } = {}) =>
     new Promise((resolve) => {
-      execFile('gh', args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
+      execFileFn(
+        'gh',
+        args,
+        { cwd, encoding: 'utf8', maxBuffer: GH_MAX_BUFFER, timeout, killSignal: 'SIGKILL' },
+        (err, stdout, stderr) => {
         if (err) {
           const error = err.code === 'ENOENT' ? 'gh-not-found' : (stderr || err.message);
           resolve({ ok: false, code: typeof err.code === 'number' ? err.code : 1, stdout: stdout ?? '', stderr: stderr ?? '', error });
