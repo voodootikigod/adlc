@@ -16,9 +16,8 @@
 // Ordering is preserved and output still streams through, so a normal green run
 // looks the same as before.
 
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, realpathSync } from 'node:fs';
-import { availableParallelism } from 'node:os';
 import { join, delimiter, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -173,52 +172,7 @@ export const SEGMENTS = [
   ['docs app', 'node --test apps/docs/test/*.test.mjs'],
 ];
 
-/**
- * Resolve worker-pool concurrency for multi-segment runs.
- * Honors `ADLC_TEST_JOBS` when set to a positive integer; defaults to `min(4, availableParallelism())`.
- *
- * @param {NodeJS.ProcessEnv} [env]
- * @param {number} [available]
- * @returns {number}
- */
-export function resolveConcurrency(env = process.env, available = availableParallelism()) {
-  const raw = env?.ADLC_TEST_JOBS?.trim?.() ?? '';
-  if (/^[1-9]\d*$/.test(raw)) return Number(raw);
-  const safeAvailable = Number.isFinite(available) && available > 0 ? Math.floor(available) : 1;
-  return Math.max(1, Math.min(4, safeAvailable));
-}
-
-function runSegmentAsync(name, command, env) {
-  return new Promise((resolve) => {
-    const child = spawn(command, { shell: true, stdio: ['ignore', 'pipe', 'pipe'], env });
-    const chunks = [];
-    child.stdout?.on('data', (c) => chunks.push(c));
-    child.stderr?.on('data', (c) => chunks.push(c));
-    child.on('error', (err) => {
-      chunks.push(Buffer.from(`${err.stack ?? err.message ?? err}\n`));
-      resolve({ name, status: 1, signal: null, output: Buffer.concat(chunks) });
-    });
-    child.on('close', (status, signal) => {
-      resolve({ name, status, signal, output: Buffer.concat(chunks) });
-    });
-  });
-}
-
-async function runPool(segments, concurrency, env, onComplete) {
-  let cursor = 0;
-  const workerCount = Math.min(concurrency, segments.length);
-  const workers = Array.from({ length: workerCount }, async () => {
-    while (cursor < segments.length) {
-      const idx = cursor++;
-      const [name, command] = segments[idx];
-      const res = await runSegmentAsync(name, command, env);
-      onComplete(res);
-    }
-  });
-  await Promise.all(workers);
-}
-
-async function main() {
+function main() {
   const { env: segmentEnv, scrubbed } = buildSegmentEnv(process.env);
   if (scrubbed.length) {
     console.log(`note: ${scrubbed.join(', ')} set in your shell — scrubbed for test segments`);
@@ -232,27 +186,11 @@ async function main() {
   }
 
   const failed = [];
-  const concurrency = resolveConcurrency(process.env);
-  if (segments.length <= 1 || concurrency === 1) {
-    for (const [name, command] of segments) {
-      console.log(`\n─── ${name}`);
-      const result = spawnSync(command, { shell: true, stdio: 'inherit', env: segmentEnv });
-      // A signal (status null) is a failure too — never let a killed segment read as a pass.
-      if (result.status !== 0) failed.push({ name, status: result.status, signal: result.signal });
-    }
-  } else {
-    const parallelSegments = segments.filter(([name]) => name !== 'scripts');
-    const serialSegments = segments.filter(([name]) => name === 'scripts');
-    await runPool(parallelSegments, concurrency, segmentEnv, (res) => {
-      console.log(`\n─── ${res.name}`);
-      if (res.output.length) process.stdout.write(res.output);
-      if (res.status !== 0) failed.push({ name: res.name, status: res.status, signal: res.signal });
-    });
-    for (const [name, command] of serialSegments) {
-      console.log(`\n─── ${name}`);
-      const result = spawnSync(command, { shell: true, stdio: 'inherit', env: segmentEnv });
-      if (result.status !== 0) failed.push({ name, status: result.status, signal: result.signal });
-    }
+  for (const [name, command] of segments) {
+    console.log(`\n─── ${name}`);
+    const result = spawnSync(command, { shell: true, stdio: 'inherit', env: segmentEnv });
+    // A signal (status null) is a failure too — never let a killed segment read as a pass.
+    if (result.status !== 0) failed.push({ name, status: result.status, signal: result.signal });
   }
 
   console.log(`\n═══ ${segments.length - failed.length}/${segments.length} segments passed`);

@@ -18,7 +18,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { join, dirname, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AMBIENT_SESSION_ENV_VARS, buildSegmentEnv, packageHasTests, packageSegments, resolveConcurrency, SCRUBBED_ENV_VARS, shouldScrubEnvValue } from '../run-tests.mjs';
+import { AMBIENT_SESSION_ENV_VARS, buildSegmentEnv, packageHasTests, packageSegments, SCRUBBED_ENV_VARS, shouldScrubEnvValue } from '../run-tests.mjs';
 
 const REPO_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
@@ -248,15 +248,4 @@ test('packageSegments includes cli-test and adapter-test globs and skips package
   assert.match(segs[0][1], /adapter-test\/\*\.test\.mjs/);
   assert.doesNotMatch(segs[1][1], /cli-test/);
   assert.doesNotMatch(segs[1][1], /adapter-test/);
-});
-
-test('resolveConcurrency honors ADLC_TEST_JOBS and clamps default parallelism to [1, 4]', () => {
-  assert.equal(resolveConcurrency({ ADLC_TEST_JOBS: '1' }, 16), 1);
-  assert.equal(resolveConcurrency({ ADLC_TEST_JOBS: '6' }, 2), 6);
-  assert.equal(resolveConcurrency({ ADLC_TEST_JOBS: '0' }, 8), 4);
-  assert.equal(resolveConcurrency({ ADLC_TEST_JOBS: '-2' }, 8), 4);
-  assert.equal(resolveConcurrency({ ADLC_TEST_JOBS: 'abc' }, 8), 4);
-  assert.equal(resolveConcurrency({}, 8), 4);
-  assert.equal(resolveConcurrency({}, 2), 2);
-  assert.equal(resolveConcurrency({}, 0), 1);
 });
