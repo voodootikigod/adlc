@@ -13,26 +13,109 @@
 // worktree is still the cwd, so the git diff sees the ticket branch, but the
 // executable is trusted. `reviewBin` is configurable for a pinned absolute path.
 
-import { isAbsolute, join, delimiter } from 'node:path';
-import { existsSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join, delimiter, resolve, sep } from 'node:path';
+import { accessSync, constants as fsConstants, realpathSync, statSync } from 'node:fs';
+import { candidateRejection, candidateStats, ownershipRejection } from '@adlc/core';
 import { spawnAsync } from './spawn-async.mjs';
 import { denyNeverExempt } from './env-scrub.mjs';
+import { REVIEW_PROVIDER_RE } from './prosecutor-config.mjs';
+
+const NODE_MODULES_SEG_RE = /(?:^|[\\/])node_modules(?:[\\/]|$)/;
+
+function isInsideWorktree(candidate, worktree) {
+  if (!worktree) return false;
+  const wt = resolve(worktree);
+  const resolved = resolve(candidate);
+  if (resolved === wt || resolved.startsWith(wt + sep)) return true;
+  try {
+    const wtReal = realpathSync(wt);
+    const candReal = realpathSync(resolved);
+    if (candReal === wtReal || candReal.startsWith(wtReal + sep)) return true;
+  } catch { /* synthetic test paths may not exist on disk */ }
+  return false;
+}
+
+function isExecutableFile(candidate) {
+  try {
+    if (!statSync(candidate).isFile()) return false;
+    if (process.platform !== 'win32') accessSync(candidate, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isTrustedPathDir(dir, selfUid) {
+  if (selfUid === null) return true;
+  let st;
+  try {
+    st = statSync(dir);
+  } catch {
+    // Non-existent synthetic PATH entries in unit tests cannot hold binaries anyway.
+    return true;
+  }
+  if (!st.isDirectory()) return false;
+  if (st.uid === selfUid) return true;
+  return st.uid === 0 && (st.mode & 0o022) === 0;
+}
+
+/** Sanitize a PATH string to absolute, non-node_modules, trusted-owner directories strictly outside `worktree`. */
+export function sanitizeTrustedPath(pathStr, worktree) {
+  const selfUid = typeof process.getuid === 'function' ? process.getuid() : null;
+  return String(pathStr ?? '')
+    .split(delimiter)
+    .filter(
+      (d) =>
+        d &&
+        d !== '.' &&
+        isAbsolute(d) &&
+        !NODE_MODULES_SEG_RE.test(d) &&
+        !isInsideWorktree(d, worktree) &&
+        isTrustedPathDir(d, selfUid)
+    )
+    .join(delimiter);
+}
 
 /**
- * Resolve a review binary to an ABSOLUTE trusted path (adversarial-review L1/M2).
- * An absolute reviewBin is used as-is. A bare name is resolved ONLY against
- * absolute PATH directories that are not the worktree — relative entries
- * (`''`, `.`, or any non-absolute/worktree dir) are rejected so exec can never
- * resolve a worker-planted binary relative to cwd=worktree. Returns null if no
- * trusted absolute path is found (→ prosecution fails closed).
+ * Resolve a binary to an ABSOLUTE trusted executable file path (adversarial-review L1/M2).
+ * Rejects empty/non-string/leading-dash inputs, relative paths containing separators,
+ * `node_modules` segments, directories, non-executable files (preventing 0644 PATH shadowing),
+ * untrusted ownership / world-writable root dirs (`ownershipRejection`), and any path (or
+ * symlink target) inside `worktree` — even when `isAbsolute(bin)` is true.
+ * Returns null if no trusted absolute executable file is found (→ fail closed).
  */
 export function resolveTrustedBin(bin, pathStr, worktree) {
-  if (isAbsolute(bin)) return existsSync(bin) ? bin : null;
+  if (typeof bin !== 'string' || bin.length === 0 || bin.includes('\0') || bin.startsWith('-')) return null;
+  const selfUid = typeof process.getuid === 'function' ? process.getuid() : null;
+  if (isAbsolute(bin)) {
+    if (NODE_MODULES_SEG_RE.test(bin) || isInsideWorktree(bin, worktree)) return null;
+    if (!isExecutableFile(bin)) return null;
+    if (selfUid !== null) {
+      try {
+        const stats = candidateStats(bin, dirname(bin), basename(bin), statSync(bin), selfUid);
+        if (ownershipRejection(stats, selfUid) !== null) return null;
+      } catch {
+        return null;
+      }
+    }
+    return bin;
+  }
+  if (bin.includes('/') || bin.includes('\\')) return null;
   const dirs = String(pathStr ?? '').split(delimiter)
-    .filter((d) => d && d !== '.' && isAbsolute(d) && !(worktree && (d === worktree || d.startsWith(worktree + '/'))));
+    .filter((d) => d && d !== '.' && isAbsolute(d) && !NODE_MODULES_SEG_RE.test(d) && !isInsideWorktree(d, worktree));
   for (const d of dirs) {
     const p = join(d, bin);
-    if (existsSync(p)) return p;
+    if (isInsideWorktree(p, worktree) || !isExecutableFile(p)) continue;
+    if (selfUid !== null) {
+      let stats = null;
+      try {
+        stats = candidateStats(p, d, bin, statSync(p), selfUid);
+      } catch {
+        stats = null;
+      }
+      if (candidateRejection(d, stats, selfUid) !== null) continue;
+    }
+    return p;
   }
   return null;
 }
@@ -60,6 +143,9 @@ export function boundedTimeout(base, call) {
 export const DEFAULT_REVIEW_TIMEOUT_MS = 600000;
 export function makeReviewRunner({ spawn = defaultSpawn, reviewBin = 'adversarial-review', trustedPath, resolveBin = resolveTrustedBin, provider, failOn = 'medium', timeoutMs = DEFAULT_REVIEW_TIMEOUT_MS, env: source = process.env, maxBytes = null } = {}) {
   return async ({ worktree, startSha, timeoutMs: callTimeoutMs = null }) => {
+    if (provider != null && (typeof provider !== 'string' || !REVIEW_PROVIDER_RE.test(provider))) {
+      return { ok: false, reason: 'invalid adversarial-review provider identifier — failing closed' };
+    }
     const args = ['--base', startSha, '--json', '--fail-on', failOn];
     if (provider) args.push('--provider', provider);
     // fleet-ext item 8: the reviewer's inline-diff grounding limit is forwarded
@@ -72,10 +158,10 @@ export function makeReviewRunner({ spawn = defaultSpawn, reviewBin = 'adversaria
     // cwd=worktree (M2). Fail closed if no trusted binary is found.
     const bin = resolveBin(reviewBin, path, worktree);
     if (!bin) {
-      return { ok: false, reason: `no trusted adversarial-review binary on a safe PATH (set config.reviewBin to an absolute path) — failing closed` };
+      return { ok: false, reason: 'no trusted adversarial-review binary on a safe PATH (pass --review-bin with an absolute path) — failing closed' };
     }
     // Sanitize PATH to absolute, non-worktree dirs for the child too.
-    const safePath = String(path ?? '').split(delimiter).filter((d) => d && d !== '.' && isAbsolute(d) && !(d === worktree || d.startsWith(worktree + '/'))).join(delimiter);
+    const safePath = sanitizeTrustedPath(path, worktree);
 
     // #446: the PROSECUTOR must not hold the credential that could forge its own
     // verdict. `NEVER_EXEMPT` exists because a process with the ledger signing

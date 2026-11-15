@@ -379,14 +379,15 @@ export const MAX_MASKED_LINE: number;
 export function maskSecretText(text: string): string;
 export function maskRemovedSecrets(diff: string): string;
 export function readVerdictSource(source: string): Promise<string>;
-export function recordPromptOnlyVerdict<T = unknown>(options?: {
+export function recordPromptOnlyVerdict<T = unknown>(options: {
   gate?: string;
   ticket?: string;
   verdict: string;
   extra?: Record<string, unknown>;
   dir?: string;
-  recordFn?: (params: { gate?: string; ticket?: string; rawData: string; dir?: string }) => T;
+  recordFn: (params: { gate?: string; ticket?: string; rawData: string; dir?: string }) => T;
 }): T;
+export function escapeSeatbeltPath(pathValue: string): string;
 
 // lib/inflight.mjs
 export function makeTempPath(targetPath: string, pid?: number): string;

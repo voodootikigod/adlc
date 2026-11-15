@@ -87,19 +87,23 @@ test('gate/init/allowedCommands pass through from config', () => {
   assert.deepEqual(c.allowedCommands, ['node x']);
 });
 
-test('envPassthrough, adlcBin, and canary plumb through resolveRunConfig with validation (#639)', () => {
+test('envPassthrough and canary plumb through resolveRunConfig; adlcBin/reviewBin are operator-local (#639)', () => {
   const defaults = resolveRunConfig({}, {});
   assert.deepEqual(defaults.envPassthrough, []);
   assert.equal(defaults.adlcBin, null);
+  assert.equal(defaults.reviewBin, null);
   assert.equal(defaults.canary, true);
 
   const configured = resolveRunConfig({
     envPassthrough: ['X', 'CUSTOM_VAR'],
-    adlcBin: 'a',
     canary: false,
-  }, {});
+  }, {
+    adlcBin: '/opt/trusted/adlc',
+    reviewBin: '/opt/trusted/adversarial-review',
+  });
   assert.deepEqual(configured.envPassthrough, ['X', 'CUSTOM_VAR']);
-  assert.equal(configured.adlcBin, 'a');
+  assert.equal(configured.adlcBin, '/opt/trusted/adlc');
+  assert.equal(configured.reviewBin, '/opt/trusted/adversarial-review');
   assert.equal(configured.canary, false);
   assert.deepEqual(configured.warnings, []);
 
@@ -120,12 +124,15 @@ test('envPassthrough, adlcBin, and canary plumb through resolveRunConfig with va
     assert.ok(r.warnings.some((w) => /fleet\.envPassthrough must be an array of non-empty strings/.test(w)));
   }
 
-  // Malformed adlcBin warns and falls back to null
-  for (const bad of ['', 42, false]) {
-    const r = resolveRunConfig({ adlcBin: bad }, {});
+  // Repo-committed adlcBin or reviewBin warns with SECURITY and resolves to null
+  for (const val of ['adlc', '/evil/adlc', '', 42, false]) {
+    const r = resolveRunConfig({ adlcBin: val }, {});
     assert.equal(r.adlcBin, null);
-    assert.ok(r.warnings.some((w) => /fleet\.adlcBin must be a non-empty string/.test(w)));
+    assert.ok(r.warnings.some((w) => /SECURITY:.*fleet\.adlcBin.*operator-local/.test(w)));
   }
+  const rRev = resolveRunConfig({ reviewBin: './fake-review' }, {});
+  assert.equal(rRev.reviewBin, null);
+  assert.ok(rRev.warnings.some((w) => /SECURITY:.*fleet\.reviewBin.*operator-local/.test(w)));
 
   // Malformed canary warns and falls back to true
   for (const bad of ['false', 0, {}]) {

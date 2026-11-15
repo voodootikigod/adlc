@@ -37,7 +37,9 @@ export function makeProvisionFn(opts) {
     baselineRef = 'HEAD',
     independentApprovalFn = null,
     timeout = 120_000,
+    maxEnvScanDirs,
   } = opts;
+  const envMaskCache = new Map();
 
   return async function provision(candidate) {
     let cloneDir = null;
@@ -47,6 +49,8 @@ export function makeProvisionFn(opts) {
         sandboxType,
         unsafeNoSandbox,
         timeout,
+        maxEnvScanDirs,
+        envMaskCache,
       });
       cloneDir = provisioned.cloneDir;
 
@@ -72,7 +76,10 @@ export function makeProvisionFn(opts) {
         const r = runGateSandboxed(argv, cloneDir, {
           sandboxType,
           unsafeNoSandbox,
+          repoRoot,
           timeout,
+          maxEnvScanDirs,
+          envMaskCache,
         });
         return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr };
       };
@@ -85,7 +92,10 @@ export function makeProvisionFn(opts) {
           sandboxType,
           unsafeNoSandbox,
           confineDir: cloneDir, // writes ALWAYS confined to the candidate clone
+          repoRoot,
           timeout,
+          maxEnvScanDirs,
+          envMaskCache,
         });
       };
 

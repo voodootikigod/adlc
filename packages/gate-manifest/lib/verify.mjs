@@ -5,7 +5,7 @@
 
 import { sha256, ledgerPath, ADLC_DIR } from '@adlc/core';
 import { verifyEntrySig } from './sign.mjs';
-import { discoverSegments, readRawLines, segmentPath, resolveAnchor, detectAnchorCycle } from './forest.mjs';
+import { discoverSegments, readRawLines, segmentPath, resolveAnchor, detectAnchorCycle, validateForestMarker, hasManifestCutoverTail, checkForestSignedEra, isUnsignedKeyedRoot } from './forest.mjs';
 import { validateKeyParam } from '@adlc/tickets/lib/key-contract.mjs';
 
 /**
@@ -95,15 +95,16 @@ export function verifyChain(nonEmpty, { key, requireSignatures, anchorOnFirst })
     // writer's empty file (or an empty file dropped by tampering) verify as
     // a legitimate null-anchored zero-entry segment.
     if (anchorOnFirst) {
-      return { valid: false, message: 'empty segment file has no first entry to carry the required anchor', count: 0, signed: false, break: { seq: null, lineNo: null, reason: 'empty segment file' }, lastRawLine: null, firstAnchor: undefined };
+      return { valid: false, message: 'empty segment file has no first entry to carry the required anchor', count: 0, signed: false, break: { seq: null, lineNo: null, reason: 'empty segment file' }, lastRawLine: null, firstAnchor: undefined, sawSignedEntry: false, firstUnsigned: null };
     }
-    return { valid: true, message: 'empty manifest', count: 0, signed: false, break: null, lastRawLine: null, firstAnchor: undefined };
+    return { valid: true, message: 'empty manifest', count: 0, signed: false, break: null, lastRawLine: null, firstAnchor: undefined, sawSignedEntry: false, firstUnsigned: null };
   }
 
   let prevRawLine = null;
   let prevSeq = null;
   let firstAnchor;
   let seenSignedEntry = false; // set once an entry with a verified sig has been seen (per-chain)
+  let firstUnsigned = null;
 
   for (const { line, lineNo } of nonEmpty) {
     let entry;
@@ -181,6 +182,7 @@ export function verifyChain(nonEmpty, { key, requireSignatures, anchorOnFirst })
     if (key !== null) {
       const hasSig = entry.sig !== undefined && entry.sig !== null;
       if (!hasSig) {
+        if (firstUnsigned === null) firstUnsigned = { seq: entry.seq, lineNo };
         const toleratedLegacyPrefix = !requireSignatures && !seenSignedEntry;
         if (!toleratedLegacyPrefix) {
           return fail(lineNo - 1, { seq: entry.seq, lineNo, reason: 'unsigned entry' }, `chain broken at seq ${entry.seq} (line ${lineNo}): unsigned entry`);
@@ -205,10 +207,12 @@ export function verifyChain(nonEmpty, { key, requireSignatures, anchorOnFirst })
     break: null,
     lastRawLine: prevRawLine,
     firstAnchor,
+    sawSignedEntry: seenSignedEntry,
+    firstUnsigned,
   };
 
   function fail(count, breakInfo, message) {
-    return { valid: false, message, count, signed: false, break: breakInfo, lastRawLine: null, firstAnchor: undefined };
+    return { valid: false, message, count, signed: false, break: breakInfo, lastRawLine: null, firstAnchor: undefined, sawSignedEntry: false, firstUnsigned: null };
   }
 }
 
@@ -246,6 +250,18 @@ export function verify(dir = ADLC_DIR, { requireSignatures = true, requireEntrie
     };
   }
 
+  const markerCheck = validateForestMarker(dir);
+  if (!markerCheck.ok) {
+    return {
+      valid: false,
+      message: `manifest.d/.store.json: ${markerCheck.reason}`,
+      count: 0,
+      segments: segmentNames.length,
+      signed: false,
+      break: { seq: null, lineNo: null, reason: markerCheck.reason, segment: '.store.json' },
+    };
+  }
+
   if (segmentNames.length === 0) {
     if (requireEntries && rootRaw.length === 0) {
       const reason = 'empty manifest (--require-entries requires at least one entry)';
@@ -264,6 +280,10 @@ export function verify(dir = ADLC_DIR, { requireSignatures = true, requireEntrie
     // consistent contract (an AC2 golden test never inspects break.segment,
     // since the pre-forest verifier never had one to match).
     const result = verifyChain(rootRaw, { key, requireSignatures, anchorOnFirst: false });
+    if (isUnsignedKeyedRoot(markerCheck.auth, key, requireSignatures, result)) {
+      const u = result.firstUnsigned;
+      return { valid: false, message: `chain broken at seq ${u.seq} (line ${u.lineNo}): unsigned entry`, count: result.count, segments: 0, signed: false, break: { seq: u.seq, lineNo: u.lineNo, reason: 'unsigned entry', segment: 'root' } };
+    }
     return { valid: result.valid, message: result.message, count: result.count, segments: 0, signed: result.signed, break: result.break ? { ...result.break, segment: 'root' } : null };
   }
 
@@ -278,6 +298,7 @@ export function verify(dir = ADLC_DIR, { requireSignatures = true, requireEntrie
   const chainsBySeq = new Map(); // 'root' | segmentName -> Map(seq -> rawLine)
   chainsBySeq.set('root', seqMap(rootRaw));
   const anchorBySegment = new Map(); // segmentName -> anchor (object or null)
+  const segmentResults = new Map(); // segmentName -> VerifyResult
   let totalCount = rootResult.count;
   // An empty chain (root-less repo's empty root, or a degenerate empty segment
   // file) reports signed:false on its own — it has nothing to sign — but must
@@ -292,6 +313,7 @@ export function verify(dir = ADLC_DIR, { requireSignatures = true, requireEntrie
     }
     chainsBySeq.set(name, seqMap(raw));
     anchorBySegment.set(name, result.firstAnchor === undefined ? null : result.firstAnchor);
+    segmentResults.set(name, result);
     totalCount += result.count;
     allSigned = allSigned && (result.count === 0 ? true : result.signed);
   }
@@ -309,6 +331,33 @@ export function verify(dir = ADLC_DIR, { requireSignatures = true, requireEntrie
   const cycleCheck = detectAnchorCycle(anchorBySegment);
   if (!cycleCheck.ok) {
     return { valid: false, message: `manifest.d/${cycleCheck.segment}: anchor cycle detected`, count: totalCount, segments: segmentNames.length, signed: false, break: { seq: null, lineNo: null, reason: 'anchor cycle', segment: cycleCheck.segment } };
+  }
+
+  // Enforce monotonic signed-era inheritance across segments under lenient verification.
+  if (key !== null && !requireSignatures) {
+    const eraCheck = checkForestSignedEra({
+      declaredAuth: markerCheck.auth,
+      rootEmpty: rootRaw.length === 0,
+      rootCutover: hasManifestCutoverTail(rootRaw),
+      segmentNames,
+      anchorBySegment,
+      rootSawSigned: rootResult.sawSignedEntry,
+      rootFirstUnsigned: rootResult.firstUnsigned,
+      segmentResults,
+    });
+    if (!eraCheck.ok) {
+      const u = eraCheck.firstUnsigned;
+      const msg = `chain broken at seq ${u.seq} (line ${u.lineNo}): unsigned entry`;
+      const prefix = eraCheck.segment === 'root' ? '' : `manifest.d/${eraCheck.segment}: `;
+      return {
+        valid: false,
+        message: `${prefix}${msg}`,
+        count: totalCount,
+        segments: segmentNames.length,
+        signed: false,
+        break: { seq: u.seq, lineNo: u.lineNo, reason: 'unsigned entry', segment: eraCheck.segment },
+      };
+    }
   }
 
   const signed = allSigned; // signed:true only when every chain in the forest verified signed

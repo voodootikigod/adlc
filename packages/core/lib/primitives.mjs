@@ -20,7 +20,6 @@ import {
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { opError, readStdin } from './cli.mjs';
-import { appendEntry } from './ledger.mjs';
 import { procStartTimeOf } from './proc.mjs';
 
 const SECRET_REGEX =
@@ -217,7 +216,12 @@ export async function readVerdictSource(source) {
 }
 
 /**
- * Record a prompt-only verdict into .adlc/manifest.jsonl.
+ * Record a prompt-only verdict via the caller-supplied gate-manifest writer.
+ *
+ * `recordFn` is required: writing raw unsequenced JSON via `appendEntry('manifest')`
+ * bypasses `.adlc/manifest.d/` segment routing and breaks hash-chain verification.
+ * All in-repo callers (`@adlc/coldstart`, `@adlc/parallax`, and `@adlc/premortem`
+ * `verdict.mjs`) pass `@adlc/gate-manifest`'s `record` callback.
  *
  * @param {object} options
  * @param {string} [options.gate]
@@ -225,15 +229,32 @@ export async function readVerdictSource(source) {
  * @param {string} options.verdict
  * @param {Record<string, unknown>} [options.extra]
  * @param {string} [options.dir]
- * @param {(params: { gate?: string; ticket?: string; rawData: string; dir?: string }) => unknown} [options.recordFn]
+ * @param {(params: { gate?: string; ticket?: string; rawData: string; dir?: string }) => unknown} options.recordFn
  * @returns {unknown}
  */
 export function recordPromptOnlyVerdict({ gate, ticket, verdict, extra = {}, dir, recordFn } = {}) {
-  const data = { ...extra, promptOnly: true, usageStatus: 'unreported', verdict };
-  if (recordFn) {
-    return recordFn({ gate, ticket, rawData: JSON.stringify(data), dir });
+  if (typeof recordFn !== 'function') {
+    throw new TypeError('recordPromptOnlyVerdict requires a recordFn from @adlc/gate-manifest');
   }
-  return appendEntry('manifest', { gate, ticket, data }, dir);
+  const data = { ...extra, promptOnly: true, usageStatus: 'unreported', verdict };
+  return recordFn({ gate, ticket, rawData: JSON.stringify(data), dir });
+}
+
+/**
+ * Escape backslashes and double quotes in a path for safe inclusion inside a
+ * macOS Seatbelt (`sandbox-exec -p`) SBPL double-quoted string literal, and
+ * refuse NUL or line-terminator characters that could truncate C strings or
+ * break profile parsing.
+ *
+ * @param {string} pathValue
+ * @returns {string}
+ */
+export function escapeSeatbeltPath(pathValue) {
+  const str = String(pathValue);
+  if (/[\0\r\n]/.test(str)) {
+    throw new Error('Seatbelt path cannot contain NUL or line-terminator characters');
+  }
+  return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
 /**

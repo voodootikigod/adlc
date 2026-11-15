@@ -13,6 +13,14 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { NEVER_EXEMPT } from './env-scrub.mjs';
+import {
+  PROSECUTE_SEVERITIES,
+  REVIEW_PROVIDER_RE,
+  validateProsecutorFlags,
+  resolveProsecutorConfig,
+} from './prosecutor-config.mjs';
+
+export { PROSECUTE_SEVERITIES, REVIEW_PROVIDER_RE, validateProsecutorFlags };
 
 export const DEFAULTS = Object.freeze({
   concurrency: 2,
@@ -223,16 +231,22 @@ export function resolveRunConfig(config = {}, flags = {}) {
       warnings.push('warning: .adlc/config.json fleet.envPassthrough must be an array of non-empty strings — ignored.');
     }
   }
-  let adlcBin = null;
-  if (config.adlcBin != null) {
-    if (typeof config.adlcBin === 'string' && config.adlcBin.length > 0) adlcBin = config.adlcBin;
-    else warnings.push('warning: .adlc/config.json fleet.adlcBin must be a non-empty string — ignored.');
-  }
   let canary = true;
   if (config.canary != null) {
     if (typeof config.canary === 'boolean') canary = config.canary;
     else warnings.push('warning: .adlc/config.json fleet.canary must be a boolean — using true.');
   }
+  if (flags.adapterCommand != null && (typeof flags.adapterCommand !== 'string' || flags.adapterCommand === '' || flags.adapterCommand.startsWith('-') || flags.adapterCommand.includes('\0'))) {
+    throw new Error('--adapter-command must be a non-empty executable name or path without NUL bytes or a leading "-"');
+  }
+  const effectiveAdapter = flags.adapter ?? 'claude-code';
+  const effectiveModel = flags.model ?? null;
+  const { adlcBin, reviewBin, prosecuteFailOn, reviewProvider, reviewProviderSource, repoReviewProvider } = resolveProsecutorConfig(config, flags, {
+    defaultFailOn: DEFAULTS.prosecuteFailOn,
+    effectiveAdapter,
+    effectiveModel,
+    warnings,
+  });
   return {
     gate: config.gate ?? null,
     init: config.init ?? null,
@@ -243,9 +257,11 @@ export function resolveRunConfig(config = {}, flags = {}) {
     concurrency: flags.concurrency ?? config.concurrency ?? DEFAULTS.concurrency,
     base: flags.base ?? config.base ?? DEFAULTS.base,
     timeoutMinutes: config.timeoutMinutes ?? DEFAULTS.timeoutMinutes,
-    prosecuteFailOn: config.prosecuteFailOn ?? DEFAULTS.prosecuteFailOn,
-    reviewBin: config.reviewBin ?? null,
-    reviewProvider: config.reviewProvider ?? null,
+    prosecuteFailOn,
+    reviewBin,
+    reviewProvider,
+    reviewProviderSource,
+    repoReviewProvider: repoReviewProvider ?? null,
     reviewMaxBytes,
     // OPERATOR-LOCAL, and the most dangerous of the three.
     //
@@ -261,7 +277,7 @@ export function resolveRunConfig(config = {}, flags = {}) {
     // with weaker worker containment (only claude-code installs a per-worktree
     // permission allowlist). Default 'claude-code' — fully contained. The worker
     // BINARY override (adapterCommand/adapterArgs, A2) is likewise CLI-only.
-    adapter: flags.adapter ?? 'claude-code',
+    adapter: effectiveAdapter,
     // The worker MODEL is operator-local too, as of the quartermaster layer.
     //
     // It used to be read from repo config as "non-executable data". That was only
@@ -271,7 +287,7 @@ export function resolveRunConfig(config = {}, flags = {}) {
     // `fleet.model` would be a candidate tree choosing the model that builds and
     // judges it — the exact downgrade operating-stack §4/§10 exist to forbid. So
     // it moves to the CLI, alongside `adapter`, and a repo value is warned + ignored.
-    model: flags.model ?? null,
+    model: effectiveModel,
     adapterStdin: config.adapterStdin === true,
     adapterCommand: flags.adapterCommand ?? null,
     adapterArgs: flags.adapterArgs ?? null,

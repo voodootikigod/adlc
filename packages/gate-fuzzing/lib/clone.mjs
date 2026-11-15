@@ -81,20 +81,22 @@ export function provisionClone(candidate, opts) {
     spawnFn,
     mkdtempFn = mkdtempSync,
     timeout = 120_000,
+    maxEnvScanDirs,
+    envMaskCache = new Map(),
   } = opts;
 
   const cloneDir = mkdtempFn(join(tmpRoot, 'gf-clone-'));
   // Until this returns, the caller has no path to destroy: any throw (a failed
   // clone, a patch write error, the no-sandbox refusal) removes the clone here.
   try {
-    return populateClone(candidate, cloneDir, { repoRoot, sandboxType, unsafeNoSandbox, spawnFn, timeout });
+    return populateClone(candidate, cloneDir, { repoRoot, sandboxType, unsafeNoSandbox, spawnFn, timeout, maxEnvScanDirs, envMaskCache });
   } catch (e) {
     safeDestroy(cloneDir);
     throw e;
   }
 }
 
-function populateClone(candidate, cloneDir, { repoRoot, sandboxType, unsafeNoSandbox, spawnFn, timeout }) {
+function populateClone(candidate, cloneDir, { repoRoot, sandboxType, unsafeNoSandbox, spawnFn, timeout, maxEnvScanDirs, envMaskCache }) {
   // 2. Disposable clone with --no-hardlinks (Fix 2). Hardened git.
   const clone = hardenedGit(
     ['clone', '--local', '--no-hardlinks', repoRoot, cloneDir],
@@ -129,7 +131,10 @@ function populateClone(candidate, cloneDir, { repoRoot, sandboxType, unsafeNoSan
       sandboxType,
       unsafeNoSandbox,
       cwd: cloneDir,
+      repoRoot,
       timeout,
+      maxEnvScanDirs,
+      envMaskCache,
     });
     setupResults.push({
       step: step.join(' '),
@@ -153,7 +158,7 @@ function populateClone(candidate, cloneDir, { repoRoot, sandboxType, unsafeNoSan
  *
  * @param {{cmd:string, args?:string[]}} witnessSpec
  * @param {string} targetDir - directory to run the witness against (chdir)
- * @param {object} opts - { sandboxType, unsafeNoSandbox, timeout, confineDir }
+ * @param {object} opts - { sandboxType, unsafeNoSandbox, timeout, confineDir, repoRoot }
  * @returns {{status:number, timedOut:boolean}}
  */
 export function runWitnessSandboxed(witnessSpec, targetDir, opts) {
@@ -166,7 +171,10 @@ export function runWitnessSandboxed(witnessSpec, targetDir, opts) {
       unsafeNoSandbox: opts.unsafeNoSandbox,
       cwd: targetDir,
       workDir: targetDir,
+      repoRoot: opts.repoRoot,
       timeout: opts.timeout ?? 60_000,
+      maxEnvScanDirs: opts.maxEnvScanDirs,
+      envMaskCache: opts.envMaskCache,
     }
   );
   return { status: res.exitCode, timedOut: res.timedOut };
@@ -179,7 +187,7 @@ export function runWitnessSandboxed(witnessSpec, targetDir, opts) {
  *
  * @param {string[]} gateArgv - [cmd, ...args]
  * @param {string} cloneDir
- * @param {object} opts - { sandboxType, unsafeNoSandbox, timeout }
+ * @param {object} opts - { sandboxType, unsafeNoSandbox, timeout, repoRoot }
  * @returns {{exitCode:number, stdout:string, stderr:string}}
  */
 export function runGateSandboxed(gateArgv, cloneDir, opts) {
@@ -187,7 +195,10 @@ export function runGateSandboxed(gateArgv, cloneDir, opts) {
     sandboxType: opts.sandboxType,
     unsafeNoSandbox: opts.unsafeNoSandbox,
     cwd: cloneDir,
+    repoRoot: opts.repoRoot,
     timeout: opts.timeout ?? 120_000,
+    maxEnvScanDirs: opts.maxEnvScanDirs,
+    envMaskCache: opts.envMaskCache,
   });
 }
 

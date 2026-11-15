@@ -7,15 +7,19 @@
 // record.mjs (writer, a later slice) will use discoverSegments + segmentPath for
 // lineage routing.
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { sha256, ledgerPath, ADLC_DIR } from '@adlc/core';
 import {
   SEGMENT_DIRNAME,
+  MARKER_FORMAT,
+  MARKER_VERSION,
   segmentDirPath,
   segmentPath,
   discoverSegments,
   ulidOf,
   looksLikeGenuineLedgerLock,
+  markerPath,
+  readBoundedJsonNoFollow,
 } from '@adlc/tickets/lib/manifest-primitives.mjs';
 
 export {
@@ -174,33 +178,42 @@ export function readManifestForest(dir = ADLC_DIR) {
     bySegment.set(name, { entries: parsed.entries, anchor });
   }
 
-  // Depth from root/null (0), walking anchor.segment links. Today's writer
-  // (§7.1) only ever anchors to root or null, so every segment is depth 0 in
-  // practice — but the format (§4.4) also allows anchoring to another
-  // segment (repair-chain, §10, may produce this), and the (anchored-to
-  // segment, anchored-to seq, ULID) sort key alone would then sort a child
-  // BEFORE its parent whenever the parent's name string-sorts after the
-  // child's (e.g. parent 'root' vs a lowercase-named parent segment).
-  // Sorting by depth first guarantees a parent always precedes any segment
-  // anchored to it, transitively; the spec's 3-key tuple then breaks ties
-  // among segments at the same depth.
+  const anchorMap = new Map();
+  for (const [name, info] of bySegment.entries()) anchorMap.set(name, info.anchor);
+  const orderedNames = orderSegmentNames(segmentNames, anchorMap);
+
+  const entries = [...root.entries];
+  for (const name of orderedNames) entries.push(...bySegment.get(name).entries);
+
+  return { entries, skipped };
+}
+
+/**
+ * Deterministically order segment names so every parent precedes its anchored
+ * children, breaking ties by (anchor.segment, anchor.seq, ULID, filename).
+ *
+ * @param {string[]} segmentNames
+ * @param {Map<string, object|null>} anchorBySegment
+ * @returns {string[]}
+ */
+export function orderSegmentNames(segmentNames, anchorBySegment) {
   const depthCache = new Map();
   function depthOf(name, seen = new Set()) {
     if (depthCache.has(name)) return depthCache.get(name);
-    if (seen.has(name)) return 0; // cycle — verify() rejects this forest; don't hang here
+    if (seen.has(name)) return 0;
     seen.add(name);
-    const anchor = bySegment.get(name)?.anchor;
+    const anchor = anchorBySegment.get(name);
     const target = anchor?.segment;
-    const depth = target && target !== 'root' && bySegment.has(target) ? depthOf(target, seen) + 1 : 0;
+    const depth = target && target !== 'root' && anchorBySegment.has(target) ? depthOf(target, seen) + 1 : 0;
     depthCache.set(name, depth);
     return depth;
   }
 
-  const orderedNames = [...segmentNames].sort((a, b) => {
+  return [...segmentNames].sort((a, b) => {
     const depthDiff = depthOf(a) - depthOf(b);
     if (depthDiff !== 0) return depthDiff;
-    const aa = bySegment.get(a).anchor;
-    const bb = bySegment.get(b).anchor;
+    const aa = anchorBySegment.get(a);
+    const bb = anchorBySegment.get(b);
     const aSeg = aa?.segment ?? '';
     const bSeg = bb?.segment ?? '';
     if (aSeg !== bSeg) return aSeg < bSeg ? -1 : 1;
@@ -210,16 +223,123 @@ export function readManifestForest(dir = ADLC_DIR) {
     const aUlid = ulidOf(a);
     const bUlid = ulidOf(b);
     if (aUlid !== bUlid) return aUlid < bUlid ? -1 : 1;
-    // Two different segments (different slugs) sharing a ULID is a
-    // near-impossible collision, not something §4.2 forbids outright — fall
-    // back to the full filename so the comparator is still total (a name
-    // never ties with a DIFFERENT name here, since discoverSegments already
-    // rejects same-name-different-case duplicates).
     return a < b ? -1 : a > b ? 1 : 0;
   });
+}
 
-  const entries = [...root.entries];
-  for (const name of orderedNames) entries.push(...bySegment.get(name).entries);
+/**
+ * Validate `.adlc/manifest.d/.store.json` fail-closed when present on disk:
+ * symlinks, non-regular files, oversized (`>= 4096` bytes) or malformed JSON,
+ * wrong format/version, or an unrecognized `auth` mode are rejected rather
+ * than silently degrading to `auth: null`.
+ *
+ * @param {string} [dir]
+ * @returns {{ok: true, auth: 'keyed'|'keyless'|null} | {ok: false, reason: string}}
+ */
+export function validateForestMarker(dir = ADLC_DIR) {
+  const path = markerPath(dir);
+  let st;
+  try {
+    st = lstatSync(path);
+  } catch (err) {
+    if (err?.code === 'ENOENT') return { ok: true, present: false, auth: null };
+    return { ok: false, reason: `cannot stat .store.json: ${err.message}` };
+  }
+  if (st.isSymbolicLink()) return { ok: false, reason: 'symlink' };
+  if (!st.isFile()) return { ok: false, reason: 'not a regular file' };
+  const parsed = readBoundedJsonNoFollow(path);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, reason: 'invalid or oversized .store.json marker' };
+  }
+  if (parsed.format !== MARKER_FORMAT || parsed.version !== MARKER_VERSION) {
+    return { ok: false, reason: 'invalid .store.json format or version' };
+  }
+  if (parsed.auth !== undefined && parsed.auth !== 'keyed' && parsed.auth !== 'keyless') {
+    return { ok: false, reason: 'invalid .store.json auth mode' };
+  }
+  return { ok: true, present: true, auth: parsed.auth ?? null };
+}
 
-  return { entries, skipped };
+/**
+ * True when the non-empty root chain's final raw line has `gate: "manifest-cutover"`
+ * (spec §4.7's second segmentation marker alongside `.store.json`).
+ */
+export function hasManifestCutoverTail(rootRaw) {
+  if (!Array.isArray(rootRaw) || rootRaw.length === 0) return false;
+  try {
+    const last = JSON.parse(rootRaw.at(-1).line);
+    return Boolean(last) && typeof last === 'object' && last.gate === 'manifest-cutover';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Enforce monotonic signed-era inheritance across segments under
+ * `requireSignatures: false` when a signing key is present:
+ *  - a forest explicitly activated with `auth: "keyed"` (or whose root ends in
+ *    a signed `manifest-cutover` entry when `.store.json` carries no explicit
+ *    auth mode, or a greenfield signed forest whose `.store.json` was deleted)
+ *    requires every segment in `manifest.d/` to be signed and rejects a
+ *    non-empty, 100%-unsigned root chain;
+ *  - in pre-policy (`auth` absent, non-cutover) or `auth: "keyless"` forests,
+ *    independent segments (`anchor: null` or anchored to `root`) evaluate
+ *    signature transitions per segment per spec §4.7/§5.3/§6 (consumers that
+ *    rely on approvals such as `hasCrossModelApprove` and
+ *    `carryForwardCrossModelReview` independently verify `verifyEntrySignature`
+ *    on every `approve` entry, while `buildAttest` labels mixed chains
+ *    `partially-signed`), and any child segment anchored to a signed-era
+ *    parent segment inherits the signed era transitively.
+ */
+export function checkForestSignedEra({
+  declaredAuth = null,
+  rootEmpty = false,
+  rootCutover = false,
+  segmentNames,
+  anchorBySegment,
+  rootSawSigned,
+  rootFirstUnsigned = null,
+  segmentResults,
+}) {
+  if (declaredAuth === 'keyed' && !rootSawSigned && rootFirstUnsigned) {
+    return { ok: false, segment: 'root', firstUnsigned: rootFirstUnsigned };
+  }
+  const ordered = orderSegmentNames(segmentNames, anchorBySegment);
+  const anySegmentSigned = ordered.some((name) => Boolean(segmentResults.get(name)?.sawSignedEntry));
+  const keyedForest =
+    declaredAuth === 'keyed' ||
+    (declaredAuth === null && Boolean(rootCutover) && Boolean(rootSawSigned)) ||
+    (declaredAuth !== 'keyless' && Boolean(rootEmpty) && anySegmentSigned);
+  const signedSegments = new Set();
+  for (const name of ordered) {
+    const res = segmentResults.get(name);
+    const anchor = anchorBySegment.get(name);
+    const parentSeg = anchor && anchor.segment !== 'root' ? anchor.segment : null;
+    const parentInSignedEra = keyedForest || (parentSeg !== null && signedSegments.has(parentSeg));
+    if (parentInSignedEra && res?.firstUnsigned) {
+      return { ok: false, segment: name, firstUnsigned: res.firstUnsigned };
+    }
+    if (parentInSignedEra || res?.sawSignedEntry) {
+      signedSegments.add(name);
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * Reject a non-empty, 100%-unsigned root chain when `.store.json` explicitly
+ * declares `auth: "keyed"` under lenient verification with a key present.
+ * Preserves migrated legacy-prefix roots because `migrate` appends a signed
+ * `manifest-cutover` entry (`rootResult.sawSignedEntry === true`).
+ */
+export function isUnsignedKeyedRoot(declaredAuth, key, requireSignatures, rootResult) {
+  return (
+    key !== null &&
+    !requireSignatures &&
+    declaredAuth === 'keyed' &&
+    rootResult.valid &&
+    rootResult.count > 0 &&
+    !rootResult.sawSignedEntry &&
+    rootResult.firstUnsigned !== null
+  );
 }

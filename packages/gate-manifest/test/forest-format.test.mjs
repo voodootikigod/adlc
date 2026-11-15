@@ -207,6 +207,196 @@ describe('forest verify() — a valid forest', () => {
     });
   });
 
+  it('rejects an unsigned segment anchored to a signed-cutover root (even if back-dated to an older unsigned root seq or missing .store.json)', (t) => {
+    const dir = tmp(t, 'gate-manifest-forest-test-');
+    const adlc = join(dir, '.adlc');
+    const rootLines = buildChainLines(
+      [{ gate: 'legacy-unsigned' }, { gate: 'manifest-cutover' }],
+      { key: KEY, signFrom: 1 }
+    );
+    writeLines(join(adlc, 'manifest.jsonl'), rootLines);
+
+    // Anchored to the signed tail entry (seq 2), but forged without KEY:
+    const tailAnchor = { segment: 'root', seq: 2, lineHash: lineHashOf(rootLines, 1) };
+    writeLines(join(adlc, 'manifest.d', 'forged-tail-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'evidence', anchor: tailAnchor }]));
+    withKey(KEY, () => {
+      const r1 = verify(adlc, { requireSignatures: false });
+      assert.equal(r1.valid, false);
+      assert.equal(r1.break.reason, 'unsigned entry');
+      assert.equal(r1.break.segment, 'forged-tail-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl');
+    });
+
+    // Back-dated to the older unsigned root entry (seq 1) to try dodging signed-era inheritance:
+    const dir2 = tmp(t, 'gate-manifest-forest-test-');
+    const adlc2 = join(dir2, '.adlc');
+    writeLines(join(adlc2, 'manifest.jsonl'), rootLines);
+    const backdatedAnchor = { segment: 'root', seq: 1, lineHash: lineHashOf(rootLines, 0) };
+    writeLines(join(adlc2, 'manifest.d', 'forged-old-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'evidence', anchor: backdatedAnchor }]));
+    withKey(KEY, () => {
+      const r2 = verify(adlc2, { requireSignatures: false });
+      assert.equal(r2.valid, false);
+      assert.equal(r2.break.reason, 'unsigned entry');
+      assert.equal(r2.break.segment, 'forged-old-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl');
+    });
+  });
+
+  it('rejects unsigned segments in a keyed-activated forest and unsigned child segments anchored to a signed parent segment', (t) => {
+    const dir = tmp(t, 'gate-manifest-forest-test-');
+    const adlc = join(dir, '.adlc');
+    const segA = buildChainLines([{ gate: 'evidence', anchor: null }], { key: KEY });
+    const anchorA = { segment: 'a-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl', seq: 1, lineHash: lineHashOf(segA, 0) };
+    const segB = buildChainLines([{ gate: 'forged-unsigned', anchor: anchorA }]);
+    writeLines(join(adlc, 'manifest.d', 'a-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), segA);
+    writeLines(join(adlc, 'manifest.d', 'b-01BRZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), segB);
+
+    withKey(KEY, () => {
+      const r = verify(adlc, { requireSignatures: false });
+      assert.equal(r.valid, false);
+      assert.equal(r.break.reason, 'unsigned entry');
+      assert.equal(r.break.segment, 'b-01BRZ3NDEKTSV4RRFFQ69G5FAV.jsonl');
+    });
+
+    const keyedDir = tmp(t, 'gate-manifest-forest-keyed-');
+    const keyedAdlc = join(keyedDir, '.adlc');
+    mkdirSync(join(keyedAdlc, 'manifest.d'), { recursive: true });
+    writeFileSync(join(keyedAdlc, 'manifest.d', '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1, auth: 'keyed' }));
+    writeLines(join(keyedAdlc, 'manifest.d', 'only-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'forged', anchor: null }]));
+    withKey(KEY, () => {
+      const rKeyed = verify(keyedAdlc, { requireSignatures: false });
+      assert.equal(rKeyed.valid, false);
+      assert.equal(rKeyed.break.reason, 'unsigned entry');
+    });
+
+    // Greenfield auth:keyed forest with 0 segments + forged unsigned root MUST fail closed
+    const keyedRootOnlyDir = tmp(t, 'gate-manifest-forest-keyed-root-only-');
+    const keyedRootOnlyAdlc = join(keyedRootOnlyDir, '.adlc');
+    mkdirSync(join(keyedRootOnlyAdlc, 'manifest.d'), { recursive: true });
+    writeFileSync(join(keyedRootOnlyAdlc, 'manifest.d', '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1, auth: 'keyed' }));
+    writeLines(join(keyedRootOnlyAdlc, 'manifest.jsonl'), buildChainLines([{ gate: 'forged-unsigned-root' }]));
+    withKey(KEY, () => {
+      const rKeyedRoot = verify(keyedRootOnlyAdlc, { requireSignatures: false });
+      assert.equal(rKeyedRoot.valid, false);
+      assert.equal(rKeyedRoot.break.reason, 'unsigned entry');
+      assert.equal(rKeyedRoot.break.segment, 'root');
+    });
+
+    // auth:keyed forest with segments + 100%-unsigned forged root (no signed cutover) MUST fail closed on root,
+    // while a migrated root ending in a signed manifest-cutover entry STILL passes lenient verification!
+    const forgedRootWithSegDir = tmp(t, 'gate-manifest-forest-keyed-forged-root-seg-');
+    const forgedRootWithSegAdlc = join(forgedRootWithSegDir, '.adlc');
+    mkdirSync(join(forgedRootWithSegAdlc, 'manifest.d'), { recursive: true });
+    writeFileSync(join(forgedRootWithSegAdlc, 'manifest.d', '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1, auth: 'keyed' }));
+    const completelyUnsignedRoot = buildChainLines([{ gate: 'forged-root-entry' }]);
+    writeLines(join(forgedRootWithSegAdlc, 'manifest.jsonl'), completelyUnsignedRoot);
+    const forgedAnchor = { segment: 'root', seq: 1, lineHash: lineHashOf(completelyUnsignedRoot, 0) };
+    writeLines(join(forgedRootWithSegAdlc, 'manifest.d', 'seg-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'signed-seg', anchor: forgedAnchor }], { key: KEY }));
+    withKey(KEY, () => {
+      const rForgedRoot = verify(forgedRootWithSegAdlc, { requireSignatures: false });
+      assert.equal(rForgedRoot.valid, false);
+      assert.equal(rForgedRoot.break.reason, 'unsigned entry');
+      assert.equal(rForgedRoot.break.segment, 'root');
+    });
+
+    // Early-ULID bypass attempt in an auth:keyed forest: unsigned anchor:null segment sorting BEFORE a signed segment
+    const earlyDir = tmp(t, 'gate-manifest-forest-early-ulid-');
+    const earlyAdlc = join(earlyDir, '.adlc');
+    mkdirSync(join(earlyAdlc, 'manifest.d'), { recursive: true });
+    writeFileSync(join(earlyAdlc, 'manifest.d', '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1, auth: 'keyed' }));
+    writeLines(join(earlyAdlc, 'manifest.d', 'a-01000000000000000000000000.jsonl'), buildChainLines([{ gate: 'forged-early', anchor: null }]));
+    writeLines(join(earlyAdlc, 'manifest.d', 'z-01ZRZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'legit-signed', anchor: null }], { key: KEY }));
+    withKey(KEY, () => {
+      const rEarly = verify(earlyAdlc, { requireSignatures: false });
+      assert.equal(rEarly.valid, false);
+      assert.equal(rEarly.break.reason, 'unsigned entry');
+      assert.equal(rEarly.break.segment, 'a-01000000000000000000000000.jsonl');
+    });
+
+    // Sibling unsigned-root bypass attempt in a migrated/keyed forest: legacy root + signed cutover + signed segment S1 + forged unsigned segment S2 anchored to legacy seq 1
+    const sibDir = tmp(t, 'gate-manifest-forest-sibling-');
+    const sibAdlc = join(sibDir, '.adlc');
+    mkdirSync(join(sibAdlc, 'manifest.d'), { recursive: true });
+    writeFileSync(join(sibAdlc, 'manifest.d', '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1, auth: 'keyed' }));
+    const migratedRoot = buildChainLines([{ gate: 'legacy-root' }, { gate: 'manifest-cutover' }], { key: KEY, signFrom: 1 });
+    writeLines(join(sibAdlc, 'manifest.jsonl'), migratedRoot);
+    const rootAnchor = { segment: 'root', seq: 1, lineHash: lineHashOf(migratedRoot, 0) };
+    writeLines(join(sibAdlc, 'manifest.d', 'legit-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'signed-seg', anchor: rootAnchor }], { key: KEY }));
+    writeLines(join(sibAdlc, 'manifest.d', 'forged-01BRZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'forged-seg', anchor: rootAnchor }]));
+    withKey(KEY, () => {
+      const rSib = verify(sibAdlc, { requireSignatures: false });
+      assert.equal(rSib.valid, false);
+      assert.equal(rSib.break.reason, 'unsigned entry');
+      assert.equal(rSib.break.segment, 'forged-01BRZ3NDEKTSV4RRFFQ69G5FAV.jsonl');
+    });
+
+    // Greenfield marker-deletion bypass attempt: deleting .store.json on a root-less signed forest
+    // MUST still reject an injected unsigned segment (including early-ULID anchor:null).
+    const deletedMarkerDir = tmp(t, 'gate-manifest-forest-deleted-marker-');
+    const deletedMarkerAdlc = join(deletedMarkerDir, '.adlc');
+    writeLines(join(deletedMarkerAdlc, 'manifest.d', 'a-01000000000000000000000000.jsonl'), buildChainLines([{ gate: 'forged-early', anchor: null }]));
+    writeLines(join(deletedMarkerAdlc, 'manifest.d', 'z-01ZRZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'legit-signed', anchor: null }], { key: KEY }));
+    withKey(KEY, () => {
+      const rDel = verify(deletedMarkerAdlc, { requireSignatures: false });
+      assert.equal(rDel.valid, false);
+      assert.equal(rDel.break.reason, 'unsigned entry');
+      assert.equal(rDel.break.segment, 'a-01000000000000000000000000.jsonl');
+    });
+
+    // Pre-policy marker (present, no auth field) + empty root + signed segment:
+    // an injected unsigned anchor:null segment MUST also be rejected as regression.
+    const prePolicyEmptyRootDir = tmp(t, 'gate-manifest-forest-prepolicy-empty-root-');
+    const prePolicyEmptyRootAdlc = join(prePolicyEmptyRootDir, '.adlc');
+    mkdirSync(join(prePolicyEmptyRootAdlc, 'manifest.d'), { recursive: true });
+    writeFileSync(join(prePolicyEmptyRootAdlc, 'manifest.d', '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1 }));
+    writeLines(join(prePolicyEmptyRootAdlc, 'manifest.d', 'a-01000000000000000000000000.jsonl'), buildChainLines([{ gate: 'forged-early', anchor: null }]));
+    writeLines(join(prePolicyEmptyRootAdlc, 'manifest.d', 'z-01ZRZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'legit-signed', anchor: null }], { key: KEY }));
+    withKey(KEY, () => {
+      const rPre = verify(prePolicyEmptyRootAdlc, { requireSignatures: false });
+      assert.equal(rPre.valid, false);
+      assert.equal(rPre.break.reason, 'unsigned entry');
+      assert.equal(rPre.break.segment, 'a-01000000000000000000000000.jsonl');
+    });
+
+    // Spec §4.7 & §6 compatibility: pre-policy marker (without auth) on a non-cutover root
+    // permits an independent unsigned revocation segment under requireSignatures:false (signed:false),
+    // while strict verify() still rejects it.
+    const prePolicyDir = tmp(t, 'gate-manifest-forest-pre-policy-');
+    const prePolicyAdlc = join(prePolicyDir, '.adlc');
+    mkdirSync(join(prePolicyAdlc, 'manifest.d'), { recursive: true });
+    writeFileSync(join(prePolicyAdlc, 'manifest.d', '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1 }));
+    const prePolicyRoot = buildChainLines([{ gate: 'cross-model-review' }], { key: KEY });
+    writeLines(join(prePolicyAdlc, 'manifest.jsonl'), prePolicyRoot);
+    const prePolicyAnchor = { segment: 'root', seq: 1, lineHash: lineHashOf(prePolicyRoot, 0) };
+    writeLines(join(prePolicyAdlc, 'manifest.d', 'revoke-01ARZ3NDEKTSV4RRFFQ69G5FAV.jsonl'), buildChainLines([{ gate: 'cross-model-review', anchor: prePolicyAnchor }]));
+    withKey(KEY, () => {
+      const rLenient = verify(prePolicyAdlc, { requireSignatures: false });
+      assert.equal(rLenient.valid, true, rLenient.message);
+      assert.equal(rLenient.signed, false);
+      const rStrict = verify(prePolicyAdlc);
+      assert.equal(rStrict.valid, false);
+      assert.equal(rStrict.break.reason, 'unsigned entry');
+    });
+
+    // Corrupt, symlinked, or invalid-auth .store.json inside manifest.d/ fails closed in verify()
+    for (const [label, plant] of [
+      ['malformed JSON', (segDir) => writeFileSync(join(segDir, '.store.json'), '{bad json')],
+      ['invalid auth', (segDir) => writeFileSync(join(segDir, '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1, auth: 'bogus' }))],
+      ['symlink', (segDir, rootDir) => {
+        const decoy = join(rootDir, 'decoy.json');
+        writeFileSync(decoy, JSON.stringify({ format: 'adlc-manifest-segments', version: 1, auth: 'keyed' }));
+        symlinkSync(decoy, join(segDir, '.store.json'));
+      }],
+    ]) {
+      const mDir = tmp(t, 'gate-manifest-bad-marker-');
+      const mAdlc = join(mDir, '.adlc');
+      const segDir = join(mAdlc, 'manifest.d');
+      mkdirSync(segDir, { recursive: true });
+      plant(segDir, mDir);
+      const res = verify(mAdlc, { requireSignatures: false });
+      assert.equal(res.valid, false, `${label} .store.json must fail closed`);
+      assert.equal(res.break.segment, '.store.json');
+    }
+  });
+
   it('root-less repo with all-signed segments reports signed:true (empty root must not drag it down)', (t) => {
     const dir = tmp(t, 'gate-manifest-forest-test-');
     const adlc = join(dir, '.adlc');

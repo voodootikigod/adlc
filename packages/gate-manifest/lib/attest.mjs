@@ -1,6 +1,7 @@
 // attest.mjs — generate markdown gate evidence for a ticket (PR comment ready).
 
 import { verify } from './verify.mjs';
+import { readManifestForest } from './forest.mjs';
 import { loadFiltered } from './show.mjs';
 import { ADLC_DIR } from '@adlc/core';
 
@@ -30,9 +31,9 @@ function dataSummary(data) {
  * @param {string} [opts.dir]  ledger directory (default ADLC_DIR)
  * @returns {string}  markdown text
  */
-export function buildAttest({ ticket, dir = ADLC_DIR, key = null } = {}) {
+export function buildAttest({ ticket, dir = ADLC_DIR, key = null, requireSignatures = true } = {}) {
   const { entries } = loadFiltered({ ticket, dir });
-  const chainResult = verify(dir, { key });
+  const chainResult = verify(dir, { key, requireSignatures });
 
   const heading = ticket
     ? `## Gate evidence for ${ticket}`
@@ -53,8 +54,16 @@ export function buildAttest({ ticket, dir = ADLC_DIR, key = null } = {}) {
     lines.push('');
   }
 
+  let sigState = 'unsigned';
+  if (chainResult.signed) {
+    sigState = 'signed';
+  } else if (chainResult.valid && key !== null && !requireSignatures) {
+    const forestEntries = readManifestForest(dir).entries;
+    const signedCount = forestEntries.filter((e) => typeof e.sig === 'string').length;
+    if (signedCount > 0) sigState = signedCount === forestEntries.length ? 'signed' : 'partially-signed';
+  }
   const chainStatus = chainResult.valid
-    ? `Chain status: **valid** (${chainResult.count} entries)`
+    ? `Chain status: **valid** (${chainResult.count} entries, ${sigState})`
     : `Chain status: **BROKEN** — ${chainResult.message}`;
 
   lines.push(chainStatus);

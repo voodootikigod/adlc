@@ -94,11 +94,27 @@ export async function runPreflight({
     }
   }
 
-  // 6. Merge-forecast pre-run — evidence, recorded into the caller's status.
+  // 6. Merge-forecast pre-run — evidence, recorded into the caller's status,
+  // plus eager verification that a trusted `adlc` binary resolves before dispatch.
   let forecast = null;
   try {
     // Evidence only, but bounded: a hung forecast must not outlive the run's deadline (codex r10).
-    const r = io.adlc(['merge-forecast', '--json'], typeof remainingMs === 'function' ? { timeout: remainingMs() } : {});
+    const forecastOpts = {
+      cwd: repo,
+      ...(config?.adlcBin ? { bin: config.adlcBin } : {}),
+      ...(typeof remainingMs === 'function' ? { timeout: remainingMs() } : {}),
+    };
+    const r = io.adlc(['merge-forecast', '--json'], forecastOpts);
+    if (r?.error && /no trusted adlc binary/i.test(r.error.message)) {
+      releaseLock(statusDir);
+      return {
+        ok: false,
+        exitCode: 1,
+        reason: `${r.error.message} (install adlc globally outside the target repo/node_modules or pass --adlc-bin /trusted/path/to/adlc outside the repo and node_modules)`,
+        warnings,
+        lockHeld: false,
+      };
+    }
     if (r.stdout) forecast = JSON.parse(r.stdout);
   } catch { /* forecast is evidence, not a gate */ }
 

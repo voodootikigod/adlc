@@ -23,7 +23,7 @@ const USAGE =
   'verbs: record <gate-name> [--ticket id] [--data \'{json}\'] [--files a,b,c] [--force]\n' +
   '       verify [--json] [--allow-legacy-unsigned] [--require-entries]\n' +
   '       show   [--ticket id] [--json]\n' +
-  '       attest [--ticket id]\n' +
+  '       attest [--ticket id] [--allow-legacy-unsigned]\n' +
   '       repair-chain --reason "..." [--write] [--attest-unsigned] [--json]\n' +
   '       generate-key --output <path> [--allow-key-import] [--json]\n' +
   '       enable [--write] [--json] [--allow-keyless]\n' +
@@ -169,7 +169,12 @@ if (verb === 'show') {
 
 // ── attest ───────────────────────────────────────────────────────────────────
 if (verb === 'attest') {
-  const md = buildAttest({ ticket: flags.ticket, dir: flags.dir, key: getKey() });
+  const md = buildAttest({
+    ticket: flags.ticket,
+    dir: flags.dir,
+    key: getKey(),
+    requireSignatures: !flags['allow-legacy-unsigned'],
+  });
   console.log(md);
   pass();
 }

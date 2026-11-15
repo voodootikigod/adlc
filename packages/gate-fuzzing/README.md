@@ -153,6 +153,10 @@ test passes. This is the compounding ratchet.
 C-tool (continuous calibration). Scheduled / nightly, not per-commit.
 See ADLC.md §C and Post 8 for the doctrine.
 
+## Sandbox `.env` masking & large-repo tunable
+
+Both `bwrap` (Linux) and `sandbox-exec` (macOS) mask host `.env` / `.env.*` files outside the disposable candidate clone, caching discovered paths with a 5-second TTL per root directory stamp (`mtimeNs`) on standalone calls and snapshotting host `.env*` files at run start across candidate clones in `makeProvisionFn` (host `.env*` files created mid-run after the initial snapshot are not retroactively masked until the next run). Directory traversal is bounded to `16384` directories by default (excluding `.git`, `node_modules`, and `.worktrees`) and fails closed if exceeded so a partial mask can never expose secrets silently; set `ADLC_MAX_ENV_SCAN_DIRS=<positive-int>` (or `maxEnvScanDirs` programmatically) on monorepos exceeding `16384` directories.
+
 ## Core gaps
 
 - `fan()` / `complete()` return raw text; no `usage` block is exposed. Budget is
