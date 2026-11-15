@@ -10,7 +10,7 @@ import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { loadPlan, activeTickets } from '../lib/plan.mjs';
 import { planRound, REASON_CODES } from '../lib/scheduler.mjs';
-import { loadConfig, resolveRunConfig, validateExtensionFlags, parsePreStrike } from '../lib/config.mjs';
+import { loadConfig, resolveRunConfig, validateExtensionFlags, validateProsecutorFlags, parsePreStrike } from '../lib/config.mjs';
 import { loadStatus } from '../lib/status.mjs';
 import { readLockOwner, forceUnlock, releaseLock, isLockLive } from '../lib/lock.mjs';
 import { runPreflight } from '../lib/preflight.mjs';
@@ -28,7 +28,7 @@ import {
 } from '../lib/quartermaster.mjs';
 import { builderPrompt, fenceDeadEnd } from '../lib/charters.mjs';
 import { getAdapter } from '../lib/adapters/index.mjs';
-import { Sandbox } from '../lib/sandbox.mjs';
+import { SafeSandbox } from '../lib/safe-sandbox.mjs';
 import { SYSTEM_ROOTS } from '../lib/bounded-model-plane.mjs';
 import { repoCommandEnv } from '../lib/env-scrub.mjs';
 
@@ -37,6 +37,8 @@ const USAGE = `adlc-fleet — parallel ADLC ticket orchestration (or: adlc fleet
 Usage:
   adlc-fleet run [--concurrency N] [--dry-run] [--tickets T1,T2] [--base B] [--json]
                  [--adapter NAME] [--model MODEL] [--model-auth-key ENV_VAR]
+                 [--adlc-bin PATH] [--review-bin PATH] [--review-provider NAME]
+                 [--prosecute-fail-on low|medium|high|critical]
                  [--i-am-in-a-disposable-container] [--model-plane-writable PATH]
                  [--no-pr] [--no-complete] [--dead-end-file PATH] [--max-strikes N]
                  [--wall-clock-minutes M] [--charter-file PATH]
@@ -68,6 +70,10 @@ export function parseFlags(args) {
       'model-auth-key': { type: 'string' },
       'adapter-command': { type: 'string' },
       'adapter-args': { type: 'string' },
+      'adlc-bin': { type: 'string' },
+      'review-bin': { type: 'string' },
+      'review-provider': { type: 'string' },
+      'prosecute-fail-on': { type: 'string' },
       'model-plane-writable': { type: 'string', multiple: true },
       // ---- autopilot extensions (issue-autopilot-local §14), all operator-local ----
       'no-pr': { type: 'boolean' },
@@ -121,6 +127,20 @@ export function extensionFlags(flags) {
   };
   validateExtensionFlags(ext);
   return ext;
+}
+
+/**
+ * Translate and validate operator-local host-binary and prosecutor CLI overrides.
+ */
+export function prosecutorFlags(flags) {
+  const pros = {
+    adlcBin: flags['adlc-bin'] ?? undefined,
+    reviewBin: flags['review-bin'] ?? undefined,
+    reviewProvider: flags['review-provider'] ?? undefined,
+    prosecuteFailOn: flags['prosecute-fail-on'] ?? undefined,
+  };
+  validateProsecutorFlags(pros);
+  return pros;
 }
 
 // Under --json EVERY non-zero pre-dispatch exit carries one result document —
@@ -178,7 +198,9 @@ if (sub === 'run') {
   try { flags = parseFlags(raw.slice(1)); } catch (e) { refuseFlags(e.message); }
   let ext;
   try { ext = extensionFlags(flags); } catch (e) { refuseFlags(e.message); }
-  const configResolved = resolveRunConfig(loadConfig(dir), {
+  let pros;
+  try { pros = prosecutorFlags(flags); } catch (e) { refuseFlags(e.message); }
+  const runFlags = {
     concurrency: flags.concurrency ? Number(flags.concurrency) : undefined,
     base: flags.base,
     disposableContainer: flags['i-am-in-a-disposable-container'] === true,
@@ -191,8 +213,11 @@ if (sub === 'run') {
     // Operator-local escape hatch for the model-plane write boundary (#395): a
     // harness whose state directory the adapter catalog has not caught up with.
     modelPlaneWritable: flags['model-plane-writable'] ?? undefined,
+    ...pros,
     ...ext,
-  });
+  };
+  let configResolved;
+  try { configResolved = resolveRunConfig(loadConfig(dir), runFlags); } catch (e) { refuseFlags(e.message); }
   // A repo-configured concurrency can widen a mirror run past one worker: refuse it here too (codex r11).
   if (configResolved.modelPlaneGit === 'mirror' && configResolved.concurrency !== 1) refuseFlags('--model-plane-git mirror requires concurrency 1 (one writable mirror per worker)');
   const config = configResolved;
@@ -514,7 +539,7 @@ export async function runLive({ repo, dir, all, config, onlyIds, json = false },
     try {
       tmp = mkdtempSync(join(tmpdir(), 'fleet-canary-'));
       mkdirSync(join(tmp, '.home'), { recursive: true }); // bwrap bind source must exist (L4)
-      const sb = new Sandbox({
+      const sb = new SafeSandbox({
         mode: sandboxSpec.mode, backend: sandboxSpec.backend, worktree: tmp, syntheticHome: join(tmp, '.home'),
         readOnlyPaths: canaryReadOnlyPaths(io.pathExists ?? existsSync),
         exec: async (argv, opts) => { const r = await io.spawnWorker(argv[0], argv.slice(1), { cwd: tmp, killGroup: true, ...opts }); if (r.error) throw r.error; if (typeof r.status === 'number' && r.status !== 0) throw new Error(r.stderr || 'canary command failed'); return `${r.stdout ?? ''}`; },

@@ -661,11 +661,36 @@ describe('attest', () => {
     assert.ok(md.includes('build'));
   });
 
-  it('includes chain status', (t) => {
+  it('includes chain status and distinguishes signed vs unsigned', (t) => {
     const dir = setupAttest(t);
-    const md = buildAttest({ ticket: 'T-5', dir });
-    assert.ok(md.includes('Chain status:'));
-    assert.ok(md.includes('valid'));
+    const mdUnsigned = buildAttest({ ticket: 'T-5', dir });
+    assert.ok(mdUnsigned.includes('Chain status: **valid** (2 entries, unsigned)'));
+
+    const signedDir = tmp(t, 'gate-manifest-attest-signed-');
+    record({ gate: 'spec', ticket: 'T-5', dir: signedDir, key: 'attest-key' });
+    const mdSigned = buildAttest({ ticket: 'T-5', dir: signedDir, key: 'attest-key' });
+    assert.ok(mdSigned.includes('Chain status: **valid** (1 entries, signed)'));
+    const mdSignedLenient = buildAttest({ ticket: 'T-5', dir: signedDir, key: 'attest-key', requireSignatures: false });
+    assert.ok(mdSignedLenient.includes('Chain status: **valid** (1 entries, signed)'), 'lenient attest on a 100%-signed chain must still report signed');
+
+    // Mixed legacy-unsigned prefix + signed tail: strict attest marks BROKEN, lenient attest reports partially-signed
+    const mixedDir = tmp(t, 'gate-manifest-attest-mixed-');
+    record({ gate: 'legacy', ticket: 'T-5', dir: mixedDir, key: null });
+    record({ gate: 'modern', ticket: 'T-5', dir: mixedDir, key: 'attest-key' });
+    const mdStrict = buildAttest({ ticket: 'T-5', dir: mixedDir, key: 'attest-key' });
+    assert.ok(mdStrict.includes('Chain status: **BROKEN**'), `strict attest must reject unsigned entry: ${mdStrict}`);
+    const mdLenient = buildAttest({ ticket: 'T-5', dir: mixedDir, key: 'attest-key', requireSignatures: false });
+    assert.ok(mdLenient.includes('Chain status: **valid** (2 entries, partially-signed)'), `lenient attest must report partially-signed: ${mdLenient}`);
+
+    // CLI: gate-manifest attest --allow-legacy-unsigned threads through to buildAttest
+    const bin = new URL('../bin/gate-manifest.mjs', import.meta.url).pathname;
+    const cliLenient = spawnSync(
+      process.execPath,
+      [bin, 'attest', '--ticket', 'T-5', '--allow-legacy-unsigned', '--dir', mixedDir],
+      { encoding: 'utf8', env: { ...process.env, [KEY_ENV]: 'attest-key' } },
+    );
+    assert.equal(cliLenient.status, 0, cliLenient.stderr);
+    assert.ok(cliLenient.stdout.includes('Chain status: **valid** (2 entries, partially-signed)'));
   });
 
   it('marks chain as BROKEN when tampered', (t) => {

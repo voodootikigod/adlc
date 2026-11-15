@@ -21,6 +21,7 @@ import {
   redactSecrets,
   readVerdictSource,
   recordPromptOnlyVerdict,
+  escapeSeatbeltPath,
 } from '../index.mjs';
 import { readEntries } from '../lib/ledger.mjs';
 
@@ -492,34 +493,35 @@ test('recordPromptOnlyVerdict: delegates to recordFn if provided', () => {
   });
 });
 
-test('recordPromptOnlyVerdict: appends to manifest ledger when recordFn is not provided', (t) => {
+test('recordPromptOnlyVerdict: throws TypeError and writes nothing when recordFn is omitted', (t) => {
   const dir = tmp(t, 'rpov-manifest-');
 
-  const entry = recordPromptOnlyVerdict({
-    gate: 'premortem',
-    ticket: 'T2',
-    verdict: 'clear',
-    extra: { reason: 'clean audit' },
-    dir,
-  });
-
-  assert.equal(entry.gate, 'premortem');
-  assert.equal(entry.ticket, 'T2');
-  assert.deepEqual(entry.data, {
-    promptOnly: true,
-    usageStatus: 'unreported',
-    verdict: 'clear',
-    reason: 'clean audit',
-  });
+  assert.throws(
+    () =>
+      recordPromptOnlyVerdict({
+        gate: 'premortem',
+        ticket: 'T2',
+        verdict: 'clear',
+        extra: { reason: 'clean audit' },
+        dir,
+      }),
+    { name: 'TypeError', message: /recordFn/ }
+  );
+  assert.throws(() => recordPromptOnlyVerdict(), { name: 'TypeError' });
 
   const { entries } = readEntries('manifest', dir);
-  assert.equal(entries.length, 1);
-  assert.equal(entries[0].gate, 'premortem');
-  assert.equal(entries[0].ticket, 'T2');
-  assert.equal(entries[0].data.promptOnly, true);
-  assert.equal(entries[0].data.usageStatus, 'unreported');
-  assert.equal(entries[0].data.verdict, 'clear');
-  assert.equal(entries[0].data.reason, 'clean audit');
+  assert.equal(entries.length, 0);
+});
+
+test('escapeSeatbeltPath: escapes backslashes and double quotes and rejects NUL/newlines', () => {
+  assert.equal(escapeSeatbeltPath('/tmp/plain/path'), '/tmp/plain/path');
+  assert.equal(
+    escapeSeatbeltPath('/tmp/quote") (allow default) (subpath "\\x'),
+    '/tmp/quote\\") (allow default) (subpath \\"\\\\x'
+  );
+  assert.throws(() => escapeSeatbeltPath('/tmp/bad\0path'), /NUL or line-terminator/);
+  assert.throws(() => escapeSeatbeltPath('/tmp/bad\npath'), /NUL or line-terminator/);
+  assert.throws(() => escapeSeatbeltPath('/tmp/bad\rpath'), /NUL or line-terminator/);
 });
 
 test('writeFileAtomic: explicit options.mode overrides existing file mode', (t) => {

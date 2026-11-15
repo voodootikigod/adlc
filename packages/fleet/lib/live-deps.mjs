@@ -9,7 +9,8 @@
 
 import { defaultGit } from './worktrees.mjs';
 import * as worktrees from './worktrees.mjs';
-import { Sandbox, NETWORK, READ_POLICY } from './sandbox.mjs';
+import { NETWORK, READ_POLICY } from './sandbox.mjs';
+import { SafeSandbox } from './safe-sandbox.mjs';
 import { modelPlaneFilesystem } from './model-plane.mjs';
 import { repoCommandEnv, modelPlaneEnv } from './env-scrub.mjs';
 import { runGatePipeline } from './gate-pipeline.mjs';
@@ -19,7 +20,8 @@ import { usageEvidence } from './adapters/usage.mjs';
 import { transportCredential, transportEvidence } from './adapters/transport-credential.mjs';
 import { ladderAdapters, seatForAttempt } from './quartermaster.mjs';
 import { prosecute as prosecuteGate } from './prosecute.mjs';
-import { makeReviewRunner, DEFAULT_REVIEW_TIMEOUT_MS } from './review-runner.mjs';
+import { makeReviewRunner, DEFAULT_REVIEW_TIMEOUT_MS, resolveTrustedBin, sanitizeTrustedPath } from './review-runner.mjs';
+import { inferBuilderFamily, inferProviderFamily } from './prosecutor-config.mjs';
 import { builderPrompt, fixPrompt } from './charters.mjs';
 import { PROTECTED_PREFIXES, isUnderProtectedPrefix } from './protected-paths.mjs';
 import { BASE_MANIFEST } from './protected-paths.mjs';
@@ -73,10 +75,15 @@ export function ensureLocalExclude(repoDir) {
  * into an execFileSync-shaped throw carrying `status` + `stdout` routes both
  * this path and `defaultExec` through checkFlail's single exit-code trust rule.
  */
-export function flailExec(io, remaining = null) {
+export function flailExec(io, remaining = null, cwd = undefined) {
   return (bin, args) => {
     // Bounded by the remaining wall clock when the run has one (codex r10).
-    const r = io.adlc(args, { bin, maxBuffer: MAX_OUTPUT_BYTES, ...(typeof remaining === 'function' ? { timeout: remaining() } : {}) });
+    const r = io.adlc(args, {
+      bin,
+      ...(cwd !== undefined ? { cwd } : {}),
+      maxBuffer: MAX_OUTPUT_BYTES,
+      ...(typeof remaining === 'function' ? { timeout: remaining() } : {}),
+    });
     // Could not spawn at all, or no exit status to trust → unverifiable (§12).
     if (r?.error) throw r.error;
     if (typeof r?.status !== 'number') throw new Error('flail-detector did not run');
@@ -96,19 +103,44 @@ export function fleetLogPath(statusDir, repo, ticketId) {
 }
 
 export function defaultIo() {
-  return {
+  const io = {
     git: (dir) => defaultGit(dir),
     // Sync adlc for the quick, off-hot-path calls (flail between strikes;
     // best-effort gate-manifest recording). The per-ticket rails-guard on the
     // gate path uses adlcAsync so it does not block the event loop (#164).
-    // `bin` lets a caller honor an operator-configured `config.adlcBin` instead
-    // of always resolving the bare name from PATH; it is stripped before the
-    // rest of the options reach spawnSync.
+    // Both resolve `bin` through `resolveTrustedBin` so relative paths and
+    // worktree-planted binaries fail closed instead of shadowing the host CLI.
     adlc: (args, opts = {}) => {
-      const { bin = 'adlc', ...rest } = opts;
-      return spawnSync(bin, args, { encoding: 'utf8', ...rest });
+      const { bin = 'adlc', env: optEnv, cwd, ...rest } = opts;
+      const sourceEnv = optEnv ?? io.env ?? process.env;
+      const resolved = resolveTrustedBin(bin, sourceEnv?.PATH, cwd);
+      if (!resolved) {
+        return {
+          status: null,
+          stdout: '',
+          stderr: '',
+          error: new Error(`no trusted adlc binary resolved for ${JSON.stringify(bin)}`),
+        };
+      }
+      const safeEnv = { ...sourceEnv, PATH: sanitizeTrustedPath(sourceEnv?.PATH, cwd) };
+      return spawnSync(resolved, args, { encoding: 'utf8', cwd, env: safeEnv, ...rest });
     },
-    adlcAsync: (args, opts = {}) => spawnAsync('adlc', args, { encoding: 'utf8', ...opts }),
+    adlcAsync: async (args, opts = {}) => {
+      const { bin = 'adlc', env: optEnv, cwd, ...rest } = opts;
+      const sourceEnv = optEnv ?? io.env ?? process.env;
+      const resolved = resolveTrustedBin(bin, sourceEnv?.PATH, cwd);
+      if (!resolved) {
+        return {
+          status: null,
+          stdout: '',
+          stderr: `no trusted adlc binary resolved for ${JSON.stringify(bin)}`,
+          timedOut: false,
+          error: new Error(`no trusted adlc binary resolved for ${JSON.stringify(bin)}`),
+        };
+      }
+      const safeEnv = { ...sourceEnv, PATH: sanitizeTrustedPath(sourceEnv?.PATH, cwd) };
+      return spawnAsync(resolved, args, { encoding: 'utf8', cwd, env: safeEnv, ...rest });
+    },
     // Async (non-blocking) worker/gate/review execution so the concurrent
     // scheduler is not serialized by a blocking spawn (#164).
     spawnWorker: (cmd, args, opts) => spawnAsync(cmd, args, { encoding: 'utf8', ...opts }),
@@ -142,6 +174,7 @@ export function defaultIo() {
     env: process.env,
     hasGh: () => { try { execFileSync('gh', ['--version'], { stdio: 'ignore' }); return true; } catch { return false; } },
   };
+  return io;
 }
 
 const PROSECUTE_GATED_MANIFEST = BASE_MANIFEST;
@@ -253,9 +286,9 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     return mods.includes(current) ? mods : [current, ...mods];
   };
 
-  const review = reviewRunner ?? makeReviewRunner({
+  const buildReview = (provider) => makeReviewRunner({
     reviewBin: config.reviewBin ?? 'adversarial-review',
-    provider: config.reviewProvider,
+    provider,
     failOn: config.prosecuteFailOn,
     // The reviewer is spawned through the same async primitive as every other
     // child (defaultIo's spawnWorker IS spawnAsync), so the injected io observes
@@ -265,6 +298,12 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     // as --max-bytes; --allow-summary-review is never passed (see review-runner).
     maxBytes: config.reviewMaxBytes ?? null,
   });
+  const configuredProvider = config.reviewProvider ?? (
+    seatsPresent && config.reviewProviderSource !== 'cli' ? config.repoReviewProvider ?? null : null
+  );
+  const review = reviewRunner ?? buildReview(configuredProvider);
+  const fallbackReview = reviewRunner ? null : buildReview(null);
+  const dispatchedBuilders = new Map();
   const adlcBin = config.adlcBin ?? 'adlc';
   const now = io.now ?? (() => Date.now());
   const boundedMode = config.modelPlaneRead === 'bounded';
@@ -288,7 +327,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
 
   // A per-worktree Sandbox on the repo-command plane (§7.3). exec runs the
   // wrapped argv via the worker-spawn primitive so tests can observe it.
-  const sandboxFor = (worktree) => new Sandbox({
+  const sandboxFor = (worktree) => new SafeSandbox({
     mode: sandboxSpec.mode,
     backend: sandboxSpec.backend,
     worktree,
@@ -371,7 +410,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
         'write it, re-run with --model-plane-writable <path>.'
       );
     }
-    return new Sandbox({
+    return new SafeSandbox({
       mode: sandboxSpec.mode,
       backend: sandboxSpec.backend,
       worktree,
@@ -407,6 +446,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     },
 
     createWorktree: async ({ ticket, integrationBranch }) => {
+      dispatchedBuilders.delete(ticket.id);
       // fleet-ext item 12: in mirror mode the worker's worktree belongs to the
       // caller-supplied bare mirror; the gates run in a caller-repo worktree.
       const wt = mirrorMode
@@ -483,6 +523,17 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       const attempt = attemptFor(ticket, strike);
       const seat = attempt?.seat ?? null;
       const adapter = adapterForSeat(ticket, seat);
+      const priorBuilders = dispatchedBuilders.get(ticket.id) ?? [];
+      for (let s = priorBuilders.length + 1; s < strike; s++) {
+        const prev = attemptFor(ticket, s)?.seat ?? null;
+        priorBuilders.push(prev ? { adapter: prev.adapter, model: prev.model, provider: prev.provider ?? null } : { adapter: null, model: null, provider: null });
+      }
+      priorBuilders.push({
+        adapter: seat?.adapter ?? adapter.name ?? config.adapter ?? 'claude-code',
+        model: seat ? seat.model : (config.model ?? null),
+        provider: seat?.provider ?? null,
+      });
+      dispatchedBuilders.set(ticket.id, priorBuilders);
       // §4b transport is load-bearing HERE (#396): a seat's credential comes
       // from its transport class, not from the run-wide `config.modelAuthKey`.
       // A `subscription:` seat resolves to null — keep NO provider key — so the
@@ -629,7 +680,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       const railsGuard = async () => {
         // Bounded by the remaining wall clock and killed as a group like every other gate phase (codex r9).
         const left = config.deadline != null ? Math.max(1, config.deadline - now()) : remainingMs;
-        const res = await io.adlcAsync(['rails-guard', '--base', startSha, '--ticket', ticket.id], { cwd: worktree, killGroup: true, ...(left != null ? { timeout: left } : {}) });
+        const res = await io.adlcAsync(['rails-guard', '--base', startSha, '--ticket', ticket.id], { bin: adlcBin, cwd: worktree, killGroup: true, ...(left != null ? { timeout: left } : {}) });
         return { ok: res.status === 0 && !res.timedOut, output: `${res.stdout ?? ''}${res.stderr ?? ''}${res.timedOut ? '\nrails-guard timed out' : ''}`, timedOut: res.timedOut === true };
       };
       return runGatePipeline(ticket, {
@@ -649,10 +700,42 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     },
 
     prosecute: async ({ ticket, worktree, startSha, remainingMs = null }) => {
+      // If repo config (never operator `--review-provider`) chose `reviewProvider` and
+      // Quartermaster routed or escalated this ticket onto the SAME model family, drop
+      // the repo-supplied provider override so repo config cannot force self-review.
+      let activeReview = review;
+      let effectiveProvider = configuredProvider;
+      const repoConfiguredProvider =
+        !reviewRunner &&
+        effectiveProvider != null &&
+        (config.reviewProviderSource === 'config' || (config.reviewProviderSource == null && seatsPresent));
+      if (repoConfiguredProvider) {
+        const fallbackSeat = attemptFor(ticket, 1)?.seat ?? null;
+        const builders = dispatchedBuilders.get(ticket.id) ?? (
+          fallbackSeat
+            ? [{ adapter: fallbackSeat.adapter, model: fallbackSeat.model, provider: fallbackSeat.provider ?? null }]
+            : (seatsPresent ? [] : [{ adapter: config.adapter ?? 'claude-code', model: config.model ?? null }])
+        );
+        const reviewerFamily = inferProviderFamily(effectiveProvider);
+        const offendingBuilder = builders.find((b) => {
+          const bf = inferBuilderFamily(b);
+          return !bf || bf === reviewerFamily;
+        });
+        if (!reviewerFamily || builders.length === 0 || offendingBuilder) {
+          const bDesc = offendingBuilder
+            ? `${offendingBuilder.adapter ?? 'unknown'}/${offendingBuilder.model ?? 'default'} in family "${inferBuilderFamily(offendingBuilder) ?? 'unknown'}"`
+            : 'unknown/unresolved builder';
+          console.error(
+            `SECURITY: ignoring repo fleet.reviewProvider "${effectiveProvider}" for ${ticket.id} (branch includes ${bDesc}).`
+          );
+          activeReview = fallbackReview;
+          effectiveProvider = null;
+        }
+      }
       // fleet-ext item 5: the reviewer is bounded by the remaining wall clock too.
       // The SMALLER of the reviewer's own budget and what remains — a long remaining wall clock never
       // widens the reviewer's timeout, and a short one bounds it (agy fleet3 c3).
-      const runReview = (args) => review({ ...args, timeoutMs: remainingMs != null ? Math.min(remainingMs, DEFAULT_REVIEW_TIMEOUT_MS) : undefined });
+      const runReview = (args) => activeReview({ ...args, timeoutMs: remainingMs != null ? Math.min(remainingMs, DEFAULT_REVIEW_TIMEOUT_MS) : undefined });
       const r = await prosecuteGate({ worktree, startSha, ticket }, { runReview, failOn: config.prosecuteFailOn });
       // The revision the review judged: HEAD of the reviewed worktree at this
       // instant (fleet-ext item 9). Best effort — a missing revision is null,
@@ -660,13 +743,13 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       let revision = null;
       try { revision = io.git(worktree)('rev-parse', 'HEAD') || null; } catch { revision = null; }
       const verdictWord = r.review?.verdict ?? ({ pass: 'approve', block: 'needs-attention', unavailable: 'unavailable' })[r.verdict] ?? r.verdict;
-      return { ...r, review: { provider: r.review?.provider ?? config.reviewProvider ?? null, verdict: verdictWord, revision } };
+      return { ...r, review: { provider: r.review?.provider ?? effectiveProvider, verdict: verdictWord, revision } };
     },
 
     flail: ({ ticket }) => checkFlail(
       fleetLogPath(statusDir, repo, ticket.id),
       ticket.scope,
-      { adlcBin, exec: flailExec(io, config.deadline != null ? () => Math.max(1, config.deadline - now()) : null) },
+      { adlcBin, exec: flailExec(io, config.deadline != null ? () => Math.max(1, config.deadline - now()) : null, repo) },
     ),
 
     // Rebase inside the ticket's own worktree, merge inside the integration worktree —
@@ -819,7 +902,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       if (entry?.registryDigest) data.registryDigest = entry.registryDigest;
 
       let res;
-      try { res = io.adlc(['gate-manifest', 'record', 'p4', '--ticket', ticket.id, '--data', JSON.stringify(data)], {}); }
+      try { res = io.adlc(['gate-manifest', 'record', 'p4', '--ticket', ticket.id, '--data', JSON.stringify(data)], { bin: adlcBin, cwd: repo }); }
       catch (e) { warn(e.message); return; }
       if (res?.error) warn(res.error.message);
       else if (res?.signal) warn(`recorder killed by ${res.signal}`);
@@ -835,8 +918,11 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       // to what an existing entry looks like.
       const argv = ['gate-manifest', 'record', phase, '--ticket', ticket.id, ok ? '--pass' : '--fail'];
       if (data !== undefined) argv.push('--data', JSON.stringify(data));
-      try { io.adlc(argv, {}); }
-      catch { /* evidence is best-effort */ }
+      const warnGate = (why) => console.error(`warning: ${ticket.id} ${phase} gate evidence was NOT recorded (${why}).`);
+      let res;
+      try { res = io.adlc(argv, { bin: adlcBin, cwd: repo }); }
+      catch (e) { warnGate(e.message); return; }
+      if (res?.error) warnGate(res.error.message);
     },
 
     openPR: async ({ integrationBranch, base }) => {

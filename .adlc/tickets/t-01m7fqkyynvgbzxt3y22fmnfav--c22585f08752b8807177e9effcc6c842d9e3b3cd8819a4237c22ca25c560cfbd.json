@@ -1,0 +1,19 @@
+{
+  "body": "Close five Phase 0 trust-root and sandbox vulnerabilities identified in adversarial codebase review without modifying active frozen rails (`packages/fleet/lib/sandbox.mjs`, `packages/gate-manifest/lib/record.mjs`).\n\nAcceptance criteria:\n1. `@adlc/fleet` quarantines `adlcBin` and `reviewBin` as operator-local CLI flags (`--adlc-bin`, `--review-bin`), warning and ignoring repo-committed `.adlc/config.json` values; `prosecuteFailOn` in repo config can only match or tighten `DEFAULTS.prosecuteFailOn` (`low`|`medium`, clamping weaker/invalid values with a warning while `--prosecute-fail-on` overrides); `reviewProvider` validates identifier grammar, rejects repo-configured same-family self-review against the builder adapter/model, and supports `--review-provider`; `resolveTrustedBin` rejects worktree-interior paths (including absolute paths) and directories, and `defaultIo().adlc`/`adlcAsync` resolve `adlcBin` via `resolveTrustedBin`. Verify: npm test --workspace=@adlc/fleet --workspace=@adlc/autopilot\n2. `escapeSeatbeltPath` is promoted to `@adlc/core` (escaping `\\\\` and `\"` and rejecting NUL/newline control characters in SBPL string literals, declared in `packages/core/index.d.ts`), re-used by `@adlc/gate-fuzzing`, and applied to all `@adlc/fleet` Seatbelt profiles via `SafeSandbox` (`packages/fleet/lib/safe-sandbox.mjs`) without editing frozen `packages/fleet/lib/sandbox.mjs`. Verify: npm test --workspace=@adlc/core --workspace=@adlc/fleet --workspace=@adlc/gate-fuzzing\n3. `@adlc/core` `recordPromptOnlyVerdict` requires `recordFn` (throwing `TypeError` when omitted rather than appending unchained raw JSON to `.adlc/manifest.jsonl`). Verify: npm test --workspace=@adlc/core\n4. `@adlc/lesson-foundry` `buildCheckScript` invokes `grep` via `execFileSync` (`shell: false`) with `-E -e <PATTERN> -- <ROOT>` so `$()`, backticks, and leading-dash patterns/paths in `.adlc/findings.jsonl` never execute shell commands or inject flags. Verify: npm test --workspace=@adlc/lesson-foundry\n5. `@adlc/gate-fuzzing` `buildSandboxedArgs` (`bwrap`) and `buildMacOSSbpl` (`sandbox-exec`) mask/deny sensitive `$HOME` credential paths and host `.env`/`.env.*` files (including `.env.local` outside `cloneDir`). Verify: npm test --workspace=@adlc/gate-fuzzing\n6. `@adlc/gate-manifest` `verify()` propagates signed-era state across `.adlc/manifest.d/` segments under `requireSignatures: false` (inheriting signed-era from signed ancestor chains regardless of `anchor.seq`, enforcing `auth: \"keyed\"` markers, and preventing unsigned `anchor: null` regression after an earlier signed root-less segment), and `buildAttest` discloses `signed` vs `unsigned` chain status. Verify: npm test --workspace=@adlc/gate-manifest",
+  "category": "bugfix",
+  "duration": 3,
+  "edges": [],
+  "id": "T-01M7FQKYYNVGBZXT3Y22FMNFAV",
+  "rails": [
+    "packages/fleet/lib/sandbox.mjs",
+    "packages/gate-manifest/lib/record.mjs"
+  ],
+  "scope": [
+    "packages/core/**",
+    "packages/fleet/**",
+    "packages/lesson-foundry/**",
+    "packages/gate-fuzzing/**",
+    "packages/gate-manifest/**"
+  ],
+  "title": "Harden Phase 0 orchestrator config, Seatbelt/bwrap sandboxes, lint-gate exec, and forest signed-era verification"
+}

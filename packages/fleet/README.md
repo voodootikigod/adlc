@@ -84,11 +84,13 @@ A live `fleet run` (no `--dry-run`) requires:
    inside worker worktrees (`ADLC_P4_ENFORCEMENT=1` + `ADLC_TICKET`);
 3. a **Claude Code** binary (`claude`) on `PATH`;
 4. a **trusted `adversarial-review`** binary resolvable on the orchestrator's
-   `PATH` (or a pinned `fleet.reviewBin`) — the blocking prosecution runs it by
+   `PATH` (or a pinned operator-local `--review-bin`) — the blocking prosecution runs it by
    name against a trusted PATH, never `npx` from the worker worktree, so a worker
-   cannot shadow the prosecutor. If it is not resolvable, prosecution fails closed
+   cannot shadow the prosecutor (and an absolute path inside the worktree or a
+   directory is likewise rejected). If it is not resolvable, prosecution fails closed
    and no ticket merges;
-5. `fleet.gate` configured under the `fleet` key of `.adlc/config.json`.
+5. a **trusted `adlc`** binary resolvable on the orchestrator's `PATH` outside `<repo>` and `node_modules` (or a pinned operator-local `--adlc-bin /trusted/path/to/adlc` outside `<repo>` and `node_modules` — repo-local installs inside `<repo>` or `node_modules/.bin` are intentionally rejected so candidate trees cannot shadow orchestrator gates);
+6. `fleet.gate` configured under the `fleet` key of `.adlc/config.json`.
 
 The fleet refuses to dispatch when the sandbox precondition is unmet (fail
 closed).
@@ -226,6 +228,15 @@ limits: [`docs/integrations/quartermaster-registry.md`](../../docs/integrations/
 `adversarial-review` as `--max-bytes`; `--allow-summary-review` is never passed,
 because above the reviewer's grounding limit a summary-only review silently
 drops every finding — a false green, not a review.
+
+`fleet.prosecuteFailOn` in `.adlc/config.json` may tighten or match the `medium`
+default (`low` or `medium`); weaker values (`high`, `critical`) clamp to `medium`
+with a security warning unless explicitly passed via operator-local
+`--prosecute-fail-on`. `fleet.reviewProvider` must match a strict identifier
+grammar and cannot force same-family self-review against the builder harness/model
+(use operator-local `--review-provider` to override). Host executable paths
+(`--adlc-bin`, `--review-bin`) are strictly operator-local CLI flags and are
+ignored if committed in `.adlc/config.json`.
 
 ## Composing fleet — the operator-local extensions
 

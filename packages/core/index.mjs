@@ -30,6 +30,7 @@ export {
   redactSecrets,
   readVerdictSource,
   recordPromptOnlyVerdict,
+  escapeSeatbeltPath,
 } from './lib/primitives.mjs';
 export {
   makeTempPath,
