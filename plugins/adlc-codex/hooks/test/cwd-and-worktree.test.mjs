@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmp } from '@adlc/core/test-kit';
+import { spawnHook } from './helpers/run-hook.mjs';
 
 const HOOKS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const RAILS_HOOK = join(HOOKS_DIR, 'adlc-rails-guard.mjs');
@@ -54,7 +55,7 @@ test('Codex rails-guard and build-gate resolve payload.cwd subdirectories and ne
   const subDir = join(lane, 'packages', 'sub');
 
   // Structured edit from subdirectory payload.cwd inside nested worktree hits frozen rail (exit 2)
-  const editRes = spawnSync(process.execPath, [RAILS_HOOK], {
+  const editRes = spawnHook([RAILS_HOOK], {
     cwd: outsideCwd,
     input: JSON.stringify({
       cwd: subDir,
@@ -68,7 +69,7 @@ test('Codex rails-guard and build-gate resolve payload.cwd subdirectories and ne
   assert.match(editRes.stderr, /blocked rail edit/);
 
   // Shell tool run_shell_command with dir_path targeting frozen rail is denied (exit 2)
-  const shellRes = spawnSync(process.execPath, [RAILS_HOOK], {
+  const shellRes = spawnHook([RAILS_HOOK], {
     cwd: outsideCwd,
     input: JSON.stringify({
       cwd: lane,
@@ -81,7 +82,7 @@ test('Codex rails-guard and build-gate resolve payload.cwd subdirectories and ne
   assert.equal(shellRes.status, 2, shellRes.stderr);
 
   // Build-gate resolves high-risk ticket from subdirectory payload.cwd inside nested worktree and fails closed without transcript (exit 2)
-  const bgRes = spawnSync(process.execPath, [BUILD_GATE_HOOK], {
+  const bgRes = spawnHook([BUILD_GATE_HOOK], {
     cwd: outsideCwd,
     input: JSON.stringify({
       cwd: subDir,

@@ -71,8 +71,13 @@ try {
   writeFileSync(join(repo, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
   mkdirSync(join(repo, 'src'));
   const SHIM = join(PLUGIN, 'hooks', 'adlc-rails-guard.cjs');
+  const smokeEnv = { ...process.env, ADLC_P4_ENFORCEMENT: '1' };
+  delete smokeEnv.ANTIGRAVITY_CONVERSATION_ID;
+  delete smokeEnv.ADLC_SESSION_ID;
+  delete smokeEnv.AGY_SESSION_ID;
+  delete smokeEnv.GEMINI_SESSION_ID;
   const drive = (name, args) => {
-    const out = execFileSync(process.execPath, [SHIM], { input: JSON.stringify({ toolCall: { name, args } }), env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' }, encoding: 'utf8' });
+    const out = execFileSync(process.execPath, [SHIM], { input: JSON.stringify({ toolCall: { name, args } }), env: smokeEnv, encoding: 'utf8' });
     return JSON.parse(out);
   };
   if (drive('write_to_file', { TargetFile: join(repo, 'src', 'frozen.js') }).allow_tool !== false) fail('shim did not DENY a rail write'); else ok('shim denies a frozen-rail write (exit 0 + allow_tool:false)');

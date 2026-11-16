@@ -349,3 +349,28 @@ test('detectRepeatedErrors suppresses short signatures (< 5 chars) and created/c
     { signature: "error: task completed at shutdown failed", count: 2 },
   ]);
 });
+
+test('parseTranscriptLines ignores read_file source code, passing commands, and planner prose while keeping real errors', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'flail-filter-'));
+  try {
+    const transcriptPath = join(tmpDir, 'transcript.jsonl');
+    writeFileSync(
+      transcriptPath,
+      [
+        JSON.stringify({ type: 'USER_INPUT', status: 'DONE', content: 'Error: please fix this failed test' }),
+        JSON.stringify({ type: 'PLANNER_RESPONSE', status: 'DONE', content: 'Error: I see why it failed' }),
+        JSON.stringify({ status: 'DONE', content: 'Showing lines 1-20 of 50\n10: throw new Error("failed");' }),
+        JSON.stringify({ status: 'DONE', content: 'Command exited with code 0.\n✔ error handling test passed' }),
+        JSON.stringify({ status: 'DONE', content: 'Command exited with code 1.\nError: assertion failed on line 9' }),
+        JSON.stringify({ status: 'ERROR', error: 'Encountered error in tool execution: ENOENT' }),
+      ].join('\n')
+    );
+    const lines = parseTranscriptLines(transcriptPath);
+    assert.equal(lines.some((l) => l.includes('throw new Error')), false);
+    assert.equal(lines.some((l) => l.includes('error handling test passed')), false);
+    assert.equal(lines.some((l) => l.includes('assertion failed on line 9')), true);
+    assert.equal(lines.some((l) => l.includes('Encountered error in tool execution')), true);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

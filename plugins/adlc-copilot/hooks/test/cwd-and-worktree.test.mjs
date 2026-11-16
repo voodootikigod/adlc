@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmp } from '@adlc/core/test-kit';
+import { spawnHook } from './helpers/run-hook.mjs';
 
 const HOOKS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const RAILS_HOOK = join(HOOKS_DIR, 'adlc-rails-guard.mjs');
@@ -54,7 +55,7 @@ test('Copilot rails-guard and build-gate resolve subdirectory payload.cwd inside
   const subDir = join(lane, 'packages', 'sub');
 
   // Relative file_path from subdirectory payload.cwd inside nested worktree hits frozen rail
-  const editRes = spawnSync(process.execPath, [RAILS_HOOK], {
+  const editRes = spawnHook([RAILS_HOOK], {
     cwd: outsideCwd,
     input: JSON.stringify({
       cwd: subDir,
@@ -68,7 +69,7 @@ test('Copilot rails-guard and build-gate resolve subdirectory payload.cwd inside
   assert.match(editRes.stdout, /blocked rail edit/);
 
   // Shell tool run_terminal_cmd with Cwd targeting frozen rail is denied
-  const shellRes = spawnSync(process.execPath, [RAILS_HOOK], {
+  const shellRes = spawnHook([RAILS_HOOK], {
     cwd: outsideCwd,
     input: JSON.stringify({
       cwd: lane,
@@ -83,7 +84,7 @@ test('Copilot rails-guard and build-gate resolve subdirectory payload.cwd inside
 
   // Build-gate resolves enclosing worktree root when payload.cwd is a subdirectory and fails closed on corrupt store
   writeFileSync(join(lane, '.adlc', 'tickets.json'), '{not-json');
-  const bgRes = spawnSync(process.execPath, [BUILD_GATE_HOOK], {
+  const bgRes = spawnHook([BUILD_GATE_HOOK], {
     cwd: outsideCwd,
     input: JSON.stringify({
       cwd: subDir,

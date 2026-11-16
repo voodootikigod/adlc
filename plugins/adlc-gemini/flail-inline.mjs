@@ -253,6 +253,19 @@ export function parseTranscriptRecords(filePath, options = {}) {
   }
 }
 
+function isNonErrorStepRecord(obj) {
+  const stepType = typeof obj.type === 'string' ? obj.type.toUpperCase() : '';
+  const status = typeof obj.status === 'string' ? obj.status.toUpperCase() : '';
+  if (status === 'ERROR') return false;
+  if (stepType === 'USER_INPUT' || stepType === 'PLANNER_RESPONSE') return true;
+  if (status === 'DONE') {
+    const body = typeof obj.content === 'string' ? obj.content : '';
+    if (/Showing lines \d+-\d+ of \d+/.test(body)) return true;
+    if (/Command exited with code 0\./.test(body)) return true;
+  }
+  return false;
+}
+
 export function parseTranscriptSteps(filePath, maxScanBytes = MAX_SCAN_BYTES) {
   const records = parseTranscriptRecords(filePath, maxScanBytes);
   const steps = [];
@@ -261,6 +274,7 @@ export function parseTranscriptSteps(filePath, maxScanBytes = MAX_SCAN_BYTES) {
       if (typeof obj === 'string' && obj.trim()) steps.push([obj]);
       continue;
     }
+    if (isNonErrorStepRecord(obj)) continue;
     const stepLines = [];
     if (typeof obj.content === 'string') {
       stepLines.push(...obj.content.split('\n'));
@@ -270,6 +284,9 @@ export function parseTranscriptSteps(filePath, maxScanBytes = MAX_SCAN_BYTES) {
     }
     if (typeof obj.message === 'string') {
       stepLines.push(...obj.message.split('\n'));
+    }
+    if (typeof obj.error === 'string') {
+      stepLines.push(...obj.error.split('\n'));
     }
     if (stepLines.length > 0) {
       steps.push(stepLines);
