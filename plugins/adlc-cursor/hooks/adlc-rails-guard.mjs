@@ -23,7 +23,6 @@ import { isAbsolute, resolve, relative, dirname, basename } from 'node:path';
 import { realpathSync, existsSync } from 'node:fs';
 import { checkRail, classifyTool, isShellTool, railPreconditions } from '../rails-checker.mjs';
 import { normalizeRootPath } from '../lib/workspace-resolve.mjs';
-import { findInnermostCheckoutRoot, preferInnermostCheckout } from '@adlc/core';
 
 /** Best-effort realpath; falls back to the lexical path (a write may create it). */
 function realOr(p) {
@@ -55,7 +54,7 @@ function realpathDeepest(absPath) {
 // is pinned against a real payload in ADR 0006 (Unverified).
 const TOOL_NAME_KEYS = ['tool_name', 'toolName', 'tool', 'name'];
 const INPUT_BAG_KEYS = ['tool_input', 'toolInput', 'input', 'args', 'arguments', 'params', 'parameters'];
-const PATH_KEYS = ['file_path', 'filePath', 'path', 'notebook_path', 'notebookPath', 'target_file', 'targetFile', 'target', 'target_path', 'targetPath'];
+const PATH_KEYS = ['file_path', 'filePath', 'path', 'target_file', 'targetFile', 'target', 'target_path', 'targetPath'];
 const ROOT_KEYS = ['workspace_roots', 'workspaceRoots', 'workspace_root', 'workspaceRoot', 'project_root', 'projectRoot', 'cwd', 'root'];
 
 function firstString(obj, keys) {
@@ -189,16 +188,8 @@ export function absoluteRoot(raw) {
  * (or a symlinked root alias) must be attributed to the repo it actually resolves
  * into, not the one whose name lexically prefixes it.
  */
-const EXPLICIT_WORKSPACE_KEYS = ['workspace_roots', 'workspaceRoots', 'workspace_root', 'workspaceRoot', 'project_root', 'projectRoot', 'root'];
-
-function hasExplicitWorkspaceDeclaration(payload) {
-  return Boolean(firstString(payload, EXPLICIT_WORKSPACE_KEYS));
-}
-
 export function resolveOwning(payload, filePath, fallback, env = process.env) {
   const roots = candidateRoots(payload);
-  const storeOverride = env?.ADLC_TICKET_STORE ?? env?.ADLC_TICKETS ?? null;
-  const cwdOnlyRoot = roots.length > 0 && !hasExplicitWorkspaceDeclaration(payload);
   const base = roots[0] ?? fallback ?? hostProjectRoot(env);
   // Resolve the edited path to an ABSOLUTE path. A relative path with `..`
   // traversal (e.g. `../backend/src/auth.js`) is resolved against the primary root
@@ -211,41 +202,18 @@ export function resolveOwning(payload, filePath, fallback, env = process.env) {
   const absFile = !filePath
     ? undefined
     : isAbsolute(filePath) ? resolve(filePath) : (base != null ? resolve(base, filePath) : undefined);
-  const climbIfCwdOnly = (chosen) =>
-    cwdOnlyRoot && chosen
-      ? (findInnermostCheckoutRoot(chosen, { storeOverride, preserveSpelling: true }) ?? chosen)
-      : chosen;
   if (absFile) {
-    const upgradeWorktree = (chosen) => {
-      const climbed = climbIfCwdOnly(chosen);
-      return (
-        preferInnermostCheckout(climbed, [absFile], {
-          storeOverride,
-          allowFileStart: true,
-          preserveSpelling: true,
-        }) ?? climbed
-      );
-    };
     const owning = roots
-      .map((raw) => climbIfCwdOnly(raw))
       .filter((raw) => contains(raw, absFile))
       .map((raw) => ({ raw, real: realpathDeepest(resolve(raw)) }))
       .sort((a, b) => b.real.length - a.real.length)[0];
-    if (owning) return { root: upgradeWorktree(owning.raw), absFile };
+    if (owning) return { root: owning.raw, absFile };
     // Neither payload-declared roots nor CURSOR_PROJECT_DIR silently claim an
     // external target: a file outside every candidate workspace root stays
     // unresolved unless the caller explicitly supplied `fallback`.
-    const climbedBase = climbIfCwdOnly(base);
-    if (fallback == null && climbedBase != null && !contains(climbedBase, absFile)) return { root: null, absFile };
-    if (climbedBase != null) return { root: upgradeWorktree(climbedBase), absFile };
+    if (fallback == null && base != null && !contains(base, absFile)) return { root: null, absFile };
   }
-  const resolvedBase = base != null
-    ? (preferInnermostCheckout(climbIfCwdOnly(base), [payload?.cwd], {
-        storeOverride,
-        preserveSpelling: true,
-      }) ?? climbIfCwdOnly(base))
-    : null;
-  return { root: resolvedBase, absFile };
+  return { root: base ?? null, absFile };
 }
 
 /** Symlink-aware, boundary-aware containment of an absolute path in a root. */
@@ -318,23 +286,9 @@ export function decide(payload, { root, env = process.env } = {}) {
       // outcome — any 'deny' (conflict/corrupt) → deny; else any 'active' root → deny
       // (can't verify it against that root's frozen rails); else (all inactive) allow.
       const declared = candidateRoots(payload);
-      const storeOverride = env?.ADLC_TICKET_STORE ?? env?.ADLC_TICKETS ?? null;
-      const cwdOnly = declared.length > 0 && !hasExplicitWorkspaceDeclaration(payload);
       const host = hostProjectRoot(env);
-      const rawRoots = root != null ? [root] : declared.length ? declared : host != null ? [host] : [];
-      if (!rawRoots.length) return unresolvedRootVerdict(tool, env);
-      const roots = rawRoots.map((r) => {
-        const climbed =
-          root == null && cwdOnly
-            ? (findInnermostCheckoutRoot(r, { storeOverride, preserveSpelling: true }) ?? r)
-            : r;
-        return (
-          preferInnermostCheckout(climbed, [payload?.cwd], {
-            storeOverride,
-            preserveSpelling: true,
-          }) ?? climbed
-        );
-      });
+      const roots = root != null ? [root] : declared.length ? declared : host != null ? [host] : [];
+      if (!roots.length) return unresolvedRootVerdict(tool, env);
       const states = roots.map((r) => railPreconditions({ root: r, env }));
       const denied = states.find((s) => s.state === 'deny');
       if (denied) {

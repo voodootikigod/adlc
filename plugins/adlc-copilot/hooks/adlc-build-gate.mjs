@@ -41,7 +41,6 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadTicketStoreReadOnly, ticketStoreExists } from './generated-ticket-reader.mjs';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
-import { extractToolWorkdir, findInnermostCheckoutRoot, preferInnermostCheckout } from './generated-workspace-root.mjs';
 import {
   resolveTrustedBinary,
   ownershipRejection,
@@ -424,29 +423,7 @@ async function main() {
   // read were anchored on process.cwd(), which is not that repository.
   const payload = await stdinJson();
   const processCwd = process.cwd();
-  const toolCwd = payloadRoot(payload, processCwd);
-  const storeOverride = process.env.ADLC_TICKET_STORE ?? process.env.ADLC_TICKETS ?? null;
-  let parsedArgs = {};
-  if (typeof payload?.toolArgs === 'string') {
-    try { parsedArgs = JSON.parse(payload.toolArgs); } catch {}
-  } else if (payload?.toolArgs && typeof payload.toolArgs === 'object') {
-    parsedArgs = payload.toolArgs;
-  } else if (payload?.tool_input && typeof payload.tool_input === 'object') {
-    parsedArgs = payload.tool_input;
-  }
-  const outerRoot = findInnermostCheckoutRoot(toolCwd, { storeOverride, preserveSpelling: true }) ?? toolCwd;
-  const dynamicTarget =
-    parsedArgs?.file_path ?? parsedArgs?.filePath ?? parsedArgs?.path ?? parsedArgs?.target ?? extractToolWorkdir(parsedArgs) ?? null;
-  const resolvedDynamic =
-    typeof dynamicTarget === 'string' && dynamicTarget.trim()
-      ? resolve(toolCwd, dynamicTarget.trim())
-      : null;
-  const root =
-    preferInnermostCheckout(outerRoot, [resolvedDynamic], {
-      storeOverride,
-      allowFileStart: true,
-      preserveSpelling: true,
-    }) ?? outerRoot;
+  const root = payloadRoot(payload, processCwd);
   if (realpathOrSelf(root) !== realpathOrSelf(processCwd)) {
     console.error(`adlc-build-gate: resolving the repository from the payload cwd ${root} (process cwd ${processCwd})`);
   }

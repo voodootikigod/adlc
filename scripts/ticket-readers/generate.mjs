@@ -88,9 +88,6 @@ const ARTIFACTS = [
     marker: '// GENERATED-WORKSPACE-ROOT SOURCE.',
     outputs: [
       'plugins/adlc-gemini/generated-workspace-root.mjs',
-      'plugins/adlc-claude-code/hooks/generated-workspace-root.mjs',
-      'plugins/adlc-codex/hooks/generated-workspace-root.mjs',
-      'plugins/adlc-copilot/hooks/generated-workspace-root.mjs',
     ],
   },
 ];

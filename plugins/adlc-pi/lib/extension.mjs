@@ -8,11 +8,7 @@
 // those pieces. index.ts is a typed shim around createExtension().
 
 import { readdirSync, statSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
-import {
-  extractAllToolWorkdirs,
-  hasConflictingToolWorkdirs,
-} from '@adlc/core';
+import { isAbsolute, join } from 'node:path';
 import {
   resolveActiveTicket,
   checkStructuredWrite,
@@ -262,19 +258,8 @@ export function createExtension({ env = process.env } = {}) {
       return `${env.ADLC_TICKET ?? ''}|${mtime('.adlc/current-ticket.json')}|${storeStamp}`;
     }
 
-    function resolveEffectiveRoot(cwd) {
-      if (!cwd) return activeCwd;
-      return (
-        resolveAdlcRoot(
-          cwd,
-          env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null,
-          handoffAdlcRoots
-        ) ?? cwd
-      );
-    }
-
     function reload(cwd) {
-      activeCwd = resolveEffectiveRoot(cwd);
+      activeCwd = cwd ?? activeCwd;
       active = resolveActiveTicket(activeCwd, env);
       ticketStamp = stampTicketFiles(activeCwd);
       return active;
@@ -283,7 +268,7 @@ export function createExtension({ env = process.env } = {}) {
     // Live ticket lifecycle: a ticket activated or switched mid-session is
     // picked up on the next turn via a cheap mtime check.
     function maybeReload(cwd) {
-      const nextCwd = resolveEffectiveRoot(cwd);
+      const nextCwd = cwd ?? activeCwd;
       if (nextCwd !== activeCwd || stampTicketFiles(nextCwd) !== ticketStamp) reload(nextCwd);
     }
 
@@ -453,7 +438,7 @@ export function createExtension({ env = process.env } = {}) {
           sessionId: handoffSessionId,
           usage: handoffUsage(ctx),
           ticketId: active.ticketId ?? null,
-          root: ctx?.cwd ?? activeCwd,
+          root: activeCwd,
           manifestKey,
           sticky: handoffSticky,
           adlcRoots: handoffAdlcRoots,
@@ -484,8 +469,7 @@ export function createExtension({ env = process.env } = {}) {
           // A mutating tool whose target cannot be extracted fails CLOSED.
           return { block: true, reason: `Blocked ${event.toolName}: no extractable target path (ticket ${active.ticketId})` };
         }
-        const resolvedFilePath = isAbsolute(filePath) ? filePath : resolve(ctx.cwd ?? activeCwd, filePath);
-        const verdict = checkStructuredWrite(resolvedFilePath, active.ticket, activeCwd);
+        const verdict = checkStructuredWrite(filePath, active.ticket, activeCwd);
         if (verdict.decision === 'deny') {
           ctx.ui.notify(`Blocked ${event.toolName}: ${verdict.reason}`, 'error');
           noteGate({ ctx, type: 'rail-deny', detail: { tool: event.toolName, path: filePath, reason: verdict.reason } });
@@ -509,7 +493,7 @@ export function createExtension({ env = process.env } = {}) {
         steerFlailAdvisories(filePath, ctx);
         // Snapshot the target so a post-write violation restores exactly this
         // state — never HEAD, never any other file.
-        rememberSnapshot(event.toolCallId, { kind: 'file', snap: snapshotFile(activeCwd, resolvedFilePath) });
+        rememberSnapshot(event.toolCallId, { kind: 'file', snap: snapshotFile(activeCwd, filePath) });
         return undefined;
       }
 
@@ -518,21 +502,7 @@ export function createExtension({ env = process.env } = {}) {
         if (typeof command !== 'string') {
           return { block: true, reason: `Blocked bash: no extractable command (ticket ${active.ticketId})` };
         }
-        const baseCallCwd = ctx.cwd ?? activeCwd;
-        if (hasConflictingToolWorkdirs(event.input, baseCallCwd)) {
-          const conflictReason = 'mutating shell command specifies conflicting working directories; target paths cannot be verified against the frozen rails';
-          ctx.ui.notify(`Blocked shell command: ${conflictReason}`, 'error');
-          noteGate({ ctx, type: 'shell-deny', detail: { reason: conflictReason } });
-          return { block: true, reason: `Blocked command: ${conflictReason} (ticket ${active.ticketId})` };
-        }
-        const candidateWorkdirs = [
-          baseCallCwd,
-          ...extractAllToolWorkdirs(event.input).map((w) => resolve(baseCallCwd, w)),
-        ];
-        const verdict = checkShellCommand(command, active.ticket, activeCwd, {
-          workdir: candidateWorkdirs[candidateWorkdirs.length - 1],
-          workdirs: candidateWorkdirs,
-        });
+        const verdict = checkShellCommand(command, active.ticket, activeCwd);
         if (verdict.decision === 'deny') {
           ctx.ui.notify(`Blocked shell command: ${verdict.reason}`, 'error');
           noteGate({ ctx, type: 'shell-deny', detail: { reason: verdict.reason } });
@@ -555,9 +525,7 @@ export function createExtension({ env = process.env } = {}) {
 
       // Third-party (custom) tool coverage (spec 2.5): rail-check extractable
       // targets; record no-target unknown tools as unvetted.
-      const custom = checkCustomTool(event.toolName, event.input, active.ticket, activeCwd, {
-        cwd: ctx.cwd ?? activeCwd,
-      });
+      const custom = checkCustomTool(event.toolName, event.input, active.ticket, activeCwd);
       if (custom.decision === 'deny') {
         ctx.ui.notify(`Blocked ${event.toolName}: ${custom.reason}`, 'error');
         noteGate({ ctx, type: 'custom-tool-deny', detail: { tool: event.toolName, reason: custom.reason } });

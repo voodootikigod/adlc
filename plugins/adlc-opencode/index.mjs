@@ -17,7 +17,6 @@
 // directly and the module imports nothing from the host at load.
 
 import { checkToolCall, resolveRailsInForce, resolveActiveTicketId, railHit, extractTargets, READONLY_TOOLS, UNGATED_TOOLS, SHELL_TOOLS } from './rails-checker.mjs';
-import { findInnermostCheckoutRoot, isPathInside, preferInnermostCheckout } from '@adlc/core';
 import { checkPreflight, auditGateManifest, auditAdversarialReview } from './lib/session-hooks.mjs';
 import { createDepthTracker, checkBuildGate } from './lib/build-gate.mjs';
 import { checkHandoff, createStickyDenyState, createInitLatch } from './lib/handoff-gate.mjs';
@@ -94,18 +93,11 @@ function isWithin(child, parent) {
  * contains the launch directory and is not the filesystem root, because a
  * non-git ("global") project reports a root unrelated to where the work is.
  */
-function resolveRoot(location, env = process.env) {
+function resolveRoot(location) {
   const launch = nonEmpty(location?.directory);
   const project = nonEmpty(location?.project?.directory);
-  const storeOverride = env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null;
-  if (project && launch && resolve(project) !== resolve('/') && isPathInside(launch, project)) {
-    return preferInnermostCheckout(project, [launch], { storeOverride, preserveSpelling: true }) ?? project;
-  }
-  const start = launch ?? project;
-  if (start) {
-    return findInnermostCheckoutRoot(start, { storeOverride, preserveSpelling: true }) ?? start;
-  }
-  return process.cwd();
+  if (project && launch && resolve(project) !== resolve('/') && isWithin(launch, project)) return project;
+  return launch ?? project ?? process.cwd();
 }
 
 /**
@@ -137,13 +129,11 @@ function adlcCommandOf(prompt) {
 }
 
 async function setup(ctx = {}) {
+  // The repo root used to locate .adlc/ and to canonicalize edited paths.
+  const root = resolveRoot(ctx.location);
   // Per-repo plugin options as the base, real env vars override (see optionsToEnv).
   const optEnv = optionsToEnv(ctx.options ?? {});
   const env = { ...optEnv, ...process.env };
-  // The repo root used to locate .adlc/ and to canonicalize edited paths.
-  const root = resolveRoot(ctx.location, env);
-  const rawLaunchDir = nonEmpty(ctx.location?.directory);
-  const launchCwd = rawLaunchDir && isPathInside(rawLaunchDir, root) ? rawLaunchDir : root;
   // Kill switch: the context-rot handoff deny-set (slice 5) is not yet
   // stable enough for real sessions — it was blocking edits/shell wholesale
   // across workstreams, so it defaults OFF. checkHandoff() and its test
@@ -352,7 +342,7 @@ async function setup(ctx = {}) {
       }
     }
 
-    const verdict = checkToolCall({ tool, args, root, cwd: launchCwd, env });
+    const verdict = checkToolCall({ tool, args, root, env });
     if (verdict.decision === 'deny') {
       return deny(`ADLC rails-guard: blocked ${tool} — ${verdict.reason}`);
     }

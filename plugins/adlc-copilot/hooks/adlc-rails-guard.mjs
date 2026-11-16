@@ -37,14 +37,6 @@ import { isAbsolute, resolve, dirname, basename } from 'node:path';
 import { loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
 import { resolveRailPath } from './generated-railpath.mjs';
 import {
-  findInnermostCheckoutRoot,
-  preferInnermostCheckout,
-  isPathInside,
-  extractToolWorkdir,
-  hasConflictingToolWorkdirs,
-  SHELL_WORKDIR_KEYS,
-} from './generated-workspace-root.mjs';
-import {
   resolveActiveTicketId as resolveActiveTicketIdCanonical,
   resolveActiveTicketAgainst,
 } from './generated-active-ticket.mjs';
@@ -186,29 +178,6 @@ function collectCommandText(value, out = []) {
   return out;
 }
 
-function withoutOuterWorkdirKeys(value) {
-  if (!toolName(value)) return value;
-  const stripped = { ...value };
-  for (const key of SHELL_WORKDIR_KEYS) delete stripped[key];
-  return stripped;
-}
-
-function hasShellWorkdirConflict(value, baseDir) {
-  if (!value || typeof value !== 'object') return false;
-  if (Array.isArray(value)) {
-    return value.some((item) => hasShellWorkdirConflict(item, baseDir));
-  }
-  if (hasConflictingToolWorkdirs(withoutOuterWorkdirKeys(value), baseDir)) {
-    return true;
-  }
-  for (const child of Object.values(value)) {
-    if (child && typeof child === 'object' && hasShellWorkdirConflict(child, baseDir)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function firstShellWorkdir(value) {
   if (!value || typeof value !== 'object') return null;
   if (Array.isArray(value)) {
@@ -218,9 +187,10 @@ function firstShellWorkdir(value) {
     }
     return null;
   }
-  const direct = extractToolWorkdir(withoutOuterWorkdirKeys(value));
-  if (direct) return direct;
-  for (const child of Object.values(value)) {
+  for (const [key, child] of Object.entries(value)) {
+    if (['workdir', 'cwd', 'workingDirectory', 'working_directory'].includes(key) && typeof child === 'string') {
+      return child;
+    }
     const found = firstShellWorkdir(child);
     if (found) return found;
   }
@@ -251,7 +221,7 @@ function toolName(payload) {
 const NON_MUTATING_TOOL_NAMES = new Set(['adlc_gate', 'adlc_prosecute', 'todo_write', 'fetch']);
 
 function isShellToolName(name) {
-  return /(^|\.)(bash|shell|exec|exec_command|run_command|run_shell_command|run_terminal_cmd|write_stdin)$/i.test(String(name));
+  return /(^|\.)(bash|shell|exec|exec_command|run_command|write_stdin)$/i.test(String(name));
 }
 
 function collectShellInvocations(value, out = []) {
@@ -343,10 +313,10 @@ function exceedsDepth(rootNode, maxDepth) {
   return false;
 }
 
-function normalizePath(path, baseCwd = root, repoRoot = root) {
+function normalizePath(path, baseCwd = root) {
   const normalized = path.replaceAll('\\', '/');
   const candidate = resolve(baseCwd, normalized);
-  const projectRelative = resolveRailPath(candidate, repoRoot);
+  const projectRelative = resolveRailPath(candidate, root);
   return projectRelative.startsWith('..') ? normalized : projectRelative;
 }
 
@@ -368,9 +338,7 @@ if (exceedsDepth(payload, MAX_PAYLOAD_DEPTH)) {
 }
 
 const processCwd = process.cwd();
-const toolCwd = payloadRoot(payload, processCwd);
-const storeOverride = process.env.ADLC_TICKET_STORE ?? process.env.ADLC_TICKETS ?? null;
-const root = findInnermostCheckoutRoot(toolCwd, { storeOverride, preserveSpelling: true }) ?? toolCwd;
+const root = payloadRoot(payload, processCwd);
 if (safeRealpath(root) !== safeRealpath(processCwd)) {
   notice(`resolving the repository from the payload cwd ${root} (process cwd ${processCwd})`);
 }
@@ -384,99 +352,44 @@ if (explicitEnforcement !== undefined && explicitEnforcement !== '1') {
   fail('ADLC_P4_ENFORCEMENT must be 0, 1, or unset');
 }
 
-const rawPaths = collectPaths(payload);
-const shellInvocations = collectShellInvocations(payload);
-const shellTool = shellInvocations.length > 0;
-
-function loadCheckoutRails(checkoutRoot) {
-  const activeTicket = resolveActiveTicketId(checkoutRoot);
-  const ticketId = activeTicket.id;
-  if (!ticketId) return { active: false, reason: 'no-ticket' };
-  let snapshot;
-  try { snapshot = loadTicketStoreReadOnly({ root: checkoutRoot, env: process.env }); }
-  catch (error) { fail(`ticket store failed to load: ${error.message}`); }
-  const ticket = snapshot.tickets.find((t) => t.id === ticketId);
-  if (!ticket) fail(`unknown active ticket: ${ticketId}`);
-  const activeAgainstStore = resolveActiveTicketAgainst(snapshot, { root: checkoutRoot, env: process.env, allowLegacyPointer: true });
-  if (!activeAgainstStore.ok) fail(activeAgainstStore.message);
-  const ticketsPath = process.env.ADLC_TICKET_STORE ?? process.env.ADLC_TICKETS ?? (snapshot.backend === 'directory' ? '.adlc/tickets' : '.adlc/tickets.json');
-  const declaredRails = ticket.rails ?? [];
-  if (explicitEnforcement !== '1' && ticket.completed === true) {
-    return { active: false, reason: 'completed', ticketId };
-  }
-  if (declaredRails.length === 0) {
-    return { active: false, reason: 'no-rails', ticketId };
-  }
-  const rails = [
-    ...declaredRails,
-    snapshot.backend === 'directory' ? '.adlc/tickets/**' : normalizePath(ticketsPath, checkoutRoot, checkoutRoot),
-    '.adlc/current-ticket.json',
-  ];
-  return { active: true, ticketId, rails };
-}
-
-const primaryState = loadCheckoutRails(root);
-const shellProbePaths = [];
-for (const { commandText, workdir } of shellInvocations) {
-  const shellBase = workdir ? resolve(toolCwd, workdir) : toolCwd;
-  shellProbePaths.push(shellBase);
-  const sp = new Set();
-  collectShellPaths(commandText, sp);
-  for (const p of sp) shellProbePaths.push(resolve(shellBase, p));
-}
-const absProbeTargets = [
-  ...Array.from(rawPaths).map((p) => resolve(toolCwd, p)),
-  ...shellProbePaths,
-];
-const nestedRoots = new Set();
-for (const absTarget of absProbeTargets) {
-  if (!isPathInside(absTarget, root)) continue;
-  const inner = preferInnermostCheckout(root, [absTarget], {
-    storeOverride,
-    allowFileStart: true,
-    preserveSpelling: true,
-  });
-  if (inner && inner !== root) nestedRoots.add(inner);
-}
-const allNestedStates = new Map();
-const nestedStates = new Map();
-for (const nr of nestedRoots) {
-  const st = loadCheckoutRails(nr);
-  allNestedStates.set(nr, st);
-  if (st.active) nestedStates.set(nr, st);
-}
-
-if (!primaryState.active && nestedStates.size === 0) {
-  if (explicitEnforcement === '1') {
-    for (const st of allNestedStates.values()) {
-      if (st.reason === 'no-ticket') fail('ADLC_P4_ENFORCEMENT=1 but no active ticket source resolved');
-      if (st.reason === 'no-rails') fail(`ticket ${st.ticketId} has no rails`);
-    }
-  }
-  if (primaryState.reason === 'no-ticket') {
-    if (explicitEnforcement === '1') fail('ADLC_P4_ENFORCEMENT=1 but no active ticket source resolved');
-    notice('P4 rail hook inactive: no current ticket selected');
-    process.exit(0);
-  }
-  if (primaryState.reason === 'completed') {
-    notice(`P4 rail hook inactive: ticket ${primaryState.ticketId} is completed`);
-    process.exit(0);
-  }
-  if (explicitEnforcement === '1') fail(`ticket ${primaryState.ticketId} has no rails`);
-  notice(`P4 rail hook inactive: ticket ${primaryState.ticketId} has no rails`);
+const activeTicket = resolveActiveTicketId(root);
+const ticketId = activeTicket.id;
+if (!ticketId) {
+  if (explicitEnforcement === '1') fail('ADLC_P4_ENFORCEMENT=1 but no active ticket source resolved');
+  notice('P4 rail hook inactive: no current ticket selected');
   process.exit(0);
 }
 
-if (shellTool && hasShellWorkdirConflict(payload, toolCwd)) {
-  fail('shell payload specifies conflicting working directories');
-}
+let snapshot;
+try { snapshot = loadTicketStoreReadOnly({ root, env: process.env }); }
+catch (error) { fail(`ticket store failed to load: ${error.message}`); }
+const tickets = snapshot.tickets;
 
-const resolvedTargets = Array.from(rawPaths).map((path) => ({
-  raw: path,
-  base: toolCwd,
-  abs: resolve(toolCwd, path),
-  isShellVerb: false,
-}));
+const ticket = tickets.find((t) => t.id === ticketId);
+if (!ticket) fail(`unknown active ticket: ${ticketId}`);
+// Re-resolve against the loaded store so the pinned ticketHash is verified by the
+// same contract every other reader uses. allowLegacyPointer keeps the documented
+// 1.x bridge: a pointer that pins no hash still resolves (this harness never
+// required one), but a hash that IS present is always verified.
+const activeAgainstStore = resolveActiveTicketAgainst(snapshot, { root, env: process.env, allowLegacyPointer: true });
+if (!activeAgainstStore.ok) fail(activeAgainstStore.message);
+const ticketsPath = process.env.ADLC_TICKET_STORE ?? process.env.ADLC_TICKETS ?? (snapshot.backend === 'directory' ? '.adlc/tickets' : '.adlc/tickets.json');
+const declaredRails = ticket.rails ?? [];
+if (explicitEnforcement !== '1' && ticket.completed === true) {
+  notice(`P4 rail hook inactive: ticket ${ticketId} is completed`);
+  process.exit(0);
+}
+if (declaredRails.length === 0) {
+  if (explicitEnforcement === '1') fail(`ticket ${ticketId} has no rails`);
+  notice(`P4 rail hook inactive: ticket ${ticketId} has no rails`);
+  process.exit(0);
+}
+const rails = [...declaredRails, snapshot.backend === 'directory' ? '.adlc/tickets/**' : normalizePath(ticketsPath), '.adlc/current-ticket.json'];
+
+const rawPaths = collectPaths(payload);
+const paths = Array.from(rawPaths).map((path) => normalizePath(path));
+const shellInvocations = collectShellInvocations(payload);
+const shellTool = shellInvocations.length > 0;
 let shellMutating = false;
 let cwdChangingShellMutation = false;
 let expandingShellMutation = false;
@@ -508,16 +421,8 @@ if (shellTool) {
     if (commandPaths.size === 0) {
       fail('mutating shell payload did not include literal editable paths');
     }
-    const firstVerb = shellTokens(commandText)[0] ?? '';
-    const shellBaseCwd = workdir ? resolve(toolCwd, workdir) : toolCwd;
-    for (const path of commandPaths) {
-      resolvedTargets.push({
-        raw: path,
-        base: shellBaseCwd,
-        abs: resolve(shellBaseCwd, path),
-        isShellVerb: path === firstVerb && !looksPathLike(path),
-      });
-    }
+    const shellBaseCwd = workdir ? resolve(root, workdir) : root;
+    for (const path of commandPaths) paths.push(normalizePath(path, shellBaseCwd));
   }
 }
 
@@ -528,7 +433,7 @@ if (expandingShellMutation) {
   fail('mutating shell payload uses shell expansion; use a structured edit tool or literal project-relative shell target paths');
 }
 
-if (resolvedTargets.length === 0) {
+if (paths.length === 0) {
   if (shellTool && !shellMutating && shellInvocations.length > 0 && shellInvocations.every(({ commandText }) => shellIsPositivelyReadOnly(commandText))) {
     notice('shell command has no editable rail targets');
     process.exit(0);
@@ -539,28 +444,7 @@ if (resolvedTargets.length === 0) {
   }
   fail(shellTool ? 'shell payload did not include literal editable paths or a known read-only command' : 'active hook payload did not include any editable paths');
 }
-
-const primaryTargets = resolvedTargets.filter(({ abs }) => !Array.from(nestedRoots).some((nr) => isPathInside(abs, nr)));
-if (primaryState.active) {
-  const primaryPaths = primaryTargets.map(({ raw, base }) => normalizePath(raw, base, root));
-  const blocked = primaryPaths.filter((path) => primaryState.rails.some((rail) => railMatchesPath(rail, path)));
-  if (blocked.length > 0) fail(`blocked rail edit for ${primaryState.ticketId}: ${blocked.join(', ')}`);
-}
-for (const [nr, st] of allNestedStates.entries()) {
-  const nestedTargets = resolvedTargets.filter(({ abs }) => isPathInside(abs, nr));
-  if (nestedTargets.length === 0) continue;
-  if (st.active) {
-    const nestedPaths = nestedTargets.map(({ raw, base }) => normalizePath(raw, base, nr));
-    const blocked = nestedPaths.filter((path) => st.rails.some((rail) => railMatchesPath(rail, path)));
-    if (blocked.length > 0) fail(`blocked rail edit for ${st.ticketId}: ${blocked.join(', ')}`);
-  } else if (explicitEnforcement === '1' && nestedTargets.some((t) => !t.isShellVerb)) {
-    if (st.reason === 'no-ticket') fail('ADLC_P4_ENFORCEMENT=1 but no active ticket source resolved');
-    if (st.reason === 'no-rails') fail(`ticket ${st.ticketId} has no rails`);
-  }
-}
-if (primaryTargets.some((t) => !t.isShellVerb) && !primaryState.active && explicitEnforcement === '1') {
-  if (primaryState.reason === 'no-ticket') fail('ADLC_P4_ENFORCEMENT=1 but no active ticket source resolved');
-  if (primaryState.reason === 'no-rails') fail(`ticket ${primaryState.ticketId} has no rails`);
-}
+const blocked = paths.filter((path) => rails.some((rail) => railMatchesPath(rail, path)));
+if (blocked.length > 0) fail(`blocked rail edit for ${ticketId}: ${blocked.join(', ')}`);
 
 process.exit(0);

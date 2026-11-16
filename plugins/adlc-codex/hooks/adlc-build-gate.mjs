@@ -35,8 +35,7 @@ import {
   repoManifestChainIsSigned,
 } from './adlc-handoff-gate.mjs';
 import { resolveContextHandoffEntry } from './handoff-resolve.mjs';
-import { extractToolWorkdir, findInnermostCheckoutRoot, preferInnermostCheckout } from './generated-workspace-root.mjs';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 function fail(message) {
@@ -53,8 +52,8 @@ async function stdinJson() {
 
 // Enforcing gate: a malformed/conflicting pointer fails closed, matching
 // adlc-rails-guard.mjs's resolveActiveTicketId().
-function resolveActiveTicketId(root = process.cwd()) {
-  const resolved = resolveActiveTicketIdCanonical({ root, env: process.env });
+function resolveActiveTicketId() {
+  const resolved = resolveActiveTicketIdCanonical({ root: process.cwd(), env: process.env });
   if (!resolved.ok) fail(resolved.message);
   return { id: resolved.value?.id ?? undefined };
 }
@@ -300,29 +299,10 @@ function readOptionalTranscript(path) {
 }
 
 async function main() {
-  const payload = await stdinJson();
-  const toolCwd =
-    typeof payload?.cwd === 'string' && payload.cwd.trim() !== ''
-      ? resolve(payload.cwd)
-      : process.cwd();
-  const storeOverride = process.env.ADLC_TICKET_STORE ?? process.env.ADLC_TICKETS ?? null;
-  const outerRoot = findInnermostCheckoutRoot(toolCwd, { storeOverride, preserveSpelling: true }) ?? toolCwd;
-  const ti = payload?.tool_input ?? payload?.toolInput ?? payload?.args ?? payload?.arguments ?? {};
-  const dynamicTarget =
-    ti?.file_path ?? ti?.filePath ?? ti?.path ?? ti?.target ?? extractToolWorkdir(ti) ?? null;
-  const resolvedDynamic =
-    typeof dynamicTarget === 'string' && dynamicTarget.trim()
-      ? resolve(toolCwd, dynamicTarget.trim())
-      : null;
-  const root =
-    preferInnermostCheckout(outerRoot, [resolvedDynamic], {
-      storeOverride,
-      allowFileStart: true,
-      preserveSpelling: true,
-    }) ?? outerRoot;
+  if (!existsSync('.adlc')) process.exit(0); // not an ADLC repo → allow
+  if (!ticketStoreExists(process.cwd(), process.env)) process.exit(0); // no tickets → nothing to gate → allow
 
-  if (!existsSync(join(root, '.adlc'))) process.exit(0); // not an ADLC repo → allow
-  if (!ticketStoreExists(root, process.env)) process.exit(0); // no tickets → nothing to gate → allow
+  const payload = await stdinJson();
 
   // Recovery Exception & Inspection Bash Exception (context-rot-threshold-
   // calibration spec §1.3), applied to THIS gate too — evaluated before any
@@ -353,7 +333,7 @@ async function main() {
       // the package, only locates it, but a repository that ships its own
       // @adlc/context-handoff controls what path this resolves to (see
       // adlc-handoff-gate.mjs's identical comment for the full residual).
-      const entry = resolveContextHandoffEntry({ projectRoot: root });
+      const entry = resolveContextHandoffEntry({ projectRoot: process.cwd() });
       const trustedRecoveryCliPath = entry ? join(dirname(dirname(entry)), 'bin', 'handoff.mjs') : null;
       if (trustedRecoveryCliPath) {
         const sessionId = resolveHandoffSessionIdLocal({
@@ -371,7 +351,6 @@ async function main() {
             sessionId,
             trustedEnv: process.env,
             adlcBinPath: resolveTrustedBinary('adlc', process.env.PATH),
-            cwd: root,
           });
           process.exit(0); // allow — never gated on the audit record above succeeding
         }
@@ -379,12 +358,12 @@ async function main() {
     }
   }
 
-  const active = resolveActiveTicketId(root);
+  const active = resolveActiveTicketId();
   if (!active.id) process.exit(0); // no active ticket declared → allow (opt-in gate)
 
   let ticket;
   try {
-    ticket = loadTicketStoreReadOnly({ root, env: process.env }).tickets.find((t) => t.id === active.id);
+    ticket = loadTicketStoreReadOnly({ root: process.cwd(), env: process.env }).tickets.find((t) => t.id === active.id);
   } catch (e) {
     fail(`cannot read the ticket store (${e.message}) — active ticket ${active.id}'s risk cannot be verified, failing closed`);
   }
@@ -395,7 +374,7 @@ async function main() {
 
   if (result.decision === 'allow') process.exit(0);
   if (result.decision === 'pending-bypass') {
-    if (recordBuildGateBypass(active.id, result.signals, result.depth, result.sessionBytes, { cwd: root })) process.exit(0); // audited → allow
+    if (recordBuildGateBypass(active.id, result.signals, result.depth, result.sessionBytes)) process.exit(0); // audited → allow
     fail('ADLC_BUILD_GATE_BYPASS is set but the override could not be recorded to the gate-manifest (is @adlc/cli installed and .adlc writable?). An unaudited bypass is refused — the build is blocked.');
   }
   fail(result.reason);
