@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
 import {
   canonicalizeExisting,
+  decide,
   discoverRootFromTranscriptRecords,
   findAdlcRoot,
   anchorPath,
@@ -18,6 +19,7 @@ import {
   postToolUse,
   runFromStdin,
 } from '../hooks/adlc-rails-guard.mjs';
+import { resolveTranscriptPath } from '../flail-inline.mjs';
 import { loadTickets } from '../core-inline.mjs';
 
 function git(cwd, ...args) {
@@ -237,15 +239,45 @@ test('resolveWorkspaceRoot, discoverRootFromTranscriptRecords, and lifecycle hoo
     realpathSync(lane)
   );
 
-  // Full PreToolUse -> PostToolUse -> Stop lifecycle with outer workspacePaths[0], outer-repo transcript,
+  // Structured edit with escaping Cwd or relative ../ TargetFile is DENIED under enforcement
+  const outsideTmp = tmp(t, 'gemini-escape-cwd-');
+  const escapeCwdVerdict = decide(
+    {
+      workspacePaths: [primary],
+      toolCall: { name: 'write_to_file', args: { TargetFile: 'escape.mjs', Cwd: outsideTmp, CodeContent: 'x' } },
+    },
+    { env: { ADLC_P4_ENFORCEMENT: '1' } }
+  );
+  assert.equal(escapeCwdVerdict.allow_tool, false);
+
+  const escapeRelVerdict = decide(
+    {
+      workspacePaths: [primary],
+      toolCall: { name: 'write_to_file', args: { TargetFile: '../../../escape.mjs', Cwd: lane, CodeContent: 'x' } },
+    },
+    { env: { ADLC_P4_ENFORCEMENT: '1' } }
+  );
+  assert.equal(escapeRelVerdict.allow_tool, false);
+
+  // Full PreToolUse -> PostToolUse -> Stop lifecycle with real brain transcript path, outer workspacePaths[0],
   // initial outer read_file, structured edit using { TargetFile: 'src/impl.js', Cwd: lane }, and nested test run
   const home = tmp(t, 'gemini-wt-home-');
-  const transcriptPath = join(primary, 'session-transcript.jsonl');
   const conversationId = '11111111-1111-4111-8111-111111111111';
-  const env = { ADLC_P4_ENFORCEMENT: '1', HOME: home, ANTIGRAVITY_CONVERSATION_ID: conversationId };
+  const appDataDir = join(home, '.gemini', 'antigravity-cli');
+  const transcriptDir = join(appDataDir, 'brain', conversationId, '.system_generated', 'logs');
+  mkdirSync(transcriptDir, { recursive: true });
+  const transcriptPath = join(transcriptDir, 'transcript.jsonl');
+  const env = {
+    ADLC_P4_ENFORCEMENT: '1',
+    HOME: home,
+    ANTIGRAVITY_APP_DATA_DIR: appDataDir,
+    ANTIGRAVITY_CONVERSATION_ID: conversationId,
+  };
 
   const initialRead = { name: 'read_file', args: { Path: join(primary, 'src', 'frozen.js') } };
   writeFileSync(transcriptPath, `${JSON.stringify({ status: 'DONE', toolCalls: [initialRead] })}\n`);
+  assert.equal(realpathSync(resolveTranscriptPath({ conversationId, env })), realpathSync(transcriptPath));
+
   runFromStdin(JSON.stringify({ workspacePaths: [primary], conversationId, transcriptPath, toolCall: initialRead }), env);
   postToolUse({ workspacePaths: [primary], conversationId, transcriptPath, exitCode: 0 }, { env });
 
@@ -263,6 +295,11 @@ test('resolveWorkspaceRoot, discoverRootFromTranscriptRecords, and lifecycle hoo
       `${JSON.stringify({ status: 'DONE', toolCalls: [editCall.toolCall] })}\n`
   );
   postToolUse({ workspacePaths: [primary], conversationId, transcriptPath, exitCode: 0 }, { env });
+
+  // Prove onStop is genuinely exercising transcript verification on `lane`: BEFORE running tests, onStop MUST reject!
+  const prematureStop = onStop({ workspacePaths: [primary], conversationId, transcriptPath }, { env });
+  assert.equal(prematureStop.decision, 'continue');
+  assert.match(prematureStop.reason ?? '', /unverified file edits/);
 
   const testCall = {
     workspacePaths: [primary],
@@ -282,4 +319,22 @@ test('resolveWorkspaceRoot, discoverRootFromTranscriptRecords, and lifecycle hoo
 
   const stopRes = onStop({ workspacePaths: [primary], conversationId, transcriptPath }, { env });
   assert.equal(stopRes.decision, 'stop', stopRes.reason);
+
+  // Also prove record-derived checkout wins when headless transcript file resides inside a different ADLC repo
+  const foreignTranscript = join(unrelatedRepo, 'foreign-transcript.jsonl');
+  const foreignConvId = '22222222-2222-4222-8222-222222222222';
+  const foreignEnv = {
+    ADLC_P4_ENFORCEMENT: '1',
+    HOME: home,
+    ANTIGRAVITY_APP_DATA_DIR: unrelatedRepo,
+    ANTIGRAVITY_CONVERSATION_ID: foreignConvId,
+  };
+  writeFileSync(foreignTranscript, '');
+  const foreignEdit = { name: 'write_to_file', args: { TargetFile: join(lane, 'src', 'impl2.js'), CodeContent: 'export const y = 3;\n' } };
+  runFromStdin(JSON.stringify({ conversationId: foreignConvId, transcriptPath: foreignTranscript, toolCall: foreignEdit }), foreignEnv);
+  writeFileSync(foreignTranscript, `${JSON.stringify({ status: 'DONE', toolCalls: [foreignEdit] })}\n`);
+  postToolUse({ conversationId: foreignConvId, transcriptPath: foreignTranscript, exitCode: 0 }, { env: foreignEnv });
+  const foreignStop = onStop({ conversationId: foreignConvId, transcriptPath: foreignTranscript }, { env: foreignEnv });
+  assert.equal(foreignStop.decision, 'continue');
+  assert.match(foreignStop.reason ?? '', /unverified file edits/);
 });

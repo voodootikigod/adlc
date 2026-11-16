@@ -103,7 +103,8 @@ export function detectEditChurn(logLines, threshold = DEFAULT_FLAIL_THRESHOLD) {
  * Resolve transcript path for a given agy conversation ID or payload.
  */
 export function resolveTranscriptPath({ payload, conversationId, env = process.env } = {}) {
-  const appDataDir = env?.ANTIGRAVITY_APP_DATA_DIR ?? env?.GEMINI_CLI_DATA_DIR ?? join(homedir(), '.gemini', 'antigravity-cli');
+  const effectiveHome = env?.HOME || env?.USERPROFILE || homedir();
+  const appDataDir = env?.ANTIGRAVITY_APP_DATA_DIR ?? env?.GEMINI_CLI_DATA_DIR ?? join(effectiveHome, '.gemini', 'antigravity-cli');
   const direct = payload?.transcriptPath ?? payload?.transcript_path ?? payload?.logPath ?? payload?.log_path;
   const cidFromPayload = payload?.conversationId ?? payload?.conversation_id ?? payload?.conversationID ?? payload?.sessionID ?? payload?.sessionId ?? payload?.params?.conversationId ?? payload?.params?.conversation_id;
   const cidFromEnv = env?.ADLC_SESSION_ID ?? env?.AGY_SESSION_ID ?? env?.GEMINI_SESSION_ID;
@@ -115,7 +116,14 @@ export function resolveTranscriptPath({ payload, conversationId, env = process.e
         const lstat = lstatSync(direct);
         if (!lstat.isSymbolicLink() && lstat.isFile()) {
           const real = realpathSync(direct);
-          const allowedRoots = [appDataDir, env?.ANTIGRAVITY_WORKSPACE, env?.WORKSPACE_ROOT];
+          const allowedRoots = [
+            appDataDir,
+            env?.AGY_WORKSPACE,
+            env?.ANTIGRAVITY_WORKSPACE,
+            env?.GEMINI_WORKSPACE,
+            env?.PROJECT_ROOT,
+            env?.WORKSPACE_ROOT,
+          ];
           const isAllowed = allowedRoots.filter(Boolean).some((r) => {
             try {
               const realR = realpathSync(r);
