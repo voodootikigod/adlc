@@ -221,28 +221,36 @@ test('resolveWorkspaceRoot, discoverRootFromTranscriptRecords, and lifecycle hoo
     realpathSync(lane)
   );
 
-  // Full PreToolUse -> PostToolUse -> Stop lifecycle with outer workspacePaths[0] + nested worktree tool args
+  // Full PreToolUse -> PostToolUse -> Stop lifecycle with outer workspacePaths[0], outer-repo transcript,
+  // initial outer read_file, and subsequent nested worktree tool args
   const home = tmp(t, 'gemini-wt-home-');
-  const transcriptDir = tmp(t, 'gemini-wt-transcript-');
-  const transcriptPath = join(transcriptDir, 'session-transcript.jsonl');
-  const env = { ADLC_P4_ENFORCEMENT: '1', HOME: home, ANTIGRAVITY_CONVERSATION_ID: 'conv-wt-1' };
+  const transcriptPath = join(primary, 'session-transcript.jsonl');
+  const conversationId = '11111111-1111-4111-8111-111111111111';
+  const env = { ADLC_P4_ENFORCEMENT: '1', HOME: home, ANTIGRAVITY_CONVERSATION_ID: conversationId };
 
-  writeFileSync(transcriptPath, '');
+  const initialRead = { name: 'read_file', args: { Path: join(primary, 'src', 'frozen.js') } };
+  writeFileSync(transcriptPath, `${JSON.stringify({ status: 'DONE', toolCalls: [initialRead] })}\n`);
+  runFromStdin(JSON.stringify({ workspacePaths: [primary], conversationId, transcriptPath, toolCall: initialRead }), env);
+  postToolUse({ workspacePaths: [primary], conversationId, transcriptPath, exitCode: 0 }, { env });
+
   const editCall = {
     workspacePaths: [primary],
+    conversationId,
     transcriptPath,
-    toolCall: { name: 'write_to_file', args: { TargetFile: join(lane, 'src', 'impl.js'), CodeContent: 'export const x = 2;\n' } },
+    toolCall: { name: 'write_to_file', args: { TargetFile: '.worktrees/lane-wt/src/impl.js', CodeContent: 'export const x = 2;\n' } },
   };
   const preEdit = runFromStdin(JSON.stringify(editCall), env);
   assert.equal(preEdit.allow_tool, true, preEdit.deny_reason);
   writeFileSync(
     transcriptPath,
-    `${JSON.stringify({ status: 'DONE', toolCalls: [editCall.toolCall] })}\n`
+    `${JSON.stringify({ status: 'DONE', toolCalls: [initialRead] })}\n` +
+      `${JSON.stringify({ status: 'DONE', toolCalls: [editCall.toolCall] })}\n`
   );
-  postToolUse({ workspacePaths: [primary], transcriptPath, exitCode: 0 }, { env });
+  postToolUse({ workspacePaths: [primary], conversationId, transcriptPath, exitCode: 0 }, { env });
 
   const testCall = {
     workspacePaths: [primary],
+    conversationId,
     transcriptPath,
     toolCall: { name: 'run_shell_command', args: { command: 'npm test', dir_path: '.worktrees/lane-wt' } },
   };
@@ -250,11 +258,12 @@ test('resolveWorkspaceRoot, discoverRootFromTranscriptRecords, and lifecycle hoo
   assert.equal(preTest.allow_tool, true, preTest.deny_reason);
   writeFileSync(
     transcriptPath,
-    `${JSON.stringify({ status: 'DONE', toolCalls: [editCall.toolCall] })}\n` +
+    `${JSON.stringify({ status: 'DONE', toolCalls: [initialRead] })}\n` +
+      `${JSON.stringify({ status: 'DONE', toolCalls: [editCall.toolCall] })}\n` +
       `${JSON.stringify({ status: 'DONE', exitCode: 0, content: 'pass 1', toolCalls: [testCall.toolCall] })}\n`
   );
-  postToolUse({ workspacePaths: [primary], transcriptPath, exitCode: 0 }, { env });
+  postToolUse({ workspacePaths: [primary], conversationId, transcriptPath, exitCode: 0 }, { env });
 
-  const stopRes = onStop({ workspacePaths: [primary], transcriptPath }, { env });
+  const stopRes = onStop({ workspacePaths: [primary], conversationId, transcriptPath }, { env });
   assert.equal(stopRes.decision, 'stop', stopRes.reason);
 });

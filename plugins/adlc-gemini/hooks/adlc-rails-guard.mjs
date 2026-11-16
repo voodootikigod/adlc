@@ -512,7 +512,7 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
       const transcriptDiscoveredRoot = !wsRoot && !resolvedDeclaredWs
         ? (() => {
             const tp = resolveTranscriptPath({ payload, conversationId: resolveSessionId({ payload, env }), env });
-            return tp ? (findAdlcRoot(tp, env) ?? discoverRootFromTranscriptRecords(parseTranscriptRecords(tp), env)) : null;
+            return tp ? discoverTranscriptCheckoutRoot(tp, env, { anchorBase: resolvedDeclaredWs }) : null;
           })()
         : null;
       const shellWorkspaceBound =
@@ -665,9 +665,7 @@ export function runFromStdin(raw, envArg = process.env) {
 
   const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
   if (distinctRoots.size === 0 && transcriptPath) {
-    const transcriptRoot =
-      findAdlcRoot(transcriptPath, env) ??
-      discoverRootFromTranscriptRecords(parseTranscriptRecords(transcriptPath), env, { anchorBase: outerDeclaredWs });
+    const transcriptRoot = discoverTranscriptCheckoutRoot(transcriptPath, env, { anchorBase: outerDeclaredWs });
     if (transcriptRoot) distinctRoots.add(transcriptRoot);
   }
 
@@ -954,36 +952,87 @@ export function extractToolCalls(record) {
 
 export function discoverRootFromTranscriptRecords(records, env = process.env, { anchorBase = null } = {}) {
   if (!Array.isArray(records) || records.length === 0) return null;
+  const storeOverride = env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null;
+  const homeDir = resolveUserHome(env) || homedir();
+  const discovered = [];
   for (const r of records) {
     const calls = extractToolCalls(r);
     for (const c of calls) {
-      const paths = extractFilePaths({ toolCall: c });
       const args = extractArgs({ toolCall: c });
-      for (const cwd of extractAllToolWorkdirs(args)) {
-        paths.push(cwd);
-      }
-      for (const p of paths) {
+      const orderedCandidates = [
+        ...extractAllToolWorkdirs(args),
+        ...extractFilePaths({ toolCall: c }),
+      ];
+      for (const p of orderedCandidates) {
         if (typeof p === 'string' && p.trim()) {
           const resolvedP = isAbsolute(p) ? p : (anchorBase ? resolve(anchorBase, p) : null);
           if (!resolvedP) continue;
           const canonical = canonicalizeExisting(resolvedP);
           const candidate = findAdlcRoot(canonical, env) ?? findAdlcRoot(resolvedP, env);
-          if (candidate) return candidate;
+          if (candidate) discovered.push(candidate);
         }
       }
     }
   }
-  return null;
+  if (discovered.length === 0) return null;
+  let best = discovered[0];
+  for (let i = 1; i < discovered.length; i += 1) {
+    const next = discovered[i];
+    const upgraded = preferInnermostCheckout(best, [next], {
+      storeOverride,
+      homeDir,
+      pluginDir: PLUGIN_ROOT,
+      preserveSpelling: true,
+    });
+    if (upgraded && canonicalizePath(upgraded) !== canonicalizePath(best)) {
+      best = upgraded;
+    } else if (isPathInside(best, next)) {
+      // keep `best` when `best` is already a nested worktree inside outer `next`
+    } else {
+      best = next;
+    }
+  }
+  return best;
+}
+
+function discoverTranscriptCheckoutRoot(transcriptPath, env = process.env, { anchorBase = null, readFull = false } = {}) {
+  if (!transcriptPath) return null;
+  const pathRoot = findAdlcRoot(transcriptPath, env);
+  const records = parseTranscriptRecords(transcriptPath, readFull ? { readFull: true } : undefined);
+  const recordRoot = discoverRootFromTranscriptRecords(records, env, { anchorBase: anchorBase ?? pathRoot });
+  if (pathRoot && recordRoot) {
+    return (
+      preferInnermostCheckout(pathRoot, [recordRoot], {
+        storeOverride: env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null,
+        homeDir: resolveUserHome(env) || homedir(),
+        pluginDir: PLUGIN_ROOT,
+        preserveSpelling: true,
+      }) ?? recordRoot
+    );
+  }
+  return recordRoot ?? pathRoot;
 }
 
 export function preInvocation(payload, { env = process.env } = {}) {
   try {
     let root = resolveWorkspaceRoot(payload, env);
-    if (!root) {
-      const transcriptPath = resolveTranscriptPath({ payload, env });
-      if (transcriptPath) {
-        const records = parseTranscriptRecords(transcriptPath, { readFull: true });
-        root = discoverRootFromTranscriptRecords(records, env);
+    const transcriptPath = resolveTranscriptPath({ payload, env });
+    if (transcriptPath) {
+      const outerDeclaredWs = declaredOuterWorkspace(payload, root);
+      const transcriptRoot = discoverTranscriptCheckoutRoot(transcriptPath, env, {
+        anchorBase: outerDeclaredWs,
+        readFull: true,
+      });
+      if (!root) {
+        root = transcriptRoot;
+      } else if (transcriptRoot) {
+        root =
+          preferInnermostCheckout(root, [transcriptRoot], {
+            storeOverride: env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null,
+            homeDir: resolveUserHome(env) || homedir(),
+            pluginDir: PLUGIN_ROOT,
+            preserveSpelling: true,
+          }) ?? root;
       }
     }
     if (!root) return { injectSteps: [] };
@@ -1498,8 +1547,7 @@ export function postToolUse(payload, { env = process.env } = {}) {
     const outerDeclaredWs = declaredOuterWorkspace(payload, wsRoot);
     const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
     const transcriptRoot = transcriptPath
-      ? (findAdlcRoot(transcriptPath, env) ??
-         discoverRootFromTranscriptRecords(parseTranscriptRecords(transcriptPath), env, { anchorBase: outerDeclaredWs }))
+      ? discoverTranscriptCheckoutRoot(transcriptPath, env, { anchorBase: outerDeclaredWs })
       : null;
     if (wsRoot && transcriptRoot) {
       const upgraded = preferInnermostCheckout(wsRoot, [transcriptRoot], {
@@ -1694,11 +1742,17 @@ export function onStop(payload, { env = process.env } = {}) {
     }
 
     let callSeq = 0;
+    let rootCallSeq = 0;
     let mutatingCallSeq = 0;
     let lastMutationCallIdx = -1;
     let lastSuccessTestCallIdx = -1;
     let packageManifestMutated = false;
     let shellMutated = false;
+    const isNestedWorktreeSession =
+      Boolean(outerDeclaredWs) &&
+      canonicalizePath(outerDeclaredWs) !== canonicalizePath(root) &&
+      isPathInside(root, outerDeclaredWs);
+    const fileAnchorBase = isNestedWorktreeSession ? outerDeclaredWs : root;
 
     for (let i = 0; i < records.length; i++) {
       const r = records[i];
@@ -1762,7 +1816,31 @@ export function onStop(payload, { env = process.env } = {}) {
 
         const isShell = isShellTool(name, args);
         const isMutating = !isShell && classifyTool(name, args) !== 'readonly';
-        if (isMutating) mutatingCallSeq++;
+
+        // Determine whether this call targeted an outer checkout before entering a nested worktree
+        let callTargetsOuterOnly = false;
+        if (isNestedWorktreeSession) {
+          const callWorkdir = extractCwdFromArgs(args);
+          const candidateCallPaths = [
+            ...(callWorkdir ? [callWorkdir] : []),
+            ...filePaths,
+          ];
+          const resolvedCallRoots = candidateCallPaths
+            .filter((p) => typeof p === 'string' && p.trim())
+            .map((p) => (isAbsolute(p.trim()) ? p.trim() : resolve(fileAnchorBase, p.trim())))
+            .map((absP) => findAdlcRoot(canonicalizeExisting(absP), env) ?? findAdlcRoot(absP, env))
+            .filter(Boolean);
+          if (
+            resolvedCallRoots.length > 0 &&
+            resolvedCallRoots.every((cr) => canonicalizePath(cr) !== canonicalizePath(root))
+          ) {
+            callTargetsOuterOnly = true;
+          }
+        }
+        if (!callTargetsOuterOnly) {
+          rootCallSeq++;
+        }
+        if (isMutating && !callTargetsOuterOnly) mutatingCallSeq++;
 
         if (isMutating) {
           if (filePaths.some((p) => /(^|[/\\])\.adlc([/\\]|$)/i.test(p)) || (overrideEscaped && filePaths.some((p) => overrideEscaped.test(p)))) {
@@ -1784,7 +1862,7 @@ export function onStop(payload, { env = process.env } = {}) {
             };
           }
           if (filePaths.some((p) => {
-            const abs = isAbsolute(p) ? p : resolve(root, p);
+            const abs = isAbsolute(p) ? p : resolve(fileAnchorBase, p);
             const rel = relative(root, abs);
             return rel.startsWith('..') || isAbsolute(rel);
           })) {
@@ -1839,8 +1917,8 @@ export function onStop(payload, { env = process.env } = {}) {
             if (isExplicitSuccess && !isExplicitFailure && hasTests && !isZeroTests) {
               lastSuccessTestCallIdx = currentCallIdx;
             }
-          } else if (!isReadonlyCommand(cmd, { root, cwd: actualCwd, env }) && !isVerificationCommand(cmd, { root, toolArgs: stopVerifyArgs, allowImplicitCwd })) {
-            mutatingCallSeq++;
+          } else if (!isReadonlyCommand(cmd, { root: callTargetsOuterOnly ? outerDeclaredWs : root, cwd: actualCwd, env }) && !isVerificationCommand(cmd, { root, toolArgs: stopVerifyArgs, allowImplicitCwd })) {
+            if (!callTargetsOuterOnly) mutatingCallSeq++;
             lastMutationCallIdx = currentCallIdx;
             shellMutated = true;
             if (/(^|[\s=;,"'\/$.()[\]])(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|vitest\.config|jest\.config|\.mocharc|node_modules\/\.bin|npm\s+(pkg|install|i|add|remove|rm|uninstall))\b/i.test(normCmd)) {
@@ -1859,7 +1937,7 @@ export function onStop(payload, { env = process.env } = {}) {
       };
     }
     const trackedTotal = tracker.totalCalls ? tracker.totalCalls(sessionID) : 0;
-    if (trackedTotal > 0 && callSeq !== trackedTotal) {
+    if (trackedTotal > 0 && rootCallSeq !== trackedTotal) {
       return {
         decision: 'continue',
         reason: 'ADLC Rails-Guard: Untracked or missing tool execution records detected in transcript during Stop verification.',
