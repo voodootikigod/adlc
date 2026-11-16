@@ -407,9 +407,6 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
       }
     }
 
-    // Step 2 — classify first. Reads of non-secret files are allowed.
-    if (cls === 'readonly') return allow();
-
     const earlyDeclaredWs = declaredOuterWorkspace(payload, wsRoot);
     if (hasConflictingToolWorkdirs(args, earlyDeclaredWs ?? wsRoot ?? nonPluginProcessCwd() ?? process.cwd())) {
       return deny('shell command specifies conflicting working directories — failing closed');
@@ -427,6 +424,23 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
       if (!isPathInside(candidateWd, structuredBound)) {
         return deny('structured tool workdir attempts to access filesystem paths outside workspace — strictly prohibited under enforcement');
       }
+    }
+
+    // Step 2 — classify first. Reads of non-secret files are allowed once tool workdirs are confined.
+    if (cls === 'readonly') {
+      if (enforcing) {
+        for (const raw of paths) {
+          const rawNorm = typeof raw === 'string' ? raw.replace(/\\/g, '/') : '';
+          if (rawNorm && !isAbsolute(rawNorm)) {
+            const { abs, anchored } = anchorPath(raw, payload, env);
+            const relBound = declaredOuterWorkspace(payload, abs) ?? wsRoot;
+            if (!anchored || !relBound || !isPathInside(abs, relBound)) {
+              return deny(`relative target path "${raw}" attempts to access filesystem paths outside workspace — failing closed`);
+            }
+          }
+        }
+      }
+      return allow();
     }
 
     if (paths.length > 0) {

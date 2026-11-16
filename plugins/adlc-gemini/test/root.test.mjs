@@ -259,6 +259,24 @@ test('resolveWorkspaceRoot, discoverRootFromTranscriptRecords, and lifecycle hoo
   );
   assert.equal(escapeRelVerdict.allow_tool, false);
 
+  const escapeReadCwdVerdict = decide(
+    {
+      workspacePaths: [primary],
+      toolCall: { name: 'read_file', args: { Path: 'passwd', Cwd: outsideTmp } },
+    },
+    { env: { ADLC_P4_ENFORCEMENT: '1' } }
+  );
+  assert.equal(escapeReadCwdVerdict.allow_tool, false);
+
+  const escapeReadRelVerdict = decide(
+    {
+      workspacePaths: [primary],
+      toolCall: { name: 'read_file', args: { Path: '../../../etc/passwd', dir_path: lane } },
+    },
+    { env: { ADLC_P4_ENFORCEMENT: '1' } }
+  );
+  assert.equal(escapeReadRelVerdict.allow_tool, false);
+
   // Full PreToolUse -> PostToolUse -> Stop lifecycle with real brain transcript path, outer workspacePaths[0],
   // initial outer read_file, structured edit using { TargetFile: 'src/impl.js', Cwd: lane }, and nested test run
   const home = tmp(t, 'gemini-wt-home-');
