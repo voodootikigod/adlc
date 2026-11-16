@@ -1,0 +1,23 @@
+{
+  "body": "Eliminate the recurring headless Cwd, nested-worktree (.worktrees/<lane>), and stale parent env/process.cwd() bug class across ADLC.\n\n1. Introduce canonical shared workspace/worktree checkout-root and tool-workdir resolution in packages/core/lib/workspace-root.mjs (with zero non-stdlib dependencies) and propagate generated-workspace-root.mjs via scripts/ticket-readers/generate.mjs into all seven harness plugins.\n2. Fix plugins/adlc-gemini headless agy run_command verification (omitted Cwd on unambiguous single-root workspaces while preserving subdir Cwd and ambiguous multi-root rejection), Gemini CLI run_shell_command classification and dir_path/working_directory extraction, resolveWorkspaceRoot/findAdlcRoot priority (payload.cwd and non-plugin process.cwd() ahead of stale env.PWD/env.INIT_CWD, nested linked worktrees ahead of outer repos, stopping before stray ~/.adlc), core-inline loadTickets root derivation, Linux /home/... in-repo shell path checks, /dev/null and HEAD~1 false-positive escape checks, grep/rg readonly allowlisting, and PURE_READS tool classification.\n3. Wire innermost linked-worktree and tool-workdir resolution across adlc-claude-code (input.cwd ahead of outer CLAUDE_PROJECT_DIR), adlc-pi (linked git worktree boundary in resolveAdlcRoot, subdirectory ctx.cwd walk, bash event.input.cwd enforcement), adlc-opencode (nested worktree launch ahead of outer project, in-repo subdirectory workdir resolution), adlc-cursor (nested worktree owning root, hostProjectRoot fallback, notebook_path, runshellcommand, regenerated MCP bundle), adlc-codex, and adlc-copilot (payload.cwd + enclosing checkout walk + Cwd/dir_path + run_shell_command/run_terminal_cmd).\n4. Normalize relative dir ('.adlc') against explicit cwd in packages/prosecute/lib/run.mjs, packages/gate-manifest/lib/own-chain.mjs, packages/gate-manifest/lib/forest.mjs, and packages/tickets/lib/manifest-primitives.mjs.\n\nAcceptance criteria:\n1. Canonical workspace-root helpers resolve nested git worktrees, reject forged subdirectory .git decoys and stray ~/.adlc directories, extract tool workdirs across harness schemas, and stay byte-for-byte synced via scripts/ticket-readers/generate.mjs --check. Verify: node --test packages/core/test/workspace-root.test.mjs scripts/test/ticket-reader-generation.test.mjs\n2. adlc-gemini accepts headless agy run_command verification without Cwd in unambiguous single-root workspaces, rejects omitted Cwd in ambiguous multi-root workspaces and subdirectory Cwd, classifies run_shell_command and PURE_READS accurately, allows in-repo /home/... paths and 2>/dev/null, and resolves nested worktrees ahead of stale parent env.PWD/INIT_CWD. Verify: node --test plugins/adlc-gemini/test/lifecycle-hooks.test.mjs plugins/adlc-gemini/test/root.test.mjs plugins/adlc-gemini/test/rails-guard.test.mjs\n3. Claude Code, Pi, OpenCode, Cursor, Codex, and Copilot hooks enforce rails against nested worktrees and subdirectory/explicit tool workdirs without outer-repo prefix bypasses, with Cursor MCP bundle up to date. Verify: npm test\n4. Prosecute, gate-manifest, and tickets resolve relative dir against explicit cwd rather than process.cwd(), and full workspace preflight passes. Verify: npm run preflight",
+  "category": "bugfix",
+  "duration": 3,
+  "edges": [],
+  "id": "T-01M7J7FAJN8WXA2XZKK7RFSQP0",
+  "rails": [],
+  "scope": [
+    "packages/core/**",
+    "packages/tickets/**",
+    "packages/gate-manifest/**",
+    "packages/prosecute/**",
+    "plugins/adlc-gemini/**",
+    "plugins/adlc-claude-code/**",
+    "plugins/adlc-codex/**",
+    "plugins/adlc-copilot/**",
+    "plugins/adlc-cursor/**",
+    "plugins/adlc-opencode/**",
+    "plugins/adlc-pi/**",
+    "scripts/ticket-readers/**"
+  ],
+  "title": "Unify workspace/worktree root and tool-cwd resolution across all ADLC harnesses and core packages"
+}

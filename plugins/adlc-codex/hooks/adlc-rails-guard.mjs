@@ -7,6 +7,7 @@ import { isAbsolute, resolve, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
 import { resolveRailPath } from './generated-railpath.mjs';
+import { findInnermostCheckoutRoot, extractToolWorkdir, SHELL_WORKDIR_KEYS } from './generated-workspace-root.mjs';
 import {
   resolveActiveTicketId as resolveActiveTicketIdCanonical,
   resolveActiveTicketAgainst,
@@ -121,9 +122,17 @@ function firstShellWorkdir(value) {
     }
     return null;
   }
+  // Prefer the tool's own input/args bag over the outer hook envelope's `payload.cwd`
+  for (const bagKey of ['tool_input', 'toolInput', 'args', 'arguments', 'input', 'params', 'parameters']) {
+    const fromBag = extractToolWorkdir(value[bagKey]);
+    if (fromBag) return fromBag;
+  }
   for (const [key, child] of Object.entries(value)) {
-    if (['workdir', 'cwd', 'workingDirectory', 'working_directory'].includes(key) && typeof child === 'string') {
-      return child;
+    if (key === 'cwd' && (value.tool_name !== undefined || value.toolName !== undefined || value.tool_input !== undefined)) {
+      continue;
+    }
+    if (SHELL_WORKDIR_KEYS.includes(key) && typeof child === 'string' && child.trim().length > 0) {
+      return child.trim();
     }
     const found = firstShellWorkdir(child);
     if (found) return found;
@@ -144,7 +153,7 @@ function toolName(payload) {
 }
 
 function isShellToolName(name) {
-  return /(^|\.)(bash|shell|exec|exec_command|run_command|write_stdin)$/i.test(String(name));
+  return /(^|\.)(bash|shell|exec|exec_command|run_command|run_shell_command|run_terminal_cmd|write_stdin)$/i.test(String(name));
 }
 
 function collectShellInvocations(value, out = []) {
@@ -217,16 +226,16 @@ async function stdinText() {
  * build-gate copies did not, so the same pointer enforced here and silently
  * disabled enforcement there. Any denial fails closed.
  */
-function resolveActiveTicketId() {
-  const resolved = resolveActiveTicketIdCanonical({ root: process.cwd(), env: process.env });
+function resolveActiveTicketId(root = process.cwd()) {
+  const resolved = resolveActiveTicketIdCanonical({ root, env: process.env });
   if (!resolved.ok) fail(resolved.message);
   return { id: resolved.value?.id ?? undefined };
 }
 
-function normalizePath(path, baseCwd = process.cwd()) {
+function normalizePath(path, baseCwd = process.cwd(), repoRoot = baseCwd) {
   const normalized = path.replaceAll('\\', '/');
   const candidate = resolve(baseCwd, normalized);
-  const projectRelative = resolveRailPath(candidate, process.cwd());
+  const projectRelative = resolveRailPath(candidate, repoRoot);
   return projectRelative.startsWith('..') ? normalized : projectRelative;
 }
 
@@ -251,6 +260,13 @@ if (raw.trim()) {
 if (exceedsDepth(payload, MAX_PAYLOAD_DEPTH)) {
   fail(`hook payload nesting exceeds ${MAX_PAYLOAD_DEPTH} levels — refusing to classify it`);
 }
+
+const toolCwd =
+  typeof payload?.cwd === 'string' && payload.cwd.trim() !== ''
+    ? resolve(payload.cwd)
+    : process.cwd();
+const storeOverride = process.env.ADLC_TICKET_STORE ?? process.env.ADLC_TICKETS ?? null;
+const root = findInnermostCheckoutRoot(toolCwd, { storeOverride, preserveSpelling: true }) ?? toolCwd;
 
 // Recovery Exception & Inspection Bash Exception (context-rot-threshold-
 // calibration spec §1.3), applied to THIS gate too — evaluated before
@@ -286,7 +302,7 @@ if (exceedsDepth(payload, MAX_PAYLOAD_DEPTH)) {
       // the package, only locates it, but a repository that ships its own
       // @adlc/context-handoff controls what path this resolves to (see
       // adlc-handoff-gate.mjs's identical comment for the full residual).
-      const entry = resolveContextHandoffEntry({ projectRoot: process.cwd() });
+      const entry = resolveContextHandoffEntry({ projectRoot: root });
       const trustedRecoveryCliPath = entry ? join(dirname(dirname(entry)), 'bin', 'handoff.mjs') : null;
       if (trustedRecoveryCliPath) {
         const sessionId = resolveHandoffSessionIdLocal({
@@ -304,6 +320,7 @@ if (exceedsDepth(payload, MAX_PAYLOAD_DEPTH)) {
             sessionId,
             trustedEnv: process.env,
             adlcBinPath: resolveTrustedBinary('adlc', process.env.PATH),
+            cwd: root,
           });
           process.exit(0); // allow — never gated on the audit record above succeeding
         }
@@ -321,7 +338,7 @@ if (explicitEnforcement !== undefined && explicitEnforcement !== '1') {
   fail('ADLC_P4_ENFORCEMENT must be 0, 1, or unset');
 }
 
-const activeTicket = resolveActiveTicketId();
+const activeTicket = resolveActiveTicketId(root);
 const ticketId = activeTicket.id;
 if (!ticketId) {
   if (explicitEnforcement === '1') fail('ADLC_P4_ENFORCEMENT=1 but no active ticket source resolved');
@@ -330,7 +347,7 @@ if (!ticketId) {
 }
 
 let snapshot;
-try { snapshot = loadTicketStoreReadOnly({ root: process.cwd(), env: process.env }); }
+try { snapshot = loadTicketStoreReadOnly({ root, env: process.env }); }
 catch (error) { fail(`ticket store failed to load: ${error.message}`); }
 const tickets = snapshot.tickets;
 
@@ -340,7 +357,7 @@ if (!ticket) fail(`unknown active ticket: ${ticketId}`);
 // same contract every other reader uses. allowLegacyPointer keeps the documented
 // 1.x bridge: a pointer that pins no hash still resolves (this harness never
 // required one), but a hash that IS present is always verified.
-const activeAgainstStore = resolveActiveTicketAgainst(snapshot, { root: process.cwd(), env: process.env, allowLegacyPointer: true });
+const activeAgainstStore = resolveActiveTicketAgainst(snapshot, { root, env: process.env, allowLegacyPointer: true });
 if (!activeAgainstStore.ok) fail(activeAgainstStore.message);
 const ticketsPath = process.env.ADLC_TICKET_STORE ?? process.env.ADLC_TICKETS ?? (snapshot.backend === 'directory' ? '.adlc/tickets' : '.adlc/tickets.json');
 const declaredRails = ticket.rails ?? [];
@@ -353,10 +370,10 @@ if (declaredRails.length === 0) {
   notice(`P4 rail hook inactive: ticket ${ticketId} has no rails`);
   process.exit(0);
 }
-const rails = [...declaredRails, snapshot.backend === 'directory' ? '.adlc/tickets/**' : normalizePath(ticketsPath), '.adlc/current-ticket.json'];
+const rails = [...declaredRails, snapshot.backend === 'directory' ? '.adlc/tickets/**' : normalizePath(ticketsPath, root, root), '.adlc/current-ticket.json'];
 
 const rawPaths = collectPaths(payload);
-const paths = Array.from(rawPaths).map((path) => normalizePath(path));
+const paths = Array.from(rawPaths).map((path) => normalizePath(path, toolCwd, root));
 const shellInvocations = collectShellInvocations(payload);
 const shellTool = shellInvocations.length > 0;
 let shellMutating = false;
@@ -390,8 +407,8 @@ if (shellTool) {
     if (commandPaths.size === 0) {
       fail('mutating shell payload did not include literal editable paths');
     }
-    const shellBaseCwd = workdir ? resolve(process.cwd(), workdir) : process.cwd();
-    for (const path of commandPaths) paths.push(normalizePath(path, shellBaseCwd));
+    const shellBaseCwd = workdir ? resolve(toolCwd, workdir) : toolCwd;
+    for (const path of commandPaths) paths.push(normalizePath(path, shellBaseCwd, root));
   }
 }
 

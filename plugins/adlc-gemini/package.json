@@ -63,6 +63,7 @@
     "generated-ticket-reader.mjs",
     "generated-glob-match.mjs",
     "generated-railpath.mjs",
+    "generated-workspace-root.mjs",
     "hooks/",
     "hooks.json",
     "rails-checker.mjs",

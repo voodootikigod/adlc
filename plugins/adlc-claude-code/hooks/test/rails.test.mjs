@@ -957,3 +957,53 @@ test('a package-level store BELOW the git root still enforces its rails', (t) =>
   const r = runRailsIn(join(pkg, 'secret'), join(pkg, 'secret', 'x.js'), home);
   assert.equal(r.verdict, 'deny');
 });
+
+test('nested git worktree (.worktrees/<lane>) enforces its own rails even when CLAUDE_PROJECT_DIR points at the outer repo', async (t) => {
+  const { execFileSync } = await import('node:child_process');
+  const git = (cwd, ...args) =>
+    execFileSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'Test',
+        GIT_AUTHOR_EMAIL: 'test@example.com',
+        GIT_COMMITTER_NAME: 'Test',
+        GIT_COMMITTER_EMAIL: 'test@example.com',
+      },
+    });
+  const primary = tmp(t, 'adlc-cc-wt-primary-');
+  git(primary, 'init', '-b', 'main');
+  mkdirSync(join(primary, '.adlc'), { recursive: true });
+  writeFileSync(
+    join(primary, '.adlc', 'tickets.json'),
+    JSON.stringify({ tickets: [{ id: 'T-MAIN', title: 'main', rails: ['src/frozen.js'] }] })
+  );
+  mkdirSync(join(primary, 'src'), { recursive: true });
+  writeFileSync(join(primary, 'src', 'frozen.js'), 'export const frozen = 1;\n');
+  git(primary, 'add', '-A');
+  git(primary, 'commit', '-m', 'init');
+
+  const lane = join(primary, '.worktrees', 'lane-a');
+  git(primary, 'worktree', 'add', '-b', 'lane-a', lane);
+  writeFileSync(join(lane, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T-MAIN' }));
+
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: primary, PATH: WITH_ADLC };
+  delete env.ADLC_RAILS_BYPASS;
+
+  let out = '';
+  try {
+    out = runHook([HOOK, 'rails'], {
+      input: JSON.stringify({
+        cwd: lane,
+        tool_name: 'Write',
+        tool_input: { file_path: join(lane, 'src', 'frozen.js'), content: 'tamper' },
+      }),
+      encoding: 'utf8',
+      env,
+    });
+  } catch (e) {
+    out = e.stdout ?? '';
+  }
+  assert.match(out, /"permissionDecision":"deny"/, `expected nested worktree rail edit to be denied, got: ${out}`);
+});

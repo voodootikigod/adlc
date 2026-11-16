@@ -41,6 +41,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadTicketStoreReadOnly, ticketStoreExists } from './generated-ticket-reader.mjs';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
+import { findInnermostCheckoutRoot } from './generated-workspace-root.mjs';
 import {
   resolveTrustedBinary,
   ownershipRejection,
@@ -423,7 +424,9 @@ async function main() {
   // read were anchored on process.cwd(), which is not that repository.
   const payload = await stdinJson();
   const processCwd = process.cwd();
-  const root = payloadRoot(payload, processCwd);
+  const toolCwd = payloadRoot(payload, processCwd);
+  const storeOverride = process.env.ADLC_TICKET_STORE ?? process.env.ADLC_TICKETS ?? null;
+  const root = findInnermostCheckoutRoot(toolCwd, { storeOverride, preserveSpelling: true }) ?? toolCwd;
   if (realpathOrSelf(root) !== realpathOrSelf(processCwd)) {
     console.error(`adlc-build-gate: resolving the repository from the payload cwd ${root} (process cwd ${processCwd})`);
   }

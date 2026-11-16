@@ -9,9 +9,10 @@
 // — documented in docs/integrations/pi.md.
 
 import { existsSync } from 'node:fs';
-import { isAbsolute, join, relative } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { loadTickets, globMatch, inScope, classifyShellCommand, resolveRailPath, TICKET_TRUST_ROOT_RAILS } from '@adlc/core';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
+import { canonicalizePath as canonicalizeWorkspacePath } from './generated-workspace-root.mjs';
 
 // The ticket file and the active-ticket pointer are the rail trust root: frozen
 // whenever a ticket is active, even if the ticket declares no rails, so the
@@ -146,7 +147,7 @@ export function isSafeBranchCreation(command) {
  *   mutation with no literal targets        → deny (fail closed)
  *   literal targets                         → deny only on a frozen-rail hit
  */
-export function checkShellCommand(command, ticket, root) {
+export function checkShellCommand(command, ticket, root, { workdir = null } = {}) {
   if (isSafeBranchCreation(command)) {
     return { decision: 'allow', mutating: false, reason: 'pure branch creation cannot touch a rail' };
   }
@@ -165,7 +166,11 @@ export function checkShellCommand(command, ticket, root) {
   if (c.opaque) {
     return { decision: 'deny', mutating: true, reason: 'mutating shell command uses an opaque form (git apply/checkout/patch/tar…); use a structured edit tool or a literal path-transparent mutation' };
   }
-  if (c.changesCwd) {
+  const movesWorkdir =
+    typeof workdir === 'string' &&
+    workdir.trim() !== '' &&
+    canonicalizeWorkspacePath(resolve(root, workdir.trim())) !== canonicalizeWorkspacePath(resolve(root));
+  if (c.changesCwd || movesWorkdir) {
     return { decision: 'deny', mutating: true, reason: 'mutating shell command changes cwd; target paths cannot be verified against the frozen rails' };
   }
   if (c.expands) {

@@ -8,7 +8,8 @@
 // those pieces. index.ts is a typed shim around createExtension().
 
 import { readdirSync, statSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
+import { extractToolWorkdir } from './generated-workspace-root.mjs';
 import {
   resolveActiveTicket,
   checkStructuredWrite,
@@ -258,8 +259,19 @@ export function createExtension({ env = process.env } = {}) {
       return `${env.ADLC_TICKET ?? ''}|${mtime('.adlc/current-ticket.json')}|${storeStamp}`;
     }
 
+    function resolveEffectiveRoot(cwd) {
+      if (!cwd) return activeCwd;
+      return (
+        resolveAdlcRoot(
+          cwd,
+          env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null,
+          handoffAdlcRoots
+        ) ?? cwd
+      );
+    }
+
     function reload(cwd) {
-      activeCwd = cwd ?? activeCwd;
+      activeCwd = resolveEffectiveRoot(cwd);
       active = resolveActiveTicket(activeCwd, env);
       ticketStamp = stampTicketFiles(activeCwd);
       return active;
@@ -268,7 +280,7 @@ export function createExtension({ env = process.env } = {}) {
     // Live ticket lifecycle: a ticket activated or switched mid-session is
     // picked up on the next turn via a cheap mtime check.
     function maybeReload(cwd) {
-      const nextCwd = cwd ?? activeCwd;
+      const nextCwd = resolveEffectiveRoot(cwd);
       if (nextCwd !== activeCwd || stampTicketFiles(nextCwd) !== ticketStamp) reload(nextCwd);
     }
 
@@ -469,7 +481,8 @@ export function createExtension({ env = process.env } = {}) {
           // A mutating tool whose target cannot be extracted fails CLOSED.
           return { block: true, reason: `Blocked ${event.toolName}: no extractable target path (ticket ${active.ticketId})` };
         }
-        const verdict = checkStructuredWrite(filePath, active.ticket, activeCwd);
+        const resolvedFilePath = isAbsolute(filePath) ? filePath : resolve(ctx.cwd ?? activeCwd, filePath);
+        const verdict = checkStructuredWrite(resolvedFilePath, active.ticket, activeCwd);
         if (verdict.decision === 'deny') {
           ctx.ui.notify(`Blocked ${event.toolName}: ${verdict.reason}`, 'error');
           noteGate({ ctx, type: 'rail-deny', detail: { tool: event.toolName, path: filePath, reason: verdict.reason } });
@@ -493,7 +506,7 @@ export function createExtension({ env = process.env } = {}) {
         steerFlailAdvisories(filePath, ctx);
         // Snapshot the target so a post-write violation restores exactly this
         // state — never HEAD, never any other file.
-        rememberSnapshot(event.toolCallId, { kind: 'file', snap: snapshotFile(activeCwd, filePath) });
+        rememberSnapshot(event.toolCallId, { kind: 'file', snap: snapshotFile(activeCwd, resolvedFilePath) });
         return undefined;
       }
 
@@ -502,7 +515,11 @@ export function createExtension({ env = process.env } = {}) {
         if (typeof command !== 'string') {
           return { block: true, reason: `Blocked bash: no extractable command (ticket ${active.ticketId})` };
         }
-        const verdict = checkShellCommand(command, active.ticket, activeCwd);
+        const explicitWorkdir = extractToolWorkdir(event.input);
+        const effectiveWorkdir = explicitWorkdir
+          ? resolve(ctx.cwd ?? activeCwd, explicitWorkdir)
+          : (ctx.cwd ?? activeCwd);
+        const verdict = checkShellCommand(command, active.ticket, activeCwd, { workdir: effectiveWorkdir });
         if (verdict.decision === 'deny') {
           ctx.ui.notify(`Blocked shell command: ${verdict.reason}`, 'error');
           noteGate({ ctx, type: 'shell-deny', detail: { reason: verdict.reason } });

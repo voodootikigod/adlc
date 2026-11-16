@@ -17,6 +17,7 @@
 // directly and the module imports nothing from the host at load.
 
 import { checkToolCall, resolveRailsInForce, resolveActiveTicketId, railHit, extractTargets, READONLY_TOOLS, UNGATED_TOOLS, SHELL_TOOLS } from './rails-checker.mjs';
+import { preferInnermostCheckout } from './generated-workspace-root.mjs';
 import { checkPreflight, auditGateManifest, auditAdversarialReview } from './lib/session-hooks.mjs';
 import { createDepthTracker, checkBuildGate } from './lib/build-gate.mjs';
 import { checkHandoff, createStickyDenyState, createInitLatch } from './lib/handoff-gate.mjs';
@@ -96,7 +97,9 @@ function isWithin(child, parent) {
 function resolveRoot(location) {
   const launch = nonEmpty(location?.directory);
   const project = nonEmpty(location?.project?.directory);
-  if (project && launch && resolve(project) !== resolve('/') && isWithin(launch, project)) return project;
+  if (project && launch && resolve(project) !== resolve('/') && isWithin(launch, project)) {
+    return preferInnermostCheckout(project, [launch], { preserveSpelling: true }) ?? project;
+  }
   return launch ?? project ?? process.cwd();
 }
 

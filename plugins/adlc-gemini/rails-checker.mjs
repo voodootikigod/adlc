@@ -66,7 +66,7 @@ export const PURE_READS = new Set([
   // agy workflows (e.g. asking the user a question).
   'managetask', 'schedule', 'listpermissions', 'sendmessage', 'askquestion',
   'invokesubagent', 'askpermission', 'managesubagents', 'definesubagent',
-  'readurlcontent',
+  'readurlcontent', 'callmcptool', 'listresources', 'readresource',
 ]);
 
 /** Normalize a raw Cursor tool name to a lowercase alpha token for classification. */
@@ -90,7 +90,7 @@ export function normalizeToolName(name) {
 const SHELL_TOOL_NAMES = new Set([
   'bash', 'sh', 'zsh', 'fish', 'shell', 'terminal', 'cmd', 'powershell', 'pwsh', 'console',
   'exec', 'run', 'runcommand', 'runcmd', 'runterminalcmd', 'runterminalcommand',
-  'runinterminal', 'runinterminalcommand', 'runshell', 'shellexec', 'shellcommand',
+  'runinterminal', 'runinterminalcommand', 'runshell', 'runshellcommand', 'shellexec', 'shellcommand',
   'executecommand', 'execcommand', 'executecommandline', 'execcommandline',
   'executeshell', 'executeterminalcommand', 'terminalcmd', 'terminalcommand',
   'customshell',
@@ -183,9 +183,24 @@ export function classifyTool(name, args = null) {
   if (MUTATING_TOOL_HINTS.some((h) => n.includes(h))) return 'mutating';
   if (PURE_READS.has(n)) {
     if (args && typeof args === 'object') {
-      const hasTarget = Boolean(args.TargetFile || args.targetFile || args.FilePath || args.filePath || args.path || args.dest_file || args.destination || args.file);
+      const hasWriteTargetOrContent = Boolean(
+        args.TargetFile ||
+        args.targetFile ||
+        args.target_file ||
+        args.dest_file ||
+        args.destination ||
+        args.CodeContent ||
+        args.codeContent ||
+        args.content ||
+        args.Replacement ||
+        args.replacement ||
+        args.ReplacementContent ||
+        args.replacementContent ||
+        args.ReplacementChunks ||
+        args.replacementChunks
+      );
       const hasCmd = hasCommandLineArgs(args);
-      if (hasTarget || hasCmd) return 'other';
+      if (hasWriteTargetOrContent || hasCmd) return 'other';
     }
     return 'readonly';
   }

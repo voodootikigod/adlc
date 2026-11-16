@@ -484,6 +484,37 @@ export function candidateRejection(
 ): string | null;
 export function untrustedBinaryReason(name: string, pathEnv: unknown): string | null;
 
+// lib/workspace-root.mjs
+export const SHELL_WORKDIR_KEYS: readonly string[];
+export function extractToolWorkdir(args: unknown): string | null;
+export function canonicalizePath(targetPath: string): string;
+export function isPathInside(childPath: string, parentPath: string): boolean;
+export type GitCheckoutInspection = {
+  kind: 'repo' | 'worktree' | 'gitfile';
+  gitDir: string;
+  commonGitDir: string | null;
+};
+export function inspectGitCheckout(dir: string): GitCheckoutInspection | null;
+export function hasTicketStoreAt(dir: string, storeOverride?: string | null): boolean;
+export type FindCheckoutRootOptions = {
+  storeOverride?: string | null;
+  homeDir?: string | null;
+  pluginDir?: string | null;
+  rememberedRoots?: { has(dir: string): boolean } | null;
+  allowFileStart?: boolean;
+  requireStore?: boolean;
+  preserveSpelling?: boolean;
+};
+export function findInnermostCheckoutRoot(
+  startPath: string,
+  options?: FindCheckoutRootOptions
+): string | null;
+export function preferInnermostCheckout(
+  outerRoot: string | null | undefined,
+  dynamicCandidates?: readonly (string | null | undefined)[],
+  options?: FindCheckoutRootOptions
+): string | null;
+
 // Types of the @adlc/core/test-kit subpath, declared in lib/test-kit.d.mts.
 export type { TestContext, GitRepoOptions, GitRepoResult, RunBinOptions } from './lib/test-kit.mjs';
 

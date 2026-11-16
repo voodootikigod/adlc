@@ -17,7 +17,7 @@ import {
 } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { randomBytes, createHmac, timingSafeEqual } from 'node:crypto';
-import { dirname, join, relative, sep } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { sha256, canonicalJson } from './canonical.mjs';
 
 export const SEGMENT_DIRNAME = 'manifest.d';
@@ -259,7 +259,9 @@ export function writeLineageToken(dir = '.adlc', token) {
   }
 }
 
-export function peekOpenSegment(dir = '.adlc', { cwd = (dir && dir !== '.adlc' ? dirname(dir) : process.cwd()) } = {}) {
+export function peekOpenSegment(dir = '.adlc', { cwd = (dir && dir !== '.adlc' ? dirname(resolve(dir)) : process.cwd()) } = {}) {
+  cwd = resolve(cwd);
+  dir = resolve(cwd, dir);
   const branch = currentBranch(cwd);
   const token = readLineageToken(dir);
   if (branch !== null && token && token.branch === branch) {
@@ -299,7 +301,9 @@ export function firstEntryOf(dir = '.adlc', segmentName) {
  *  exact ref, not the lossy filename slug). Identity only — verifies no signature.
  *  null: detached HEAD or no match. Throws: several matches, any invalid object
  *  in manifest.d/, or an oversized/unreadable first entry. */
-export function recoverOpenSegment(dir = '.adlc', { cwd = (dir && dir !== '.adlc' ? dirname(dir) : process.cwd()) } = {}) {
+export function recoverOpenSegment(dir = '.adlc', { cwd = (dir && dir !== '.adlc' ? dirname(resolve(dir)) : process.cwd()) } = {}) {
+  cwd = resolve(cwd);
+  dir = resolve(cwd, dir);
   const peeked = peekOpenSegment(dir, { cwd });
   if (peeked) return peeked;
   const branch = currentBranch(cwd);
@@ -340,8 +344,9 @@ export function recoverOpenSegment(dir = '.adlc', { cwd = (dir && dir !== '.adlc
   return { name: candidates[0], isNew: false };
 }
 
-export function assertSegmentPathCommittable(dir = '.adlc', name) {
-  const probeCwd = dirname(dir);
+export function assertSegmentPathCommittable(dir = '.adlc', name, { cwd } = {}) {
+  dir = cwd ? resolve(cwd, dir) : resolve(dir);
+  const probeCwd = cwd ? resolve(cwd) : dirname(dir);
   const env = { ...process.env };
   delete env.ADLC_MANIFEST_KEY;
   delete env.GIT_DIR;
@@ -432,7 +437,9 @@ function isChainIntact(lines, key) {
   return true;
 }
 
-export function resolveOpenSegment(dir = '.adlc', { cwd = (dir && dir !== '.adlc' ? dirname(dir) : process.cwd()), key = null } = {}) {
+export function resolveOpenSegment(dir = '.adlc', { cwd = (dir && dir !== '.adlc' ? dirname(resolve(dir)) : process.cwd()), key = null } = {}) {
+  cwd = resolve(cwd);
+  dir = resolve(cwd, dir);
   const markerDoc = readBoundedJsonNoFollow(markerPath(dir));
   if (markerDoc && markerDoc.auth === 'keyed' && key === null) {
     throw new Error(

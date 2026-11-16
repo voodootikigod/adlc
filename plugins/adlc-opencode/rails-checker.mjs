@@ -14,6 +14,7 @@ import {
   resolveActiveTicketAgainst,
   resolveActiveTicketId as resolveActiveTicketIdCanonical,
 } from './generated-active-ticket.mjs';
+import { canonicalizePath as canonicalizeWorkspacePath, extractToolWorkdir } from './generated-workspace-root.mjs';
 
 // Re-exported for API stability: sibling adapters and tests may import the
 // symlink-aware resolver from this module even though @adlc/core owns it now.
@@ -663,7 +664,7 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
     return { decision: 'allow', reason: `tool "${name}" is read-only` };
   }
   if (SHELL_TOOLS.includes(name)) {
-    return checkShellCall({ command: args?.command, workdir: args?.workdir, root, env });
+    return checkShellCall({ command: args?.command, workdir: extractToolWorkdir(args), root, env });
   }
   // Operators can extend the ungated list for benign third-party tools that a
   // railed build legitimately needs (e.g. ADLC_UNGATED_TOOLS="symbols_index").
@@ -928,8 +929,10 @@ export function checkShellCall({ command, workdir, root = process.cwd(), env = p
   if (c.opaque) {
     return { decision: 'deny', reason: 'mutating shell command uses an opaque form (git apply/checkout/patch/tar…); use a structured edit tool or a literal path-transparent mutation' };
   }
-  const movesWorkdir = typeof workdir === 'string' && workdir.trim() !== ''
-    && resolve(root, workdir.trim()) !== resolve(root);
+  const movesWorkdir =
+    typeof workdir === 'string' &&
+    workdir.trim() !== '' &&
+    canonicalizeWorkspacePath(resolve(root, workdir.trim())) !== canonicalizeWorkspacePath(resolve(root));
   if (c.changesCwd || movesWorkdir) {
     return { decision: 'deny', reason: 'mutating shell command changes cwd; target paths cannot be verified against the frozen rails' };
   }

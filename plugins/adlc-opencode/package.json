@@ -22,6 +22,7 @@
     "skill/",
     "gate-bins.mjs",
     "generated-active-ticket.mjs",
+    "generated-workspace-root.mjs",
     "rails-checker.mjs",
     "README.md",
     "LICENSE"

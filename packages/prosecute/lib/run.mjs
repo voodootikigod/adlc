@@ -382,6 +382,8 @@ export function runProsecution(input, {
   requireCrossModel = false,
   authorProvider,
 } = {}) {
+  cwd = resolve(cwd ?? process.cwd());
+  dir = resolve(cwd, dir);
   const errors = validateInput(input);
   if (!ticket) errors.push('ticket is required for P5 evidence');
   // FAIL CLOSED: a trust-root-tier prosecution cannot prove the reviewer was a

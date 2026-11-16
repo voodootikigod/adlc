@@ -453,11 +453,20 @@ const verificationCommandCases = [
     reason: /unverified file edits/,
   },
   {
-    name: "onStop: rejects bare node --test when Cwd is omitted",
+    name: "onStop: rejects bare node --test when Cwd is omitted in ambiguous multi-root workspace",
     calls: [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/app.js' } }], }), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test' } }], exit_code: 0, }), JSON.stringify({ content: 'Finished.' }) ],
-    options: { conversationId: 'test-session-omitted-cwd' },
+    options: {
+      conversationId: 'test-session-omitted-cwd',
+      beforeStop: ({ root, payload }) => { payload.workspacePaths = [root, join(root, '__second_root__')]; },
+    },
     decision: 'continue',
     reason: /unverified file edits/,
+  },
+  {
+    name: "onStop: accepts headless agy run_command without Cwd in unambiguous single-root workspace",
+    calls: [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/app.js' } }], }), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }], exit_code: 0, }), JSON.stringify({ content: 'Finished.' }) ],
+    options: { preInvocation: true, conversationId: 'test-session-headless-single-root-npm-test', trackerCalls: [{ isMutating: true }, { isMutating: false }] },
+    decision: 'stop',
   },
   {
     name: "onStop: rejects node --test --test-global-setup",
@@ -495,18 +504,30 @@ const verificationCommandCases = [
     reason: /unverified file edits/,
   },
   {
-    name: "onStop: rejects node --test test/ when Cwd is omitted",
+    name: "onStop: rejects node --test test/ when Cwd is omitted in ambiguous multi-root workspace",
     calls: [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/core.js' } }], }), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test test/' } }], exit_code: 0, }), JSON.stringify({ content: 'Finished.' }) ],
-    options: { conversationId: 'test-session-node-test-no-cwd' },
+    options: {
+      conversationId: 'test-session-node-test-no-cwd',
+      beforeStop: ({ root, payload }) => { payload.workspacePaths = [root, join(root, '__second_root__')]; },
+    },
     decision: 'continue',
     reason: /unverified file edits/,
   },
   {
-    name: "onStop: rejects npm test when Cwd is omitted",
+    name: "onStop: rejects npm test when Cwd is omitted in ambiguous multi-root workspace",
     calls: [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/core.js' } }], }), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }], exit_code: 0, }), JSON.stringify({ content: 'Finished.' }) ],
-    options: { conversationId: 'test-session-npm-test-no-cwd' },
+    options: {
+      conversationId: 'test-session-npm-test-no-cwd',
+      beforeStop: ({ root, payload }) => { payload.workspacePaths = [root, join(root, '__second_root__')]; },
+    },
     decision: 'continue',
     reason: /unverified file edits/,
+  },
+  {
+    name: "onStop: accepts Gemini CLI run_shell_command with dir_path as verification",
+    calls: (root) => [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/core.js' } }], }), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_shell_command', args: { command: 'npm run preflight', dir_path: root } }], exit_code: 0, }), JSON.stringify({ content: 'Finished.' }) ],
+    options: { preInvocation: true, conversationId: 'test-session-gemini-cli-dir-path', trackerCalls: [{ isMutating: true }, { isMutating: false }] },
+    decision: 'stop',
   },
   {
     name: "onStop: rejects npm test with forwarded filter args like npm test -- -t foo",

@@ -56,6 +56,7 @@
 // stopped short of root with `identityError: null` and root's evidence vanished
 // silently. An unreadable first line on the ancestry path is a refusal.
 
+import { resolve } from 'node:path';
 import { ADLC_DIR } from '@adlc/core';
 import { discoverSegments, readManifestForest } from './forest.mjs';
 import {
@@ -100,6 +101,8 @@ function rawFirstEntry(dir, name) {
  *   that forgets to check still cannot read a stale completion as ours.
  */
 export function readOwnManifestChain(dir = ADLC_DIR, { cwd = process.cwd() } = {}) {
+  cwd = resolve(cwd);
+  dir = resolve(cwd, dir);
   const { entries, skipped } = readManifestForest(dir);
   const inSegment = (name) => entries.filter((entry) => entry.segment === name);
 

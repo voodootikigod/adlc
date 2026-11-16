@@ -23,6 +23,7 @@ import { isAbsolute, resolve, relative, dirname, basename } from 'node:path';
 import { realpathSync, existsSync } from 'node:fs';
 import { checkRail, classifyTool, isShellTool, railPreconditions } from '../rails-checker.mjs';
 import { normalizeRootPath } from '../lib/workspace-resolve.mjs';
+import { preferInnermostCheckout } from '../generated-workspace-root.mjs';
 
 /** Best-effort realpath; falls back to the lexical path (a write may create it). */
 function realOr(p) {
@@ -54,7 +55,7 @@ function realpathDeepest(absPath) {
 // is pinned against a real payload in ADR 0006 (Unverified).
 const TOOL_NAME_KEYS = ['tool_name', 'toolName', 'tool', 'name'];
 const INPUT_BAG_KEYS = ['tool_input', 'toolInput', 'input', 'args', 'arguments', 'params', 'parameters'];
-const PATH_KEYS = ['file_path', 'filePath', 'path', 'target_file', 'targetFile', 'target', 'target_path', 'targetPath'];
+const PATH_KEYS = ['file_path', 'filePath', 'path', 'notebook_path', 'notebookPath', 'target_file', 'targetFile', 'target', 'target_path', 'targetPath'];
 const ROOT_KEYS = ['workspace_roots', 'workspaceRoots', 'workspace_root', 'workspaceRoot', 'project_root', 'projectRoot', 'cwd', 'root'];
 
 function firstString(obj, keys) {
@@ -203,15 +204,23 @@ export function resolveOwning(payload, filePath, fallback, env = process.env) {
     ? undefined
     : isAbsolute(filePath) ? resolve(filePath) : (base != null ? resolve(base, filePath) : undefined);
   if (absFile) {
+    const storeOverride = env?.ADLC_TICKET_STORE ?? env?.ADLC_TICKETS ?? null;
+    const upgradeWorktree = (chosen) =>
+      preferInnermostCheckout(chosen, [absFile, payload?.cwd], {
+        storeOverride,
+        allowFileStart: true,
+        preserveSpelling: true,
+      }) ?? chosen;
     const owning = roots
       .filter((raw) => contains(raw, absFile))
       .map((raw) => ({ raw, real: realpathDeepest(resolve(raw)) }))
       .sort((a, b) => b.real.length - a.real.length)[0];
-    if (owning) return { root: owning.raw, absFile };
+    if (owning) return { root: upgradeWorktree(owning.raw), absFile };
     // Neither payload-declared roots nor CURSOR_PROJECT_DIR silently claim an
     // external target: a file outside every candidate workspace root stays
     // unresolved unless the caller explicitly supplied `fallback`.
     if (fallback == null && base != null && !contains(base, absFile)) return { root: null, absFile };
+    if (base != null) return { root: upgradeWorktree(base), absFile };
   }
   return { root: base ?? null, absFile };
 }

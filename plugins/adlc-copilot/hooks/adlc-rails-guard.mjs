@@ -36,6 +36,7 @@ import { realpathSync, writeSync } from 'node:fs';
 import { isAbsolute, resolve, dirname, basename } from 'node:path';
 import { loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
 import { resolveRailPath } from './generated-railpath.mjs';
+import { findInnermostCheckoutRoot, extractToolWorkdir, SHELL_WORKDIR_KEYS } from './generated-workspace-root.mjs';
 import {
   resolveActiveTicketId as resolveActiveTicketIdCanonical,
   resolveActiveTicketAgainst,
@@ -187,9 +188,17 @@ function firstShellWorkdir(value) {
     }
     return null;
   }
+  // Prefer the tool's own input/args bag over the outer hook envelope's `payload.cwd`
+  for (const bagKey of ['tool_input', 'toolInput', 'args', 'arguments', 'input', 'params', 'parameters']) {
+    const fromBag = extractToolWorkdir(value[bagKey]);
+    if (fromBag) return fromBag;
+  }
   for (const [key, child] of Object.entries(value)) {
-    if (['workdir', 'cwd', 'workingDirectory', 'working_directory'].includes(key) && typeof child === 'string') {
-      return child;
+    if (key === 'cwd' && (value.tool_name !== undefined || value.toolName !== undefined || value.tool_input !== undefined)) {
+      continue;
+    }
+    if (SHELL_WORKDIR_KEYS.includes(key) && typeof child === 'string' && child.trim().length > 0) {
+      return child.trim();
     }
     const found = firstShellWorkdir(child);
     if (found) return found;
@@ -221,7 +230,7 @@ function toolName(payload) {
 const NON_MUTATING_TOOL_NAMES = new Set(['adlc_gate', 'adlc_prosecute', 'todo_write', 'fetch']);
 
 function isShellToolName(name) {
-  return /(^|\.)(bash|shell|exec|exec_command|run_command|write_stdin)$/i.test(String(name));
+  return /(^|\.)(bash|shell|exec|exec_command|run_command|run_shell_command|run_terminal_cmd|write_stdin)$/i.test(String(name));
 }
 
 function collectShellInvocations(value, out = []) {
@@ -338,7 +347,9 @@ if (exceedsDepth(payload, MAX_PAYLOAD_DEPTH)) {
 }
 
 const processCwd = process.cwd();
-const root = payloadRoot(payload, processCwd);
+const toolCwd = payloadRoot(payload, processCwd);
+const storeOverride = process.env.ADLC_TICKET_STORE ?? process.env.ADLC_TICKETS ?? null;
+const root = findInnermostCheckoutRoot(toolCwd, { storeOverride, preserveSpelling: true }) ?? toolCwd;
 if (safeRealpath(root) !== safeRealpath(processCwd)) {
   notice(`resolving the repository from the payload cwd ${root} (process cwd ${processCwd})`);
 }
@@ -387,7 +398,7 @@ if (declaredRails.length === 0) {
 const rails = [...declaredRails, snapshot.backend === 'directory' ? '.adlc/tickets/**' : normalizePath(ticketsPath), '.adlc/current-ticket.json'];
 
 const rawPaths = collectPaths(payload);
-const paths = Array.from(rawPaths).map((path) => normalizePath(path));
+const paths = Array.from(rawPaths).map((path) => normalizePath(path, toolCwd));
 const shellInvocations = collectShellInvocations(payload);
 const shellTool = shellInvocations.length > 0;
 let shellMutating = false;
@@ -421,7 +432,7 @@ if (shellTool) {
     if (commandPaths.size === 0) {
       fail('mutating shell payload did not include literal editable paths');
     }
-    const shellBaseCwd = workdir ? resolve(root, workdir) : root;
+    const shellBaseCwd = workdir ? resolve(toolCwd, workdir) : toolCwd;
     for (const path of commandPaths) paths.push(normalizePath(path, shellBaseCwd));
   }
 }

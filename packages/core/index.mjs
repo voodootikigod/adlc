@@ -20,6 +20,7 @@ export * from './lib/cluster.mjs';
 export * from './lib/proc.mjs';
 export * from './lib/trusted-binary.mjs';
 export * from './lib/diff-mask.mjs';
+export * from './lib/workspace-root.mjs';
 
 // Promoted shared helpers
 export { activeTickets } from './lib/tickets.mjs';

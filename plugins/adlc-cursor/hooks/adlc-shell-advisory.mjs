@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { railPreconditions, TRUST_ROOT_RAILS } from '../rails-checker.mjs';
-import { candidateRoots } from './adlc-rails-guard.mjs';
+import { candidateRoots, hostProjectRoot } from './adlc-rails-guard.mjs';
 import { ticketStoreExists } from '@adlc/core';
 
 // Field names the command string may arrive under. Cursor's docs name
@@ -74,7 +74,7 @@ export function adviseShell(payload, { root, env = process.env } = {}) {
     const command = extractCommand(payload);
     if (!command) return { permission: 'allow' };
 
-    const owningRoot = root ?? candidateRoots(payload)[0] ?? process.cwd();
+    const owningRoot = root ?? candidateRoots(payload)[0] ?? hostProjectRoot(env) ?? process.cwd();
 
     // Rail set: the active ticket's rails when enforcement is active; the
     // trust roots alone otherwise (they are worth flagging in any ADLC repo).

@@ -74,7 +74,7 @@ export function normalizeToolName(name) {
 const SHELL_TOOL_NAMES = new Set([
   'bash', 'sh', 'zsh', 'fish', 'shell', 'terminal', 'cmd', 'powershell', 'pwsh', 'console',
   'exec', 'run', 'runcommand', 'runcmd', 'runterminalcmd', 'runterminalcommand',
-  'runinterminal', 'runinterminalcommand', 'runshell', 'shellexec', 'shellcommand',
+  'runinterminal', 'runinterminalcommand', 'runshell', 'runshellcommand', 'shellexec', 'shellcommand',
   'executecommand', 'execcommand', 'executecommandline', 'execcommandline',
   'executeshell', 'executeterminalcommand', 'terminalcmd', 'terminalcommand',
 ]);

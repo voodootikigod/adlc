@@ -83,6 +83,19 @@ const ARTIFACTS = [
       'plugins/adlc-copilot/hooks/generated-railpath.mjs',
     ],
   },
+  {
+    source: 'packages/core/lib/workspace-root.mjs',
+    marker: '// GENERATED-WORKSPACE-ROOT SOURCE.',
+    outputs: [
+      'plugins/adlc-gemini/generated-workspace-root.mjs',
+      'plugins/adlc-claude-code/hooks/generated-workspace-root.mjs',
+      'plugins/adlc-codex/hooks/generated-workspace-root.mjs',
+      'plugins/adlc-copilot/hooks/generated-workspace-root.mjs',
+      'plugins/adlc-cursor/generated-workspace-root.mjs',
+      'plugins/adlc-opencode/generated-workspace-root.mjs',
+      'plugins/adlc-pi/lib/generated-workspace-root.mjs',
+    ],
+  },
 ];
 
 const check = process.argv.includes('--check');

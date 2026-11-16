@@ -73,6 +73,7 @@ import { homedir, tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { loadTicketStoreReadOnly, ticketStoreExists } from './generated-ticket-reader.mjs';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
+import { inspectGitCheckout, preferInnermostCheckout } from './generated-workspace-root.mjs';
 import {
   resolveTrustedBinary,
   ownershipRejection,
@@ -285,7 +286,34 @@ async function main() {
   baseDir = typeof input.cwd === 'string' && input.cwd.length > 0 ? resolve(input.cwd) : process.cwd();
 
   // Operate in the project root so the tools resolve `.adlc/` correctly.
-  const dir = process.env.CLAUDE_PROJECT_DIR || input.cwd || process.cwd();
+  // When CLAUDE_PROJECT_DIR points at an outer checkout while `input.cwd` (or an
+  // edited target path) sits inside a verified nested linked git worktree
+  // (`<repo>/.worktrees/<lane>`), upgrade to that worktree so rail globs and
+  // ticket lookups bind to the worktree rather than the outer `.worktrees/` prefix.
+  const storeOverrideForRoot = process.env.ADLC_TICKET_STORE || process.env.ADLC_TICKETS || null;
+  const homeDirForRoot = realOrSelf(process.env.HOME || homedir());
+  const rawToolInput = input?.tool_input ?? input?.toolInput ?? {};
+  const rawTargetCandidates = [
+    rawToolInput?.file_path,
+    rawToolInput?.filePath,
+    rawToolInput?.path,
+    rawToolInput?.notebook_path,
+  ]
+    .filter((p) => typeof p === 'string' && p.trim().length > 0)
+    .map((p) => resolve(baseDir, p.trim()));
+  const rawProjectDir = process.env.CLAUDE_PROJECT_DIR || input.cwd || process.cwd();
+  const dir = process.env.CLAUDE_PROJECT_DIR
+    ? preferInnermostCheckout(
+        process.env.CLAUDE_PROJECT_DIR,
+        [input.cwd, ...rawTargetCandidates],
+        {
+          storeOverride: storeOverrideForRoot,
+          homeDir: homeDirForRoot,
+          allowFileStart: true,
+          preserveSpelling: true,
+        }
+      )
+    : rawProjectDir;
   try {
     process.chdir(dir);
   } catch {
@@ -348,6 +376,7 @@ async function main() {
     if (examine) {
       if (gitRoot === null && existsSync(join(cur, '.git'))) gitRoot = cur;
       if (adlcRoot === null && ticketStoreExists(cur, process.env)) adlcRoot = cur;
+      if (inspectGitCheckout(real)?.kind === 'worktree') break; // verified linked worktree boundary
     }
     const parent = dirname(cur);
     if (parent === cur || atHome) break; // filesystem root, or never ascend above $HOME

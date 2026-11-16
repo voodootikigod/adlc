@@ -1,0 +1,62 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
+import { decide, resolveOwning, extractFilePaths } from '../hooks/adlc-rails-guard.mjs';
+import { isShellTool } from '../rails-checker.mjs';
+
+function git(cwd, ...args) {
+  return execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'Test',
+      GIT_AUTHOR_EMAIL: 'test@example.com',
+      GIT_COMMITTER_NAME: 'Test',
+      GIT_COMMITTER_EMAIL: 'test@example.com',
+    },
+  });
+}
+
+test('Cursor resolveOwning and decide bind nested linked worktrees instead of outer workspace_roots', (t) => {
+  const primary = tmp(t, 'cursor-wt-primary-');
+  git(primary, 'init', '-b', 'main');
+  mkdirSync(join(primary, '.adlc'), { recursive: true });
+  writeFileSync(
+    join(primary, '.adlc', 'tickets.json'),
+    JSON.stringify({ tickets: [{ id: 'T-CUR', title: 'Cursor WT', rails: ['src/frozen.js'] }] })
+  );
+  mkdirSync(join(primary, 'src'), { recursive: true });
+  writeFileSync(join(primary, 'src', 'frozen.js'), 'export const x = 1;\n');
+  git(primary, 'add', '-A');
+  git(primary, 'commit', '-m', 'init');
+
+  const lane = join(primary, '.worktrees', 'lane-a');
+  git(primary, 'worktree', 'add', '-b', 'lane-a', lane);
+  writeFileSync(join(lane, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T-CUR' }));
+
+  const target = join(lane, 'src', 'frozen.js');
+  const owned = resolveOwning({ workspace_roots: [primary] }, target, undefined, {});
+  assert.equal(realpathSync(owned.root), realpathSync(lane));
+
+  const verdict = decide(
+    {
+      tool_name: 'Write',
+      workspace_roots: [primary],
+      tool_input: { file_path: target, content: 'tamper' },
+    },
+    { env: { ADLC_P4_ENFORCEMENT: '1' } }
+  );
+  assert.equal(verdict.permission, 'deny');
+});
+
+test('Cursor extracts notebook_path and classifies run_shell_command as shell tool', () => {
+  assert.deepEqual(
+    extractFilePaths({ tool_name: 'NotebookEdit', tool_input: { notebook_path: 'notebooks/eval.ipynb' } }),
+    ['notebooks/eval.ipynb']
+  );
+  assert.equal(isShellTool('run_shell_command'), true);
+});
