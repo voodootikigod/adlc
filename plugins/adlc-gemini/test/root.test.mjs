@@ -5,6 +5,7 @@ import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
 import {
+  canonicalizeExisting,
   findAdlcRoot,
   anchorPath,
   resolveWorkspaceRoot,
@@ -133,4 +134,22 @@ test('isReadonlyCommand allows grep and rg within workspace root and loadTickets
   const loaded = loadTickets(join(root, '.adlc', 'tickets.json'));
   assert.deepEqual(loaded.errors, []);
   assert.deepEqual(loaded.tickets, []);
+
+  // Backslash-separated conventional path, sharded path, custom path, and invalid non-string/blank paths
+  writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T-1', title: 'One' }] }));
+  const backslashLoaded = loadTickets(`${root}\\.adlc\\tickets.json`);
+  assert.deepEqual(backslashLoaded.errors, []);
+  assert.equal(backslashLoaded.tickets.length, 1);
+
+  const customPath = join(root, 'src', 'custom-store.json');
+  writeFileSync(customPath, JSON.stringify({ tickets: [{ id: 'T-CUSTOM', title: 'Custom' }] }));
+  const customLoaded = loadTickets(customPath);
+  assert.deepEqual(customLoaded.errors, []);
+  assert.equal(customLoaded.tickets[0]?.id, 'T-CUSTOM');
+
+  assert.equal(loadTickets(null).errors.length, 1);
+  assert.equal(loadTickets('   ').errors.length, 1);
+  assert.equal(canonicalizeExisting(null), null);
+  assert.equal(canonicalizeExisting(''), '');
+  assert.equal(canonicalizeExisting(root), realpathSync(root));
 });

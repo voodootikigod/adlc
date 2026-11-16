@@ -19,7 +19,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyTool, isShellTool } from '../rails-checker.mjs';
+import { classifyTool, hasMutatingPayloadDeep, isShellTool } from '../rails-checker.mjs';
 
 // Every agy MUTATING file tool must classify 'mutating' (so a rail write is
 // denied). All five are structured file-content mutators.
@@ -66,6 +66,24 @@ test('PURE_READS keep readonly classification with file path args and MCP read t
   assert.equal(classifyTool('call_mcp_tool', { ServerName: 'codegraph', ToolName: 'codegraph_explore', command: 'rm frozen.js' }), 'other');
   assert.equal(classifyTool('list_resources', { ServerName: 'mcp' }), 'readonly');
   assert.equal(classifyTool('read_resource', { ServerName: 'mcp', Uri: 'doc://1' }), 'readonly');
+  assert.equal(hasMutatingPayloadDeep({ a: { b: { c: { d: { e: { query: 'ok' } } } } } }), false);
+  assert.equal(hasMutatingPayloadDeep({ a: { b: { c: { d: { e: { f: { query: 'too-deep' } } } } } } }), true);
+  assert.equal(
+    classifyTool('call_mcp_tool', {
+      ServerName: 'codegraph',
+      ToolName: 'codegraph_explore',
+      Arguments: { a: { b: { c: { d: { query: 'ok' } } } } },
+    }),
+    'readonly'
+  );
+  assert.equal(
+    classifyTool('call_mcp_tool', {
+      ServerName: 'codegraph',
+      ToolName: 'codegraph_explore',
+      Arguments: { a: { b: { c: { d: { e: { query: 'too-deep' } } } } } },
+    }),
+    'other'
+  );
 });
 
 // Every agy NON-FILE tool (no file-path argument in any observed transcript

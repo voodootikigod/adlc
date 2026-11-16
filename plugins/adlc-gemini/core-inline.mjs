@@ -36,18 +36,19 @@ export function validateTicket(t) {
 
 export function loadTickets(path = TICKETS_PATH) {
   try {
-    const normPath = typeof path === 'string' ? path.replaceAll('\\', '/') : '';
-    const isLegacyConventional = path === TICKETS_PATH || normPath.endsWith('/.adlc/tickets.json');
+    if (typeof path !== 'string' || !path.trim()) return { tickets: [], errors: ['invalid ticket path'] };
+    const normPath = path.replaceAll('\\', '/');
+    const isLegacyConventional = normPath === TICKETS_PATH || normPath.endsWith('/.adlc/tickets.json');
     const isShardedConventional =
       normPath === '.adlc/tickets/.store.json' || normPath.endsWith('/.adlc/tickets/.store.json');
     const conventional = isLegacyConventional || isShardedConventional;
     let root = process.cwd();
-    if (path !== TICKETS_PATH && isAbsolute(path)) {
-      if (isLegacyConventional) root = dirname(dirname(path));
-      else if (isShardedConventional) root = dirname(dirname(dirname(path)));
-      else root = findInnermostCheckoutRoot(resolve(path), { allowFileStart: true, preserveSpelling: true }) ?? dirname(path);
+    if (normPath !== TICKETS_PATH && isAbsolute(normPath)) {
+      if (isLegacyConventional) root = dirname(dirname(normPath));
+      else if (isShardedConventional) root = dirname(dirname(dirname(normPath)));
+      else root = findInnermostCheckoutRoot(resolve(normPath), { allowFileStart: true, preserveSpelling: true }) ?? dirname(normPath);
     }
-    const env = conventional ? process.env : { ...process.env, ADLC_TICKET_STORE: path, ADLC_TICKETS: undefined };
+    const env = conventional ? process.env : { ...process.env, ADLC_TICKET_STORE: normPath, ADLC_TICKETS: undefined };
     const snapshot = loadTicketStoreReadOnly({ root, env });
     return { tickets: snapshot.tickets.map((ticket) => structuredClone(ticket)), errors: [] };
   } catch (err) {

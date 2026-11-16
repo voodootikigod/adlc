@@ -10,12 +10,7 @@ import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 
 export function canonicalizeExisting(p) {
-  if (!p || typeof p !== 'string') return p;
-  try {
-    return canonicalizePath(p);
-  } catch {
-    return p;
-  }
+  return !p || typeof p !== 'string' ? p : canonicalizePath(p);
 }
 
 function realpathOr(p) {
