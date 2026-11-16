@@ -25,7 +25,7 @@ var MCP_BUILD_METADATA = typeof define_ADLC_MCP_BUILD_METADATA_default === "unde
 
 // plugins/adlc-cursor/lib/workspace-resolve.mjs
 import { existsSync as existsSync12, mkdirSync as mkdirSync5, readFileSync as readFileSync9, renameSync as renameSync2, writeFileSync as writeFileSync5 } from "node:fs";
-import { dirname as dirname11, isAbsolute as isAbsolute4, join as join11, normalize as normalize2, resolve as pathResolve } from "node:path";
+import { dirname as dirname10, isAbsolute as isAbsolute5, join as join11, normalize as normalize2, resolve as pathResolve } from "node:path";
 
 // packages/tickets/lib/pointer.mjs
 var MAX_POINTER_BYTES = 64 * 1024;
@@ -357,7 +357,7 @@ var TicketSnapshot = class {
 
 // packages/tickets/lib/store.mjs
 import { existsSync as existsSync10, lstatSync as lstatSync5, readdirSync as readdirSync4 } from "node:fs";
-import { isAbsolute as isAbsolute2, join as join8, resolve as resolve5 } from "node:path";
+import { isAbsolute as isAbsolute3, join as join8, resolve as resolve5 } from "node:path";
 
 // packages/tickets/lib/stores/directory.mjs
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
@@ -435,11 +435,11 @@ var DirectoryTicketStore = class {
 
 // packages/tickets/lib/stores/legacy.mjs
 import { existsSync as existsSync9, lstatSync as lstatSync4, readFileSync as readFileSync8 } from "node:fs";
-import { basename as basename2, dirname as dirname8 } from "node:path";
+import { basename as basename2, dirname as dirname7 } from "node:path";
 
 // packages/tickets/lib/transaction.mjs
 import { existsSync as existsSync8, readFileSync as readFileSync7 } from "node:fs";
-import { basename, dirname as dirname7, isAbsolute, join as join7, relative as relative2, resolve as resolve4 } from "node:path";
+import { basename, dirname as dirname6, isAbsolute as isAbsolute2, join as join7, relative as relative2, resolve as resolve4 } from "node:path";
 import { randomUUID as randomUUID2 } from "node:crypto";
 
 // packages/tickets/lib/lock.mjs
@@ -532,7 +532,7 @@ function releaseTicketLock(lock, { removeLock = rmSync } = {}) {
 import { closeSync as closeSync3, existsSync as existsSync6, fsyncSync as fsyncSync2, mkdirSync as mkdirSync4, openSync as openSync3, readFileSync as readFileSync5, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "node:fs";
 import { createHmac as createHmac2, randomUUID } from "node:crypto";
 import { hostname as hostname2 } from "node:os";
-import { dirname as dirname6, join as join5 } from "node:path";
+import { dirname as dirname5, join as join5 } from "node:path";
 
 // packages/tickets/lib/durability.mjs
 import {
@@ -614,7 +614,7 @@ function durableRemove(path, options) {
 
 // packages/tickets/lib/manifest-segments.mjs
 import { existsSync as existsSync5, readFileSync as readFileSync4 } from "node:fs";
-import { dirname as dirname5, join as join4 } from "node:path";
+import { join as join4 } from "node:path";
 
 // packages/tickets/lib/manifest-primitives.mjs
 import {
@@ -632,7 +632,7 @@ import {
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { randomBytes, createHmac, timingSafeEqual } from "node:crypto";
-import { dirname as dirname4, join as join3, relative, resolve as resolve3, sep } from "node:path";
+import { dirname as dirname4, isAbsolute, join as join3, relative, resolve as resolve3, sep } from "node:path";
 var SEGMENT_DIRNAME = "manifest.d";
 var SEGMENT_NAME_RE = /^[a-z0-9-]{1,40}-[0-9A-HJKMNP-TV-Z]{26}\.jsonl$/;
 var RESERVED_NAMES = /* @__PURE__ */ new Set([".store.json", ".lineage"]);
@@ -846,9 +846,20 @@ function writeLineageToken(dir = ".adlc", token) {
     closeSync2(fd);
   }
 }
-function peekOpenSegment(dir = ".adlc", { cwd = dir && dir !== ".adlc" ? dirname4(resolve3(dir)) : process.cwd() } = {}) {
-  cwd = resolve3(cwd);
-  dir = resolve3(cwd, dir);
+function normalizeManifestDirAndCwd(dir = ".adlc", opts = {}) {
+  const effectiveDir = dir ?? ".adlc";
+  if (opts?.cwd === void 0 || opts?.cwd === null) {
+    const resolvedDir2 = resolve3(effectiveDir);
+    const defaultCwd = effectiveDir === ".adlc" ? process.cwd() : dirname4(resolvedDir2);
+    return { dir: resolvedDir2, cwd: defaultCwd };
+  }
+  const resolvedCwd = resolve3(opts.cwd);
+  const resolvedDir = isAbsolute(effectiveDir) ? resolve3(effectiveDir) : effectiveDir !== ".adlc" && resolve3(dirname4(effectiveDir)) === resolvedCwd ? resolve3(effectiveDir) : resolve3(resolvedCwd, effectiveDir);
+  return { dir: resolvedDir, cwd: resolvedCwd };
+}
+function peekOpenSegment(dir = ".adlc", opts = {}) {
+  ({ dir, cwd: opts } = normalizeManifestDirAndCwd(dir, opts));
+  const cwd = opts;
   const branch = currentBranch(cwd);
   const token = readLineageToken(dir);
   if (branch !== null && token && token.branch === branch) {
@@ -881,9 +892,9 @@ function firstEntryOf(dir = ".adlc", segmentName) {
     closeSync2(fd);
   }
 }
-function recoverOpenSegment(dir = ".adlc", { cwd = dir && dir !== ".adlc" ? dirname4(resolve3(dir)) : process.cwd() } = {}) {
-  cwd = resolve3(cwd);
-  dir = resolve3(cwd, dir);
+function recoverOpenSegment(dir = ".adlc", opts = {}) {
+  let cwd;
+  ({ dir, cwd } = normalizeManifestDirAndCwd(dir, opts));
   const peeked = peekOpenSegment(dir, { cwd });
   if (peeked) return peeked;
   const branch = currentBranch(cwd);
@@ -917,9 +928,9 @@ function recoverOpenSegment(dir = ".adlc", { cwd = dir && dir !== ".adlc" ? dirn
   }
   return { name: candidates[0], isNew: false };
 }
-function assertSegmentPathCommittable(dir = ".adlc", name, { cwd } = {}) {
-  dir = cwd ? resolve3(cwd, dir) : resolve3(dir);
-  const probeCwd = cwd ? resolve3(cwd) : dirname4(dir);
+function assertSegmentPathCommittable(dir = ".adlc", name, opts = {}) {
+  let probeCwd;
+  ({ dir, cwd: probeCwd } = normalizeManifestDirAndCwd(dir, opts));
   const env = { ...process.env };
   delete env.ADLC_MANIFEST_KEY;
   delete env.GIT_DIR;
@@ -1002,9 +1013,10 @@ function isChainIntact(lines, key2) {
   }
   return true;
 }
-function resolveOpenSegment(dir = ".adlc", { cwd = dir && dir !== ".adlc" ? dirname4(resolve3(dir)) : process.cwd(), key: key2 = null } = {}) {
-  cwd = resolve3(cwd);
-  dir = resolve3(cwd, dir);
+function resolveOpenSegment(dir = ".adlc", opts = {}) {
+  const key2 = opts?.key ?? null;
+  let cwd;
+  ({ dir, cwd } = normalizeManifestDirAndCwd(dir, opts));
   const markerDoc = readBoundedJsonNoFollow(markerPath(dir));
   if (markerDoc && markerDoc.auth === "keyed" && key2 === null) {
     throw new Error(
@@ -1137,7 +1149,7 @@ function validateKeyParam(key2) {
 var sleep2 = (milliseconds) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 function withManifestLock(path, fn, { retries = 400, delayMs = 5 } = {}) {
   const lockPath = `${path}.lock`;
-  mkdirSync4(dirname6(path), { recursive: true });
+  mkdirSync4(dirname5(path), { recursive: true });
   const owner = { version: 1, token: randomUUID(), pid: process.pid, hostname: hostname2(), startedAt: (/* @__PURE__ */ new Date()).toISOString() };
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     let descriptor;
@@ -1208,9 +1220,9 @@ function recordSegmentedTicketEvidence(dir, { gate, data, transactionId, operati
     }
     const existing = findMatchingEvidence(readForestEntries(dir), { gate, data, transactionId, operation, action, ticketId, ticketHash: ticketHash2, storeHash: storeHash2, archiveHash, key: key2, acceptLegacyMatch });
     if (existing) return existing;
-    const resolved = resolveOpenSegment(dir, { cwd: dirname6(dir), key: key2 });
+    const resolved = resolveOpenSegment(dir, { cwd: dirname5(dir), key: key2 });
     const targetPath = segmentPath(dir, resolved.name);
-    mkdirSync4(dirname6(targetPath), { recursive: true });
+    mkdirSync4(dirname5(targetPath), { recursive: true });
     return withManifestLock(targetPath, () => {
       const content = existsSync6(targetPath) ? readFileSync5(targetPath, "utf8") : "";
       const rawLines = content.split("\n").filter((line) => line.trim() !== "");
@@ -1255,7 +1267,7 @@ function recordSegmentedTicketEvidence(dir, { gate, data, transactionId, operati
       } finally {
         closeSync3(descriptor);
       }
-      fsyncDirectory(dirname6(targetPath));
+      fsyncDirectory(dirname5(targetPath));
       return entry;
     });
   });
@@ -1353,7 +1365,7 @@ function recordTicketEvidence(root, {
     } finally {
       closeSync3(descriptor);
     }
-    fsyncDirectory(dirname6(path));
+    fsyncDirectory(dirname5(path));
     return entry;
   });
 }
@@ -1491,7 +1503,7 @@ var fileHash = (path) => sha256(readFileSync7(path));
 function journalPath(root, path) {
   const absolute = resolve4(path);
   const rel = relative2(resolve4(root), absolute);
-  return rel && rel !== ".." && !rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(rel) ? rel : absolute;
+  return rel && rel !== ".." && !rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute2(rel) ? rel : absolute;
 }
 function evidenceBinding(before, tickets, ticketId, beforeTicketId = null) {
   const priorId = beforeTicketId ?? ticketId;
@@ -1524,8 +1536,8 @@ function applyLegacyTransaction(store, tickets, { expectedSnapshotHash, operatio
     const recordedTarget = journalPath(root, target);
     const stage = join7(transactionRoot, "stage", basename(store.path));
     const backup = join7(transactionRoot, "backup", basename(store.path));
-    durableMkdir(dirname7(stage));
-    durableMkdir(dirname7(backup));
+    durableMkdir(dirname6(stage));
+    durableMkdir(dirname6(backup));
     durableWrite(stage, prettyCanonicalJson({ tickets }));
     durableCopy(target, backup);
     const afterHash = storeHash(tickets);
@@ -1587,9 +1599,9 @@ function applyLegacyTransaction(store, tickets, { expectedSnapshotHash, operatio
 // packages/tickets/lib/stores/legacy.mjs
 function repositoryRootFor(path, explicit) {
   if (explicit !== null && explicit !== void 0) return explicit;
-  const parent = dirname8(path);
-  if (basename2(path) === basename2(LEGACY_FILE) && basename2(parent) === dirname8(LEGACY_FILE)) {
-    return dirname8(parent);
+  const parent = dirname7(path);
+  if (basename2(path) === basename2(LEGACY_FILE) && basename2(parent) === dirname7(LEGACY_FILE)) {
+    return dirname7(parent);
   }
   throw invalid(
     "AMBIGUOUS_STORE_ROOT",
@@ -1622,8 +1634,8 @@ var LegacyTicketStore = class {
     if (!this.exists()) throw operational("STORE_NOT_FOUND", `tickets file not found: ${this.path}`);
     const stat = lstatSync4(this.path);
     if (stat.isSymbolicLink() || !stat.isFile()) throw invalid("UNSAFE_STORE_PATH", `${this.path} must be a regular file`);
-    const parentStat = lstatSync4(dirname8(this.path));
-    if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) throw invalid("UNSAFE_STORE_PATH", `${dirname8(this.path)} must be a real directory`);
+    const parentStat = lstatSync4(dirname7(this.path));
+    if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) throw invalid("UNSAFE_STORE_PATH", `${dirname7(this.path)} must be a real directory`);
     let parsed;
     try {
       parsed = JSON.parse(readFileSync8(this.path, "utf8"));
@@ -1639,7 +1651,7 @@ var LegacyTicketStore = class {
 };
 
 // packages/tickets/lib/store.mjs
-var rooted = (root, path) => isAbsolute2(path) ? path : join8(root, path);
+var rooted = (root, path) => isAbsolute3(path) ? path : join8(root, path);
 function pendingTransactions(root = ".") {
   const path = join8(root, TRANSACTION_DIRECTORY);
   if (!existsSync10(path)) return [];
@@ -1923,7 +1935,7 @@ var SECRET_PATTERNS = [
 
 // packages/core/lib/tickets.mjs
 import { existsSync as existsSync11, lstatSync as lstatSync6 } from "node:fs";
-import { dirname as dirname9, isAbsolute as isAbsolute3, join as join9 } from "node:path";
+import { dirname as dirname8, isAbsolute as isAbsolute4, join as join9 } from "node:path";
 
 // packages/core/lib/glob.mjs
 var SLASH2 = "/".charCodeAt(0);
@@ -1936,7 +1948,7 @@ var TICKET_TRUST_ROOT_RAILS = Object.freeze([
   ".adlc/current-ticket.json"
 ]);
 function ticketStoreExists(root = ".", override = null) {
-  if (override) return existsSync11(isAbsolute3(override) ? override : join9(root, override));
+  if (override) return existsSync11(isAbsolute4(override) ? override : join9(root, override));
   return existsSync11(join9(root, ".adlc/tickets.json")) || existsSync11(join9(root, ".adlc/tickets/.store.json"));
 }
 
@@ -2169,14 +2181,14 @@ var WORKDIR_CONTAINERS = Object.freeze([
 
 // plugins/adlc-cursor/generated-active-ticket.mjs
 import { lstatSync as lstatSync7, openSync as openSync4, fstatSync, readSync as readSync2, closeSync as closeSync4, constants as fsConstants2 } from "node:fs";
-import { dirname as dirname10, join as join10 } from "node:path";
+import { dirname as dirname9, join as join10 } from "node:path";
 var CURRENT_TICKET_FILE2 = ".adlc/current-ticket.json";
 var MAX_POINTER_BYTES2 = 64 * 1024;
 var ABSENT = /* @__PURE__ */ Symbol("pointer-absent");
 function readPointerFileBounded(path) {
   let parentLst;
   try {
-    parentLst = lstatSync7(dirname10(path));
+    parentLst = lstatSync7(dirname9(path));
   } catch (err) {
     return err && err.code === "ENOENT" ? ABSENT : null;
   }
@@ -2358,7 +2370,7 @@ function normalizeRootPath(raw) {
     if (existsSync12(p)) return pathResolve(p);
   } catch {
   }
-  return isAbsolute4(p) ? p : null;
+  return isAbsolute5(p) ? p : null;
 }
 function isAdlcBearing(root, env = process.env) {
   if (!root) return false;
@@ -2742,7 +2754,7 @@ function retireChildProcess(child, childReadline, timers, timeoutMs = 500, killT
 
 // plugins/adlc-cursor/lib/mcp-spawn.mjs
 import { accessSync, constants, statSync } from "node:fs";
-import { dirname as dirname12, join as join12 } from "node:path";
+import { dirname as dirname11, join as join12 } from "node:path";
 function isRunnableFile(path) {
   try {
     const stat = statSync(path);
@@ -2771,7 +2783,7 @@ function npmGlobalRoots(env, platform, execPath) {
       add(root);
     }
   }
-  const binDir = dirname12(execPath);
+  const binDir = dirname11(execPath);
   if (platform === "win32") {
     add(join12(binDir, "node_modules"));
     if (env.APPDATA) {

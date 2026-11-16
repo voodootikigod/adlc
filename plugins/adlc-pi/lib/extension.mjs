@@ -9,7 +9,10 @@
 
 import { readdirSync, statSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
-import { extractToolWorkdir } from './generated-workspace-root.mjs';
+import {
+  extractAllToolWorkdirs,
+  hasConflictingToolWorkdirs,
+} from './generated-workspace-root.mjs';
 import {
   resolveActiveTicket,
   checkStructuredWrite,
@@ -515,11 +518,21 @@ export function createExtension({ env = process.env } = {}) {
         if (typeof command !== 'string') {
           return { block: true, reason: `Blocked bash: no extractable command (ticket ${active.ticketId})` };
         }
-        const explicitWorkdir = extractToolWorkdir(event.input);
-        const effectiveWorkdir = explicitWorkdir
-          ? resolve(ctx.cwd ?? activeCwd, explicitWorkdir)
-          : (ctx.cwd ?? activeCwd);
-        const verdict = checkShellCommand(command, active.ticket, activeCwd, { workdir: effectiveWorkdir });
+        const baseCallCwd = ctx.cwd ?? activeCwd;
+        if (hasConflictingToolWorkdirs(event.input, baseCallCwd)) {
+          const conflictReason = 'mutating shell command specifies conflicting working directories; target paths cannot be verified against the frozen rails';
+          ctx.ui.notify(`Blocked shell command: ${conflictReason}`, 'error');
+          noteGate({ ctx, type: 'shell-deny', detail: { reason: conflictReason } });
+          return { block: true, reason: `Blocked command: ${conflictReason} (ticket ${active.ticketId})` };
+        }
+        const candidateWorkdirs = [
+          baseCallCwd,
+          ...extractAllToolWorkdirs(event.input).map((w) => resolve(baseCallCwd, w)),
+        ];
+        const verdict = checkShellCommand(command, active.ticket, activeCwd, {
+          workdir: candidateWorkdirs[candidateWorkdirs.length - 1],
+          workdirs: candidateWorkdirs,
+        });
         if (verdict.decision === 'deny') {
           ctx.ui.notify(`Blocked shell command: ${verdict.reason}`, 'error');
           noteGate({ ctx, type: 'shell-deny', detail: { reason: verdict.reason } });
@@ -542,7 +555,9 @@ export function createExtension({ env = process.env } = {}) {
 
       // Third-party (custom) tool coverage (spec 2.5): rail-check extractable
       // targets; record no-target unknown tools as unvetted.
-      const custom = checkCustomTool(event.toolName, event.input, active.ticket, activeCwd);
+      const custom = checkCustomTool(event.toolName, event.input, active.ticket, activeCwd, {
+        cwd: ctx.cwd ?? activeCwd,
+      });
       if (custom.decision === 'deny') {
         ctx.ui.notify(`Blocked ${event.toolName}: ${custom.reason}`, 'error');
         noteGate({ ctx, type: 'custom-tool-deny', detail: { tool: event.toolName, reason: custom.reason } });

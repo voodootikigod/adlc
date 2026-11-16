@@ -35,7 +35,7 @@ import {
   repoManifestChainIsSigned,
 } from './adlc-handoff-gate.mjs';
 import { resolveContextHandoffEntry } from './handoff-resolve.mjs';
-import { findInnermostCheckoutRoot } from './generated-workspace-root.mjs';
+import { extractToolWorkdir, findInnermostCheckoutRoot, preferInnermostCheckout } from './generated-workspace-root.mjs';
 import { join, dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -306,7 +306,20 @@ async function main() {
       ? resolve(payload.cwd)
       : process.cwd();
   const storeOverride = process.env.ADLC_TICKET_STORE ?? process.env.ADLC_TICKETS ?? null;
-  const root = findInnermostCheckoutRoot(toolCwd, { storeOverride, preserveSpelling: true }) ?? toolCwd;
+  const outerRoot = findInnermostCheckoutRoot(toolCwd, { storeOverride, preserveSpelling: true }) ?? toolCwd;
+  const ti = payload?.tool_input ?? payload?.toolInput ?? payload?.args ?? payload?.arguments ?? {};
+  const dynamicTarget =
+    ti?.file_path ?? ti?.filePath ?? ti?.path ?? ti?.target ?? extractToolWorkdir(ti) ?? null;
+  const resolvedDynamic =
+    typeof dynamicTarget === 'string' && dynamicTarget.trim()
+      ? resolve(toolCwd, dynamicTarget.trim())
+      : null;
+  const root =
+    preferInnermostCheckout(outerRoot, [resolvedDynamic], {
+      storeOverride,
+      allowFileStart: true,
+      preserveSpelling: true,
+    }) ?? outerRoot;
 
   if (!existsSync(join(root, '.adlc'))) process.exit(0); // not an ADLC repo → allow
   if (!ticketStoreExists(root, process.env)) process.exit(0); // no tickets → nothing to gate → allow

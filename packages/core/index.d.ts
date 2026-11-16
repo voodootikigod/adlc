@@ -486,7 +486,9 @@ export function untrustedBinaryReason(name: string, pathEnv: unknown): string | 
 
 // lib/workspace-root.mjs
 export const SHELL_WORKDIR_KEYS: readonly string[];
+export function extractAllToolWorkdirs(args: unknown): string[];
 export function extractToolWorkdir(args: unknown): string | null;
+export function hasConflictingToolWorkdirs(args: unknown, baseDir?: string): boolean;
 export function canonicalizePath(targetPath: string): string;
 export function isPathInside(childPath: string, parentPath: string): boolean;
 export type GitCheckoutInspection = {

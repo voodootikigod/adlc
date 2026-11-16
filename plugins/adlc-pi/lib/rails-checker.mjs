@@ -147,7 +147,7 @@ export function isSafeBranchCreation(command) {
  *   mutation with no literal targets        → deny (fail closed)
  *   literal targets                         → deny only on a frozen-rail hit
  */
-export function checkShellCommand(command, ticket, root, { workdir = null } = {}) {
+export function checkShellCommand(command, ticket, root, { workdir = null, workdirs = null } = {}) {
   if (isSafeBranchCreation(command)) {
     return { decision: 'allow', mutating: false, reason: 'pure branch creation cannot touch a rail' };
   }
@@ -166,10 +166,18 @@ export function checkShellCommand(command, ticket, root, { workdir = null } = {}
   if (c.opaque) {
     return { decision: 'deny', mutating: true, reason: 'mutating shell command uses an opaque form (git apply/checkout/patch/tar…); use a structured edit tool or a literal path-transparent mutation' };
   }
-  const movesWorkdir =
-    typeof workdir === 'string' &&
-    workdir.trim() !== '' &&
-    canonicalizeWorkspacePath(resolve(root, workdir.trim())) !== canonicalizeWorkspacePath(resolve(root));
+  const canonicalRoot = canonicalizeWorkspacePath(resolve(root));
+  const candidateDirs = Array.isArray(workdirs)
+    ? workdirs
+    : typeof workdir === 'string' && workdir.trim() !== ''
+      ? [workdir]
+      : [];
+  const movesWorkdir = candidateDirs.some(
+    (w) =>
+      typeof w === 'string' &&
+      w.trim() !== '' &&
+      canonicalizeWorkspacePath(resolve(root, w.trim())) !== canonicalRoot
+  );
   if (c.changesCwd || movesWorkdir) {
     return { decision: 'deny', mutating: true, reason: 'mutating shell command changes cwd; target paths cannot be verified against the frozen rails' };
   }
@@ -231,19 +239,25 @@ export function extractToolPaths(input, root, depth = 0) {
  * gate — for anything this extraction cannot see (deeper nesting, spoofed
  * read-only names), the CI rails-guard diff gate is the backstop.
  */
-export function checkCustomTool(toolName, input, ticket, root) {
+export function checkCustomTool(toolName, input, ticket, root, { cwd = root } = {}) {
   const name = String(toolName ?? '').toLowerCase();
   if (READONLY_TOOLS.includes(name)) {
     return { decision: 'allow', reason: 'known read-only tool' };
   }
-  const paths = extractToolPaths(input, root);
+  const effectiveCwd = typeof cwd === 'string' && cwd.trim() !== '' ? cwd : root;
+  const paths = new Set([
+    ...extractToolPaths(input, root),
+    ...(effectiveCwd !== root
+      ? extractToolPaths(input, effectiveCwd).map((p) => (isAbsolute(p) ? p : resolve(effectiveCwd, p)))
+      : []),
+  ]);
   for (const path of paths) {
     const hit = railHit(path, ticket, root);
     if (hit) {
       return { decision: 'deny', reason: `custom tool "${toolName}" targets frozen rail "${hit}" via "${path}"` };
     }
   }
-  if (paths.length === 0) {
+  if (paths.size === 0) {
     return { decision: 'allow', reason: 'no extractable file target', unvetted: true };
   }
   return { decision: 'allow', reason: 'targets hit no frozen rail' };

@@ -1006,4 +1006,72 @@ test('nested git worktree (.worktrees/<lane>) enforces its own rails even when C
     out = e.stdout ?? '';
   }
   assert.match(out, /"permissionDecision":"deny"/, `expected nested worktree rail edit to be denied, got: ${out}`);
+
+  // MultiEdit spanning outer repo frozen rail + nested worktree non-rail file MUST still be denied
+  let mixedOuterOut = '';
+  try {
+    mixedOuterOut = runHook([HOOK, 'rails'], {
+      input: JSON.stringify({
+        cwd: lane,
+        tool_name: 'MultiEdit',
+        tool_input: {
+          edits: [
+            { file_path: join(primary, 'src', 'frozen.js') },
+            { file_path: join(lane, 'src', 'free.js') },
+          ],
+        },
+      }),
+      encoding: 'utf8',
+      env,
+    });
+  } catch (e) {
+    mixedOuterOut = e.stdout ?? '';
+  }
+  assert.match(mixedOuterOut, /"permissionDecision":"deny"/, `expected mixed outer rail edit to be denied, got: ${mixedOuterOut}`);
+
+  // MultiEdit spanning outer repo non-rail file + nested worktree frozen rail MUST ALSO be denied
+  let mixedInnerOut = '';
+  try {
+    mixedInnerOut = runHook([HOOK, 'rails'], {
+      input: JSON.stringify({
+        cwd: primary,
+        tool_name: 'MultiEdit',
+        tool_input: {
+          edits: [
+            { file_path: join(primary, 'src', 'free.js') },
+            { file_path: join(lane, 'src', 'frozen.js') },
+          ],
+        },
+      }),
+      encoding: 'utf8',
+      env,
+    });
+  } catch (e) {
+    mixedInnerOut = e.stdout ?? '';
+  }
+  assert.match(mixedInnerOut, /"permissionDecision":"deny"/, `expected mixed nested worktree rail edit to be denied, got: ${mixedInnerOut}`);
+
+  // Forged subdirectory .git (empty or with fake HEAD) inside an ADLC git repo MUST NOT release enclosing rails
+  const forgedSub = join(primary, 'src', 'forged');
+  mkdirSync(join(forgedSub, '.git'), { recursive: true });
+  writeFileSync(join(forgedSub, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  const envNoProjectDir = { ...process.env, PATH: WITH_ADLC };
+  delete envNoProjectDir.CLAUDE_PROJECT_DIR;
+  delete envNoProjectDir.ADLC_RAILS_BYPASS;
+  let forgedOut = '';
+  try {
+    forgedOut = runHook([HOOK, 'rails'], {
+      cwd: forgedSub,
+      input: JSON.stringify({
+        cwd: forgedSub,
+        tool_name: 'Write',
+        tool_input: { file_path: join(primary, 'src', 'frozen.js'), content: 'tamper' },
+      }),
+      encoding: 'utf8',
+      env: envNoProjectDir,
+    });
+  } catch (e) {
+    forgedOut = e.stdout ?? '';
+  }
+  assert.match(forgedOut, /"permissionDecision":"deny"/, `forged subdirectory .git must not escape enclosing ADLC repo: ${forgedOut}`);
 });

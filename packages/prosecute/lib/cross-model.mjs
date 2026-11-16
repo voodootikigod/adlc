@@ -17,8 +17,8 @@
 // cross-model-gate.yml, which lets the key verify signatures without ever exposing it
 // to PR-controlled code.)
 
-import { dirname } from 'node:path';
-import { isChangeSetRevision, changeSetBase, changeSetDigest } from '@adlc/core';
+import { dirname, resolve } from 'node:path';
+import { ADLC_DIR, isChangeSetRevision, changeSetBase, changeSetDigest } from '@adlc/core';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
 // Two independent defenses on the read side: verify() proves the append-only chain
 // was not corrupted-and-skipped to drop a revocation (#326 Codex F2); verifyEntrySig()
@@ -216,10 +216,11 @@ export function carryForwardCrossModelReview({ ticket, fromRevision, revision, d
   // guessed at. The forest-wide revocation check below (after a genuine prior
   // approve is confirmed) is a separate matter: it does not need a total
   // order, only forest-wide membership, so it reads every segment regardless.
-  const forest = readManifestForest(dir);
+  const effectiveDir = resolve(dir ?? ADLC_DIR);
+  const forest = readManifestForest(effectiveDir);
   let recovered;
   try {
-    recovered = recoverOpenSegment(dir, { cwd: dirname(dir) });
+    recovered = recoverOpenSegment(effectiveDir, { cwd: dirname(effectiveDir) });
   } catch (error) {
     throw new Error(`carry-forward refused: ${error.message}`);
   }

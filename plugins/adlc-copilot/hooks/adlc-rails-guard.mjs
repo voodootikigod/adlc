@@ -36,7 +36,14 @@ import { realpathSync, writeSync } from 'node:fs';
 import { isAbsolute, resolve, dirname, basename } from 'node:path';
 import { loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
 import { resolveRailPath } from './generated-railpath.mjs';
-import { findInnermostCheckoutRoot, extractToolWorkdir, SHELL_WORKDIR_KEYS } from './generated-workspace-root.mjs';
+import {
+  findInnermostCheckoutRoot,
+  preferInnermostCheckout,
+  isPathInside,
+  extractToolWorkdir,
+  hasConflictingToolWorkdirs,
+  SHELL_WORKDIR_KEYS,
+} from './generated-workspace-root.mjs';
 import {
   resolveActiveTicketId as resolveActiveTicketIdCanonical,
   resolveActiveTicketAgainst,
@@ -179,6 +186,19 @@ function collectCommandText(value, out = []) {
   return out;
 }
 
+const TOOL_INPUT_BAG_KEYS = ['tool_input', 'toolInput', 'args', 'arguments', 'input', 'params', 'parameters'];
+
+function hasShellWorkdirConflict(value, baseDir) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (hasConflictingToolWorkdirs(value, baseDir) && !toolName(value)) {
+    return true;
+  }
+  for (const bagKey of TOOL_INPUT_BAG_KEYS) {
+    if (hasConflictingToolWorkdirs(value[bagKey], baseDir)) return true;
+  }
+  return false;
+}
+
 function firstShellWorkdir(value) {
   if (!value || typeof value !== 'object') return null;
   if (Array.isArray(value)) {
@@ -189,12 +209,13 @@ function firstShellWorkdir(value) {
     return null;
   }
   // Prefer the tool's own input/args bag over the outer hook envelope's `payload.cwd`
-  for (const bagKey of ['tool_input', 'toolInput', 'args', 'arguments', 'input', 'params', 'parameters']) {
+  for (const bagKey of TOOL_INPUT_BAG_KEYS) {
     const fromBag = extractToolWorkdir(value[bagKey]);
     if (fromBag) return fromBag;
   }
+  const isEnvelope = Boolean(toolName(value));
   for (const [key, child] of Object.entries(value)) {
-    if (key === 'cwd' && (value.tool_name !== undefined || value.toolName !== undefined || value.tool_input !== undefined)) {
+    if (isEnvelope && SHELL_WORKDIR_KEYS.includes(key)) {
       continue;
     }
     if (SHELL_WORKDIR_KEYS.includes(key) && typeof child === 'string' && child.trim().length > 0) {
@@ -322,10 +343,10 @@ function exceedsDepth(rootNode, maxDepth) {
   return false;
 }
 
-function normalizePath(path, baseCwd = root) {
+function normalizePath(path, baseCwd = root, repoRoot = root) {
   const normalized = path.replaceAll('\\', '/');
   const candidate = resolve(baseCwd, normalized);
-  const projectRelative = resolveRailPath(candidate, root);
+  const projectRelative = resolveRailPath(candidate, repoRoot);
   return projectRelative.startsWith('..') ? normalized : projectRelative;
 }
 
@@ -363,44 +384,82 @@ if (explicitEnforcement !== undefined && explicitEnforcement !== '1') {
   fail('ADLC_P4_ENFORCEMENT must be 0, 1, or unset');
 }
 
-const activeTicket = resolveActiveTicketId(root);
-const ticketId = activeTicket.id;
-if (!ticketId) {
-  if (explicitEnforcement === '1') fail('ADLC_P4_ENFORCEMENT=1 but no active ticket source resolved');
-  notice('P4 rail hook inactive: no current ticket selected');
-  process.exit(0);
-}
-
-let snapshot;
-try { snapshot = loadTicketStoreReadOnly({ root, env: process.env }); }
-catch (error) { fail(`ticket store failed to load: ${error.message}`); }
-const tickets = snapshot.tickets;
-
-const ticket = tickets.find((t) => t.id === ticketId);
-if (!ticket) fail(`unknown active ticket: ${ticketId}`);
-// Re-resolve against the loaded store so the pinned ticketHash is verified by the
-// same contract every other reader uses. allowLegacyPointer keeps the documented
-// 1.x bridge: a pointer that pins no hash still resolves (this harness never
-// required one), but a hash that IS present is always verified.
-const activeAgainstStore = resolveActiveTicketAgainst(snapshot, { root, env: process.env, allowLegacyPointer: true });
-if (!activeAgainstStore.ok) fail(activeAgainstStore.message);
-const ticketsPath = process.env.ADLC_TICKET_STORE ?? process.env.ADLC_TICKETS ?? (snapshot.backend === 'directory' ? '.adlc/tickets' : '.adlc/tickets.json');
-const declaredRails = ticket.rails ?? [];
-if (explicitEnforcement !== '1' && ticket.completed === true) {
-  notice(`P4 rail hook inactive: ticket ${ticketId} is completed`);
-  process.exit(0);
-}
-if (declaredRails.length === 0) {
-  if (explicitEnforcement === '1') fail(`ticket ${ticketId} has no rails`);
-  notice(`P4 rail hook inactive: ticket ${ticketId} has no rails`);
-  process.exit(0);
-}
-const rails = [...declaredRails, snapshot.backend === 'directory' ? '.adlc/tickets/**' : normalizePath(ticketsPath), '.adlc/current-ticket.json'];
-
 const rawPaths = collectPaths(payload);
-const paths = Array.from(rawPaths).map((path) => normalizePath(path, toolCwd));
 const shellInvocations = collectShellInvocations(payload);
 const shellTool = shellInvocations.length > 0;
+
+function loadCheckoutRails(checkoutRoot) {
+  const activeTicket = resolveActiveTicketId(checkoutRoot);
+  const ticketId = activeTicket.id;
+  if (!ticketId) return { active: false, reason: 'no-ticket' };
+  let snapshot;
+  try { snapshot = loadTicketStoreReadOnly({ root: checkoutRoot, env: process.env }); }
+  catch (error) { fail(`ticket store failed to load: ${error.message}`); }
+  const ticket = snapshot.tickets.find((t) => t.id === ticketId);
+  if (!ticket) fail(`unknown active ticket: ${ticketId}`);
+  const activeAgainstStore = resolveActiveTicketAgainst(snapshot, { root: checkoutRoot, env: process.env, allowLegacyPointer: true });
+  if (!activeAgainstStore.ok) fail(activeAgainstStore.message);
+  const ticketsPath = process.env.ADLC_TICKET_STORE ?? process.env.ADLC_TICKETS ?? (snapshot.backend === 'directory' ? '.adlc/tickets' : '.adlc/tickets.json');
+  const declaredRails = ticket.rails ?? [];
+  if (explicitEnforcement !== '1' && ticket.completed === true) {
+    return { active: false, reason: 'completed', ticketId };
+  }
+  if (declaredRails.length === 0) {
+    return { active: false, reason: 'no-rails', ticketId };
+  }
+  const rails = [
+    ...declaredRails,
+    snapshot.backend === 'directory' ? '.adlc/tickets/**' : normalizePath(ticketsPath, checkoutRoot, checkoutRoot),
+    '.adlc/current-ticket.json',
+  ];
+  return { active: true, ticketId, rails };
+}
+
+const primaryState = loadCheckoutRails(root);
+const absProbeTargets = [
+  ...Array.from(rawPaths).map((p) => resolve(toolCwd, p)),
+  ...shellInvocations.map(({ workdir }) => (workdir ? resolve(toolCwd, workdir) : toolCwd)),
+];
+const nestedRoots = new Set();
+for (const absTarget of absProbeTargets) {
+  if (!isPathInside(absTarget, root)) continue;
+  const inner = preferInnermostCheckout(root, [absTarget], {
+    storeOverride,
+    allowFileStart: true,
+    preserveSpelling: true,
+  });
+  if (inner && inner !== root) nestedRoots.add(inner);
+}
+const nestedStates = new Map();
+for (const nr of nestedRoots) {
+  const st = loadCheckoutRails(nr);
+  if (st.active) nestedStates.set(nr, st);
+}
+
+if (!primaryState.active && nestedStates.size === 0) {
+  if (primaryState.reason === 'no-ticket') {
+    if (explicitEnforcement === '1') fail('ADLC_P4_ENFORCEMENT=1 but no active ticket source resolved');
+    notice('P4 rail hook inactive: no current ticket selected');
+    process.exit(0);
+  }
+  if (primaryState.reason === 'completed') {
+    notice(`P4 rail hook inactive: ticket ${primaryState.ticketId} is completed`);
+    process.exit(0);
+  }
+  if (explicitEnforcement === '1') fail(`ticket ${primaryState.ticketId} has no rails`);
+  notice(`P4 rail hook inactive: ticket ${primaryState.ticketId} has no rails`);
+  process.exit(0);
+}
+
+if (shellTool && hasShellWorkdirConflict(payload, toolCwd)) {
+  fail('shell payload specifies conflicting working directories');
+}
+
+const resolvedTargets = Array.from(rawPaths).map((path) => ({
+  raw: path,
+  base: toolCwd,
+  abs: resolve(toolCwd, path),
+}));
 let shellMutating = false;
 let cwdChangingShellMutation = false;
 let expandingShellMutation = false;
@@ -433,7 +492,9 @@ if (shellTool) {
       fail('mutating shell payload did not include literal editable paths');
     }
     const shellBaseCwd = workdir ? resolve(toolCwd, workdir) : toolCwd;
-    for (const path of commandPaths) paths.push(normalizePath(path, shellBaseCwd));
+    for (const path of commandPaths) {
+      resolvedTargets.push({ raw: path, base: shellBaseCwd, abs: resolve(shellBaseCwd, path) });
+    }
   }
 }
 
@@ -444,7 +505,7 @@ if (expandingShellMutation) {
   fail('mutating shell payload uses shell expansion; use a structured edit tool or literal project-relative shell target paths');
 }
 
-if (paths.length === 0) {
+if (resolvedTargets.length === 0) {
   if (shellTool && !shellMutating && shellInvocations.length > 0 && shellInvocations.every(({ commandText }) => shellIsPositivelyReadOnly(commandText))) {
     notice('shell command has no editable rail targets');
     process.exit(0);
@@ -455,7 +516,20 @@ if (paths.length === 0) {
   }
   fail(shellTool ? 'shell payload did not include literal editable paths or a known read-only command' : 'active hook payload did not include any editable paths');
 }
-const blocked = paths.filter((path) => rails.some((rail) => railMatchesPath(rail, path)));
-if (blocked.length > 0) fail(`blocked rail edit for ${ticketId}: ${blocked.join(', ')}`);
+
+if (primaryState.active) {
+  const primaryPaths = resolvedTargets
+    .filter(({ abs }) => !Array.from(nestedRoots).some((nr) => isPathInside(abs, nr)))
+    .map(({ raw, base }) => normalizePath(raw, base, root));
+  const blocked = primaryPaths.filter((path) => primaryState.rails.some((rail) => railMatchesPath(rail, path)));
+  if (blocked.length > 0) fail(`blocked rail edit for ${primaryState.ticketId}: ${blocked.join(', ')}`);
+}
+for (const [nr, st] of nestedStates.entries()) {
+  const nestedPaths = resolvedTargets
+    .filter(({ abs }) => isPathInside(abs, nr))
+    .map(({ raw, base }) => normalizePath(raw, base, nr));
+  const blocked = nestedPaths.filter((path) => st.rails.some((rail) => railMatchesPath(rail, path)));
+  if (blocked.length > 0) fail(`blocked rail edit for ${st.ticketId}: ${blocked.join(', ')}`);
+}
 
 process.exit(0);

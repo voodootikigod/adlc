@@ -3215,3 +3215,68 @@ test('isVerificationCommand: rejects node --test when shadowed by node_modules/.
   const isVer = isVerificationCommand('node --test', { root, toolArgs: { Cwd: root } });
   assert.equal(isVer, false, 'node_modules/.bin/node binary must not shadow system node runner');
 });
+
+test('onStop: rejects verification command run against a foreign clean ADLC repo or omitted Cwd from a subdirectory payload.cwd', (t) => {
+  const { root, env } = setupTempRepo(t, { enforcement: '1' });
+  const { root: foreignCleanRepo } = setupTempRepo(t, { enforcement: '1' });
+
+  // 1. Cwd pointing at a different clean ADLC repository cannot satisfy Stop verification for `root`
+  const foreignTranscript = join(root, 'foreign-transcript.jsonl');
+  writeFileSync(
+    foreignTranscript,
+    [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'write_to_file', args: { TargetFile: join(root, 'src', 'app.js') } }],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test', Cwd: foreignCleanRepo } }],
+        exit_code: 0,
+      }),
+    ].join('\n') + '\n'
+  );
+  const foreignPayload = {
+    workspacePaths: [root],
+    transcriptPath: foreignTranscript,
+    conversationId: 'sess-foreign-verify',
+  };
+  preInvocation(foreignPayload, { env });
+  const tracker = createPersistentTracker(root, env);
+  tracker.recordToolCall('sess-foreign-verify', { isMutating: true });
+  tracker.recordToolCall('sess-foreign-verify', { isMutating: true });
+  const foreignStop = onStop(foreignPayload, { env });
+  assert.equal(foreignStop.decision, 'continue');
+  assert.match(foreignStop.reason, /unverified file edits/i);
+
+  // 2. Omitted Cwd when payload.cwd is a subdirectory inside `root` does NOT satisfy full-repo verification
+  const subDir = join(root, 'src');
+  mkdirSync(subDir, { recursive: true });
+  const subTranscript = join(root, 'subdir-implicit-transcript.jsonl');
+  writeFileSync(
+    subTranscript,
+    [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'write_to_file', args: { TargetFile: join(root, 'src', 'app.js') } }],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }],
+        exit_code: 0,
+      }),
+    ].join('\n') + '\n'
+  );
+  const subPayload = {
+    workspacePaths: [root],
+    cwd: subDir,
+    transcriptPath: subTranscript,
+    conversationId: 'sess-subdir-implicit',
+  };
+  preInvocation(subPayload, { env });
+  tracker.recordToolCall('sess-subdir-implicit', { isMutating: true });
+  tracker.recordToolCall('sess-subdir-implicit', { isMutating: true });
+  const subStop = onStop(subPayload, { env });
+  assert.equal(subStop.decision, 'continue');
+  assert.match(subStop.reason, /unverified file edits/i);
+});

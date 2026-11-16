@@ -92,4 +92,46 @@ test('Codex rails-guard and build-gate resolve payload.cwd subdirectories and ne
   });
   assert.equal(bgRes.status, 2, bgRes.stderr);
   assert.match(bgRes.stderr, /high-risk/);
+
+  // Envelope using { cwd, tool, args } must NOT double-join payload.cwd as shell workdir
+  const toolEnvelopeRes = spawnHook([RAILS_HOOK], {
+    cwd: outsideCwd,
+    input: JSON.stringify({
+      cwd: subDir,
+      tool: 'bash',
+      args: { cmd: 'rm frozen.mjs' },
+    }),
+    encoding: 'utf8',
+    env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' },
+  });
+  assert.equal(toolEnvelopeRes.status, 2, toolEnvelopeRes.stderr);
+  assert.match(toolEnvelopeRes.stderr, /blocked rail edit/);
+
+  // Conflicting shell workdirs fail closed
+  const conflictRes = spawnHook([RAILS_HOOK], {
+    cwd: outsideCwd,
+    input: JSON.stringify({
+      cwd: lane,
+      tool_name: 'bash',
+      tool_input: { command: 'rm ok.mjs', Cwd: '.', dir_path: subDir },
+    }),
+    encoding: 'utf8',
+    env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' },
+  });
+  assert.equal(conflictRes.status, 2, conflictRes.stderr);
+  assert.match(conflictRes.stderr, /conflicting working directories/);
+
+  // Editing a nested worktree's frozen rail from outer primary payload.cwd (even with no ticket active in primary) blocks
+  const crossWtRes = spawnHook([RAILS_HOOK], {
+    cwd: outsideCwd,
+    input: JSON.stringify({
+      cwd: primary,
+      tool_name: 'edit',
+      tool_input: { file_path: '.worktrees/lane-a/packages/sub/frozen.mjs' },
+    }),
+    encoding: 'utf8',
+    env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' },
+  });
+  assert.equal(crossWtRes.status, 2, crossWtRes.stderr);
+  assert.match(crossWtRes.stderr, /blocked rail edit/);
 });

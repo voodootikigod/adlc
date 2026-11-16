@@ -112,4 +112,36 @@ test('checkToolCall extracts alternative shell workdir keys (Cwd, dir_path, work
     });
     assert.equal(allowed.decision, 'allow', key);
   }
+
+  // Conflicting workdir keys fail closed
+  const conflicted = checkToolCall({
+    tool: 'bash',
+    args: { command: 'rm src/free.mjs', Cwd: '.', workdir: 'src' },
+    root,
+    env,
+  });
+  assert.equal(conflicted.decision, 'deny');
+  assert.match(conflicted.reason, /conflicting working directories/);
+
+  // Subdirectory launch cwd denies relative shell mutation without workdir and catches relative structured write
+  mkdirSync(join(root, 'src'), { recursive: true });
+  const subShellDenied = checkToolCall({
+    tool: 'bash',
+    args: { command: 'rm frozen.mjs' },
+    root,
+    cwd: join(root, 'src'),
+    env,
+  });
+  assert.equal(subShellDenied.decision, 'deny');
+  assert.match(subShellDenied.reason, /changes cwd/);
+
+  const subWriteDenied = checkToolCall({
+    tool: 'write',
+    args: { path: 'frozen.mjs', content: 'tamper' },
+    root,
+    cwd: join(root, 'src'),
+    env,
+  });
+  assert.equal(subWriteDenied.decision, 'deny');
+  assert.match(subWriteDenied.reason, /frozen rail/);
 });

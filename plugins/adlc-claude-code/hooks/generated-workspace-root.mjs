@@ -42,6 +42,40 @@ function readSmallRegularFile(filePath) {
 }
 
 /**
+ * Extract all explicit non-empty working directory strings from a tool
+ * invocation's arguments object across all supported harness schemas.
+ *
+ * @param {unknown} args
+ * @returns {string[]}
+ */
+export function extractAllToolWorkdirs(args) {
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return [];
+  const record = /** @type {Record<string, unknown>} */ (args);
+  /** @type {string[]} */
+  const out = [];
+  const seenRaw = new Set();
+  const pushVal = (val) => {
+    if (typeof val !== 'string') return;
+    const trimmed = val.trim();
+    if (!trimmed || seenRaw.has(trimmed)) return;
+    seenRaw.add(trimmed);
+    out.push(trimmed);
+  };
+  for (const key of SHELL_WORKDIR_KEYS) {
+    pushVal(record[key]);
+  }
+  for (const containerKey of WORKDIR_CONTAINERS) {
+    const nested = record[containerKey];
+    if (!nested || typeof nested !== 'object' || Array.isArray(nested)) continue;
+    const nestedRecord = /** @type {Record<string, unknown>} */ (nested);
+    for (const key of SHELL_WORKDIR_KEYS) {
+      pushVal(nestedRecord[key]);
+    }
+  }
+  return out;
+}
+
+/**
  * Extract the first explicit non-empty working directory string from a tool
  * invocation's arguments object across all supported harness schemas.
  *
@@ -49,22 +83,27 @@ function readSmallRegularFile(filePath) {
  * @returns {string | null}
  */
 export function extractToolWorkdir(args) {
-  if (!args || typeof args !== 'object' || Array.isArray(args)) return null;
-  const record = /** @type {Record<string, unknown>} */ (args);
-  for (const key of SHELL_WORKDIR_KEYS) {
-    const val = record[key];
-    if (typeof val === 'string' && val.trim().length > 0) return val.trim();
-  }
-  for (const containerKey of WORKDIR_CONTAINERS) {
-    const nested = record[containerKey];
-    if (!nested || typeof nested !== 'object' || Array.isArray(nested)) continue;
-    const nestedRecord = /** @type {Record<string, unknown>} */ (nested);
-    for (const key of SHELL_WORKDIR_KEYS) {
-      const val = nestedRecord[key];
-      if (typeof val === 'string' && val.trim().length > 0) return val.trim();
-    }
-  }
-  return null;
+  return extractAllToolWorkdirs(args)[0] ?? null;
+}
+
+/**
+ * True when a tool's arguments supply two or more working-directory keys that
+ * resolve to distinct canonical directories relative to `baseDir` (for example
+ * `{ Cwd: ".", workdir: "test" }`). Gates fail closed on conflicting workdir
+ * claims so a benign first key can never mask a different runtime key.
+ *
+ * @param {unknown} args
+ * @param {string} [baseDir]
+ * @returns {boolean}
+ */
+export function hasConflictingToolWorkdirs(args, baseDir = process.cwd()) {
+  const candidates = extractAllToolWorkdirs(args);
+  if (candidates.length <= 1) return false;
+  const anchor = typeof baseDir === 'string' && baseDir.trim() ? baseDir : process.cwd();
+  const resolved = new Set(
+    candidates.map((w) => canonicalizePath(isAbsolute(w) ? w : resolve(anchor, w)))
+  );
+  return resolved.size > 1;
 }
 
 /**
@@ -165,12 +204,18 @@ export function inspectGitCheckout(dir) {
           return { kind: 'worktree', gitDir: realGitDir, commonGitDir: realCommon };
         }
       }
+      if (existsSync(join(realGitDir, 'HEAD')) || existsSync(join(realGitDir, 'commondir'))) {
+        return { kind: 'gitfile', gitDir: realGitDir, commonGitDir: null };
+      }
+    }
+    if (existsSync(join(realGitDir, 'HEAD')) || existsSync(join(realGitDir, 'commondir'))) {
+      return { kind: 'gitfile', gitDir: realGitDir, commonGitDir: null };
     }
   } catch {
-    // Fall through to syntactic gitfile classification.
+    return null;
   }
 
-  return { kind: 'gitfile', gitDir: canonicalizePath(resolvedGitDir), commonGitDir: null };
+  return null;
 }
 
 /**
@@ -304,10 +349,12 @@ export function findInnermostCheckoutRoot(startPath, options = {}) {
 
   // $HOME (even when a dotfiles git repo) never overrides a distinct git repo
   // cloned beneath $HOME; it only governs non-repo dotfiles paths beneath it.
+  const externalStoreActive = hasExternalAbsoluteStore(storeOverride);
   const adlcRepoAbove = effectiveChain.map(() => false);
   for (let i = effectiveChain.length - 2; i >= 0; i -= 1) {
     const above = effectiveChain[i + 1];
-    adlcRepoAbove[i] = adlcRepoAbove[i + 1] || (!above.atHome && above.checkout && above.store);
+    const aboveHasStore = above.store || above.remembered || externalStoreActive;
+    adlcRepoAbove[i] = adlcRepoAbove[i + 1] || (!above.atHome && above.checkout && aboveHasStore);
   }
 
   let outermost = null;

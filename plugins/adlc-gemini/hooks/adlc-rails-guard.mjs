@@ -38,8 +38,10 @@ import { checkRail, classifyTool, isShellTool, hasCommandLineArgs, hasCodeExecut
 export { extractCommandString };
 import { loadTicketStoreReadOnly } from '../generated-ticket-reader.mjs';
 import {
+  canonicalizePath,
   extractToolWorkdir,
   findInnermostCheckoutRoot,
+  hasConflictingToolWorkdirs,
   preferInnermostCheckout,
   isPathInside,
 } from '../generated-workspace-root.mjs';
@@ -101,9 +103,19 @@ export function extractFilePaths(payload) {
       if (key === 'CommandLine' || key === 'command' || key === 'cmd' || key === 'code' || key === 'CodeContent' || key === 'content' || key === 'ReplacementContent' || key === 'TargetContent' || key === 'Instruction' || key === 'Description' || key === 'Prompt' || key === 'Message' || key === 'message') {
         continue;
       }
+      const isUriKey = key.toLowerCase() === 'uri';
       const isPathKey = PATH_KEYS.some((pk) => pk.toLowerCase() === key.toLowerCase()) || (parentKey && PATH_KEYS.some((pk) => pk.toLowerCase() === parentKey.toLowerCase()));
       if (typeof v === 'string') {
-        if (isPathKey && v.trim()) out.add(v.trim());
+        const trimmed = v.trim();
+        if (isPathKey && trimmed) {
+          out.add(trimmed.startsWith('file://') ? trimmed.slice('file://'.length) : trimmed);
+        } else if (isUriKey && trimmed) {
+          if (trimmed.startsWith('file://')) {
+            out.add(trimmed.slice('file://'.length));
+          } else if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) {
+            out.add(trimmed);
+          }
+        }
       } else if (Array.isArray(v)) {
         for (const e of v) {
           if (typeof e === 'string' && isPathKey && e.trim()) out.add(e.trim());
@@ -466,21 +478,54 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
     const isShell = isShellTool(tool, args);
     const cmd = isShell ? extractCommandString(args) : '';
 
+    if (isShell && hasConflictingToolWorkdirs(args, wsRoot ?? nonPluginProcessCwd() ?? process.cwd())) {
+      return deny('shell command specifies conflicting working directories — failing closed');
+    }
+
     if (cmd) {
-      const cmdCwd = extractCwdFromArgs(args) ?? args?.Cwd ?? args?.cwd;
-      const cmdRoot = (cmdCwd && typeof cmdCwd === 'string' ? (isAbsolute(cmdCwd) ? cmdCwd : (wsRoot ? resolve(wsRoot, cmdCwd) : null)) : null) ?? wsRoot ?? null;
+      const cmdCwd = extractCwdFromArgs(args);
+      const declaredWs = WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : [payload?.[k]]))
+        .find((s) => typeof s === 'string' && s.trim());
+      const resolvedDeclaredWs = declaredWs
+        ? (isAbsolute(declaredWs.trim()) ? declaredWs.trim() : resolve(nonPluginProcessCwd() ?? process.cwd(), declaredWs.trim()))
+        : null;
+      const transcriptDiscoveredRoot = !wsRoot && !resolvedDeclaredWs
+        ? (() => {
+            const tp = resolveTranscriptPath({ payload, conversationId: resolveSessionId({ payload, env }), env });
+            return tp ? (findAdlcRoot(tp, env) ?? discoverRootFromTranscriptRecords(parseTranscriptRecords(tp), env)) : null;
+          })()
+        : null;
+      const shellWorkspaceBound =
+        wsRoot ??
+        resolvedDeclaredWs ??
+        transcriptDiscoveredRoot ??
+        (cmdCwd && typeof cmdCwd === 'string' && isAbsolute(cmdCwd) ? findAdlcRoot(cmdCwd, env) : null);
+      if (enforcing && typeof cmdCwd === 'string' && cmdCwd.trim()) {
+        if (!shellWorkspaceBound) {
+          return deny('shell command attempts to access filesystem paths outside workspace — strictly prohibited under enforcement');
+        }
+        const candidateCmdRoot = isAbsolute(cmdCwd) ? cmdCwd : resolve(shellWorkspaceBound, cmdCwd);
+        if (!isPathInside(candidateCmdRoot, shellWorkspaceBound)) {
+          return deny('shell command attempts to access filesystem paths outside workspace — strictly prohibited under enforcement');
+        }
+      }
+      const cmdRoot = (cmdCwd && typeof cmdCwd === 'string' ? (isAbsolute(cmdCwd) ? cmdCwd : (shellWorkspaceBound ? resolve(shellWorkspaceBound, cmdCwd) : null)) : null) ?? shellWorkspaceBound ?? null;
       const effectiveRoot = cmdRoot ?? process.cwd();
+      const containmentRoot = shellWorkspaceBound ?? effectiveRoot;
       // CRITICAL: Master key and trust-root secret access is strictly prohibited under ALL modes
-      if (isTrustRootSecretAccess(cmd, overrideEscaped) && !isReadonlyCommand(cmd, { root: effectiveRoot, env })) {
+      if (isTrustRootSecretAccess(cmd, overrideEscaped) && !isReadonlyCommand(cmd, { root: containmentRoot, cwd: effectiveRoot, env })) {
         return deny('shell modification of ticket store or trust-root rails is strictly prohibited');
       }
-      if (hasShellTrustRootSecretAccess(cmd, { root: effectiveRoot, env })) {
+      if (
+        hasShellTrustRootSecretAccess(cmd, { root: containmentRoot, cwd: effectiveRoot, env }) ||
+        (shellWorkspaceBound && effectiveRoot !== shellWorkspaceBound && hasShellTrustRootSecretAccess(cmd, { root: shellWorkspaceBound, cwd: shellWorkspaceBound, env }))
+      ) {
         return deny('shell access to master key or trust-root session secrets is strictly prohibited');
       }
-      if (hasShellSymlinkOrSecretEscape(cmd, { root: effectiveRoot, env })) {
+      if (hasShellSymlinkOrSecretEscape(cmd, { root: containmentRoot, cwd: effectiveRoot, env })) {
         return deny('shell command accesses or indirects through symlink targeting trust root or escaping workspace');
       }
-      if (enforcing && isUnauthorizedWorkspaceEscape(cmd, { root: cmdRoot })) {
+      if (enforcing && isUnauthorizedWorkspaceEscape(cmd, { root: shellWorkspaceBound, cwd: cmdRoot })) {
         return deny('shell command attempts to access filesystem paths outside workspace — strictly prohibited under enforcement');
       }
     }
@@ -589,10 +634,12 @@ export function runFromStdin(raw, envArg = process.env) {
   const shellCwd = extractedWorkdir;
   const fallbackProcCwd = nonPluginProcessCwd();
   const actualCwd = (shellCwd && typeof shellCwd === 'string' ? (isAbsolute(shellCwd) ? shellCwd : resolve(wsRoot ?? fallbackProcCwd ?? process.cwd(), shellCwd)) : null) ?? wsRoot ?? fallbackProcCwd ?? process.cwd();
-  const repoRoot = (shellCwd && typeof shellCwd === 'string' ? findAdlcRoot(actualCwd, env) : null) ?? wsRoot ?? Array.from(distinctRoots)[0] ?? (env === process.env && fallbackProcCwd ? findAdlcRoot(fallbackProcCwd, env) : null);
+  const priorDiscoveredRoot = Array.from(distinctRoots)[0] ?? null;
+  const repoRoot = (shellCwd && typeof shellCwd === 'string' ? findAdlcRoot(actualCwd, env) : null) ?? wsRoot ?? priorDiscoveredRoot ?? (env === process.env && fallbackProcCwd ? findAdlcRoot(fallbackProcCwd, env) : null);
   if (repoRoot) distinctRoots.add(repoRoot);
-  const allowImplicitCwd = hasUnambiguousWorkspaceCwd(payload, env);
-  const isMut = isShell ? (!isReadonlyCommand(cmd, { root: actualCwd, env }) && !isVerificationCommand(cmd, { root: repoRoot, toolArgs: args, allowImplicitCwd })) : cls !== 'readonly';
+  const verifyRoot = wsRoot ?? priorDiscoveredRoot ?? repoRoot;
+  const allowImplicitCwd = hasUnambiguousWorkspaceCwd(payload, env, verifyRoot);
+  const isMut = isShell ? (!isReadonlyCommand(cmd, { root: verifyRoot ?? actualCwd, cwd: actualCwd, env }) && !isVerificationCommand(cmd, { root: verifyRoot, toolArgs: args, allowImplicitCwd })) : cls !== 'readonly';
 
   for (const root of distinctRoots) {
     const tracker = getTracker(root);
@@ -643,22 +690,51 @@ export function printStatus(root = process.cwd(), env = process.env, payload = {
   console.log(`Flail Status: ${flail.verdict.toUpperCase()}${flail.summary ? ` (${flail.summary})` : ''}`);
 }
 
-export function hasUnambiguousWorkspaceCwd(payload, env = process.env) {
+export function hasUnambiguousWorkspaceCwd(payload, env = process.env, expectedRoot = null) {
+  const baseCwd = nonPluginProcessCwd() ?? process.cwd();
+  const toCanonical = (s) =>
+    canonicalizePath(isAbsolute(s.trim()) ? resolve(s.trim()) : resolve(baseCwd, s.trim()));
   const declared = WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : [payload?.[k]]))
     .filter((s) => typeof s === 'string' && s.trim())
-    .map((s) => realpathOr(isAbsolute(s.trim()) ? resolve(s.trim()) : resolve(nonPluginProcessCwd() ?? process.cwd(), s.trim())));
-  const uniqueDeclared = new Set(declared);
-  if (uniqueDeclared.size <= 1) return true;
-  const explicitSingle = [
+    .map(toCanonical);
+  const uniqueDeclared = [...new Set(declared)];
+
+  const explicitPayloadDir = [
     payload?.cwd,
     payload?.workingDirectory,
     payload?.working_directory,
     payload?.workspaceRoot,
+  ].find((s) => typeof s === 'string' && s.trim());
+
+  const explicitEnvWorkspace = [
     env?.AGY_WORKSPACE,
     env?.ANTIGRAVITY_WORKSPACE,
     env?.GEMINI_WORKSPACE,
-  ].some((s) => typeof s === 'string' && s.trim().length > 0);
-  return explicitSingle;
+    env?.PROJECT_ROOT,
+    env?.WORKSPACE_ROOT,
+  ].find((s) => typeof s === 'string' && s.trim());
+
+  if (uniqueDeclared.length > 1 && !explicitPayloadDir && !explicitEnvWorkspace) {
+    return false;
+  }
+
+  if (typeof expectedRoot === 'string' && expectedRoot.trim()) {
+    const canonicalExpected = canonicalizePath(resolve(expectedRoot.trim()));
+    const implicitDir =
+      explicitPayloadDir ??
+      (uniqueDeclared.length === 1 ? uniqueDeclared[0] : null) ??
+      explicitEnvWorkspace ??
+      (env === process.env ? nonPluginProcessCwd() : null) ??
+      env?.PWD ??
+      env?.INIT_CWD ??
+      null;
+    if (!implicitDir || typeof implicitDir !== 'string' || !implicitDir.trim()) {
+      return false;
+    }
+    return toCanonical(implicitDir) === canonicalExpected;
+  }
+
+  return true;
 }
 
 export function resolveWorkspaceRoot(payload, env = process.env) {
@@ -935,6 +1011,7 @@ export function isVerificationCommand(
   // MUST resolve to the repository root itself (never a subdirectory or sibling).
   // When omitted (Antigravity's run_command schema has no Cwd parameter), bind to
   // realRoot iff the workspace root is unambiguous (not an ambiguous multi-root workspace).
+  if (hasConflictingToolWorkdirs(toolArgs, root ?? process.cwd())) return false;
   const cwd = extractCwdFromArgs(toolArgs);
   if (typeof cwd === 'string' && cwd) {
     if (!root || !realRoot) return false;
@@ -1000,7 +1077,18 @@ function isAllowedSystemExecOrNullPath(p) {
   );
 }
 
-export function isUnauthorizedWorkspaceEscape(cmd, { root = null } = {}) {
+function isTrustedCurrentExecPath(p) {
+  if (!p || !process.execPath) return false;
+  const normExec = process.execPath.replace(/\\/g, '/');
+  if (p === normExec) return true;
+  try {
+    return p === realpathSync(process.execPath).replace(/\\/g, '/');
+  } catch {
+    return false;
+  }
+}
+
+export function isUnauthorizedWorkspaceEscape(cmd, { root = null, cwd = root } = {}) {
   if (!cmd || typeof cmd !== 'string') return false;
   const norm = cmd.replace(/\\/g, '/');
 
@@ -1020,8 +1108,13 @@ export function isUnauthorizedWorkspaceEscape(cmd, { root = null } = {}) {
   }
 
   const hasValidRoot = typeof root === 'string' && root.trim().length > 0;
-  const checkAbsPath = (candidate) => {
+  const effectiveCwd = typeof cwd === 'string' && cwd.trim().length > 0 ? cwd : root;
+  if (hasValidRoot && effectiveCwd && !isPathInside(effectiveCwd, root)) {
+    return true;
+  }
+  const checkAbsPath = (candidate, { isCommandToken = false } = {}) => {
     if (isAllowedSystemExecOrNullPath(candidate)) return false;
+    if (isCommandToken && isTrustedCurrentExecPath(candidate)) return false;
     if (hasValidRoot) {
       return !isPathInside(candidate, root);
     }
@@ -1029,22 +1122,18 @@ export function isUnauthorizedWorkspaceEscape(cmd, { root = null } = {}) {
   };
 
   // Token-level check (handles quoted arguments, --flag=/abs/path, and redirects like 2>/dev/null)
-  const tokens = tokenizeCommand(cmd);
-  const redirectMatches = cmd.match(/[0-9]*[><]+\s*([^<>&|;\s]+)/g);
-  if (redirectMatches) {
-    for (const rm of redirectMatches) {
-      const target = rm.replace(/^[0-9]*[><]+\s*/, '').trim();
-      if (target) tokens.push(target);
-    }
-  }
-  for (const rawToken of tokens) {
-    if (!rawToken || rawToken.length > 4096) continue;
-    let t = rawToken.replace(/^[0-9]*[><]+/, '').replace(/^--?[a-zA-Z0-9_-]+=/, '').trim();
-    if (t.startsWith('"') && t.endsWith('"') && t.length >= 2) t = t.slice(1, -1);
-    if (t.startsWith("'") && t.endsWith("'") && t.length >= 2) t = t.slice(1, -1);
-    if (!t || t.startsWith('-') || /^(;|&&|\|\||\|)$/.test(t)) continue;
+  const items = collectShellCandidateTokens(cmd);
+  const allowedCommandExecPaths = new Set();
+  for (const { rawToken: t, isCommandToken } of items) {
     if (t.startsWith('/') || /^[a-zA-Z]:[/\\]/.test(t)) {
-      if (checkAbsPath(t.replace(/\\/g, '/'))) return true;
+      const normT = t.replace(/\\/g, '/');
+      if (isCommandToken && isTrustedCurrentExecPath(normT)) {
+        allowedCommandExecPaths.add(normT);
+      }
+      if (checkAbsPath(normT, { isCommandToken })) return true;
+    } else if (hasValidRoot && effectiveCwd && (t.includes('/') || t.includes('\\')) && !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(t)) {
+      const resolvedRel = resolve(effectiveCwd, t);
+      if (!isPathInside(resolvedRel, root)) return true;
     }
   }
 
@@ -1053,6 +1142,7 @@ export function isUnauthorizedWorkspaceEscape(cmd, { root = null } = {}) {
   let match;
   while ((match = embeddedRegex.exec(norm)) !== null) {
     const absPath = match[1];
+    if (absPath && allowedCommandExecPaths.has(absPath) && match.index === 0) continue;
     if (absPath && checkAbsPath(absPath)) return true;
   }
 
@@ -1086,85 +1176,128 @@ export function isTrustRootSecretAccess(cmd, overrideEscaped = null) {
   return false;
 }
 
-export function hasShellTrustRootSecretAccess(cmd, { root = process.cwd(), env = process.env } = {}) {
+function collectShellCandidateTokens(cmd) {
+  const baseTokens = tokenizeCommand(cmd);
+  const items = [];
+  let expectingCommand = true;
+  for (const rawToken of baseTokens) {
+    if (!rawToken || rawToken.length > 4096) continue;
+    if (/^(;|&&|\|\||\|)$/.test(rawToken)) {
+      expectingCommand = true;
+      continue;
+    }
+    const inlineOutRedirect = /^[0-9]*>+/.test(rawToken);
+    if (!inlineOutRedirect && expectingCommand && /^[A-Za-z_][A-Za-z0-9_]*=/.test(rawToken)) {
+      const rhs = rawToken.slice(rawToken.indexOf('=') + 1).trim();
+      if (rhs) items.push({ rawToken: rhs, isOutRedirect: false, isCommandToken: false });
+      continue;
+    }
+    const hadFlagPrefix = /^--?[a-zA-Z0-9_-]+=/.test(rawToken);
+    let cleaned = rawToken.replace(/^[0-9]*[><]+/, '').replace(/^--?[a-zA-Z0-9_-]+=/, '').trim();
+    if (cleaned.startsWith('"') && cleaned.endsWith('"') && cleaned.length >= 2) cleaned = cleaned.slice(1, -1);
+    if (cleaned.startsWith("'") && cleaned.endsWith("'") && cleaned.length >= 2) cleaned = cleaned.slice(1, -1);
+    if (!cleaned || cleaned.startsWith('-')) continue;
+    const isCommandToken = expectingCommand && !inlineOutRedirect && !hadFlagPrefix;
+    if (isCommandToken) expectingCommand = false;
+    items.push({ rawToken: cleaned, isOutRedirect: inlineOutRedirect, isCommandToken });
+  }
+  const redirectMatches = cmd.match(/[0-9]*[><]+\s*([^<>&|;\s]+)/g);
+  if (redirectMatches) {
+    for (const rm of redirectMatches) {
+      const isOutRedirect = rm.includes('>');
+      let target = rm.replace(/^[0-9]*[><]+\s*/, '').trim();
+      if (target.startsWith('"') && target.endsWith('"') && target.length >= 2) target = target.slice(1, -1);
+      if (target.startsWith("'") && target.endsWith("'") && target.length >= 2) target = target.slice(1, -1);
+      if (target) {
+        items.push({ rawToken: target, isOutRedirect, isCommandToken: false });
+      }
+    }
+  }
+  return items;
+}
+
+export function hasShellTrustRootSecretAccess(cmd, { root = process.cwd(), cwd = root, env = process.env } = {}) {
   if (!cmd || typeof cmd !== 'string') return false;
 
   // Catch wildcard globs targeting dotfiles or candidate secret names, or unexpanded globs with file readers
   if (/\b(cat|head|tail|less|more|od|xxd|strings|source|\.)\s+.*[*?[\]{}]/i.test(cmd)) {
     return true;
   }
-  const tokens = tokenizeCommand(cmd);
-  const redirectTargets = new Set();
-  const redirectMatches = cmd.match(/[0-9]*[><]+\s*([^<>&|;\s]+)/g);
-  if (redirectMatches) {
-    for (const rm of redirectMatches) {
-      const isOutRedirect = rm.includes('>');
-      const target = rm.replace(/^[0-9]*[><]+\s*/, '').trim();
-      if (target) {
-        tokens.push(target);
-        if (isOutRedirect) redirectTargets.add(target);
-      }
-    }
+
+  const effectiveCwd = cwd ?? root;
+  const readonlyCmd = isReadonlyCommand(cmd, { root, cwd: effectiveCwd, env });
+  const normCmd = cmd.replace(/\\/g, '/');
+  if (!readonlyCmd && /(^|[\s=;,"'\/$.()[\]])(node_modules\/\.bin\/(node|mocha|jest|vitest|npm|npx|adlc)(\.exe|\.cmd|\.ps1)?|\.mocharc(\.(js|cjs|mjs|json|yaml|yml))?|jest\.config\.(js|cjs|mjs|ts|json)|vitest\.config\.(js|cjs|mjs|ts))(?=$|[\s=;,"'\/$.()[\]])/i.test(normCmd)) {
+    const itemsCheck = collectShellCandidateTokens(cmd);
+    const onlyInvokedAsCommand =
+      itemsCheck.length > 0 &&
+      !/[\r\n;&|<>\$`()={}]/.test(cmd) &&
+      itemsCheck.every((it) => it.isCommandToken || !/(node_modules\/\.bin\/|\.mocharc|jest\.config\.|vitest\.config\.)/i.test(it.rawToken.replace(/\\/g, '/')));
+    if (!onlyInvokedAsCommand) return true;
   }
 
-  for (const rawToken of tokens) {
-    if (!rawToken || rawToken.length > 4096) continue;
-    const isOutRedirect = redirectTargets.has(rawToken) || /^[0-9]*>+/.test(rawToken);
-    let t = rawToken.replace(/^[0-9]*[><]+/, '').replace(/^--?[a-zA-Z0-9_-]+=/, '').trim();
-    if (t.startsWith('"') && t.endsWith('"') && t.length >= 2) t = t.slice(1, -1);
-    if (t.startsWith("'") && t.endsWith("'") && t.length >= 2) t = t.slice(1, -1);
-    if (!t || t.startsWith('-') || /^(;|&&|\|\||\|)$/.test(t)) continue;
-
-    const absCandidate = isAbsolute(t) ? t : resolve(root, t);
+  const items = collectShellCandidateTokens(cmd);
+  for (const { rawToken: t, isOutRedirect, isCommandToken } of items) {
+    const absCandidate = isAbsolute(t) ? t : resolve(effectiveCwd, t);
+    const lexCanonical = canonicalizePath(absCandidate);
+    let realCanonical = lexCanonical;
     try {
       if (existsSync(absCandidate) || lstatSync(absCandidate).isSymbolicLink()) {
-        const canonical = realpathSync(absCandidate);
-        const checkFn = isOutRedirect ? isTrustRootOrSecretPath : isSecretStatePath;
-        if (checkFn(canonical, env)) {
-          return true;
-        }
+        realCanonical = realpathSync(absCandidate);
       }
     } catch {}
+
+    if (
+      isSecretStatePath(absCandidate, env) ||
+      isSecretStatePath(lexCanonical, env) ||
+      isSecretStatePath(realCanonical, env)
+    ) {
+      return true;
+    }
+
+    if (isOutRedirect || (!isCommandToken && !readonlyCmd)) {
+      if (
+        isTrustRootOrSecretPath(absCandidate, env) ||
+        isTrustRootOrSecretPath(lexCanonical, env) ||
+        isTrustRootOrSecretPath(realCanonical, env)
+      ) {
+        return true;
+      }
+    } else if (isCommandToken && (t.includes('/') || t.includes('\\'))) {
+      const normLex = lexCanonical.replace(/\\/g, '/');
+      if (
+        root &&
+        isPathInside(lexCanonical, root) &&
+        /(^|\/)(node|node\.exe)$/i.test(normLex) &&
+        !/\/node_modules\/\.bin\//i.test(normLex)
+      ) {
+        return true;
+      }
+    }
   }
   return false;
 }
 
-export function hasShellSymlinkOrSecretEscape(cmd, { root = process.cwd(), env = process.env } = {}) {
+export function hasShellSymlinkOrSecretEscape(cmd, { root = process.cwd(), cwd = root, env = process.env } = {}) {
   if (!cmd || typeof cmd !== 'string') return false;
-  const tokens = tokenizeCommand(cmd);
-  const redirectTargets = new Set();
-  const redirectMatches = cmd.match(/[0-9]*[><]+\s*([^<>&|;\s]+)/g);
-  if (redirectMatches) {
-    for (const rm of redirectMatches) {
-      const isOutRedirect = rm.includes('>');
-      const target = rm.replace(/^[0-9]*[><]+\s*/, '').trim();
-      if (target) {
-        tokens.push(target);
-        if (isOutRedirect) redirectTargets.add(target);
-      }
-    }
-  }
+  const effectiveCwd = cwd ?? root;
+  const simpleReadVerb = !/[\r\n;&|<>\$`()={}\\~]/.test(cmd) && /^\s*(cat|head|tail|ls|stat|file|wc)\b/.test(cmd);
+  const items = collectShellCandidateTokens(cmd);
 
-  for (const rawToken of tokens) {
-    if (!rawToken || rawToken.length > 4096) continue;
-    const isOutRedirect = redirectTargets.has(rawToken) || /^[0-9]*>+/.test(rawToken);
-    let t = rawToken.replace(/^[0-9]*[><]+/, '').replace(/^--?[a-zA-Z0-9_-]+=/, '').trim();
-    if (t.startsWith('"') && t.endsWith('"') && t.length >= 2) t = t.slice(1, -1);
-    if (t.startsWith("'") && t.endsWith("'") && t.length >= 2) t = t.slice(1, -1);
-    if (!t || t.startsWith('-') || /^(;|&&|\|\||\|)$/.test(t)) continue;
-
-    const absCandidate = isAbsolute(t) ? t : resolve(root, t);
+  for (const { rawToken: t, isOutRedirect, isCommandToken } of items) {
+    const absCandidate = isAbsolute(t) ? t : resolve(effectiveCwd, t);
     try {
       const isSymlink = lstatSync(absCandidate).isSymbolicLink();
       if (isSymlink || existsSync(absCandidate)) {
         const canonical = realpathSync(absCandidate);
-        const checkFn = isOutRedirect ? isTrustRootOrSecretPath : isSecretStatePath;
-        if (checkFn(canonical, env)) {
+        if (isSecretStatePath(canonical, env)) {
+          return true;
+        }
+        if ((isOutRedirect || (!isCommandToken && !simpleReadVerb)) && isTrustRootOrSecretPath(canonical, env)) {
           return true;
         }
         if (isSymlink && !isAllowedSystemExecOrNullPath(absCandidate.replace(/\\/g, '/'))) {
-          const rel = relative(root, canonical);
-          if (rel.startsWith('..') || isAbsolute(rel)) {
+          if (root && !isPathInside(canonical, root)) {
             return true;
           }
         }
@@ -1178,7 +1311,7 @@ export function hasShellSymlinkOrSecretEscape(cmd, { root = process.cwd(), env =
   return false;
 }
 
-export function isReadonlyCommand(cmd, { root = process.cwd(), env = process.env } = {}) {
+export function isReadonlyCommand(cmd, { root = process.cwd(), cwd = root, env = process.env } = {}) {
   if (typeof cmd !== 'string' || !cmd) return false;
   const trimmed = cmd.trim();
   if (!trimmed) return false;
@@ -1186,8 +1319,8 @@ export function isReadonlyCommand(cmd, { root = process.cwd(), env = process.env
   if (/[\r\n;&|<>\$`()={}\\~]/.test(trimmed)) return false;
 
   // Reject commands targeting session secrets, session store, or ledger
-  if (isUnauthorizedWorkspaceEscape(trimmed, { root }) || isTrustRootSecretAccess(trimmed)) return false;
-  if (hasShellSymlinkOrSecretEscape(trimmed, { root, env })) return false;
+  if (isUnauthorizedWorkspaceEscape(trimmed, { root, cwd }) || isTrustRootSecretAccess(trimmed)) return false;
+  if (hasShellSymlinkOrSecretEscape(trimmed, { root, cwd, env })) return false;
 
   const tokens = tokenizeCommand(trimmed);
   if (tokens.length === 0) return false;
@@ -1600,16 +1733,15 @@ export function onStop(payload, { env = process.env } = {}) {
           const cmd = extractCommandString(args);
           const normCmd = cmd.replace(/\\/g, '/');
           const cmdCwd = extractCwdFromArgs(args);
-          const allowImplicitCwd = hasUnambiguousWorkspaceCwd(payload, env);
+          const allowImplicitCwd = hasUnambiguousWorkspaceCwd(payload, env, root);
           const actualCwd = (cmdCwd && typeof cmdCwd === 'string' ? (isAbsolute(cmdCwd) ? cmdCwd : resolve(root, cmdCwd)) : null) ?? root;
-          const repoRoot = (cmdCwd && typeof cmdCwd === 'string' ? findAdlcRoot(actualCwd, env) : null) ?? root;
-          if ((/(^|[\s=;,"'\/$.()[\]])(\.adlc|\.master-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc|\.system_generated|transcript.*\.jsonl)/i.test(normCmd) || (overrideEscaped && (overrideEscaped.test(cmd) || overrideEscaped.test(normCmd))) || hasShellTrustRootSecretAccess(cmd, { root: actualCwd, env }) || hasShellSymlinkOrSecretEscape(cmd, { root: actualCwd, env })) && !isReadonlyCommand(cmd, { root: actualCwd, env })) {
+          if ((/(^|[\s=;,"'\/$.()[\]])(\.adlc|\.master-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc|\.system_generated|transcript.*\.jsonl)/i.test(normCmd) || (overrideEscaped && (overrideEscaped.test(cmd) || overrideEscaped.test(normCmd))) || hasShellTrustRootSecretAccess(cmd, { root, cwd: actualCwd, env }) || hasShellSymlinkOrSecretEscape(cmd, { root, cwd: actualCwd, env })) && !isReadonlyCommand(cmd, { root, cwd: actualCwd, env })) {
             return {
               decision: 'continue',
               reason: 'ADLC Rails-Guard: Shell modification of trust-root store or transcript is strictly prohibited.',
             };
           }
-          if (isVerificationCommand(cmd, { root: repoRoot, toolArgs: args, allowImplicitCwd, packageManifestMutated, shellMutated })) {
+          if (isVerificationCommand(cmd, { root, toolArgs: args, allowImplicitCwd, packageManifestMutated, shellMutated })) {
             const exitCode = r?.exit_code ?? r?.exitCode ?? c?.exitCode;
             const status = r?.status ?? c?.status;
             const isExplicitSuccess = exitCode === 0 || status === 'DONE' || status === 'done' || status === 'success' || r?.success === true;
@@ -1617,16 +1749,16 @@ export function onStop(payload, { env = process.env } = {}) {
 
             const outStr = typeof r?.content === 'string' ? r.content : (typeof r?.output === 'string' ? r.output : JSON.stringify(r ?? {}));
             const isZeroTests = /\b(tests|pass)\s+0\b/i.test(outStr) || /\b0\s+(tests|passing)\b/i.test(outStr);
-            const hasTests = hasDiscoverableTests(repoRoot);
+            const hasTests = hasDiscoverableTests(root);
 
             if (isExplicitSuccess && !isExplicitFailure && hasTests && !isZeroTests) {
               lastSuccessTestCallIdx = currentCallIdx;
             }
-          } else if (!isReadonlyCommand(cmd, { root: actualCwd, env }) && !isVerificationCommand(cmd, { root: repoRoot, toolArgs: args, allowImplicitCwd })) {
+          } else if (!isReadonlyCommand(cmd, { root, cwd: actualCwd, env }) && !isVerificationCommand(cmd, { root, toolArgs: args, allowImplicitCwd })) {
             mutatingCallSeq++;
             lastMutationCallIdx = currentCallIdx;
             shellMutated = true;
-            if (/(^|[\s=;,"'\/$.()[\]])(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|npm\s+(pkg|install|i|add|remove|rm|uninstall))\b/i.test(cmd)) {
+            if (/(^|[\s=;,"'\/$.()[\]])(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|vitest\.config|jest\.config|\.mocharc|node_modules\/\.bin|npm\s+(pkg|install|i|add|remove|rm|uninstall))\b/i.test(normCmd)) {
               packageManifestMutated = true;
             }
           }

@@ -121,4 +121,28 @@ test('extension resolves subdirectory ctx.cwd to enclosing ADLC root and enforce
   );
   assert.equal(bashBlocked?.block, true);
   assert.match(bashBlocked?.reason ?? '', /changes cwd/);
+
+  // Cross-key spoofing: ctx.cwd = subCwd while input.Cwd = root MUST STILL block mutating bash
+  const spoofBlocked = await handlers.get('tool_call')(
+    { toolName: 'bash', toolCallId: 'c4', input: { command: 'rm frozen.js', Cwd: root } },
+    ctx
+  );
+  assert.equal(spoofBlocked?.block, true);
+  assert.match(spoofBlocked?.reason ?? '', /changes cwd/);
+
+  // Conflicting workdir keys on bash fail closed
+  const conflictBlocked = await handlers.get('tool_call')(
+    { toolName: 'bash', toolCallId: 'c5', input: { command: 'rm src/free.js', Cwd: '.', workdir: 'src' } },
+    { ...ctx, cwd: root }
+  );
+  assert.equal(conflictBlocked?.block, true);
+  assert.match(conflictBlocked?.reason ?? '', /conflicting working directories/);
+
+  // Custom third-party tool with relative path from subdirectory ctx.cwd resolves against ctx.cwd and blocks rail
+  const customBlocked = await handlers.get('tool_call')(
+    { toolName: 'custom_writer', toolCallId: 'c6', input: { path: 'frozen.js' } },
+    ctx
+  );
+  assert.equal(customBlocked?.block, true);
+  assert.match(customBlocked?.reason ?? '', /frozen rail/);
 });

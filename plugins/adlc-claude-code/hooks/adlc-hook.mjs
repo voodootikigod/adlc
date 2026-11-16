@@ -73,7 +73,7 @@ import { homedir, tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { loadTicketStoreReadOnly, ticketStoreExists } from './generated-ticket-reader.mjs';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
-import { inspectGitCheckout, preferInnermostCheckout } from './generated-workspace-root.mjs';
+import { findInnermostCheckoutRoot, inspectGitCheckout, preferInnermostCheckout } from './generated-workspace-root.mjs';
 import {
   resolveTrustedBinary,
   ownershipRejection,
@@ -292,28 +292,27 @@ async function main() {
   // ticket lookups bind to the worktree rather than the outer `.worktrees/` prefix.
   const storeOverrideForRoot = process.env.ADLC_TICKET_STORE || process.env.ADLC_TICKETS || null;
   const homeDirForRoot = realOrSelf(process.env.HOME || homedir());
-  const rawToolInput = input?.tool_input ?? input?.toolInput ?? {};
-  const rawTargetCandidates = [
-    rawToolInput?.file_path,
-    rawToolInput?.filePath,
-    rawToolInput?.path,
-    rawToolInput?.notebook_path,
-  ]
+  const rawTargetCandidates = targetFilePaths(input)
     .filter((p) => typeof p === 'string' && p.trim().length > 0)
     .map((p) => resolve(baseDir, p.trim()));
   const rawProjectDir = process.env.CLAUDE_PROJECT_DIR || input.cwd || process.cwd();
-  const dir = process.env.CLAUDE_PROJECT_DIR
-    ? preferInnermostCheckout(
-        process.env.CLAUDE_PROJECT_DIR,
-        [input.cwd, ...rawTargetCandidates],
-        {
-          storeOverride: storeOverrideForRoot,
-          homeDir: homeDirForRoot,
-          allowFileStart: true,
-          preserveSpelling: true,
-        }
-      )
-    : rawProjectDir;
+  const dir = (() => {
+    if (!process.env.CLAUDE_PROJECT_DIR) return rawProjectDir;
+    const preferOpts = {
+      storeOverride: storeOverrideForRoot,
+      homeDir: homeDirForRoot,
+      allowFileStart: true,
+      preserveSpelling: true,
+    };
+    if (rawTargetCandidates.length === 0) {
+      return preferInnermostCheckout(process.env.CLAUDE_PROJECT_DIR, [input.cwd], preferOpts);
+    }
+    const perTargetRoots = rawTargetCandidates.map((cand) =>
+      preferInnermostCheckout(process.env.CLAUDE_PROJECT_DIR, [cand], preferOpts)
+    );
+    const uniqueTargetRoots = [...new Set(perTargetRoots.filter(Boolean))];
+    return uniqueTargetRoots.length === 1 ? uniqueTargetRoots[0] : process.env.CLAUDE_PROJECT_DIR;
+  })();
   try {
     process.chdir(dir);
   } catch {
@@ -369,12 +368,15 @@ async function main() {
   const startDir = realOrSelf(process.cwd());
   let adlcRoot = null;
   let gitRoot = null;
+  let adlcGitRoot = null;
   for (let cur = process.cwd(), i = 0; i < 256; i++) {
     const real = realOrSelf(cur);
     const atHome = real === homeDir;
-    const examine = !atHome || real === startDir || existsSync(join(cur, '.git'));
+    const hasDotGit = existsSync(join(cur, '.git'));
+    const examine = !atHome || real === startDir || hasDotGit;
     if (examine) {
-      if (gitRoot === null && existsSync(join(cur, '.git'))) gitRoot = cur;
+      if (gitRoot === null && hasDotGit) gitRoot = cur;
+      if (hasDotGit && !atHome && ticketStoreExists(cur, process.env)) adlcGitRoot = cur;
       if (adlcRoot === null && ticketStoreExists(cur, process.env)) adlcRoot = cur;
       if (inspectGitCheckout(real)?.kind === 'worktree') break; // verified linked worktree boundary
     }
@@ -382,17 +384,16 @@ async function main() {
     if (parent === cur || atHome) break; // filesystem root, or never ascend above $HOME
     cur = parent;
   }
-  // Prefer the store at the git root; else the nearest-ancestor ADLC root — but
-  // NEVER one that sits OUTSIDE the enclosing git repo. The fallback previously
-  // applied even when a gitRoot was found, so a store in any ancestor above a
-  // non-ADLC repo (`~/work/.adlc` over `~/work/my-repo`) captured that repo and
-  // chdir'd out of it. That is the same escape the $HOME guard blocks, one level
-  // down, and it contradicted this walk's own contract ("only fall back … when
-  // there is no enclosing git repo"). A store at or BELOW the git root is still
-  // honored, so a package-level store in a monorepo keeps working.
-  const root = gitRoot && ticketStoreExists(gitRoot, process.env)
-    ? gitRoot
-    : (adlcRoot && (!gitRoot || isInside(adlcRoot, gitRoot)) ? adlcRoot : null);
+  // Prefer an enclosing git checkout that actually owns an ADLC ticket store
+  // (`adlcGitRoot`, so a forged subdirectory `.git` inside an ADLC repo can never
+  // hide the enclosing repo's store); else the store at the git root; else the
+  // nearest-ancestor ADLC root — but NEVER one that sits OUTSIDE an enclosing
+  // non-ADLC git repo.
+  const root = adlcGitRoot
+    ? adlcGitRoot
+    : gitRoot && ticketStoreExists(gitRoot, process.env)
+      ? gitRoot
+      : (adlcRoot && (!gitRoot || isInside(adlcRoot, gitRoot)) ? adlcRoot : null);
   if (root) {
     try {
       process.chdir(root);
@@ -1196,7 +1197,62 @@ function recordBypass(relPath, why) {
 // symlinks (e.g. `*/auth/**` where `auth` is a symlink) is the one residual
 // gap — declare rails with literal directory prefixes for symlink resolution to
 // apply; the CI gate remains the commit-time backstop.
+function checkNestedCheckoutRailsForTargets(input, fps) {
+  if (!fps.length) return;
+  const currentRoot = realOrSelf(process.cwd());
+  const storeOverride = process.env.ADLC_TICKET_STORE || process.env.ADLC_TICKETS || null;
+  const homeDir = realOrSelf(process.env.HOME || homedir());
+  for (const fp of fps) {
+    const absTarget = resolve(baseDir ?? process.cwd(), fp);
+    const owningRoot = findInnermostCheckoutRoot(absTarget, {
+      storeOverride,
+      homeDir,
+      allowFileStart: true,
+      preserveSpelling: true,
+    });
+    if (!owningRoot || realOrSelf(owningRoot) === currentRoot) continue;
+    if (inspectGitCheckout(realOrSelf(owningRoot))?.kind !== 'worktree') continue;
+    if (!existsSync(join(owningRoot, '.adlc')) || !ticketStoreExists(owningRoot, process.env)) continue;
+    let nestedSnap;
+    try {
+      nestedSnap = loadTicketStoreReadOnly({ root: owningRoot, env: process.env });
+    } catch (e) {
+      return denyRail(
+        `cannot read ticket store in target checkout ${owningRoot} (${e.message}); rails cannot be verified, so edits are blocked.`
+      );
+    }
+    const nestedDecls = [];
+    let nestedAny = false;
+    for (const t of nestedSnap?.tickets ?? []) {
+      if (!t || typeof t !== 'object' || Array.isArray(t)) continue;
+      const expired = t.completed === true;
+      for (const r of t.rails ?? []) {
+        if (typeof r !== 'string') continue;
+        nestedAny = true;
+        if (expired) continue;
+        nestedDecls.push({ glob: r.split('\\').join('/'), ticket: typeof t.id === 'string' ? t.id : '?' });
+      }
+    }
+    if (!nestedAny) continue;
+    nestedDecls.push({
+      glob: nestedSnap.backend === 'directory' ? '.adlc/tickets/**' : '.adlc/tickets.json',
+      ticket: '(rail trust root)',
+    });
+    nestedDecls.push({ glob: '.adlc/current-ticket.json', ticket: '(rail trust root)' });
+    const relLex = relative(owningRoot, absTarget).split('\\').join('/');
+    const relReal = relative(realOrSelf(owningRoot), realResolve(absTarget)).split('\\').join('/');
+    const hit = nestedDecls.find((r) => globMatch(r.glob, relLex) || globMatch(r.glob, relReal));
+    if (hit && process.env.ADLC_RAILS_BYPASS !== '1') {
+      return denyRail(
+        `${relReal} is a frozen rail declared by ticket ${hit.ticket} in checkout ${owningRoot} (rails: "${hit.glob}"). Edits to frozen rails are blocked during build.`
+      );
+    }
+  }
+}
+
 function rails(input) {
+  const preFps = targetFilePaths(input);
+  checkNestedCheckoutRailsForTargets(input, preFps);
   if (!existsSync('.adlc')) return; // not an ADLC repo
   if (!ticketStoreExists(process.cwd(), process.env)) return; // no tickets → no rails declared
   let ticketSnapshot;

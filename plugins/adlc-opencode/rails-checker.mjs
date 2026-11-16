@@ -14,7 +14,12 @@ import {
   resolveActiveTicketAgainst,
   resolveActiveTicketId as resolveActiveTicketIdCanonical,
 } from './generated-active-ticket.mjs';
-import { canonicalizePath as canonicalizeWorkspacePath, extractToolWorkdir } from './generated-workspace-root.mjs';
+import {
+  canonicalizePath as canonicalizeWorkspacePath,
+  extractAllToolWorkdirs,
+  extractToolWorkdir,
+  hasConflictingToolWorkdirs,
+} from './generated-workspace-root.mjs';
 
 // Re-exported for API stability: sibling adapters and tests may import the
 // symlink-aware resolver from this module even though @adlc/core owns it now.
@@ -654,7 +659,7 @@ export function railHit(target, rails, root, { ancestors = true } = {}) {
  *    target cannot be extracted is DENIED while rails are in force (fail closed —
  *    an unrecognized third-party write tool must not slip past on arg shape).
  */
-export function checkToolCall({ tool, args, root = process.cwd(), env = process.env }) {
+export function checkToolCall({ tool, args, root = process.cwd(), cwd = root, env = process.env }) {
   const name = String(tool ?? '').toLowerCase();
   if (READONLY_TOOLS.includes(name)) {
     // Reading a rail is legitimate; allow by name. Residual risk: a hostile
@@ -664,7 +669,26 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
     return { decision: 'allow', reason: `tool "${name}" is read-only` };
   }
   if (SHELL_TOOLS.includes(name)) {
-    return checkShellCall({ command: args?.command, workdir: extractToolWorkdir(args), root, env });
+    const baseCwd = typeof cwd === 'string' && cwd.trim() !== '' ? cwd : root;
+    if (hasConflictingToolWorkdirs(args, baseCwd)) {
+      const force = resolveRailsInForce(root, env);
+      if (force.conflict) return { decision: 'deny', reason: force.reason };
+      if (force.active) {
+        return {
+          decision: 'deny',
+          reason: 'shell command specifies conflicting working directories; target paths cannot be verified against the frozen rails',
+        };
+      }
+    }
+    const explicitWorkdirs = extractAllToolWorkdirs(args).map((w) => resolve(baseCwd, w));
+    const candidateWorkdirs = baseCwd !== root ? [baseCwd, ...explicitWorkdirs] : explicitWorkdirs;
+    return checkShellCall({
+      command: args?.command,
+      workdir: extractToolWorkdir(args) ?? (baseCwd !== root ? baseCwd : undefined),
+      workdirs: candidateWorkdirs,
+      root,
+      env,
+    });
   }
   // Operators can extend the ungated list for benign third-party tools that a
   // railed build legitimately needs (e.g. ADLC_UNGATED_TOOLS="symbols_index").
@@ -887,8 +911,13 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
   // detection would over-block (e.g. `write src/index.mjs` under an interior-**
   // rail). Unknown tools stay fail-closed with ancestor detection on.
   const singleFile = MUTATING_TOOLS.includes(name);
+  const effectiveCwd = typeof cwd === 'string' && cwd.trim() !== '' ? cwd : root;
   for (const target of targets) {
-    const hit = railHit(target, force.rails, root, { ancestors: !singleFile });
+    const hit =
+      railHit(target, force.rails, root, { ancestors: !singleFile }) ??
+      (effectiveCwd !== root && !isAbsolute(target)
+        ? railHit(resolve(effectiveCwd, target), force.rails, root, { ancestors: !singleFile })
+        : null);
     if (hit) {
       return { decision: 'deny', reason: `frozen rail "${hit}" (active ticket ${force.ticketId})` };
     }
@@ -911,7 +940,7 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
  * same deny as `cd`.
  * The CI diff gate remains the unbypassable backstop.
  */
-export function checkShellCall({ command, workdir, root = process.cwd(), env = process.env }) {
+export function checkShellCall({ command, workdir, workdirs, root = process.cwd(), env = process.env }) {
   const force = resolveRailsInForce(root, env);
   if (!force.active) return { decision: 'allow', reason: force.reason };
   if (force.conflict) return { decision: 'deny', reason: force.reason };
@@ -929,10 +958,18 @@ export function checkShellCall({ command, workdir, root = process.cwd(), env = p
   if (c.opaque) {
     return { decision: 'deny', reason: 'mutating shell command uses an opaque form (git apply/checkout/patch/tar…); use a structured edit tool or a literal path-transparent mutation' };
   }
-  const movesWorkdir =
-    typeof workdir === 'string' &&
-    workdir.trim() !== '' &&
-    canonicalizeWorkspacePath(resolve(root, workdir.trim())) !== canonicalizeWorkspacePath(resolve(root));
+  const canonicalRoot = canonicalizeWorkspacePath(resolve(root));
+  const candidateDirs = Array.isArray(workdirs) && workdirs.length > 0
+    ? workdirs
+    : typeof workdir === 'string' && workdir.trim() !== ''
+      ? [workdir]
+      : [];
+  const movesWorkdir = candidateDirs.some(
+    (w) =>
+      typeof w === 'string' &&
+      w.trim() !== '' &&
+      canonicalizeWorkspacePath(resolve(root, w.trim())) !== canonicalRoot
+  );
   if (c.changesCwd || movesWorkdir) {
     return { decision: 'deny', reason: 'mutating shell command changes cwd; target paths cannot be verified against the frozen rails' };
   }

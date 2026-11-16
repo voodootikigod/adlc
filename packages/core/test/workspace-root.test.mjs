@@ -6,7 +6,9 @@ import { join } from 'node:path';
 import { tmp } from '../lib/test-kit.mjs';
 import {
   SHELL_WORKDIR_KEYS,
+  extractAllToolWorkdirs,
   extractToolWorkdir,
+  hasConflictingToolWorkdirs,
   canonicalizePath,
   isPathInside,
   inspectGitCheckout,
@@ -70,6 +72,16 @@ test('SHELL_WORKDIR_KEYS is frozen and extractToolWorkdir extracts across harnes
   assert.equal(extractToolWorkdir({ input: { workdir: '/nested/opencode' } }), '/nested/opencode');
   assert.equal(extractToolWorkdir({ tool_input: { working_directory: '/nested/cursor' } }), '/nested/cursor');
   assert.equal(extractToolWorkdir({ toolInput: { workingDir: '/nested/camel' } }), '/nested/camel');
+
+  assert.deepEqual(extractAllToolWorkdirs({ Cwd: '/a', cwd: '/a', workdir: '/b', options: { dir_path: '/c' } }), [
+    '/a',
+    '/b',
+    '/c',
+  ]);
+  assert.equal(hasConflictingToolWorkdirs({ Cwd: '/srv/repo', cwd: '/srv/repo' }, '/srv/repo'), false);
+  assert.equal(hasConflictingToolWorkdirs({ Cwd: '.', cwd: '/srv/repo' }, '/srv/repo'), false);
+  assert.equal(hasConflictingToolWorkdirs({ Cwd: '.', workdir: 'test' }, '/srv/repo'), true);
+  assert.equal(hasConflictingToolWorkdirs({ Cwd: '/srv/repo', options: { dir_path: '/tmp' } }, '/srv/repo'), true);
 });
 
 test('canonicalizePath and isPathInside resolve symlinks and non-existent children safely', (t) => {
@@ -121,8 +133,14 @@ test('inspectGitCheckout distinguishes real repos, verified worktrees, syntactic
   writeFileSync(join(invalidFileDir, '.git'), `gitdir: ${'a'.repeat(5000)}\n`);
   assert.equal(inspectGitCheckout(invalidFileDir), null);
 
-  // Syntactic gitdir without valid worktree backlink classifies as gitfile (not verified worktree)
-  writeFileSync(join(invalidFileDir, '.git'), 'gitdir: ../.git/modules/sub\n');
+  // Unbacked syntactic gitdir pointing to non-existent directory is rejected
+  writeFileSync(join(invalidFileDir, '.git'), 'gitdir: ./does-not-exist\n');
+  assert.equal(inspectGitCheckout(invalidFileDir), null);
+
+  // Submodule-style gitdir pointing to a real gitdir with HEAD classifies as gitfile (not verified worktree)
+  const fakeModulesDir = tmp(t, 'ws-gitmodule-dir-');
+  writeFileSync(join(fakeModulesDir, 'HEAD'), 'ref: refs/heads/main\n');
+  writeFileSync(join(invalidFileDir, '.git'), `gitdir: ${fakeModulesDir}\n`);
   const gitfileInfo = inspectGitCheckout(invalidFileDir);
   assert.equal(gitfileInfo?.kind, 'gitfile');
   assert.equal(gitfileInfo?.commonGitDir, null);
@@ -267,6 +285,14 @@ test('findInnermostCheckoutRoot enforces $HOME boundary, external stores, requir
   writeFileSync(extStore, '{"tickets":[]}\n');
   assert.equal(
     findInnermostCheckoutRoot(childRepo, { homeDir: fakeHome, storeOverride: extStore }),
+    realpathSync(childRepo)
+  );
+  // Forged subdirectory .git inside childRepo under external storeOverride does NOT hijack childRepo
+  const forgedExtSub = join(childRepo, 'src', 'forged');
+  mkdirSync(join(forgedExtSub, '.git'), { recursive: true });
+  writeFileSync(join(forgedExtSub, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  assert.equal(
+    findInnermostCheckoutRoot(forgedExtSub, { homeDir: fakeHome, storeOverride: extStore }),
     realpathSync(childRepo)
   );
   const plainDir = tmp(t, 'ws-plain-ext-');

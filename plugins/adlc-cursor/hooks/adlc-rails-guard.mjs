@@ -189,8 +189,16 @@ export function absoluteRoot(raw) {
  * (or a symlinked root alias) must be attributed to the repo it actually resolves
  * into, not the one whose name lexically prefixes it.
  */
+const EXPLICIT_WORKSPACE_KEYS = ['workspace_roots', 'workspaceRoots', 'workspace_root', 'workspaceRoot', 'project_root', 'projectRoot', 'root'];
+
+function hasExplicitWorkspaceDeclaration(payload) {
+  return Boolean(firstString(payload, EXPLICIT_WORKSPACE_KEYS));
+}
+
 export function resolveOwning(payload, filePath, fallback, env = process.env) {
   const roots = candidateRoots(payload);
+  const storeOverride = env?.ADLC_TICKET_STORE ?? env?.ADLC_TICKETS ?? null;
+  const cwdOnlyRoot = roots.length > 0 && !hasExplicitWorkspaceDeclaration(payload);
   const base = roots[0] ?? fallback ?? hostProjectRoot(env);
   // Resolve the edited path to an ABSOLUTE path. A relative path with `..`
   // traversal (e.g. `../backend/src/auth.js`) is resolved against the primary root
@@ -203,15 +211,23 @@ export function resolveOwning(payload, filePath, fallback, env = process.env) {
   const absFile = !filePath
     ? undefined
     : isAbsolute(filePath) ? resolve(filePath) : (base != null ? resolve(base, filePath) : undefined);
+  const climbIfCwdOnly = (chosen) =>
+    cwdOnlyRoot && chosen
+      ? (findInnermostCheckoutRoot(chosen, { storeOverride, preserveSpelling: true }) ?? chosen)
+      : chosen;
   if (absFile) {
-    const storeOverride = env?.ADLC_TICKET_STORE ?? env?.ADLC_TICKETS ?? null;
-    const upgradeWorktree = (chosen) =>
-      preferInnermostCheckout(chosen, [absFile, payload?.cwd], {
-        storeOverride,
-        allowFileStart: true,
-        preserveSpelling: true,
-      }) ?? chosen;
+    const upgradeWorktree = (chosen) => {
+      const climbed = climbIfCwdOnly(chosen);
+      return (
+        preferInnermostCheckout(climbed, [absFile], {
+          storeOverride,
+          allowFileStart: true,
+          preserveSpelling: true,
+        }) ?? climbed
+      );
+    };
     const owning = roots
+      .map((raw) => climbIfCwdOnly(raw))
       .filter((raw) => contains(raw, absFile))
       .map((raw) => ({ raw, real: realpathDeepest(resolve(raw)) }))
       .sort((a, b) => b.real.length - a.real.length)[0];
@@ -219,10 +235,17 @@ export function resolveOwning(payload, filePath, fallback, env = process.env) {
     // Neither payload-declared roots nor CURSOR_PROJECT_DIR silently claim an
     // external target: a file outside every candidate workspace root stays
     // unresolved unless the caller explicitly supplied `fallback`.
-    if (fallback == null && base != null && !contains(base, absFile)) return { root: null, absFile };
-    if (base != null) return { root: upgradeWorktree(base), absFile };
+    const climbedBase = climbIfCwdOnly(base);
+    if (fallback == null && climbedBase != null && !contains(climbedBase, absFile)) return { root: null, absFile };
+    if (climbedBase != null) return { root: upgradeWorktree(climbedBase), absFile };
   }
-  return { root: base ?? null, absFile };
+  const resolvedBase = base != null
+    ? (preferInnermostCheckout(climbIfCwdOnly(base), [payload?.cwd], {
+        storeOverride,
+        preserveSpelling: true,
+      }) ?? climbIfCwdOnly(base))
+    : null;
+  return { root: resolvedBase, absFile };
 }
 
 /** Symlink-aware, boundary-aware containment of an absolute path in a root. */

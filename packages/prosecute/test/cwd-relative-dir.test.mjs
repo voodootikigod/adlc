@@ -8,6 +8,7 @@ import { runProsecution } from '../lib/run.mjs';
 import { appendManifestEntry } from '@adlc/gate-manifest';
 import { readOwnManifestChain } from '@adlc/gate-manifest/lib/own-chain.mjs';
 import { resolveOpenSegment, peekOpenSegment, recoverOpenSegment } from '@adlc/tickets/lib/manifest-primitives.mjs';
+import { readOwnChains } from '@adlc/tickets';
 
 function git(cwd, ...args) {
   return execFileSync('git', args, {
@@ -105,4 +106,56 @@ test('runProsecution, readOwnManifestChain, and manifest-primitives resolve rela
 
   assert.equal(res.status, 'pass', JSON.stringify(res));
   assert.equal(realpathSync(process.cwd()), realpathSync(outsideCwd));
+});
+
+test('multi-segment relative dir (.worktrees/lane-a/.adlc) and explicit absolute dir do not double-join or read wrong checkout', (t) => {
+  const primary = tmp(t, 'prosecute-wt-primary-');
+  git(primary, 'init', '-b', 'main');
+  mkdirSync(join(primary, '.adlc', 'manifest.d'), { recursive: true });
+  writeFileSync(
+    join(primary, '.adlc', 'manifest.d', '.store.json'),
+    JSON.stringify({ format: 'adlc-manifest-segments', version: 1, auth: 'keyless' })
+  );
+  writeFileSync(join(primary, 'README.md'), '# test\n');
+  git(primary, 'add', '-A');
+  git(primary, 'commit', '-m', 'init');
+
+  const lane = join(primary, '.worktrees', 'lane-a');
+  git(primary, 'worktree', 'add', '-b', 'feat/lane-a', lane);
+  mkdirSync(join(lane, '.adlc', 'manifest.d'), { recursive: true });
+  writeFileSync(
+    join(lane, '.adlc', 'manifest.d', '.store.json'),
+    JSON.stringify({ format: 'adlc-manifest-segments', version: 1, auth: 'keyless' })
+  );
+
+  const origCwd = process.cwd();
+  process.chdir(primary);
+  t.after(() => process.chdir(origCwd));
+
+  // Passing multi-segment relative dir '.worktrees/lane-a/.adlc' from primary repo:
+  // record.mjs supplies cwd = dirname(dir) = '.worktrees/lane-a' — must NOT double-join!
+  const relLaneAdlc = '.worktrees/lane-a/.adlc';
+  appendManifestEntry(
+    { ts: new Date().toISOString(), gate: 'coldstart', ticket: 'T-LANE', data: { gaps: [] } },
+    relLaneAdlc,
+    { key: null }
+  );
+
+  const resolvedSeg = resolveOpenSegment(relLaneAdlc);
+  assert.equal(resolvedSeg.isNew, false);
+  assert.match(resolvedSeg.name, /^feat-lane-a-/);
+  assert.equal(peekOpenSegment(relLaneAdlc)?.name, resolvedSeg.name);
+  assert.equal(recoverOpenSegment(relLaneAdlc)?.name, resolvedSeg.name);
+
+  const relChain = readOwnManifestChain(relLaneAdlc);
+  assert.equal(relChain.identityError, null);
+  assert.equal(relChain.ownSegment, resolvedSeg.name);
+
+  const absChain = readOwnManifestChain(join(lane, '.adlc'));
+  assert.equal(absChain.identityError, null);
+  assert.equal(absChain.ownSegment, resolvedSeg.name);
+
+  const ownChains = readOwnChains(relLaneAdlc);
+  assert.equal(ownChains.length, 2);
+  assert.equal(ownChains[1][0]?.ticket, 'T-LANE');
 });

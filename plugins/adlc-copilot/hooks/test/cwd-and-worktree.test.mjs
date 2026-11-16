@@ -82,6 +82,34 @@ test('Copilot rails-guard and build-gate resolve subdirectory payload.cwd inside
   assert.equal(shellRes.status, 0);
   assert.match(shellRes.stdout, /blocked rail edit/);
 
+  // Conflicting shell workdirs fail closed
+  const conflictRes = spawnHook([RAILS_HOOK], {
+    cwd: outsideCwd,
+    input: JSON.stringify({
+      cwd: lane,
+      toolName: 'run_terminal_cmd',
+      toolArgs: JSON.stringify({ command: 'rm ok.mjs', Cwd: '.', dir_path: subDir }),
+    }),
+    encoding: 'utf8',
+    env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' },
+  });
+  assert.equal(conflictRes.status, 0);
+  assert.match(conflictRes.stdout, /conflicting working directories/);
+
+  // Editing nested worktree frozen rail from outer primary payload.cwd blocks
+  const crossWtRes = spawnHook([RAILS_HOOK], {
+    cwd: outsideCwd,
+    input: JSON.stringify({
+      cwd: primary,
+      toolName: 'edit',
+      toolArgs: JSON.stringify({ file_path: '.worktrees/lane-a/packages/sub/frozen.mjs' }),
+    }),
+    encoding: 'utf8',
+    env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' },
+  });
+  assert.equal(crossWtRes.status, 0);
+  assert.match(crossWtRes.stdout, /blocked rail edit/);
+
   // Build-gate resolves enclosing worktree root when payload.cwd is a subdirectory and fails closed on corrupt store
   writeFileSync(join(lane, '.adlc', 'tickets.json'), '{not-json');
   const bgRes = spawnHook([BUILD_GATE_HOOK], {

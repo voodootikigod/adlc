@@ -253,7 +253,6 @@ export function resolveAdlcRoot(root, storeOverride = null, adlcRoots = null) {
   if (typeof root !== 'string' || root === '') return null;
   return findInnermostCheckoutRoot(root, {
     storeOverride,
-    homeDir: null,
     rememberedRoots: adlcRoots,
   });
 }

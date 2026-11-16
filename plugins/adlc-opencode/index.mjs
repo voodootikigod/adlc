@@ -17,7 +17,7 @@
 // directly and the module imports nothing from the host at load.
 
 import { checkToolCall, resolveRailsInForce, resolveActiveTicketId, railHit, extractTargets, READONLY_TOOLS, UNGATED_TOOLS, SHELL_TOOLS } from './rails-checker.mjs';
-import { preferInnermostCheckout } from './generated-workspace-root.mjs';
+import { findInnermostCheckoutRoot, isPathInside, preferInnermostCheckout } from './generated-workspace-root.mjs';
 import { checkPreflight, auditGateManifest, auditAdversarialReview } from './lib/session-hooks.mjs';
 import { createDepthTracker, checkBuildGate } from './lib/build-gate.mjs';
 import { checkHandoff, createStickyDenyState, createInitLatch } from './lib/handoff-gate.mjs';
@@ -97,10 +97,14 @@ function isWithin(child, parent) {
 function resolveRoot(location) {
   const launch = nonEmpty(location?.directory);
   const project = nonEmpty(location?.project?.directory);
-  if (project && launch && resolve(project) !== resolve('/') && isWithin(launch, project)) {
+  if (project && launch && resolve(project) !== resolve('/') && isPathInside(launch, project)) {
     return preferInnermostCheckout(project, [launch], { preserveSpelling: true }) ?? project;
   }
-  return launch ?? project ?? process.cwd();
+  const start = launch ?? project;
+  if (start) {
+    return findInnermostCheckoutRoot(start, { preserveSpelling: true }) ?? start;
+  }
+  return process.cwd();
 }
 
 /**
@@ -134,6 +138,8 @@ function adlcCommandOf(prompt) {
 async function setup(ctx = {}) {
   // The repo root used to locate .adlc/ and to canonicalize edited paths.
   const root = resolveRoot(ctx.location);
+  const rawLaunchDir = nonEmpty(ctx.location?.directory);
+  const launchCwd = rawLaunchDir && isPathInside(rawLaunchDir, root) ? rawLaunchDir : root;
   // Per-repo plugin options as the base, real env vars override (see optionsToEnv).
   const optEnv = optionsToEnv(ctx.options ?? {});
   const env = { ...optEnv, ...process.env };
@@ -345,7 +351,7 @@ async function setup(ctx = {}) {
       }
     }
 
-    const verdict = checkToolCall({ tool, args, root, env });
+    const verdict = checkToolCall({ tool, args, root, cwd: launchCwd, env });
     if (verdict.decision === 'deny') {
       return deny(`ADLC rails-guard: blocked ${tool} — ${verdict.reason}`);
     }

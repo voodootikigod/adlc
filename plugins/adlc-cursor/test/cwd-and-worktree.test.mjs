@@ -51,6 +51,32 @@ test('Cursor resolveOwning and decide bind nested linked worktrees instead of ou
     { env: { ADLC_P4_ENFORCEMENT: '1' } }
   );
   assert.equal(verdict.permission, 'deny');
+
+  // Outer target must NOT be redirected to nested worktree just because payload.cwd points at a clean worktree
+  const cleanWt = join(primary, '.worktrees', 'clean-wt');
+  git(primary, 'worktree', 'add', '-b', 'clean-wt', cleanWt);
+  writeFileSync(join(primary, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T-CUR' }));
+  const outerVerdict = decide(
+    {
+      tool_name: 'Write',
+      workspace_roots: [primary],
+      cwd: cleanWt,
+      tool_input: { file_path: join(primary, 'src', 'frozen.js'), content: 'tamper' },
+    },
+    { env: { ADLC_P4_ENFORCEMENT: '1' } }
+  );
+  assert.equal(outerVerdict.permission, 'deny');
+
+  // Subdirectory payload.cwd (without workspace_roots) climbs to enclosing ADLC checkout root
+  const subdirVerdict = decide(
+    {
+      tool_name: 'Write',
+      cwd: join(primary, 'src'),
+      tool_input: { file_path: 'frozen.js', content: 'tamper' },
+    },
+    { env: { ADLC_P4_ENFORCEMENT: '1' } }
+  );
+  assert.equal(subdirVerdict.permission, 'deny');
 });
 
 test('Cursor extracts notebook_path and classifies run_shell_command as shell tool', () => {

@@ -66,7 +66,18 @@ export const PURE_READS = new Set([
   // agy workflows (e.g. asking the user a question).
   'managetask', 'schedule', 'listpermissions', 'sendmessage', 'askquestion',
   'invokesubagent', 'askpermission', 'managesubagents', 'definesubagent',
-  'readurlcontent', 'callmcptool', 'listresources', 'readresource',
+  'readurlcontent', 'listresources', 'readresource',
+]);
+
+// Read-only inner MCP tools permitted through `call_mcp_tool` when carrying no
+// write-target, file-mutation, or command/code execution arguments.
+const READONLY_MCP_INNER_TOOLS = new Set([
+  'codegraphexplore',
+  'agbstatus',
+  'agbdoctor',
+  'agbpreflight',
+  'listresources',
+  'readresource',
 ]);
 
 /** Normalize a raw Cursor tool name to a lowercase alpha token for classification. */
@@ -167,40 +178,74 @@ export function isShellTool(name, args = null) {
   return true;
 }
 
+const MUTATING_PAYLOAD_KEY_RE = /^(TargetFile|target_file|dest_file|destFile|dest|destination|destPath|CodeContent|codeContent|content|Replacement|replacement|ReplacementContent|replacementContent|ReplacementChunks|replacementChunks|patch|patchText|diff|edits|changes|operations)$/i;
+
+export function hasMutatingPayloadDeep(args, depth = 0) {
+  if (depth > 5) return true;
+  if (!args || typeof args !== 'object') return false;
+  if (Array.isArray(args)) {
+    return args.some((item) => item && typeof item === 'object' && hasMutatingPayloadDeep(item, depth + 1));
+  }
+  for (const [key, val] of Object.entries(args)) {
+    if (MUTATING_PAYLOAD_KEY_RE.test(key)) {
+      if (typeof val === 'string' && val.length > 0) return true;
+      if (Array.isArray(val) && val.length > 0) return true;
+      if (val && typeof val === 'object') return true;
+    }
+    if (val && typeof val === 'object' && hasMutatingPayloadDeep(val, depth + 1)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Classify a Cursor tool name: 'mutating' | 'readonly' | 'other'.
  *
  * Order is load-bearing and FAIL-CLOSED:
  *  1. mutating hints (substring) win first — so "search_replace" (contains
  *     "replace") is mutating despite also containing "search";
- *  2. then known pure reads (whole token) are allowed;
- *  3. everything else is 'other', which checkRail CHECKS (treats as a mutation),
+ *  2. `call_mcp_tool` inspects the inner MCP `ToolName` + `Arguments` and only
+ *     classifies known read-only MCP tools without mutating/command payloads as
+ *     `readonly`; mutating inner names classify `mutating`, all else `other`;
+ *  3. then known pure reads (whole token) are allowed unless carrying write or
+ *     command payloads;
+ *  4. everything else is 'other', which checkRail CHECKS (treats as a mutation),
  *     so an unrecognized tool carrying a rail path is denied, not waved through.
  */
 export function classifyTool(name, args = null) {
   const n = normalizeToolName(name);
   if (!n) return 'other';
+  if (n === 'callmcptool') {
+    if (!args || typeof args !== 'object' || Array.isArray(args)) return 'other';
+    const rawInnerName = args.ToolName ?? args.toolName ?? args.tool_name ?? args.name ?? '';
+    const rawServerName = args.ServerName ?? args.serverName ?? args.server_name ?? args.server ?? '';
+    const innerName = normalizeToolName(rawInnerName);
+    const qualifiedInner = `${normalizeToolName(rawServerName)}${innerName}`;
+    const innerArgs = args.Arguments ?? args.arguments ?? args.input ?? args.params ?? null;
+    if (!innerName) return 'other';
+    if (MUTATING_TOOL_HINTS.some((h) => innerName.includes(h))) return 'mutating';
+    const allowedReadInner =
+      READONLY_MCP_INNER_TOOLS.has(innerName) ||
+      READONLY_MCP_INNER_TOOLS.has(qualifiedInner) ||
+      PURE_READS.has(innerName);
+    if (
+      allowedReadInner &&
+      !hasMutatingPayloadDeep(args) &&
+      !hasMutatingPayloadDeep(innerArgs) &&
+      !hasCommandLineArgs(innerArgs) &&
+      !hasCodeExecutionArgs(innerArgs)
+    ) {
+      return 'readonly';
+    }
+    return 'other';
+  }
   if (MUTATING_TOOL_HINTS.some((h) => n.includes(h))) return 'mutating';
   if (PURE_READS.has(n)) {
     if (args && typeof args === 'object') {
-      const hasWriteTargetOrContent = Boolean(
-        args.TargetFile ||
-        args.targetFile ||
-        args.target_file ||
-        args.dest_file ||
-        args.destination ||
-        args.CodeContent ||
-        args.codeContent ||
-        args.content ||
-        args.Replacement ||
-        args.replacement ||
-        args.ReplacementContent ||
-        args.replacementContent ||
-        args.ReplacementChunks ||
-        args.replacementChunks
-      );
-      const hasCmd = hasCommandLineArgs(args);
-      if (hasWriteTargetOrContent || hasCmd) return 'other';
+      if (hasMutatingPayloadDeep(args) || hasCommandLineArgs(args) || hasCodeExecutionArgs(args)) {
+        return 'other';
+      }
     }
     return 'readonly';
   }
