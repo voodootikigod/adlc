@@ -221,8 +221,24 @@ test('resolveWorkspaceRoot, discoverRootFromTranscriptRecords, and lifecycle hoo
     realpathSync(lane)
   );
 
+  // Transcript discovery does NOT let a later unrelated checkout hijack the established root
+  const unrelatedRepo = repoWithAdlc(t);
+  git(unrelatedRepo, 'init', '-b', 'main');
+  assert.equal(
+    realpathSync(
+      discoverRootFromTranscriptRecords(
+        [
+          { toolCalls: [{ name: 'write_to_file', args: { TargetFile: join(lane, 'src', 'impl.js') } }] },
+          { toolCalls: [{ name: 'read_file', args: { Path: join(unrelatedRepo, 'src', 'other.js') } }] },
+        ],
+        {}
+      )
+    ),
+    realpathSync(lane)
+  );
+
   // Full PreToolUse -> PostToolUse -> Stop lifecycle with outer workspacePaths[0], outer-repo transcript,
-  // initial outer read_file, and subsequent nested worktree tool args
+  // initial outer read_file, structured edit using { TargetFile: 'src/impl.js', Cwd: lane }, and nested test run
   const home = tmp(t, 'gemini-wt-home-');
   const transcriptPath = join(primary, 'session-transcript.jsonl');
   const conversationId = '11111111-1111-4111-8111-111111111111';
@@ -237,7 +253,7 @@ test('resolveWorkspaceRoot, discoverRootFromTranscriptRecords, and lifecycle hoo
     workspacePaths: [primary],
     conversationId,
     transcriptPath,
-    toolCall: { name: 'write_to_file', args: { TargetFile: '.worktrees/lane-wt/src/impl.js', CodeContent: 'export const x = 2;\n' } },
+    toolCall: { name: 'write_to_file', args: { TargetFile: 'src/impl.js', Cwd: lane, CodeContent: 'export const x = 2;\n' } },
   };
   const preEdit = runFromStdin(JSON.stringify(editCall), env);
   assert.equal(preEdit.allow_tool, true, preEdit.deny_reason);

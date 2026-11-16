@@ -242,6 +242,7 @@ export function anchorPath(rawPath, payload, env = null) {
   if (!rawPath) return { abs: null, anchored: false };
   const normRawPath = typeof rawPath === 'string' ? rawPath.replace(/\\/g, '/') : rawPath;
   if (isAbsolute(normRawPath)) return { abs: normRawPath, anchored: true };
+  const toolWorkdir = isToolPayload(payload) ? extractCwdFromArgs(extractArgs(payload)) : null;
   const ws =
     WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : [])).find(
       (s) => typeof s === 'string' && s.trim()
@@ -259,7 +260,17 @@ export function anchorPath(rawPath, payload, env = null) {
     ].find((s) => typeof s === 'string' && s.trim());
   if (ws) {
     const absWs = isAbsolute(ws) ? ws : resolve(nonPluginProcessCwd() ?? process.cwd(), ws);
+    if (typeof toolWorkdir === 'string' && toolWorkdir.trim() && normRawPath !== toolWorkdir.trim().replace(/\\/g, '/')) {
+      const absToolWd = isAbsolute(toolWorkdir.trim()) ? toolWorkdir.trim() : resolve(absWs, toolWorkdir.trim());
+      return { abs: join(absToolWd, normRawPath), anchored: true };
+    }
     return { abs: join(absWs, normRawPath), anchored: true };
+  }
+  if (typeof toolWorkdir === 'string' && toolWorkdir.trim() && isAbsolute(toolWorkdir.trim())) {
+    if (normRawPath === toolWorkdir.trim().replace(/\\/g, '/')) {
+      return { abs: toolWorkdir.trim(), anchored: true };
+    }
+    return { abs: join(toolWorkdir.trim(), normRawPath), anchored: true };
   }
   return { abs: null, anchored: false };
 }
@@ -398,6 +409,11 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
 
     // Step 2 — classify first. Reads of non-secret files are allowed.
     if (cls === 'readonly') return allow();
+
+    const earlyDeclaredWs = declaredOuterWorkspace(payload, wsRoot);
+    if (hasConflictingToolWorkdirs(args, earlyDeclaredWs ?? wsRoot ?? nonPluginProcessCwd() ?? process.cwd())) {
+      return deny('shell command specifies conflicting working directories — failing closed');
+    }
 
     if (paths.length > 0) {
       const localCache = trackerCache ?? new Map();
@@ -986,10 +1002,6 @@ export function discoverRootFromTranscriptRecords(records, env = process.env, { 
     });
     if (upgraded && canonicalizePath(upgraded) !== canonicalizePath(best)) {
       best = upgraded;
-    } else if (isPathInside(best, next)) {
-      // keep `best` when `best` is already a nested worktree inside outer `next`
-    } else {
-      best = next;
     }
   }
   return best;
@@ -1817,19 +1829,28 @@ export function onStop(payload, { env = process.env } = {}) {
         const isShell = isShellTool(name, args);
         const isMutating = !isShell && classifyTool(name, args) !== 'readonly';
 
+        const rawCallWorkdir = extractCwdFromArgs(args);
+        const callEffectiveAnchor =
+          rawCallWorkdir && typeof rawCallWorkdir === 'string' && rawCallWorkdir.trim()
+            ? (isAbsolute(rawCallWorkdir.trim()) ? rawCallWorkdir.trim() : resolve(fileAnchorBase, rawCallWorkdir.trim()))
+            : fileAnchorBase;
+
         // Determine whether this call targeted an outer checkout before entering a nested worktree
         let callTargetsOuterOnly = false;
         if (isNestedWorktreeSession) {
-          const callWorkdir = extractCwdFromArgs(args);
-          const candidateCallPaths = [
-            ...(callWorkdir ? [callWorkdir] : []),
-            ...filePaths,
-          ];
-          const resolvedCallRoots = candidateCallPaths
+          const resolvedFileRoots = filePaths
             .filter((p) => typeof p === 'string' && p.trim())
-            .map((p) => (isAbsolute(p.trim()) ? p.trim() : resolve(fileAnchorBase, p.trim())))
+            .map((p) => (isAbsolute(p.trim()) ? p.trim() : resolve(callEffectiveAnchor, p.trim())))
             .map((absP) => findAdlcRoot(canonicalizeExisting(absP), env) ?? findAdlcRoot(absP, env))
             .filter(Boolean);
+          const resolvedWorkdirRoot =
+            rawCallWorkdir && typeof rawCallWorkdir === 'string' && rawCallWorkdir.trim()
+              ? (findAdlcRoot(canonicalizeExisting(callEffectiveAnchor), env) ?? findAdlcRoot(callEffectiveAnchor, env))
+              : null;
+          const resolvedCallRoots = [
+            ...(resolvedWorkdirRoot ? [resolvedWorkdirRoot] : []),
+            ...resolvedFileRoots,
+          ];
           if (
             resolvedCallRoots.length > 0 &&
             resolvedCallRoots.every((cr) => canonicalizePath(cr) !== canonicalizePath(root))
@@ -1862,7 +1883,7 @@ export function onStop(payload, { env = process.env } = {}) {
             };
           }
           if (filePaths.some((p) => {
-            const abs = isAbsolute(p) ? p : resolve(fileAnchorBase, p);
+            const abs = isAbsolute(p) ? p : resolve(callEffectiveAnchor, p);
             const rel = relative(root, abs);
             return rel.startsWith('..') || isAbsolute(rel);
           })) {
