@@ -9,7 +9,7 @@ import { sha256, withLedgerLock } from '@adlc/core';
 import { signEntry } from './sign.mjs';
 import { verify } from './verify.mjs';
 import { segmentPath, segmentDirPath } from './forest.mjs';
-import { resolveOpenSegment, lineagePath } from './lineage.mjs';
+import { isSegmentedRepo, normalizeManifestDirAndCwd, resolveOpenSegment, lineagePath } from './lineage.mjs';
 
 /**
  * Append `payload` to the current lineage's segment, minting a new one when
@@ -22,6 +22,10 @@ import { resolveOpenSegment, lineagePath } from './lineage.mjs';
  * code).
  */
 export function appendToSegment(payload, dir, { signatureVersion, cwd, key }) {
+  ({ dir, cwd } = normalizeManifestDirAndCwd(dir, { cwd }));
+  if (!isSegmentedRepo(dir)) {
+    throw new Error(`refusing to append segment entry to non-segmented manifest directory: ${dir}`);
+  }
   // Adversarial-review finding: resolving the open segment (reading/minting
   // against .lineage) and actually writing to it used to be UNSYNCHRONIZED
   // with each other. Two first-ever writers on the same branch could both

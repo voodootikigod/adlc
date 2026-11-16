@@ -123,13 +123,20 @@ function collectCommandText(value, out = []) {
 const TOOL_INPUT_BAG_KEYS = ['tool_input', 'toolInput', 'args', 'arguments', 'input', 'params', 'parameters'];
 
 function hasShellWorkdirConflict(value, baseDir) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  if (hasConflictingToolWorkdirs(value, baseDir)) {
-    // Only count top-level keys on `value` when `value` is NOT an outer hook envelope
-    if (!toolName(value)) return true;
+  if (!value || typeof value !== 'object') return false;
+  if (Array.isArray(value)) {
+    return value.some((item) => hasShellWorkdirConflict(item, baseDir));
+  }
+  if (!toolName(value) && hasConflictingToolWorkdirs(value, baseDir)) {
+    return true;
   }
   for (const bagKey of TOOL_INPUT_BAG_KEYS) {
     if (hasConflictingToolWorkdirs(value[bagKey], baseDir)) return true;
+  }
+  for (const child of Object.values(value)) {
+    if (child && typeof child === 'object' && hasShellWorkdirConflict(child, baseDir)) {
+      return true;
+    }
   }
   return false;
 }
@@ -392,9 +399,17 @@ function loadCheckoutRails(checkoutRoot) {
 }
 
 const primaryState = loadCheckoutRails(root);
+const shellProbePaths = [];
+for (const { commandText, workdir } of shellInvocations) {
+  const shellBase = workdir ? resolve(toolCwd, workdir) : toolCwd;
+  shellProbePaths.push(shellBase);
+  const sp = new Set();
+  collectShellPaths(commandText, sp);
+  for (const p of sp) shellProbePaths.push(resolve(shellBase, p));
+}
 const absProbeTargets = [
   ...Array.from(rawPaths).map((p) => resolve(toolCwd, p)),
-  ...shellInvocations.map(({ workdir }) => (workdir ? resolve(toolCwd, workdir) : toolCwd)),
+  ...shellProbePaths,
 ];
 const nestedRoots = new Set();
 for (const absTarget of absProbeTargets) {
@@ -406,13 +421,21 @@ for (const absTarget of absProbeTargets) {
   });
   if (inner && inner !== root) nestedRoots.add(inner);
 }
+const allNestedStates = new Map();
 const nestedStates = new Map();
 for (const nr of nestedRoots) {
   const st = loadCheckoutRails(nr);
+  allNestedStates.set(nr, st);
   if (st.active) nestedStates.set(nr, st);
 }
 
 if (!primaryState.active && nestedStates.size === 0) {
+  if (explicitEnforcement === '1') {
+    for (const st of allNestedStates.values()) {
+      if (st.reason === 'no-ticket') fail('ADLC_P4_ENFORCEMENT=1 but no active ticket source resolved');
+      if (st.reason === 'no-rails') fail(`ticket ${st.ticketId} has no rails`);
+    }
+  }
   if (primaryState.reason === 'no-ticket') {
     if (explicitEnforcement === '1') fail('ADLC_P4_ENFORCEMENT=1 but no active ticket source resolved');
     notice('P4 rail hook inactive: no current ticket selected');
@@ -435,6 +458,7 @@ const resolvedTargets = Array.from(rawPaths).map((path) => ({
   raw: path,
   base: toolCwd,
   abs: resolve(toolCwd, path),
+  isShellVerb: false,
 }));
 let shellMutating = false;
 let cwdChangingShellMutation = false;
@@ -467,9 +491,15 @@ if (shellTool) {
     if (commandPaths.size === 0) {
       fail('mutating shell payload did not include literal editable paths');
     }
+    const firstVerb = shellTokens(commandText)[0] ?? '';
     const shellBaseCwd = workdir ? resolve(toolCwd, workdir) : toolCwd;
     for (const path of commandPaths) {
-      resolvedTargets.push({ raw: path, base: shellBaseCwd, abs: resolve(shellBaseCwd, path) });
+      resolvedTargets.push({
+        raw: path,
+        base: shellBaseCwd,
+        abs: resolve(shellBaseCwd, path),
+        isShellVerb: path === firstVerb && !looksPathLike(path),
+      });
     }
   }
 }
@@ -489,19 +519,27 @@ if (resolvedTargets.length === 0) {
   fail(shellTool ? 'shell payload did not include literal editable paths or a known read-only command' : 'active hook payload did not include any editable paths');
 }
 
+const primaryTargets = resolvedTargets.filter(({ abs }) => !Array.from(nestedRoots).some((nr) => isPathInside(abs, nr)));
 if (primaryState.active) {
-  const primaryPaths = resolvedTargets
-    .filter(({ abs }) => !Array.from(nestedRoots).some((nr) => isPathInside(abs, nr)))
-    .map(({ raw, base }) => normalizePath(raw, base, root));
+  const primaryPaths = primaryTargets.map(({ raw, base }) => normalizePath(raw, base, root));
   const blocked = primaryPaths.filter((path) => primaryState.rails.some((rail) => railMatchesPath(rail, path)));
   if (blocked.length > 0) fail(`blocked rail edit for ${primaryState.ticketId}: ${blocked.join(', ')}`);
 }
-for (const [nr, st] of nestedStates.entries()) {
-  const nestedPaths = resolvedTargets
-    .filter(({ abs }) => isPathInside(abs, nr))
-    .map(({ raw, base }) => normalizePath(raw, base, nr));
-  const blocked = nestedPaths.filter((path) => st.rails.some((rail) => railMatchesPath(rail, path)));
-  if (blocked.length > 0) fail(`blocked rail edit for ${st.ticketId}: ${blocked.join(', ')}`);
+for (const [nr, st] of allNestedStates.entries()) {
+  const nestedTargets = resolvedTargets.filter(({ abs }) => isPathInside(abs, nr));
+  if (nestedTargets.length === 0) continue;
+  if (st.active) {
+    const nestedPaths = nestedTargets.map(({ raw, base }) => normalizePath(raw, base, nr));
+    const blocked = nestedPaths.filter((path) => st.rails.some((rail) => railMatchesPath(rail, path)));
+    if (blocked.length > 0) fail(`blocked rail edit for ${st.ticketId}: ${blocked.join(', ')}`);
+  } else if (explicitEnforcement === '1' && nestedTargets.some((t) => !t.isShellVerb)) {
+    if (st.reason === 'no-ticket') fail('ADLC_P4_ENFORCEMENT=1 but no active ticket source resolved');
+    if (st.reason === 'no-rails') fail(`ticket ${st.ticketId} has no rails`);
+  }
+}
+if (primaryTargets.some((t) => !t.isShellVerb) && !primaryState.active && explicitEnforcement === '1') {
+  if (primaryState.reason === 'no-ticket') fail('ADLC_P4_ENFORCEMENT=1 but no active ticket source resolved');
+  if (primaryState.reason === 'no-rails') fail(`ticket ${primaryState.ticketId} has no rails`);
 }
 
 process.exit(0);

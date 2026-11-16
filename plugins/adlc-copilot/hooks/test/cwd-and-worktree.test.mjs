@@ -110,6 +110,20 @@ test('Copilot rails-guard and build-gate resolve subdirectory payload.cwd inside
   assert.equal(crossWtRes.status, 0);
   assert.match(crossWtRes.stdout, /blocked rail edit/);
 
+  // Shell command without workdir targeting nested worktree frozen rail from outer primary payload.cwd blocks
+  const shellCrossWtRes = spawnHook([RAILS_HOOK], {
+    cwd: outsideCwd,
+    input: JSON.stringify({
+      cwd: primary,
+      toolName: 'run_terminal_cmd',
+      toolArgs: JSON.stringify({ command: 'rm .worktrees/lane-a/packages/sub/frozen.mjs' }),
+    }),
+    encoding: 'utf8',
+    env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' },
+  });
+  assert.equal(shellCrossWtRes.status, 0);
+  assert.match(shellCrossWtRes.stdout, /blocked rail edit/);
+
   // Build-gate resolves enclosing worktree root when payload.cwd is a subdirectory and fails closed on corrupt store
   writeFileSync(join(lane, '.adlc', 'tickets.json'), '{not-json');
   const bgRes = spawnHook([BUILD_GATE_HOOK], {

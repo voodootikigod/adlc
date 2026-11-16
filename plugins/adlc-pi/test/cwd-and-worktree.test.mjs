@@ -145,4 +145,29 @@ test('extension resolves subdirectory ctx.cwd to enclosing ADLC root and enforce
   );
   assert.equal(customBlocked?.block, true);
   assert.match(customBlocked?.reason ?? '', /frozen rail/);
+
+  // With ADLC_CONTEXT_ROT_HANDOFF_ENABLED=1 and ctx.cwd = root/.adlc, relative write '.deny-store' hits D0 protected path
+  const handlersHandoff = new Map();
+  const piHandoff = {
+    on(event, fn) {
+      handlersHandoff.set(event, fn);
+    },
+    registerTool() {},
+    registerCommand() {},
+    sendMessage() {},
+    async exec() {
+      return { stdout: '', stderr: '', code: 0 };
+    },
+  };
+  createExtension({ env: { ADLC_CONTEXT_ROT_HANDOFF_ENABLED: '1' } })(piHandoff);
+  const adlcSubCtx = {
+    ...ctx,
+    cwd: join(root, '.adlc'),
+  };
+  await handlersHandoff.get('session_start')({}, adlcSubCtx);
+  const denyStoreBlocked = await handlersHandoff.get('tool_call')(
+    { toolName: 'write', toolCallId: 'c7', input: { path: '.deny-store', content: 'tamper' } },
+    adlcSubCtx
+  );
+  assert.equal(denyStoreBlocked?.block, true);
 });

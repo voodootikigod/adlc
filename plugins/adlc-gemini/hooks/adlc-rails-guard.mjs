@@ -12,19 +12,10 @@ import { homedir, tmpdir } from 'node:os';
 export function canonicalizeExisting(p) {
   if (!p || typeof p !== 'string') return p;
   try {
-    if (existsSync(p)) return realpathSync(p);
-    let cur = dirname(p);
-    const suffix = [parse(p).base];
-    const { root: fsRoot } = parse(cur);
-    while (cur && cur !== fsRoot) {
-      if (existsSync(cur)) {
-        return join(realpathSync(cur), ...suffix);
-      }
-      suffix.unshift(parse(cur).base);
-      cur = dirname(cur);
-    }
-  } catch {}
-  return p;
+    return canonicalizePath(p);
+  } catch {
+    return p;
+  }
 }
 
 function realpathOr(p) {
@@ -93,6 +84,20 @@ export function extractArgs(payload) {
   for (const k of ARGS_KEYS) if (tc[k] && typeof tc[k] === 'object') return tc[k];
   return {};
 }
+function decodeFileUriOrPath(trimmed) {
+  if (!trimmed.startsWith('file://')) return trimmed;
+  try {
+    return fileURLToPath(trimmed);
+  } catch {
+    const stripped = trimmed.replace(/^file:\/\/(?:localhost)?/i, '');
+    try {
+      return decodeURIComponent(stripped);
+    } catch {
+      return stripped;
+    }
+  }
+}
+
 export function extractFilePaths(payload) {
   const args = extractArgs(payload);
   const out = new Set();
@@ -108,10 +113,10 @@ export function extractFilePaths(payload) {
       if (typeof v === 'string') {
         const trimmed = v.trim();
         if (isPathKey && trimmed) {
-          out.add(trimmed.startsWith('file://') ? trimmed.slice('file://'.length) : trimmed);
+          out.add(decodeFileUriOrPath(trimmed));
         } else if (isUriKey && trimmed) {
           if (trimmed.startsWith('file://')) {
-            out.add(trimmed.slice('file://'.length));
+            out.add(decodeFileUriOrPath(trimmed));
           } else if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) {
             out.add(trimmed);
           }

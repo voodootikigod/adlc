@@ -200,11 +200,17 @@ const ADLC_CLI_TIMEOUT_MS = 5000;
  * the calls that sign or verify the manifest. Returns null when no trusted adlc
  * exists or it could not be started; untrustedBinaryReason tells those apart.
  */
-function runAdlc(args, { keyed = false } = {}) {
+function runAdlc(args, { keyed = false, cwd = undefined } = {}) {
   const candidate = resolveTrustedBinary('adlc', process.env.PATH);
   if (!candidate) return null;
   const env = keyed ? process.env : withoutHookSecrets(process.env);
-  const options = { encoding: 'utf8', timeout: ADLC_CLI_TIMEOUT_MS, killSignal: 'SIGKILL', env };
+  const options = {
+    encoding: 'utf8',
+    timeout: ADLC_CLI_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+    env,
+    ...(cwd ? { cwd } : {}),
+  };
   const script = nodeScriptPath(candidate);
   const r = script
     ? spawnSync(process.execPath, [script, ...args], options)
@@ -389,11 +395,25 @@ async function main() {
   // hide the enclosing repo's store); else the store at the git root; else the
   // nearest-ancestor ADLC root — but NEVER one that sits OUTSIDE an enclosing
   // non-ADLC git repo.
-  const root = adlcGitRoot
+  const walkedRoot = adlcGitRoot
     ? adlcGitRoot
     : gitRoot && ticketStoreExists(gitRoot, process.env)
       ? gitRoot
       : (adlcRoot && (!gitRoot || isInside(adlcRoot, gitRoot)) ? adlcRoot : null);
+  const root = (() => {
+    if (!walkedRoot || rawTargetCandidates.length === 0) return walkedRoot;
+    const preferOpts = {
+      storeOverride: storeOverrideForRoot,
+      homeDir: homeDirForRoot,
+      allowFileStart: true,
+      preserveSpelling: true,
+    };
+    const perTarget = rawTargetCandidates.map((cand) =>
+      preferInnermostCheckout(walkedRoot, [cand], preferOpts)
+    );
+    const unique = [...new Set(perTarget.filter(Boolean))];
+    return unique.length === 1 ? unique[0] : walkedRoot;
+  })();
   if (root) {
     try {
       process.chdir(root);
@@ -1161,14 +1181,14 @@ function denyRail(reason) {
  * the record was durably written (adlc present and `gate-manifest record` exited
  * 0). A bypass without a successful audit is not a valid override.
  */
-function recordBypass(relPath, why) {
+function recordBypass(relPath, why, { cwd = undefined } = {}) {
   const r = runAdlc([
     'gate-manifest',
     'record',
     'rails-bypass',
     '--data',
     JSON.stringify({ path: relPath, reason: why }),
-  ], { keyed: true });
+  ], { keyed: true, cwd });
   return !!r && r.status === 0;
 }
 
@@ -1197,68 +1217,7 @@ function recordBypass(relPath, why) {
 // symlinks (e.g. `*/auth/**` where `auth` is a symlink) is the one residual
 // gap — declare rails with literal directory prefixes for symlink resolution to
 // apply; the CI gate remains the commit-time backstop.
-function checkNestedCheckoutRailsForTargets(input, fps) {
-  if (!fps.length) return;
-  const currentRoot = realOrSelf(process.cwd());
-  const storeOverride = process.env.ADLC_TICKET_STORE || process.env.ADLC_TICKETS || null;
-  const homeDir = realOrSelf(process.env.HOME || homedir());
-  for (const fp of fps) {
-    const absTarget = resolve(baseDir ?? process.cwd(), fp);
-    const owningRoot = findInnermostCheckoutRoot(absTarget, {
-      storeOverride,
-      homeDir,
-      allowFileStart: true,
-      preserveSpelling: true,
-    });
-    if (!owningRoot || realOrSelf(owningRoot) === currentRoot) continue;
-    if (inspectGitCheckout(realOrSelf(owningRoot))?.kind !== 'worktree') continue;
-    if (!existsSync(join(owningRoot, '.adlc')) || !ticketStoreExists(owningRoot, process.env)) continue;
-    let nestedSnap;
-    try {
-      nestedSnap = loadTicketStoreReadOnly({ root: owningRoot, env: process.env });
-    } catch (e) {
-      return denyRail(
-        `cannot read ticket store in target checkout ${owningRoot} (${e.message}); rails cannot be verified, so edits are blocked.`
-      );
-    }
-    const nestedDecls = [];
-    let nestedAny = false;
-    for (const t of nestedSnap?.tickets ?? []) {
-      if (!t || typeof t !== 'object' || Array.isArray(t)) continue;
-      const expired = t.completed === true;
-      for (const r of t.rails ?? []) {
-        if (typeof r !== 'string') continue;
-        nestedAny = true;
-        if (expired) continue;
-        nestedDecls.push({ glob: r.split('\\').join('/'), ticket: typeof t.id === 'string' ? t.id : '?' });
-      }
-    }
-    if (!nestedAny) continue;
-    nestedDecls.push({
-      glob: nestedSnap.backend === 'directory' ? '.adlc/tickets/**' : '.adlc/tickets.json',
-      ticket: '(rail trust root)',
-    });
-    nestedDecls.push({ glob: '.adlc/current-ticket.json', ticket: '(rail trust root)' });
-    const relLex = relative(owningRoot, absTarget).split('\\').join('/');
-    const relReal = relative(realOrSelf(owningRoot), realResolve(absTarget)).split('\\').join('/');
-    const hit = nestedDecls.find((r) => globMatch(r.glob, relLex) || globMatch(r.glob, relReal));
-    if (hit && process.env.ADLC_RAILS_BYPASS !== '1') {
-      return denyRail(
-        `${relReal} is a frozen rail declared by ticket ${hit.ticket} in checkout ${owningRoot} (rails: "${hit.glob}"). Edits to frozen rails are blocked during build.`
-      );
-    }
-  }
-}
-
 function rails(input) {
-  const preFps = targetFilePaths(input);
-  checkNestedCheckoutRailsForTargets(input, preFps);
-  if (!existsSync('.adlc')) return; // not an ADLC repo
-  if (!ticketStoreExists(process.cwd(), process.env)) return; // no tickets → no rails declared
-  let ticketSnapshot;
-  const defaultDirectory = existsSync(join('.adlc', 'tickets', '.store.json'));
-  const ticketsPath = process.env.ADLC_TICKET_STORE ?? process.env.ADLC_TICKETS ?? (defaultDirectory ? join('.adlc', 'tickets') : join('.adlc', 'tickets.json'));
-
   // TRUST THE MATCHER: hooks.json routes only mutating edit tools to this hook,
   // so any tool that arrives is one we chose to gate — no in-code tool allowlist
   // (which would drift from the matcher and fail OPEN for a newly-matched tool).
@@ -1308,7 +1267,7 @@ function rails(input) {
   // A bypass is only honored if it is IN SCOPE and can be AUDITED. Out of scope →
   // deny. If recording fails (adlc missing, .adlc unwritable, record errors), an
   // unaudited override is refused.
-  const bypassOrDeny = (tag, denyReason) => {
+  const bypassOrDeny = (tag, denyReason, { auditCwd = undefined, targetOverride = null } = {}) => {
     if (bypassActive) {
       if (bypassWildcardOnly) {
         return denyRail(
@@ -1316,12 +1275,13 @@ function rails(input) {
             `Use ADLC_RAILS_BYPASS=1 for a deliberate session-wide override, or a specific path glob. ${denyReason}`
         );
       }
-      const targets = fps.length ? fps.map((fp) => toRepoRelative(fp)) : [subject];
+      const targets = targetOverride ?? (fps.length ? fps.map((fp) => toRepoRelative(fp)) : [subject]);
       const inScope = bypassUnscoped || targets.every((t) => globMatch(bypassRaw, t));
       if (!inScope) {
         return denyRail(`ADLC_RAILS_BYPASS is ${bypassScopeDesc} and does not authorize ${subject}. ${denyReason}`);
       }
-      if (recordBypass(subject, tag)) {
+      const auditSubject = targetOverride ? targetOverride.join(', ') : subject;
+      if (recordBypass(auditSubject, tag, { cwd: auditCwd })) {
         emitBypassNotice(targets);
         return; // audited, in-scope override → allow
       }
@@ -1332,6 +1292,91 @@ function rails(input) {
     }
     return denyRail(denyReason);
   };
+
+  // Enforce rails of any verified nested linked worktree targeted in a mixed edit
+  // even when process.cwd() stayed in the outer repository.
+  if (fps.length > 0) {
+    const currentRoot = realOrSelf(process.cwd());
+    const storeOverride = process.env.ADLC_TICKET_STORE || process.env.ADLC_TICKETS || null;
+    const homeDir = realOrSelf(process.env.HOME || homedir());
+    for (const fp of fps) {
+      const absTarget = resolve(baseDir ?? process.cwd(), fp);
+      const owningRoot = findInnermostCheckoutRoot(absTarget, {
+        storeOverride,
+        homeDir,
+        allowFileStart: true,
+        preserveSpelling: true,
+      });
+      if (!owningRoot || realOrSelf(owningRoot) === currentRoot) continue;
+      if (inspectGitCheckout(realOrSelf(owningRoot))?.kind !== 'worktree') continue;
+      if (!existsSync(join(owningRoot, '.adlc')) || !ticketStoreExists(owningRoot, process.env)) continue;
+      const relLex = relative(owningRoot, absTarget).split('\\').join('/');
+      const relReal = relative(realOrSelf(owningRoot), realResolve(absTarget)).split('\\').join('/');
+      let nestedSnap;
+      try {
+        nestedSnap = loadTicketStoreReadOnly({ root: owningRoot, env: process.env });
+      } catch (e) {
+        bypassOrDeny(
+          'unparseable-tickets-bypass',
+          `cannot read ticket store in target checkout ${owningRoot} (${e.message}); rails cannot be verified, so edits are blocked.`,
+          { auditCwd: owningRoot, targetOverride: [relReal] }
+        );
+        continue;
+      }
+      const nestedDecls = [];
+      let nestedAny = false;
+      let nestedMalformed = null;
+      for (const t of nestedSnap?.tickets ?? []) {
+        if (!t || typeof t !== 'object' || Array.isArray(t)) {
+          nestedMalformed = { tag: 'invalid-ticket-entry-bypass', reason: `ticket store in ${owningRoot} has a ticket entry that is not an object;` };
+          break;
+        }
+        if (t.rails !== undefined && !Array.isArray(t.rails)) {
+          nestedMalformed = { tag: 'invalid-rails-field-bypass', reason: `a ticket in ${owningRoot} has a non-array "rails" field;` };
+          break;
+        }
+        const expired = t.completed === true;
+        for (const r of t.rails ?? []) {
+          if (typeof r !== 'string') {
+            nestedMalformed = { tag: 'invalid-rail-entry-bypass', reason: `a ticket in ${owningRoot} has a non-string rail entry;` };
+            break;
+          }
+          nestedAny = true;
+          if (expired) continue;
+          nestedDecls.push({ glob: r.split('\\').join('/'), ticket: typeof t.id === 'string' ? t.id : '?' });
+        }
+        if (nestedMalformed) break;
+      }
+      if (nestedMalformed) {
+        bypassOrDeny(
+          nestedMalformed.tag,
+          `${nestedMalformed.reason} rails cannot be verified, so edits are blocked.`,
+          { auditCwd: owningRoot, targetOverride: [relReal] }
+        );
+        continue;
+      }
+      if (!nestedAny) continue;
+      nestedDecls.push({
+        glob: nestedSnap.backend === 'directory' ? '.adlc/tickets/**' : '.adlc/tickets.json',
+        ticket: '(rail trust root)',
+      });
+      nestedDecls.push({ glob: '.adlc/current-ticket.json', ticket: '(rail trust root)' });
+      const hit = nestedDecls.find((r) => globMatch(r.glob, relLex) || globMatch(r.glob, relReal));
+      if (hit) {
+        bypassOrDeny(
+          `rail ${hit.glob} (ticket ${hit.ticket})`,
+          `${relReal} is a frozen rail declared by ticket ${hit.ticket} in checkout ${owningRoot} (rails: "${hit.glob}"). Edits to frozen rails are blocked during build.`,
+          { auditCwd: owningRoot, targetOverride: [relReal] }
+        );
+      }
+    }
+  }
+
+  if (!existsSync('.adlc')) return; // not an ADLC repo
+  if (!ticketStoreExists(process.cwd(), process.env)) return; // no tickets → no rails declared
+  let ticketSnapshot;
+  const defaultDirectory = existsSync(join('.adlc', 'tickets', '.store.json'));
+  const ticketsPath = process.env.ADLC_TICKET_STORE ?? process.env.ADLC_TICKETS ?? (defaultDirectory ? join('.adlc', 'tickets') : join('.adlc', 'tickets.json'));
 
   // Fail closed on ANY state where rails cannot be trustworthily determined: an
   // unparseable file, an unexpected envelope, or a malformed rails field. Only a

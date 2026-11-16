@@ -82,6 +82,8 @@ test('SHELL_WORKDIR_KEYS is frozen and extractToolWorkdir extracts across harnes
   assert.equal(hasConflictingToolWorkdirs({ Cwd: '.', cwd: '/srv/repo' }, '/srv/repo'), false);
   assert.equal(hasConflictingToolWorkdirs({ Cwd: '.', workdir: 'test' }, '/srv/repo'), true);
   assert.equal(hasConflictingToolWorkdirs({ Cwd: '/srv/repo', options: { dir_path: '/tmp' } }, '/srv/repo'), true);
+  assert.equal(hasConflictingToolWorkdirs({ Cwd: '.', arguments: { workdir: 'src' } }, '/srv/repo'), true);
+  assert.equal(hasConflictingToolWorkdirs({ parameters: { Cwd: '/srv/repo', dir_path: '/tmp' } }, '/srv/repo'), true);
 });
 
 test('canonicalizePath and isPathInside resolve symlinks and non-existent children safely', (t) => {
@@ -337,4 +339,15 @@ test('preferInnermostCheckout upgrades outerRoot only for verified nested worktr
   assert.equal(preferInnermostCheckout(repo, [laneA]), realpathSync(laneA));
   mkdirSync(join(laneA, 'packages', 'sub'), { recursive: true });
   assert.equal(preferInnermostCheckout(repo, [join(laneA, 'packages', 'sub')]), realpathSync(laneA));
+
+  // File symlink and dangling symlink in outer repo pointing into nested worktree resolve to nested worktree!
+  const fileSym = join(repo, 'alias-readme.md');
+  symlinkSync(join(laneA, 'README.md'), fileSym);
+  assert.equal(findInnermostCheckoutRoot(fileSym, { allowFileStart: true }), realpathSync(laneA));
+  assert.equal(preferInnermostCheckout(repo, [fileSym], { allowFileStart: true }), realpathSync(laneA));
+
+  const danglingSym = join(repo, 'alias-new-contract.json');
+  symlinkSync(join(laneA, 'packages', 'sub', 'new-contract.json'), danglingSym);
+  assert.equal(findInnermostCheckoutRoot(danglingSym, { allowFileStart: true }), realpathSync(laneA));
+  assert.equal(preferInnermostCheckout(repo, [danglingSym], { allowFileStart: true }), realpathSync(laneA));
 });

@@ -23,7 +23,7 @@ import { isAbsolute, resolve, relative, dirname, basename } from 'node:path';
 import { realpathSync, existsSync } from 'node:fs';
 import { checkRail, classifyTool, isShellTool, railPreconditions } from '../rails-checker.mjs';
 import { normalizeRootPath } from '../lib/workspace-resolve.mjs';
-import { preferInnermostCheckout } from '../generated-workspace-root.mjs';
+import { findInnermostCheckoutRoot, preferInnermostCheckout } from '../generated-workspace-root.mjs';
 
 /** Best-effort realpath; falls back to the lexical path (a write may create it). */
 function realOr(p) {
@@ -318,9 +318,23 @@ export function decide(payload, { root, env = process.env } = {}) {
       // outcome — any 'deny' (conflict/corrupt) → deny; else any 'active' root → deny
       // (can't verify it against that root's frozen rails); else (all inactive) allow.
       const declared = candidateRoots(payload);
+      const storeOverride = env?.ADLC_TICKET_STORE ?? env?.ADLC_TICKETS ?? null;
+      const cwdOnly = declared.length > 0 && !hasExplicitWorkspaceDeclaration(payload);
       const host = hostProjectRoot(env);
-      const roots = root != null ? [root] : declared.length ? declared : host != null ? [host] : [];
-      if (!roots.length) return unresolvedRootVerdict(tool, env);
+      const rawRoots = root != null ? [root] : declared.length ? declared : host != null ? [host] : [];
+      if (!rawRoots.length) return unresolvedRootVerdict(tool, env);
+      const roots = rawRoots.map((r) => {
+        const climbed =
+          root == null && cwdOnly
+            ? (findInnermostCheckoutRoot(r, { storeOverride, preserveSpelling: true }) ?? r)
+            : r;
+        return (
+          preferInnermostCheckout(climbed, [payload?.cwd], {
+            storeOverride,
+            preserveSpelling: true,
+          }) ?? climbed
+        );
+      });
       const states = roots.map((r) => railPreconditions({ root: r, env }));
       const denied = states.find((s) => s.state === 'deny');
       if (denied) {

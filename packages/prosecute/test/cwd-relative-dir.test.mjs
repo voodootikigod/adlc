@@ -158,4 +158,17 @@ test('multi-segment relative dir (.worktrees/lane-a/.adlc) and explicit absolute
   const ownChains = readOwnChains(relLaneAdlc);
   assert.equal(ownChains.length, 2);
   assert.equal(ownChains[1][0]?.ticket, 'T-LANE');
+
+  // Calling appendManifestEntry(payload, '.adlc', { cwd: lane }) from segmented primary repo
+  // must write atomically to lane/.adlc without split-brain corruption in primary/.adlc!
+  appendManifestEntry(
+    { ts: new Date().toISOString(), gate: 'merge-forecast', ticket: 'T-LANE', data: { conflicts: [] } },
+    '.adlc',
+    { cwd: lane, key: null }
+  );
+  const afterCrossCwd = readOwnManifestChain('.adlc', { cwd: lane });
+  assert.equal(afterCrossCwd.identityError, null);
+  assert.equal(afterCrossCwd.entries.length, 2);
+  const primarySegments = readOwnManifestChain('.adlc', { cwd: primary });
+  assert.equal(primarySegments.entries.length, 0);
 });

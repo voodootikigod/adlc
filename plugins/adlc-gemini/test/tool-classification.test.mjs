@@ -62,6 +62,8 @@ test('PURE_READS keep readonly classification with file path args and MCP read t
   assert.equal(classifyTool('call_mcp_tool', { ServerName: 'custom', ToolName: 'unknown_action', Arguments: { path: 'frozen.js' } }), 'other');
   assert.equal(classifyTool('call_mcp_tool', { ServerName: 'codegraph', ToolName: 'codegraph_explore', Arguments: { TargetFile: 'frozen.js' } }), 'other');
   assert.equal(classifyTool('call_mcp_tool', { ServerName: 'codegraph', ToolName: 'codegraph_explore', Arguments: { command: 'rm frozen.js' } }), 'other');
+  assert.equal(classifyTool('call_mcp_tool', { ServerName: 'codegraph', ToolName: 'codegraph_explore', parameters: { command: 'rm frozen.js' } }), 'other');
+  assert.equal(classifyTool('call_mcp_tool', { ServerName: 'codegraph', ToolName: 'codegraph_explore', command: 'rm frozen.js' }), 'other');
   assert.equal(classifyTool('list_resources', { ServerName: 'mcp' }), 'readonly');
   assert.equal(classifyTool('read_resource', { ServerName: 'mcp', Uri: 'doc://1' }), 'readonly');
 });

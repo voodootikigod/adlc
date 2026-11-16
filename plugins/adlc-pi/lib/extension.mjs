@@ -453,7 +453,7 @@ export function createExtension({ env = process.env } = {}) {
           sessionId: handoffSessionId,
           usage: handoffUsage(ctx),
           ticketId: active.ticketId ?? null,
-          root: activeCwd,
+          root: ctx?.cwd ?? activeCwd,
           manifestKey,
           sticky: handoffSticky,
           adlcRoots: handoffAdlcRoots,

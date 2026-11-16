@@ -627,6 +627,18 @@ test('decide(): call_mcp_tool denies mutating/unknown inner tools on frozen rail
   }, { env: { ADLC_P4_ENFORCEMENT: '1' } });
   assert.equal(deniedResourceSecret.allow_tool, false);
 
+  const deniedEncodedResourceSecret = decide({
+    workspacePaths: [root],
+    toolCall: {
+      name: 'read_resource',
+      args: {
+        ServerName: 'filesystem',
+        Uri: `file://localhost${root}/%2eadlc/.session-secret`,
+      },
+    },
+  }, { env: { ADLC_P4_ENFORCEMENT: '1' } });
+  assert.equal(deniedEncodedResourceSecret.allow_tool, false);
+
   const allowedExplore = decide({
     workspacePaths: [root],
     toolCall: {

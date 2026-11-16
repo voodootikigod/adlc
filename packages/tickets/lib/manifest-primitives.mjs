@@ -538,7 +538,7 @@ export function resolveOpenSegment(dir = '.adlc', opts = {}) {
   const ulid = generateSegmentUlid();
   const slug = deriveSlug(branch ?? '');
   const name = `${slug}-${ulid}.jsonl`;
-  assertSegmentPathCommittable(dir, name);
+  assertSegmentPathCommittable(dir, name, { cwd });
   if (branch !== null) writeLineageToken(dir, { segment: name, ulid, branch });
   return { name, isNew: true, anchor, ...(branch !== null ? { branch } : {}) };
 }

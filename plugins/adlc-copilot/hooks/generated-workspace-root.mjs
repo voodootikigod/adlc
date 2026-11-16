@@ -3,9 +3,9 @@
 // workspace-root.mjs — canonical checkout-root, nested linked-worktree, and
 // tool working-directory resolution shared across ADLC packages and harnesses.
 
-import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 const GITDIR_POINTER_MAX_BYTES = 4096;
 
@@ -25,10 +25,13 @@ export const SHELL_WORKDIR_KEYS = Object.freeze([
 const WORKDIR_CONTAINERS = Object.freeze([
   'options',
   'params',
+  'parameters',
   'payload',
   'input',
   'tool_input',
   'toolInput',
+  'args',
+  'arguments',
 ]);
 
 function readSmallRegularFile(filePath) {
@@ -115,19 +118,31 @@ export function hasConflictingToolWorkdirs(args, baseDir = process.cwd()) {
  */
 export function canonicalizePath(targetPath) {
   const abs = resolve(targetPath);
-  const pending = [];
   let cur = abs;
-  for (;;) {
+  const pending = [];
+  const seen = new Set();
+  for (let guard = 0; guard < 64; guard += 1) {
     try {
       const realBase = realpathSync(cur);
       return pending.length === 0 ? realBase : join(realBase, ...pending);
     } catch {
+      if (seen.has(cur)) return abs;
+      seen.add(cur);
+      try {
+        if (lstatSync(cur).isSymbolicLink()) {
+          cur = resolve(dirname(cur), readlinkSync(cur));
+          continue;
+        }
+      } catch {
+        // Does not exist -> ascend to parent
+      }
       const parent = dirname(cur);
-      if (parent === cur) return abs;
-      pending.unshift(relative(parent, cur));
+      if (parent === cur) return pending.length === 0 ? cur : join(cur, ...pending);
+      pending.unshift(basename(cur));
       cur = parent;
     }
   }
+  return abs;
 }
 
 /**
@@ -290,10 +305,20 @@ export function findInnermostCheckoutRoot(startPath, options = {}) {
 
   let startLexical = resolve(startPath);
   if (allowFileStart) {
+    let isDir = false;
     try {
-      if (!lstatSync(startLexical).isDirectory()) startLexical = dirname(startLexical);
+      isDir = statSync(startLexical).isDirectory();
     } catch {
-      startLexical = dirname(startLexical);
+      isDir = false;
+    }
+    if (!isDir) {
+      let isSym = false;
+      try {
+        isSym = lstatSync(startLexical).isSymbolicLink();
+      } catch {
+        isSym = false;
+      }
+      startLexical = isSym ? dirname(canonicalizePath(startLexical)) : dirname(startLexical);
     }
   }
 

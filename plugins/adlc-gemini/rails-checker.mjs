@@ -222,7 +222,8 @@ export function classifyTool(name, args = null) {
     const rawServerName = args.ServerName ?? args.serverName ?? args.server_name ?? args.server ?? '';
     const innerName = normalizeToolName(rawInnerName);
     const qualifiedInner = `${normalizeToolName(rawServerName)}${innerName}`;
-    const innerArgs = args.Arguments ?? args.arguments ?? args.input ?? args.params ?? null;
+    const innerArgs =
+      args.Arguments ?? args.arguments ?? args.parameters ?? args.tool_input ?? args.toolInput ?? args.input ?? args.params ?? null;
     if (!innerName) return 'other';
     if (MUTATING_TOOL_HINTS.some((h) => innerName.includes(h))) return 'mutating';
     const allowedReadInner =
@@ -233,6 +234,8 @@ export function classifyTool(name, args = null) {
       allowedReadInner &&
       !hasMutatingPayloadDeep(args) &&
       !hasMutatingPayloadDeep(innerArgs) &&
+      !hasCommandLineArgs(args) &&
+      !hasCodeExecutionArgs(args) &&
       !hasCommandLineArgs(innerArgs) &&
       !hasCodeExecutionArgs(innerArgs)
     ) {

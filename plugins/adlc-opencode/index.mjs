@@ -94,15 +94,16 @@ function isWithin(child, parent) {
  * contains the launch directory and is not the filesystem root, because a
  * non-git ("global") project reports a root unrelated to where the work is.
  */
-function resolveRoot(location) {
+function resolveRoot(location, env = process.env) {
   const launch = nonEmpty(location?.directory);
   const project = nonEmpty(location?.project?.directory);
+  const storeOverride = env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null;
   if (project && launch && resolve(project) !== resolve('/') && isPathInside(launch, project)) {
-    return preferInnermostCheckout(project, [launch], { preserveSpelling: true }) ?? project;
+    return preferInnermostCheckout(project, [launch], { storeOverride, preserveSpelling: true }) ?? project;
   }
   const start = launch ?? project;
   if (start) {
-    return findInnermostCheckoutRoot(start, { preserveSpelling: true }) ?? start;
+    return findInnermostCheckoutRoot(start, { storeOverride, preserveSpelling: true }) ?? start;
   }
   return process.cwd();
 }
@@ -136,13 +137,13 @@ function adlcCommandOf(prompt) {
 }
 
 async function setup(ctx = {}) {
-  // The repo root used to locate .adlc/ and to canonicalize edited paths.
-  const root = resolveRoot(ctx.location);
-  const rawLaunchDir = nonEmpty(ctx.location?.directory);
-  const launchCwd = rawLaunchDir && isPathInside(rawLaunchDir, root) ? rawLaunchDir : root;
   // Per-repo plugin options as the base, real env vars override (see optionsToEnv).
   const optEnv = optionsToEnv(ctx.options ?? {});
   const env = { ...optEnv, ...process.env };
+  // The repo root used to locate .adlc/ and to canonicalize edited paths.
+  const root = resolveRoot(ctx.location, env);
+  const rawLaunchDir = nonEmpty(ctx.location?.directory);
+  const launchCwd = rawLaunchDir && isPathInside(rawLaunchDir, root) ? rawLaunchDir : root;
   // Kill switch: the context-rot handoff deny-set (slice 5) is not yet
   // stable enough for real sessions — it was blocking edits/shell wholesale
   // across workstreams, so it defaults OFF. checkHandoff() and its test

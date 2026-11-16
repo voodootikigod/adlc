@@ -1051,6 +1051,28 @@ test('nested git worktree (.worktrees/<lane>) enforces its own rails even when C
   }
   assert.match(mixedInnerOut, /"permissionDecision":"deny"/, `expected mixed nested worktree rail edit to be denied, got: ${mixedInnerOut}`);
 
+  // Unaudited ADLC_RAILS_BYPASS=1 on a mixed MultiEdit targeting a nested worktree rail MUST be refused when adlc is unavailable
+  let unauditedNestedBypassOut = '';
+  try {
+    unauditedNestedBypassOut = runHook([HOOK, 'rails'], {
+      input: JSON.stringify({
+        cwd: primary,
+        tool_name: 'MultiEdit',
+        tool_input: {
+          edits: [
+            { file_path: join(primary, 'src', 'free.js') },
+            { file_path: join(lane, 'src', 'frozen.js') },
+          ],
+        },
+      }),
+      encoding: 'utf8',
+      env: { ...env, ADLC_RAILS_BYPASS: '1', PATH: '' },
+    });
+  } catch (e) {
+    unauditedNestedBypassOut = e.stdout ?? '';
+  }
+  assert.match(unauditedNestedBypassOut, /"permissionDecision":"deny"/, `unaudited nested bypass must be refused: ${unauditedNestedBypassOut}`);
+
   // Forged subdirectory .git (empty or with fake HEAD) inside an ADLC git repo MUST NOT release enclosing rails
   const forgedSub = join(primary, 'src', 'forged');
   mkdirSync(join(forgedSub, '.git'), { recursive: true });

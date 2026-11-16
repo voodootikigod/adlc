@@ -134,4 +134,39 @@ test('Codex rails-guard and build-gate resolve payload.cwd subdirectories and ne
   });
   assert.equal(crossWtRes.status, 2, crossWtRes.stderr);
   assert.match(crossWtRes.stderr, /blocked rail edit/);
+
+  // Shell command without workdir targeting a nested worktree's frozen rail from outer primary payload.cwd blocks
+  const shellCrossWtRes = spawnHook([RAILS_HOOK], {
+    cwd: outsideCwd,
+    input: JSON.stringify({
+      cwd: primary,
+      tool_name: 'bash',
+      tool_input: { command: 'rm .worktrees/lane-a/packages/sub/frozen.mjs' },
+    }),
+    encoding: 'utf8',
+    env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' },
+  });
+  assert.equal(shellCrossWtRes.status, 2, shellCrossWtRes.stderr);
+  assert.match(shellCrossWtRes.stderr, /blocked rail edit/);
+
+  // multi_tool_use.parallel envelope with conflicting workdir keys in parameters fails closed
+  const parallelConflictRes = spawnHook([RAILS_HOOK], {
+    cwd: outsideCwd,
+    input: JSON.stringify({
+      cwd: lane,
+      tool_name: 'multi_tool_use.parallel',
+      tool_input: {
+        tool_uses: [
+          {
+            recipient_name: 'functions.exec_command',
+            parameters: { cmd: 'rm frozen.mjs', Cwd: '.', workdir: subDir },
+          },
+        ],
+      },
+    }),
+    encoding: 'utf8',
+    env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' },
+  });
+  assert.equal(parallelConflictRes.status, 2, parallelConflictRes.stderr);
+  assert.match(parallelConflictRes.stderr, /conflicting working directories/);
 });

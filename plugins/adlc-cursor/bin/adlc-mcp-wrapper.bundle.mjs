@@ -1078,7 +1078,7 @@ function resolveOpenSegment(dir = ".adlc", opts = {}) {
   const ulid = generateSegmentUlid();
   const slug = deriveSlug(branch ?? "");
   const name = `${slug}-${ulid}.jsonl`;
-  assertSegmentPathCommittable(dir, name);
+  assertSegmentPathCommittable(dir, name, { cwd });
   if (branch !== null) writeLineageToken(dir, { segment: name, ulid, branch });
   return { name, isNew: true, anchor, ...branch !== null ? { branch } : {} };
 }
@@ -2173,10 +2173,13 @@ var SHELL_WORKDIR_KEYS = Object.freeze([
 var WORKDIR_CONTAINERS = Object.freeze([
   "options",
   "params",
+  "parameters",
   "payload",
   "input",
   "tool_input",
-  "toolInput"
+  "toolInput",
+  "args",
+  "arguments"
 ]);
 
 // plugins/adlc-cursor/generated-active-ticket.mjs

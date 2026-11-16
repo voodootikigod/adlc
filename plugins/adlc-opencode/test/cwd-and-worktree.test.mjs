@@ -145,3 +145,63 @@ test('checkToolCall extracts alternative shell workdir keys (Cwd, dir_path, work
   assert.equal(subWriteDenied.decision, 'deny');
   assert.match(subWriteDenied.reason, /frozen rail/);
 });
+
+test('OpenCode setup resolves enclosing git root from subdirectory launch under external ADLC_TICKET_STORE', async (t) => {
+  const repo = tmp(t, 'oc-ext-store-repo-');
+  const extDir = tmp(t, 'oc-ext-store-dir-');
+  const extStore = join(extDir, 'tickets.json');
+  git(repo, 'init', '-b', 'main');
+  mkdirSync(join(repo, 'src'), { recursive: true });
+  writeFileSync(join(repo, 'src', 'frozen.mjs'), 'export const x = 1;\n');
+  writeFileSync(
+    extStore,
+    JSON.stringify({ tickets: [{ id: 'T-EXT', title: 'External', rails: ['src/frozen.mjs'] }] })
+  );
+
+  const prevEnf = process.env.ADLC_P4_ENFORCEMENT;
+  const prevStore = process.env.ADLC_TICKET_STORE;
+  const prevTicket = process.env.ADLC_TICKET;
+  process.env.ADLC_P4_ENFORCEMENT = '1';
+  process.env.ADLC_TICKET_STORE = extStore;
+  process.env.ADLC_TICKET = 'T-EXT';
+  t.after(() => {
+    if (prevEnf === undefined) delete process.env.ADLC_P4_ENFORCEMENT;
+    else process.env.ADLC_P4_ENFORCEMENT = prevEnf;
+    if (prevStore === undefined) delete process.env.ADLC_TICKET_STORE;
+    else process.env.ADLC_TICKET_STORE = prevStore;
+    if (prevTicket === undefined) delete process.env.ADLC_TICKET;
+    else process.env.ADLC_TICKET = prevTicket;
+  });
+
+  let beforeHook = null;
+  const ac = new AbortController();
+  t.after(() => ac.abort());
+
+  await plugin.setup({
+    location: { directory: join(repo, 'src') },
+    signal: ac.signal,
+    tool: {
+      hook(stage, fn) {
+        if (stage === 'execute.before') beforeHook = fn;
+      },
+      register() {},
+    },
+    permission: { hook() {} },
+    event: {
+      async *subscribe({ signal }) {
+        await new Promise((res) => signal.addEventListener('abort', res, { once: true }));
+      },
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      beforeHook({
+        tool: 'write',
+        sessionID: 'sess-ext',
+        input: { path: join(repo, 'src', 'frozen.mjs'), content: 'tamper' },
+      }),
+    /frozen rail/
+  );
+  ac.abort();
+});
