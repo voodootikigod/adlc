@@ -153,8 +153,8 @@ test('isReadonlyCommand allows grep and rg within workspace root and loadTickets
   assert.deepEqual(customLoaded.errors, []);
   assert.equal(customLoaded.tickets[0]?.id, 'T-CUSTOM');
 
-  assert.equal(loadTickets(null).errors.length, 1);
-  assert.equal(loadTickets('   ').errors.length, 1);
+  assert.deepEqual(loadTickets(null).errors, ['invalid ticket path']);
+  assert.deepEqual(loadTickets('   ').errors, ['invalid ticket path']);
   assert.equal(canonicalizeExisting(null), null);
   assert.equal(canonicalizeExisting(''), '');
   assert.equal(canonicalizeExisting(root), realpathSync(root));
@@ -295,6 +295,8 @@ test('resolveWorkspaceRoot, discoverRootFromTranscriptRecords, and lifecycle hoo
   const initialRead = { name: 'read_file', args: { Path: join(primary, 'src', 'frozen.js') } };
   writeFileSync(transcriptPath, `${JSON.stringify({ status: 'DONE', toolCalls: [initialRead] })}\n`);
   assert.equal(realpathSync(resolveTranscriptPath({ conversationId, env })), realpathSync(transcriptPath));
+  assert.equal(realpathSync(resolveTranscriptPath({ conversationId, env: { HOME: home } })), realpathSync(transcriptPath));
+  assert.equal(realpathSync(resolveTranscriptPath({ conversationId, env: { USERPROFILE: home } })), realpathSync(transcriptPath));
 
   runFromStdin(JSON.stringify({ workspacePaths: [primary], conversationId, transcriptPath, toolCall: initialRead }), env);
   postToolUse({ workspacePaths: [primary], conversationId, transcriptPath, exitCode: 0 }, { env });
