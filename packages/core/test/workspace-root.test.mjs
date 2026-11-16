@@ -225,6 +225,14 @@ test('findInnermostCheckoutRoot resolves nested worktrees while defeating forged
   mkdirSync(join(forgedSub, '.adlc'), { recursive: true });
   writeFileSync(join(forgedSub, '.adlc', 'tickets.json'), '{"tickets":[]}\n');
   assert.equal(findInnermostCheckoutRoot(forgedSub), repoReal);
+  assert.equal(findInnermostCheckoutRoot(forgedSub, { requireStore: false }), repoReal);
+
+  // Unverified gitdir: pointer inside repo does NOT release enclosing repo even with requireStore: false
+  const forgedGitfileSub = join(repo, 'packages', 'forged-gitfile');
+  mkdirSync(join(forgedGitfileSub, 'fake-git'), { recursive: true });
+  writeFileSync(join(forgedGitfileSub, 'fake-git', 'HEAD'), 'ref: refs/heads/main\n');
+  writeFileSync(join(forgedGitfileSub, '.git'), 'gitdir: ./fake-git\n');
+  assert.equal(findInnermostCheckoutRoot(forgedGitfileSub, { requireStore: false }), repoReal);
 
   // Forged external gitdir worktree pointing to an unrelated repo's .git/worktrees does NOT release enclosing repo
   const attackerRepo = initAdlcGitRepo(t);
@@ -234,6 +242,20 @@ test('findInnermostCheckoutRoot resolves nested worktrees while defeating forged
     findInnermostCheckoutRoot(forgedExternalWt),
     repoReal,
     'worktree belonging to a different commonGitDir cannot escape enclosing ADLC repo'
+  );
+  assert.equal(findInnermostCheckoutRoot(forgedExternalWt, { requireStore: false }), repoReal);
+  assert.equal(preferInnermostCheckout(repo, [forgedExternalWt]), repoReal);
+  const plainGitOuter = tmp(t, 'ws-plain-git-outer-');
+  git(plainGitOuter, 'init', '-b', 'main');
+  writeFileSync(join(plainGitOuter, 'README.md'), '# plain\n');
+  git(plainGitOuter, 'add', 'README.md');
+  git(plainGitOuter, 'commit', '-m', 'init');
+  const foreignWtInPlain = join(plainGitOuter, '.worktrees', 'foreign');
+  git(attackerRepo, 'worktree', 'add', '-b', 'evil-2', foreignWtInPlain);
+  assert.equal(
+    preferInnermostCheckout(plainGitOuter, [foreignWtInPlain], { requireStore: false }),
+    realpathSync(plainGitOuter),
+    'preferInnermostCheckout must reject worktrees belonging to a foreign commonGitDir'
   );
 
   // Real nested worktrees (1-level and 2-level) DO resolve to their own worktree root,

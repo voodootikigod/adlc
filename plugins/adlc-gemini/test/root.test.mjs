@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
 import {
   canonicalizeExisting,
+  discoverRootFromTranscriptRecords,
   findAdlcRoot,
   anchorPath,
   resolveWorkspaceRoot,
@@ -13,6 +14,9 @@ import {
   isUnauthorizedWorkspaceEscape,
   isReadonlyCommand,
   isVerificationCommand,
+  onStop,
+  postToolUse,
+  runFromStdin,
 } from '../hooks/adlc-rails-guard.mjs';
 import { loadTickets } from '../core-inline.mjs';
 
@@ -152,4 +156,105 @@ test('isReadonlyCommand allows grep and rg within workspace root and loadTickets
   assert.equal(canonicalizeExisting(null), null);
   assert.equal(canonicalizeExisting(''), '');
   assert.equal(canonicalizeExisting(root), realpathSync(root));
+});
+
+test('resolveWorkspaceRoot, discoverRootFromTranscriptRecords, and lifecycle hooks handle nested worktree tool Cwd/dir_path', (t) => {
+  const primary = repoWithAdlc(t);
+  writeFileSync(
+    join(primary, '.adlc', 'tickets.json'),
+    JSON.stringify({ tickets: [{ id: 'T-WT', title: 'WT', rails: ['src/frozen.js'] }] })
+  );
+  writeFileSync(join(primary, 'src', 'frozen.js'), 'export const f = 1;\n');
+  mkdirSync(join(primary, 'test'), { recursive: true });
+  writeFileSync(join(primary, 'test', 'ok.test.mjs'), 'import { test } from "node:test"; test("ok", () => {});\n');
+  git(primary, 'init', '-b', 'main');
+  git(primary, 'add', '-A');
+  git(primary, 'commit', '-m', 'init');
+
+  const lane = join(primary, '.worktrees', 'lane-wt');
+  git(primary, 'worktree', 'add', '-b', 'lane-wt', lane);
+  writeFileSync(join(lane, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T-WT' }));
+
+  // Tool-level Cwd / dir_path upgrades outer workspacePaths[0] to nested worktree
+  assert.equal(
+    realpathSync(
+      resolveWorkspaceRoot(
+        {
+          workspacePaths: [primary],
+          toolCall: { name: 'run_shell_command', args: { command: 'npm test', dir_path: '.worktrees/lane-wt' } },
+        },
+        {}
+      )
+    ),
+    realpathSync(lane)
+  );
+  assert.equal(
+    realpathSync(
+      resolveWorkspaceRoot(
+        {
+          toolCall: { name: 'run_shell_command', args: { command: 'npm test', working_directory: lane } },
+        },
+        {}
+      )
+    ),
+    realpathSync(lane)
+  );
+
+  // Transcript discovery supports dir_path, working_directory, and relative worktree paths with anchorBase
+  assert.equal(
+    realpathSync(
+      discoverRootFromTranscriptRecords(
+        [{ toolCalls: [{ name: 'run_shell_command', args: { command: 'npm test', dir_path: lane } }] }],
+        {}
+      )
+    ),
+    realpathSync(lane)
+  );
+  assert.equal(
+    realpathSync(
+      discoverRootFromTranscriptRecords(
+        [{ toolCalls: [{ name: 'run_shell_command', args: { command: 'npm test', working_directory: '.worktrees/lane-wt' } }] }],
+        {},
+        { anchorBase: primary }
+      )
+    ),
+    realpathSync(lane)
+  );
+
+  // Full PreToolUse -> PostToolUse -> Stop lifecycle with outer workspacePaths[0] + nested worktree tool args
+  const home = tmp(t, 'gemini-wt-home-');
+  const transcriptDir = tmp(t, 'gemini-wt-transcript-');
+  const transcriptPath = join(transcriptDir, 'session-transcript.jsonl');
+  const env = { ADLC_P4_ENFORCEMENT: '1', HOME: home, ANTIGRAVITY_CONVERSATION_ID: 'conv-wt-1' };
+
+  writeFileSync(transcriptPath, '');
+  const editCall = {
+    workspacePaths: [primary],
+    transcriptPath,
+    toolCall: { name: 'write_to_file', args: { TargetFile: join(lane, 'src', 'impl.js'), CodeContent: 'export const x = 2;\n' } },
+  };
+  const preEdit = runFromStdin(JSON.stringify(editCall), env);
+  assert.equal(preEdit.allow_tool, true, preEdit.deny_reason);
+  writeFileSync(
+    transcriptPath,
+    `${JSON.stringify({ status: 'DONE', toolCalls: [editCall.toolCall] })}\n`
+  );
+  postToolUse({ workspacePaths: [primary], transcriptPath, exitCode: 0 }, { env });
+
+  const testCall = {
+    workspacePaths: [primary],
+    transcriptPath,
+    toolCall: { name: 'run_shell_command', args: { command: 'npm test', dir_path: '.worktrees/lane-wt' } },
+  };
+  const preTest = runFromStdin(JSON.stringify(testCall), env);
+  assert.equal(preTest.allow_tool, true, preTest.deny_reason);
+  writeFileSync(
+    transcriptPath,
+    `${JSON.stringify({ status: 'DONE', toolCalls: [editCall.toolCall] })}\n` +
+      `${JSON.stringify({ status: 'DONE', exitCode: 0, content: 'pass 1', toolCalls: [testCall.toolCall] })}\n`
+  );
+  postToolUse({ workspacePaths: [primary], transcriptPath, exitCode: 0 }, { env });
+
+  const stopRes = onStop({ workspacePaths: [primary], transcriptPath }, { env });
+  assert.equal(stopRes.decision, 'stop', stopRes.reason);
 });

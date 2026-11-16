@@ -354,7 +354,7 @@ export function findInnermostCheckoutRoot(startPath, options = {}) {
       remembered: rememberedRoots ? rememberedRoots.has(canonicalCur) : false,
       store: examine && !isExternalOverride ? hasTicketStoreAt(canonicalCur, perDirOverride) : false,
       info,
-      checkout: info !== null,
+      checkout: info?.kind === 'repo' || info?.kind === 'worktree',
     });
     const parent = dirname(rawCur);
     if (parent === rawCur || (atHome && !rememberedRoots)) break;
@@ -374,12 +374,19 @@ export function findInnermostCheckoutRoot(startPath, options = {}) {
 
   // $HOME (even when a dotfiles git repo) never overrides a distinct git repo
   // cloned beneath $HOME; it only governs non-repo dotfiles paths beneath it.
+  // Note: effectiveChain[0] is the innermost directory and effectiveChain[last]
+  // is the outermost ancestor (truncated at any verified same-commonGitDir nested
+  // worktree above). Walking 0 -> effectiveChain.length - 1 overwrites `outermost`
+  // and `checkoutRoot` with the highest qualifying enclosing checkout, defeating
+  // forged inner `.git` decoys and unrelated nested checkouts.
   const externalStoreActive = hasExternalAbsoluteStore(storeOverride);
   const adlcRepoAbove = effectiveChain.map(() => false);
   for (let i = effectiveChain.length - 2; i >= 0; i -= 1) {
     const above = effectiveChain[i + 1];
     const aboveHasStore = above.store || above.remembered || externalStoreActive;
-    adlcRepoAbove[i] = adlcRepoAbove[i + 1] || (!above.atHome && above.checkout && aboveHasStore);
+    adlcRepoAbove[i] =
+      adlcRepoAbove[i + 1] ||
+      (!above.atHome && above.checkout && (requireStore ? aboveHasStore : true));
   }
 
   let outermost = null;
@@ -435,6 +442,7 @@ export function preferInnermostCheckout(outerRoot, dynamicCandidates = [], optio
   }
 
   const trimmedOuter = outerRoot.trim();
+  const outerInfo = inspectGitCheckout(canonicalizePath(trimmedOuter));
   for (const cand of dynamicCandidates) {
     if (typeof cand !== 'string' || !cand.trim()) continue;
     if (!isPathInside(cand, trimmedOuter)) continue;
@@ -442,7 +450,12 @@ export function preferInnermostCheckout(outerRoot, dynamicCandidates = [], optio
     if (!inner) continue;
     if (!isPathInside(inner, trimmedOuter)) continue;
     if (canonicalizePath(inner) === canonicalizePath(trimmedOuter)) continue;
-    if (inspectGitCheckout(inner)?.kind === 'worktree') {
+    const innerInfo = inspectGitCheckout(inner);
+    if (
+      innerInfo?.kind === 'worktree' &&
+      innerInfo.commonGitDir !== null &&
+      (outerInfo === null || outerInfo.commonGitDir === innerInfo.commonGitDir)
+    ) {
       return inner;
     }
   }

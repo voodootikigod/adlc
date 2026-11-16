@@ -25,6 +25,7 @@ export { extractCommandString };
 import { loadTicketStoreReadOnly } from '../generated-ticket-reader.mjs';
 import {
   canonicalizePath,
+  extractAllToolWorkdirs,
   extractToolWorkdir,
   findInnermostCheckoutRoot,
   hasConflictingToolWorkdirs,
@@ -218,6 +219,23 @@ export function findAdlcRoot(absPath, env = process.env) {
     allowFileStart: true,
     preserveSpelling: true,
   });
+}
+
+function declaredOuterWorkspaces(payload) {
+  const base = nonPluginProcessCwd() ?? process.cwd();
+  return WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : [payload?.[k]]))
+    .filter((s) => typeof s === 'string' && s.trim())
+    .map((s) => (isAbsolute(s.trim()) ? s.trim() : resolve(base, s.trim())));
+}
+
+function declaredOuterWorkspace(payload, targetHint = null) {
+  const all = declaredOuterWorkspaces(payload);
+  if (all.length === 0) return null;
+  if (typeof targetHint === 'string' && targetHint.trim() && isAbsolute(targetHint.trim())) {
+    const matched = all.find((w) => isPathInside(targetHint.trim(), w));
+    if (matched) return matched;
+  }
+  return all[0];
 }
 
 export function anchorPath(rawPath, payload, env = null) {
@@ -477,18 +495,20 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
 
     const isShell = isShellTool(tool, args);
     const cmd = isShell ? extractCommandString(args) : '';
+    const rawShellCwd = isShell ? extractCwdFromArgs(args) : null;
+    const resolvedDeclaredWs = declaredOuterWorkspace(
+      payload,
+      rawShellCwd && typeof rawShellCwd === 'string' && isAbsolute(rawShellCwd) ? rawShellCwd : wsRoot
+    );
+    const shellAnchorBase = resolvedDeclaredWs ?? wsRoot ?? nonPluginProcessCwd() ?? process.cwd();
 
-    if (isShell && hasConflictingToolWorkdirs(args, wsRoot ?? nonPluginProcessCwd() ?? process.cwd())) {
+    if (isShell && hasConflictingToolWorkdirs(args, shellAnchorBase)) {
       return deny('shell command specifies conflicting working directories — failing closed');
     }
 
+    let resolvedShellCheckoutRoot = null;
     if (cmd) {
       const cmdCwd = extractCwdFromArgs(args);
-      const declaredWs = WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : [payload?.[k]]))
-        .find((s) => typeof s === 'string' && s.trim());
-      const resolvedDeclaredWs = declaredWs
-        ? (isAbsolute(declaredWs.trim()) ? declaredWs.trim() : resolve(nonPluginProcessCwd() ?? process.cwd(), declaredWs.trim()))
-        : null;
       const transcriptDiscoveredRoot = !wsRoot && !resolvedDeclaredWs
         ? (() => {
             const tp = resolveTranscriptPath({ payload, conversationId: resolveSessionId({ payload, env }), env });
@@ -496,8 +516,8 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
           })()
         : null;
       const shellWorkspaceBound =
-        wsRoot ??
         resolvedDeclaredWs ??
+        wsRoot ??
         transcriptDiscoveredRoot ??
         (cmdCwd && typeof cmdCwd === 'string' && isAbsolute(cmdCwd) ? findAdlcRoot(cmdCwd, env) : null);
       if (enforcing && typeof cmdCwd === 'string' && cmdCwd.trim()) {
@@ -509,7 +529,8 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
           return deny('shell command attempts to access filesystem paths outside workspace — strictly prohibited under enforcement');
         }
       }
-      const cmdRoot = (cmdCwd && typeof cmdCwd === 'string' ? (isAbsolute(cmdCwd) ? cmdCwd : (shellWorkspaceBound ? resolve(shellWorkspaceBound, cmdCwd) : null)) : null) ?? shellWorkspaceBound ?? null;
+      const cmdRoot = (cmdCwd && typeof cmdCwd === 'string' ? (isAbsolute(cmdCwd) ? cmdCwd : (shellWorkspaceBound ? resolve(shellWorkspaceBound, cmdCwd) : null)) : null) ?? wsRoot ?? shellWorkspaceBound ?? null;
+      resolvedShellCheckoutRoot = cmdRoot ? findAdlcRoot(cmdRoot, env) : null;
       const effectiveRoot = cmdRoot ?? process.cwd();
       const containmentRoot = shellWorkspaceBound ?? effectiveRoot;
       // CRITICAL: Master key and trust-root secret access is strictly prohibited under ALL modes
@@ -532,9 +553,12 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
 
     if (isShell) {
       const sessionID = resolveSessionId({ payload, env });
-      const pathTracker = wsRoot ? (trackerCache?.get(wsRoot) ?? createPersistentTracker(wsRoot, env)) : null;
-      if (enforcing && pathTracker?.isInvalidated?.(sessionID)) {
-        return deny('session invalidated due to secret disclosure — failing closed');
+      const checkRoots = new Set([wsRoot, resolvedShellCheckoutRoot].filter(Boolean));
+      for (const r of checkRoots) {
+        const pathTracker = trackerCache?.get(r) ?? createPersistentTracker(r, env);
+        if (enforcing && pathTracker?.isInvalidated?.(sessionID)) {
+          return deny('session invalidated due to secret disclosure — failing closed');
+        }
       }
       if (cmd) {
         if (!paths.length) {
@@ -611,7 +635,12 @@ export function runFromStdin(raw, envArg = process.env) {
 
   const distinctRoots = new Set();
   const wsRoot = resolveWorkspaceRoot(payload, env);
-  if (wsRoot) distinctRoots.add(wsRoot);
+  const outerDeclaredWs = declaredOuterWorkspace(
+    payload,
+    extractedWorkdir && typeof extractedWorkdir === 'string' && isAbsolute(extractedWorkdir) ? extractedWorkdir : wsRoot
+  );
+  const fallbackProcCwd = nonPluginProcessCwd();
+  const shellAnchorBase = outerDeclaredWs ?? wsRoot ?? fallbackProcCwd ?? process.cwd();
 
   if (paths.length > 0) {
     for (const p of paths) {
@@ -623,23 +652,35 @@ export function runFromStdin(raw, envArg = process.env) {
     }
   }
 
-  const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
-  if (distinctRoots.size === 0 && transcriptPath) {
-    const transcriptRoot = findAdlcRoot(transcriptPath, env) ?? discoverRootFromTranscriptRecords(parseTranscriptRecords(transcriptPath), env);
-    if (transcriptRoot) distinctRoots.add(transcriptRoot);
-  }
-
   const isShell = isShellTool(toolName, args);
   const cmd = extractCommandString(args);
   const shellCwd = extractedWorkdir;
-  const fallbackProcCwd = nonPluginProcessCwd();
-  const actualCwd = (shellCwd && typeof shellCwd === 'string' ? (isAbsolute(shellCwd) ? shellCwd : resolve(wsRoot ?? fallbackProcCwd ?? process.cwd(), shellCwd)) : null) ?? wsRoot ?? fallbackProcCwd ?? process.cwd();
+  const actualCwd = (shellCwd && typeof shellCwd === 'string' ? (isAbsolute(shellCwd) ? shellCwd : resolve(shellAnchorBase, shellCwd)) : null) ?? wsRoot ?? fallbackProcCwd ?? process.cwd();
+  const shellTargetRoot = shellCwd && typeof shellCwd === 'string' ? findAdlcRoot(actualCwd, env) : null;
+  if (shellTargetRoot) distinctRoots.add(shellTargetRoot);
+
+  if (distinctRoots.size === 0 && wsRoot) {
+    distinctRoots.add(wsRoot);
+  }
+
+  const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
+  if (distinctRoots.size === 0 && transcriptPath) {
+    const transcriptRoot =
+      findAdlcRoot(transcriptPath, env) ??
+      discoverRootFromTranscriptRecords(parseTranscriptRecords(transcriptPath), env, { anchorBase: outerDeclaredWs });
+    if (transcriptRoot) distinctRoots.add(transcriptRoot);
+  }
+
   const priorDiscoveredRoot = Array.from(distinctRoots)[0] ?? null;
-  const repoRoot = (shellCwd && typeof shellCwd === 'string' ? findAdlcRoot(actualCwd, env) : null) ?? wsRoot ?? priorDiscoveredRoot ?? (env === process.env && fallbackProcCwd ? findAdlcRoot(fallbackProcCwd, env) : null);
-  if (repoRoot) distinctRoots.add(repoRoot);
-  const verifyRoot = wsRoot ?? priorDiscoveredRoot ?? repoRoot;
+  const repoRoot = shellTargetRoot ?? wsRoot ?? priorDiscoveredRoot ?? (env === process.env && fallbackProcCwd ? findAdlcRoot(fallbackProcCwd, env) : null);
+  if (repoRoot && distinctRoots.size === 0) distinctRoots.add(repoRoot);
+  const verifyRoot = shellTargetRoot ?? wsRoot ?? priorDiscoveredRoot ?? repoRoot;
   const allowImplicitCwd = hasUnambiguousWorkspaceCwd(payload, env, verifyRoot);
-  const isMut = isShell ? (!isReadonlyCommand(cmd, { root: verifyRoot ?? actualCwd, cwd: actualCwd, env }) && !isVerificationCommand(cmd, { root: verifyRoot, toolArgs: args, allowImplicitCwd })) : cls !== 'readonly';
+  const normalizedVerifyArgs =
+    shellCwd && typeof shellCwd === 'string' && !hasConflictingToolWorkdirs(args, shellAnchorBase)
+      ? { ...args, Cwd: actualCwd }
+      : args;
+  const isMut = isShell ? (!isReadonlyCommand(cmd, { root: verifyRoot ?? actualCwd, cwd: actualCwd, env }) && !isVerificationCommand(cmd, { root: verifyRoot, toolArgs: normalizedVerifyArgs, allowImplicitCwd })) : cls !== 'readonly';
 
   for (const root of distinctRoots) {
     const tracker = getTracker(root);
@@ -744,11 +785,19 @@ export function resolveWorkspaceRoot(payload, env = process.env) {
   const hasStoreOverride =
     storeOverride && existsSync(isAbsolute(storeOverride) ? storeOverride : join(baseCwd, storeOverride));
 
+  const outerDeclared = declaredOuterWorkspace(payload);
+  const toolWorkdirs = extractAllToolWorkdirs(extractArgs(payload));
+  const toolFilePaths = isToolPayload(payload) ? extractFilePaths(payload) : [];
+  const anchoredToolCandidates = [...toolWorkdirs, ...toolFilePaths]
+    .filter((s) => typeof s === 'string' && s.trim())
+    .map((s) => (isAbsolute(s.trim()) ? s.trim() : resolve(outerDeclared ?? baseCwd, s.trim())));
+
   const dynamicCwds = [
     payload?.cwd,
     payload?.workingDirectory,
     payload?.working_directory,
     payload?.workspaceRoot,
+    ...anchoredToolCandidates,
     env === process.env ? nonPluginProcessCwd() : null,
   ].filter((s) => typeof s === 'string' && s.trim());
 
@@ -757,6 +806,7 @@ export function resolveWorkspaceRoot(payload, env = process.env) {
       storeOverride,
       homeDir,
       pluginDir: PLUGIN_ROOT,
+      allowFileStart: true,
       preserveSpelling: true,
     }) ?? rootCandidate;
 
@@ -815,6 +865,12 @@ export function resolveWorkspaceRoot(payload, env = process.env) {
     if (found) return upgradeWorktree(found);
     if (hasStoreOverride && existsSync(c) && lstatSync(c).isDirectory()) {
       return upgradeWorktree(c);
+    }
+  }
+  for (const tw of toolWorkdirs) {
+    if (isAbsolute(tw)) {
+      const found = findAdlcRoot(tw, env);
+      if (found) return upgradeWorktree(found);
     }
   }
   return null;
@@ -896,23 +952,22 @@ export function extractToolCalls(record) {
   return rawCalls.map(unwrapCall).filter(Boolean);
 }
 
-export function discoverRootFromTranscriptRecords(records, env = process.env) {
+export function discoverRootFromTranscriptRecords(records, env = process.env, { anchorBase = null } = {}) {
   if (!Array.isArray(records) || records.length === 0) return null;
   for (const r of records) {
     const calls = extractToolCalls(r);
     for (const c of calls) {
       const paths = extractFilePaths({ toolCall: c });
       const args = extractArgs({ toolCall: c });
-      const cwdCandidates = [args?.Cwd, args?.cwd, args?.workdir, args?.workingDirectory];
-      for (const cwd of cwdCandidates) {
-        if (typeof cwd === 'string' && cwd.trim()) {
-          paths.push(cwd.trim());
-        }
+      for (const cwd of extractAllToolWorkdirs(args)) {
+        paths.push(cwd);
       }
       for (const p of paths) {
-        if (typeof p === 'string' && isAbsolute(p)) {
-          const canonical = canonicalizeExisting(p);
-          const candidate = findAdlcRoot(canonical, env) ?? findAdlcRoot(p, env);
+        if (typeof p === 'string' && p.trim()) {
+          const resolvedP = isAbsolute(p) ? p : (anchorBase ? resolve(anchorBase, p) : null);
+          if (!resolvedP) continue;
+          const canonical = canonicalizeExisting(resolvedP);
+          const candidate = findAdlcRoot(canonical, env) ?? findAdlcRoot(resolvedP, env);
           if (candidate) return candidate;
         }
       }
@@ -1440,10 +1495,25 @@ export function postToolUse(payload, { env = process.env } = {}) {
 
     const distinctRoots = new Set();
     const wsRoot = resolveWorkspaceRoot(payload, env);
-    if (wsRoot) distinctRoots.add(wsRoot);
+    const outerDeclaredWs = declaredOuterWorkspace(payload, wsRoot);
     const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
-    if (transcriptPath) {
-      const transcriptRoot = findAdlcRoot(transcriptPath, env) ?? discoverRootFromTranscriptRecords(parseTranscriptRecords(transcriptPath), env);
+    const transcriptRoot = transcriptPath
+      ? (findAdlcRoot(transcriptPath, env) ??
+         discoverRootFromTranscriptRecords(parseTranscriptRecords(transcriptPath), env, { anchorBase: outerDeclaredWs }))
+      : null;
+    if (wsRoot && transcriptRoot) {
+      const upgraded = preferInnermostCheckout(wsRoot, [transcriptRoot], {
+        storeOverride: env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null,
+        homeDir: resolveUserHome(env) || homedir(),
+        pluginDir: PLUGIN_ROOT,
+        preserveSpelling: true,
+      });
+      distinctRoots.add(upgraded ?? wsRoot);
+      if (canonicalizePath(transcriptRoot) !== canonicalizePath(upgraded ?? wsRoot)) {
+        distinctRoots.add(transcriptRoot);
+      }
+    } else {
+      if (wsRoot) distinctRoots.add(wsRoot);
       if (transcriptRoot) distinctRoots.add(transcriptRoot);
     }
     const exitCode = payload?.exit_code ?? payload?.exitCode ?? payload?.result?.exitCode ?? payload?.toolResult?.exitCode;
@@ -1488,10 +1558,20 @@ export function onStop(payload, { env = process.env } = {}) {
       }
     }
 
-    // Fallback: If root cannot be determined from payload or env (e.g. agy headless mode),
-    // discover root from absolute file paths in the transcript
-    if (!root && records.length > 0) {
-      root = discoverRootFromTranscriptRecords(records, env);
+    const outerDeclaredWs = declaredOuterWorkspace(payload, root);
+    const discoveredTranscriptRoot = records.length > 0
+      ? discoverRootFromTranscriptRecords(records, env, { anchorBase: outerDeclaredWs })
+      : null;
+    if (!root) {
+      root = discoveredTranscriptRoot;
+    } else if (discoveredTranscriptRoot) {
+      root =
+        preferInnermostCheckout(root, [discoveredTranscriptRoot], {
+          storeOverride: env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null,
+          homeDir: resolveUserHome(env) || homedir(),
+          pluginDir: PLUGIN_ROOT,
+          preserveSpelling: true,
+        }) ?? root;
     }
 
     if (!root) {
@@ -1734,14 +1814,19 @@ export function onStop(payload, { env = process.env } = {}) {
           const normCmd = cmd.replace(/\\/g, '/');
           const cmdCwd = extractCwdFromArgs(args);
           const allowImplicitCwd = hasUnambiguousWorkspaceCwd(payload, env, root);
-          const actualCwd = (cmdCwd && typeof cmdCwd === 'string' ? (isAbsolute(cmdCwd) ? cmdCwd : resolve(root, cmdCwd)) : null) ?? root;
+          const shellAnchorBase = outerDeclaredWs && isPathInside(root, outerDeclaredWs) ? outerDeclaredWs : root;
+          const actualCwd = (cmdCwd && typeof cmdCwd === 'string' ? (isAbsolute(cmdCwd) ? cmdCwd : resolve(shellAnchorBase, cmdCwd)) : null) ?? root;
+          const stopVerifyArgs =
+            cmdCwd && typeof cmdCwd === 'string' && !hasConflictingToolWorkdirs(args, shellAnchorBase)
+              ? { ...args, Cwd: actualCwd }
+              : args;
           if ((/(^|[\s=;,"'\/$.()[\]])(\.adlc|\.master-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc|\.system_generated|transcript.*\.jsonl)/i.test(normCmd) || (overrideEscaped && (overrideEscaped.test(cmd) || overrideEscaped.test(normCmd))) || hasShellTrustRootSecretAccess(cmd, { root, cwd: actualCwd, env }) || hasShellSymlinkOrSecretEscape(cmd, { root, cwd: actualCwd, env })) && !isReadonlyCommand(cmd, { root, cwd: actualCwd, env })) {
             return {
               decision: 'continue',
               reason: 'ADLC Rails-Guard: Shell modification of trust-root store or transcript is strictly prohibited.',
             };
           }
-          if (isVerificationCommand(cmd, { root, toolArgs: args, allowImplicitCwd, packageManifestMutated, shellMutated })) {
+          if (isVerificationCommand(cmd, { root, toolArgs: stopVerifyArgs, allowImplicitCwd, packageManifestMutated, shellMutated })) {
             const exitCode = r?.exit_code ?? r?.exitCode ?? c?.exitCode;
             const status = r?.status ?? c?.status;
             const isExplicitSuccess = exitCode === 0 || status === 'DONE' || status === 'done' || status === 'success' || r?.success === true;
@@ -1754,7 +1839,7 @@ export function onStop(payload, { env = process.env } = {}) {
             if (isExplicitSuccess && !isExplicitFailure && hasTests && !isZeroTests) {
               lastSuccessTestCallIdx = currentCallIdx;
             }
-          } else if (!isReadonlyCommand(cmd, { root, cwd: actualCwd, env }) && !isVerificationCommand(cmd, { root, toolArgs: args, allowImplicitCwd })) {
+          } else if (!isReadonlyCommand(cmd, { root, cwd: actualCwd, env }) && !isVerificationCommand(cmd, { root, toolArgs: stopVerifyArgs, allowImplicitCwd })) {
             mutatingCallSeq++;
             lastMutationCallIdx = currentCallIdx;
             shellMutated = true;
