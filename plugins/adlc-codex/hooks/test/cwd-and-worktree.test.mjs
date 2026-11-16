@@ -81,6 +81,19 @@ test('Codex rails-guard and build-gate resolve payload.cwd subdirectories and ne
   });
   assert.equal(shellRes.status, 2, shellRes.stderr);
 
+  // Outer payload.cwd must NOT conflict with a single inner dir_path on an allowed write
+  const allowedSubdirShell = spawnHook([RAILS_HOOK], {
+    cwd: outsideCwd,
+    input: JSON.stringify({
+      cwd: lane,
+      tool_name: 'run_shell_command',
+      tool_input: { command: 'rm ok.mjs', dir_path: subDir },
+    }),
+    encoding: 'utf8',
+    env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' },
+  });
+  assert.equal(allowedSubdirShell.status, 0, allowedSubdirShell.stderr);
+
   // Build-gate resolves high-risk ticket from subdirectory payload.cwd inside nested worktree and fails closed without transcript (exit 2)
   const bgRes = spawnHook([BUILD_GATE_HOOK], {
     cwd: outsideCwd,

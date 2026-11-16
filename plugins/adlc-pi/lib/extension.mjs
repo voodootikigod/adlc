@@ -12,7 +12,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import {
   extractAllToolWorkdirs,
   hasConflictingToolWorkdirs,
-} from './generated-workspace-root.mjs';
+} from '@adlc/core';
 import {
   resolveActiveTicket,
   checkStructuredWrite,

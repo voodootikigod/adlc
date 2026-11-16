@@ -28,8 +28,7 @@ import {
   isSafeSessionId,
   resolveHandoffSessionId,
 } from '@adlc/context-handoff';
-import { ticketStoreExists } from '@adlc/core';
-import { findInnermostCheckoutRoot } from './generated-workspace-root.mjs';
+import { findInnermostCheckoutRoot, ticketStoreExists } from '@adlc/core';
 import { extractToolPaths, READONLY_TOOLS } from './rails-checker.mjs';
 
 /**

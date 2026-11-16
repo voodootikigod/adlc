@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { classifyRiskTier, decideAdversarialReviewNotice, ticketStoreExists } from '@adlc/core';
 import { resolveActiveTicketId } from '../rails-checker.mjs';
-import { candidateRoots, hostProjectRoot } from './adlc-rails-guard.mjs';
+import { resolveOwning } from './adlc-rails-guard.mjs';
 
 /**
  * Every child this hook spawns is bounded. An unbounded spawnSync waits forever
@@ -164,7 +164,7 @@ async function main() {
     try { payload = JSON.parse(raw); } catch { /* advisory: ignore */ }
   }
   try {
-    const root = candidateRoots(payload)[0] ?? hostProjectRoot(process.env) ?? process.cwd();
+    const root = resolveOwning(payload, undefined, undefined, process.env).root ?? process.cwd();
     const { warnings } = stopAudit(root, { env: process.env });
     for (const w of warnings) process.stderr.write(`adlc-stop: ${w}\n`);
   } catch { /* advisory: never crash */ }

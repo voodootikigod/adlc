@@ -91,9 +91,6 @@ const ARTIFACTS = [
       'plugins/adlc-claude-code/hooks/generated-workspace-root.mjs',
       'plugins/adlc-codex/hooks/generated-workspace-root.mjs',
       'plugins/adlc-copilot/hooks/generated-workspace-root.mjs',
-      'plugins/adlc-cursor/generated-workspace-root.mjs',
-      'plugins/adlc-opencode/generated-workspace-root.mjs',
-      'plugins/adlc-pi/lib/generated-workspace-root.mjs',
     ],
   },
 ];

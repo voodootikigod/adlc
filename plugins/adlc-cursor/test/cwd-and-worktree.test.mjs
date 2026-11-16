@@ -2,11 +2,18 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tmp } from '@adlc/core/test-kit';
 import { decide, resolveOwning, extractFilePaths } from '../hooks/adlc-rails-guard.mjs';
 import { dispatch } from '../hooks/adlc-pretool.mjs';
+import { adviseShell } from '../hooks/adlc-shell-advisory.mjs';
 import { isShellTool } from '../rails-checker.mjs';
+import { spawnHook } from './helpers/run-hook.mjs';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const PREFLIGHT_HOOK = join(HERE, '..', 'hooks', 'adlc-preflight.mjs');
+const STOP_HOOK = join(HERE, '..', 'hooks', 'adlc-stop.mjs');
 
 function git(cwd, ...args) {
   return execFileSync('git', args, {
@@ -147,4 +154,52 @@ test('Cursor extracts notebook_path and classifies run_shell_command as shell to
     ['notebooks/eval.ipynb']
   );
   assert.equal(isShellTool('run_shell_command'), true);
+});
+
+test('Cursor preflight, stop, and shell-advisory hooks resolve nested worktree and subdirectory payload.cwd when process.cwd() is outside', (t) => {
+  const primary = tmp(t, 'cursor-adv-primary-');
+  const outsideCwd = tmp(t, 'cursor-adv-outside-');
+  git(primary, 'init', '-b', 'main');
+  mkdirSync(join(primary, '.adlc'), { recursive: true });
+  writeFileSync(
+    join(primary, '.adlc', 'tickets.json'),
+    JSON.stringify({ tickets: [{ id: 'T-ADV', title: 'Adv', rails: ['src/frozen.js'] }] })
+  );
+  mkdirSync(join(primary, 'src'), { recursive: true });
+  writeFileSync(join(primary, 'src', 'frozen.js'), 'export const x = 1;\n');
+  git(primary, 'add', '-A');
+  git(primary, 'commit', '-m', 'init');
+
+  const lane = join(primary, '.worktrees', 'lane-adv');
+  git(primary, 'worktree', 'add', '-b', 'lane-adv', lane);
+  writeFileSync(join(lane, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T-ADV' }));
+  mkdirSync(join(lane, 'src', 'auth'), { recursive: true });
+  writeFileSync(join(lane, 'src', 'auth', 'session.mjs'), 'export const r = 1;\n');
+
+  const shellAdv = adviseShell(
+    {
+      workspace_roots: [primary],
+      cwd: join(lane, 'src'),
+      command: 'rm src/frozen.js',
+    },
+    { env: { ADLC_P4_ENFORCEMENT: '1' } }
+  );
+  assert.equal(shellAdv.permission, 'allow');
+  assert.match(shellAdv.user_message ?? '', /src\/frozen\.js/);
+
+  const preflightRes = spawnHook([PREFLIGHT_HOOK], {
+    cwd: outsideCwd,
+    input: JSON.stringify({ workspace_roots: [primary], cwd: join(lane, 'src') }),
+    env: { ...process.env, PATH: outsideCwd, CURSOR_PROJECT_DIR: '' },
+  });
+  assert.equal(preflightRes.status, 0);
+  assert.match(preflightRes.stderr, /ADLC precedence:/);
+
+  const stopRes = spawnHook([STOP_HOOK], {
+    cwd: outsideCwd,
+    input: JSON.stringify({ workspace_roots: [primary], cwd: join(lane, 'src') }),
+    env: { ...process.env, CURSOR_PROJECT_DIR: '' },
+  });
+  assert.equal(stopRes.status, 0);
+  assert.match(stopRes.stderr, /risk-gated change/);
 });

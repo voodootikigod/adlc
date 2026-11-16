@@ -186,18 +186,20 @@ function collectCommandText(value, out = []) {
   return out;
 }
 
-const TOOL_INPUT_BAG_KEYS = ['tool_input', 'toolInput', 'args', 'arguments', 'input', 'params', 'parameters'];
+function withoutOuterWorkdirKeys(value) {
+  if (!toolName(value)) return value;
+  const stripped = { ...value };
+  for (const key of SHELL_WORKDIR_KEYS) delete stripped[key];
+  return stripped;
+}
 
 function hasShellWorkdirConflict(value, baseDir) {
   if (!value || typeof value !== 'object') return false;
   if (Array.isArray(value)) {
     return value.some((item) => hasShellWorkdirConflict(item, baseDir));
   }
-  if (!toolName(value) && hasConflictingToolWorkdirs(value, baseDir)) {
+  if (hasConflictingToolWorkdirs(withoutOuterWorkdirKeys(value), baseDir)) {
     return true;
-  }
-  for (const bagKey of TOOL_INPUT_BAG_KEYS) {
-    if (hasConflictingToolWorkdirs(value[bagKey], baseDir)) return true;
   }
   for (const child of Object.values(value)) {
     if (child && typeof child === 'object' && hasShellWorkdirConflict(child, baseDir)) {
@@ -216,19 +218,9 @@ function firstShellWorkdir(value) {
     }
     return null;
   }
-  // Prefer the tool's own input/args bag over the outer hook envelope's `payload.cwd`
-  for (const bagKey of TOOL_INPUT_BAG_KEYS) {
-    const fromBag = extractToolWorkdir(value[bagKey]);
-    if (fromBag) return fromBag;
-  }
-  const isEnvelope = Boolean(toolName(value));
-  for (const [key, child] of Object.entries(value)) {
-    if (isEnvelope && SHELL_WORKDIR_KEYS.includes(key)) {
-      continue;
-    }
-    if (SHELL_WORKDIR_KEYS.includes(key) && typeof child === 'string' && child.trim().length > 0) {
-      return child.trim();
-    }
+  const direct = extractToolWorkdir(withoutOuterWorkdirKeys(value));
+  if (direct) return direct;
+  for (const child of Object.values(value)) {
     const found = firstShellWorkdir(child);
     if (found) return found;
   }

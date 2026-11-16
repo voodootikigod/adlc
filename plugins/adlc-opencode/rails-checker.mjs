@@ -9,17 +9,23 @@
 
 import { existsSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
-import { loadTickets, globMatch, classifyShellCommand, collectPatchPaths, resolveRailPath, ticketStoreExists, TICKET_TRUST_ROOT_RAILS } from '@adlc/core';
 import {
-  resolveActiveTicketAgainst,
-  resolveActiveTicketId as resolveActiveTicketIdCanonical,
-} from './generated-active-ticket.mjs';
-import {
+  loadTickets,
+  globMatch,
+  classifyShellCommand,
+  collectPatchPaths,
+  resolveRailPath,
+  ticketStoreExists,
+  TICKET_TRUST_ROOT_RAILS,
   canonicalizePath as canonicalizeWorkspacePath,
   extractAllToolWorkdirs,
   extractToolWorkdir,
   hasConflictingToolWorkdirs,
-} from './generated-workspace-root.mjs';
+} from '@adlc/core';
+import {
+  resolveActiveTicketAgainst,
+  resolveActiveTicketId as resolveActiveTicketIdCanonical,
+} from './generated-active-ticket.mjs';
 
 // Re-exported for API stability: sibling adapters and tests may import the
 // symlink-aware resolver from this module even though @adlc/core owns it now.

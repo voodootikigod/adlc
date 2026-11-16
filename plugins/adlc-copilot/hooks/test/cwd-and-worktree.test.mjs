@@ -82,6 +82,20 @@ test('Copilot rails-guard and build-gate resolve subdirectory payload.cwd inside
   assert.equal(shellRes.status, 0);
   assert.match(shellRes.stdout, /blocked rail edit/);
 
+  // Outer payload.cwd must NOT conflict with a single inner Cwd on an allowed write
+  const allowedSubdirShell = spawnHook([RAILS_HOOK], {
+    cwd: outsideCwd,
+    input: JSON.stringify({
+      cwd: lane,
+      toolName: 'run_terminal_cmd',
+      toolArgs: JSON.stringify({ command: 'rm ok.mjs', Cwd: subDir }),
+    }),
+    encoding: 'utf8',
+    env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' },
+  });
+  assert.equal(allowedSubdirShell.status, 0);
+  assert.equal(allowedSubdirShell.stdout.trim(), '');
+
   // Conflicting shell workdirs fail closed
   const conflictRes = spawnHook([RAILS_HOOK], {
     cwd: outsideCwd,

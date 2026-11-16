@@ -15,7 +15,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { SESSION_TTL_MS, PREFLIGHT_MARKER_FILE } from '../constants.mjs';
-import { candidateRoots, hostProjectRoot } from './adlc-rails-guard.mjs';
+import { resolveOwning } from './adlc-rails-guard.mjs';
 
 // The precedence assertion (ADLC is the process spine; other process skills
 // plug into its phases). Emitted whenever .adlc/ exists.
@@ -76,7 +76,7 @@ async function main() {
     try { payload = JSON.parse(raw); } catch { /* advisory: ignore */ }
   }
   try {
-    const root = candidateRoots(payload)[0] ?? hostProjectRoot(process.env) ?? process.cwd();
+    const root = resolveOwning(payload, undefined, undefined, process.env).root ?? process.cwd();
     const { notices } = preflightOnce(root);
     for (const n of notices ?? []) process.stderr.write(`adlc-preflight: ${n}\n`);
   } catch { /* advisory: never crash */ }

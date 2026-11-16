@@ -10,9 +10,16 @@
 
 import { existsSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
-import { loadTickets, globMatch, inScope, classifyShellCommand, resolveRailPath, TICKET_TRUST_ROOT_RAILS } from '@adlc/core';
+import {
+  loadTickets,
+  globMatch,
+  inScope,
+  classifyShellCommand,
+  resolveRailPath,
+  TICKET_TRUST_ROOT_RAILS,
+  canonicalizePath as canonicalizeWorkspacePath,
+} from '@adlc/core';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
-import { canonicalizePath as canonicalizeWorkspacePath } from './generated-workspace-root.mjs';
 
 // The ticket file and the active-ticket pointer are the rail trust root: frozen
 // whenever a ticket is active, even if the ticket declares no rails, so the

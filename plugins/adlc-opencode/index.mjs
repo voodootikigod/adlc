@@ -17,7 +17,7 @@
 // directly and the module imports nothing from the host at load.
 
 import { checkToolCall, resolveRailsInForce, resolveActiveTicketId, railHit, extractTargets, READONLY_TOOLS, UNGATED_TOOLS, SHELL_TOOLS } from './rails-checker.mjs';
-import { findInnermostCheckoutRoot, isPathInside, preferInnermostCheckout } from './generated-workspace-root.mjs';
+import { findInnermostCheckoutRoot, isPathInside, preferInnermostCheckout } from '@adlc/core';
 import { checkPreflight, auditGateManifest, auditAdversarialReview } from './lib/session-hooks.mjs';
 import { createDepthTracker, checkBuildGate } from './lib/build-gate.mjs';
 import { checkHandoff, createStickyDenyState, createInitLatch } from './lib/handoff-gate.mjs';

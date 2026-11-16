@@ -43,7 +43,6 @@
     "command/",
     "constants.mjs",
     "generated-active-ticket.mjs",
-    "generated-workspace-root.mjs",
     "hooks/",
     "hooks.json",
     "lib/",

@@ -23,7 +23,7 @@ import { isAbsolute, resolve, relative, dirname, basename } from 'node:path';
 import { realpathSync, existsSync } from 'node:fs';
 import { checkRail, classifyTool, isShellTool, railPreconditions } from '../rails-checker.mjs';
 import { normalizeRootPath } from '../lib/workspace-resolve.mjs';
-import { findInnermostCheckoutRoot, preferInnermostCheckout } from '../generated-workspace-root.mjs';
+import { findInnermostCheckoutRoot, preferInnermostCheckout } from '@adlc/core';
 
 /** Best-effort realpath; falls back to the lexical path (a write may create it). */
 function realOr(p) {
