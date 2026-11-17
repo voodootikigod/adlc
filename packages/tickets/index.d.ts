@@ -249,6 +249,7 @@ export function entrySigValid(key: string, entry: Record<string, unknown>): bool
 export function canonicalEntryBytes(entry: Record<string, unknown>): string;
 export function segmentPath(dir: string, name: string): string;
 export function lineagePath(dir: string): string;
+export function normalizeManifestDirAndCwd(dir?: string, opts?: { cwd?: string | null; [key: string]: unknown }): { dir: string; cwd: string };
 export function deriveSlug(branchName: string): string;
 export function generateSegmentUlid(now?: number, entropy?: NodeBuffer): string;
 export function currentBranch(cwd?: string): string | null;

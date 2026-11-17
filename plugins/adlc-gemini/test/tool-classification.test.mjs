@@ -19,7 +19,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyTool, isShellTool } from '../rails-checker.mjs';
+import { classifyTool, hasMutatingPayloadDeep, isShellTool } from '../rails-checker.mjs';
 
 // Every agy MUTATING file tool must classify 'mutating' (so a rail write is
 // denied). All five are structured file-content mutators.
@@ -45,9 +45,45 @@ for (const t of ['view_file', 'list_dir', 'grep_search', 'codebase_search', 'rea
   });
 }
 
-// The shell tool is recognized (allowed in-session; CI-gated).
-test('run_command is a shell tool', () => {
+// The shell tools across Antigravity (run_command) and Gemini CLI (run_shell_command) are recognized.
+test('run_command and run_shell_command are shell tools', () => {
   assert.equal(isShellTool('run_command'), true);
+  assert.equal(isShellTool('run_shell_command', { command: 'npm test', dir_path: '/repo' }), true);
+});
+
+test('PURE_READS keep readonly classification with file path args and MCP read tools', () => {
+  assert.equal(classifyTool('read_file', { Path: '/repo/src/frozen.js' }), 'readonly');
+  assert.equal(classifyTool('read_file', { filePath: '/repo/src/frozen.js' }), 'readonly');
+  assert.equal(classifyTool('read_file', { path: 'src/frozen.js' }), 'readonly');
+  assert.equal(classifyTool('read_file', { Path: 'src/frozen.js', CodeContent: 'tamper' }), 'other');
+  assert.equal(classifyTool('call_mcp_tool', { ServerName: 'codegraph', ToolName: 'explore' }), 'readonly');
+  assert.equal(classifyTool('call_mcp_tool', { ServerName: 'codegraph', ToolName: 'codegraph_explore' }), 'readonly');
+  assert.equal(classifyTool('call_mcp_tool', { ServerName: 'fs', ToolName: 'write_file', Arguments: { path: 'frozen.js' } }), 'mutating');
+  assert.equal(classifyTool('call_mcp_tool', { ServerName: 'custom', ToolName: 'unknown_action', Arguments: { path: 'frozen.js' } }), 'other');
+  assert.equal(classifyTool('call_mcp_tool', { ServerName: 'codegraph', ToolName: 'codegraph_explore', Arguments: { TargetFile: 'frozen.js' } }), 'other');
+  assert.equal(classifyTool('call_mcp_tool', { ServerName: 'codegraph', ToolName: 'codegraph_explore', Arguments: { command: 'rm frozen.js' } }), 'other');
+  assert.equal(classifyTool('call_mcp_tool', { ServerName: 'codegraph', ToolName: 'codegraph_explore', parameters: { command: 'rm frozen.js' } }), 'other');
+  assert.equal(classifyTool('call_mcp_tool', { ServerName: 'codegraph', ToolName: 'codegraph_explore', command: 'rm frozen.js' }), 'other');
+  assert.equal(classifyTool('list_resources', { ServerName: 'mcp' }), 'readonly');
+  assert.equal(classifyTool('read_resource', { ServerName: 'mcp', Uri: 'doc://1' }), 'readonly');
+  assert.equal(hasMutatingPayloadDeep({ a: { b: { c: { d: { e: { query: 'ok' } } } } } }), false);
+  assert.equal(hasMutatingPayloadDeep({ a: { b: { c: { d: { e: { f: { query: 'too-deep' } } } } } } }), true);
+  assert.equal(
+    classifyTool('call_mcp_tool', {
+      ServerName: 'codegraph',
+      ToolName: 'codegraph_explore',
+      Arguments: { a: { b: { c: { d: { query: 'ok' } } } } },
+    }),
+    'readonly'
+  );
+  assert.equal(
+    classifyTool('call_mcp_tool', {
+      ServerName: 'codegraph',
+      ToolName: 'codegraph_explore',
+      Arguments: { a: { b: { c: { d: { e: { query: 'too-deep' } } } } } },
+    }),
+    'other'
+  );
 });
 
 // Every agy NON-FILE tool (no file-path argument in any observed transcript

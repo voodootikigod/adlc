@@ -17,6 +17,7 @@ export {
   peekOpenSegment,
   recoverOpenSegment,
   resolveOpenSegment,
+  normalizeManifestDirAndCwd,
   assertSegmentPathCommittable,
   firstEntryOf,
   encodeUlidPart,

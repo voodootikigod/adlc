@@ -61,6 +61,7 @@ import { discoverSegments, readManifestForest } from './forest.mjs';
 import {
   currentBranch,
   recoverOpenSegment,
+  normalizeManifestDirAndCwd,
   firstEntryOf,
   MALFORMED_FIRST_ENTRY,
   OVERSIZED_FIRST_ENTRY,
@@ -99,7 +100,9 @@ function rawFirstEntry(dir, name) {
  *   writing anything. Empty entries is the belt to that braces — a consumer
  *   that forgets to check still cannot read a stale completion as ours.
  */
-export function readOwnManifestChain(dir = ADLC_DIR, { cwd = process.cwd() } = {}) {
+export function readOwnManifestChain(dir = ADLC_DIR, opts = {}) {
+  let cwd;
+  ({ dir, cwd } = normalizeManifestDirAndCwd(dir, opts));
   const { entries, skipped } = readManifestForest(dir);
   const inSegment = (name) => entries.filter((entry) => entry.segment === name);
 

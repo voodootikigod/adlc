@@ -10,21 +10,7 @@ import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 
 export function canonicalizeExisting(p) {
-  if (!p || typeof p !== 'string') return p;
-  try {
-    if (existsSync(p)) return realpathSync(p);
-    let cur = dirname(p);
-    const suffix = [parse(p).base];
-    const { root: fsRoot } = parse(cur);
-    while (cur && cur !== fsRoot) {
-      if (existsSync(cur)) {
-        return join(realpathSync(cur), ...suffix);
-      }
-      suffix.unshift(parse(cur).base);
-      cur = dirname(cur);
-    }
-  } catch {}
-  return p;
+  return !p || typeof p !== 'string' ? p : canonicalizePath(p);
 }
 
 function realpathOr(p) {
@@ -37,8 +23,28 @@ function realpathOr(p) {
 import { checkRail, classifyTool, isShellTool, hasCommandLineArgs, hasCodeExecutionArgs, resolveActiveTicketId, railPreconditions, TRUST_ROOT_RAILS, extractCommandString } from '../rails-checker.mjs';
 export { extractCommandString };
 import { loadTicketStoreReadOnly } from '../generated-ticket-reader.mjs';
+import {
+  canonicalizePath,
+  extractAllToolWorkdirs,
+  extractToolWorkdir,
+  findInnermostCheckoutRoot,
+  hasConflictingToolWorkdirs,
+  preferInnermostCheckout,
+  isPathInside,
+} from '../generated-workspace-root.mjs';
 import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId, computePrefixHash, readTranscriptPrefixBounded, readTextFileBounded, getTestFilesMap, hasDiscoverableTests, getOrCreateSessionSecret, getMasterKeyRaw, rotateMasterKey, resolveUserHome } from '../build-gate-inline.mjs';
 import { flailMessage, resolveTranscriptPath, parseTranscriptSteps, parseTranscriptRecords, analyzeFlail } from '../flail-inline.mjs';
+
+const PLUGIN_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+
+function nonPluginProcessCwd() {
+  try {
+    const cwd = process.cwd();
+    return isPathInside(cwd, PLUGIN_ROOT) ? null : cwd;
+  } catch {
+    return null;
+  }
+}
 
 // agy nests the call under toolCall; args is the parameter bag. Read defensively.
 const TOOLCALL_KEYS = ['toolCall', 'tool_call', 'tool'];
@@ -74,6 +80,20 @@ export function extractArgs(payload) {
   for (const k of ARGS_KEYS) if (tc[k] && typeof tc[k] === 'object') return tc[k];
   return {};
 }
+function decodeFileUriOrPath(trimmed) {
+  if (!trimmed.startsWith('file://')) return trimmed;
+  try {
+    return fileURLToPath(trimmed);
+  } catch {
+    const stripped = trimmed.replace(/^file:\/\/(?:localhost)?/i, '');
+    try {
+      return decodeURIComponent(stripped);
+    } catch {
+      return stripped;
+    }
+  }
+}
+
 export function extractFilePaths(payload) {
   const args = extractArgs(payload);
   const out = new Set();
@@ -84,9 +104,19 @@ export function extractFilePaths(payload) {
       if (key === 'CommandLine' || key === 'command' || key === 'cmd' || key === 'code' || key === 'CodeContent' || key === 'content' || key === 'ReplacementContent' || key === 'TargetContent' || key === 'Instruction' || key === 'Description' || key === 'Prompt' || key === 'Message' || key === 'message') {
         continue;
       }
+      const isUriKey = key.toLowerCase() === 'uri';
       const isPathKey = PATH_KEYS.some((pk) => pk.toLowerCase() === key.toLowerCase()) || (parentKey && PATH_KEYS.some((pk) => pk.toLowerCase() === parentKey.toLowerCase()));
       if (typeof v === 'string') {
-        if (isPathKey && v.trim()) out.add(v.trim());
+        const trimmed = v.trim();
+        if (isPathKey && trimmed) {
+          out.add(decodeFileUriOrPath(trimmed));
+        } else if (isUriKey && trimmed) {
+          if (trimmed.startsWith('file://')) {
+            out.add(decodeFileUriOrPath(trimmed));
+          } else if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) {
+            out.add(trimmed);
+          }
+        }
       } else if (Array.isArray(v)) {
         for (const e of v) {
           if (typeof e === 'string' && isPathKey && e.trim()) out.add(e.trim());
@@ -125,70 +155,122 @@ function hasPathLikeArgs(args, depth = 0) {
 const WORKSPACE_KEYS = ['workspacePaths', 'workspace_paths', 'workspaceRoots', 'workspace_roots'];
 
 /** Nearest ancestor dir of absPath containing a supported ADLC ticket store, or null.
- * Bounded walk to the filesystem root — never uses process.cwd() (the plugin dir). */
+ * Honours nested git worktrees (.worktrees/<lane>), stops before stray $HOME/.adlc,
+ * and never falls back to the installed plugin directory. */
 export function findAdlcRoot(absPath, env = process.env) {
   if (!absPath || typeof absPath !== 'string' || !isAbsolute(absPath)) return null;
   const storeOverride = env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null;
+  const homeDir = resolveUserHome(env) || homedir();
 
-  let cur = absPath;
-  try {
-    const stat = lstatSync(absPath);
-    if (!stat.isDirectory()) cur = dirname(absPath);
-  } catch {
-    cur = dirname(absPath);
-  }
-
-  // Check explicit workspace roots from env if storeOverride is an absolute path
   if (storeOverride && isAbsolute(storeOverride) && existsSync(storeOverride)) {
-    const explicitRoots = [env?.AGY_WORKSPACE, env?.ANTIGRAVITY_WORKSPACE, env?.PROJECT_ROOT, env?.WORKSPACE_ROOT]
-      .filter((r) => typeof r === 'string' && r.trim() && isAbsolute(r.trim()));
+    // Nested git checkouts/worktrees still take priority over an outer explicit workspace env
+    const gitCheckoutRoot = findInnermostCheckoutRoot(absPath, {
+      storeOverride: null,
+      homeDir,
+      pluginDir: PLUGIN_ROOT,
+      allowFileStart: true,
+      requireStore: false,
+      preserveSpelling: true,
+    });
+    const explicitRoots = [
+      env?.AGY_WORKSPACE,
+      env?.ANTIGRAVITY_WORKSPACE,
+      env?.GEMINI_WORKSPACE,
+      env?.PROJECT_ROOT,
+      env?.WORKSPACE_ROOT,
+    ].filter((r) => typeof r === 'string' && r.trim() && isAbsolute(r.trim()));
+
     for (const er of explicitRoots) {
-      const rel = relative(er, absPath);
-      if (!rel.startsWith('..') && !isAbsolute(rel)) {
-        return er;
+      if (isPathInside(absPath, er)) {
+        return preferInnermostCheckout(er, [absPath], {
+          storeOverride,
+          homeDir,
+          pluginDir: PLUGIN_ROOT,
+          allowFileStart: true,
+          preserveSpelling: true,
+        });
       }
     }
+    if (gitCheckoutRoot) return gitCheckoutRoot;
+
+    // Fallback for gitless fixtures with a local .adlc directory under an external store override
+    let cur = absPath;
+    try {
+      if (!lstatSync(absPath).isDirectory()) cur = dirname(absPath);
+    } catch {
+      cur = dirname(absPath);
+    }
+    const { root: fsRoot } = parse(cur);
+    const normHome = homeDir ? realpathOr(resolve(homeDir)) : null;
+    while (true) {
+      const realCur = realpathOr(cur);
+      if (normHome && realCur === normHome) break;
+      if (existsSync(join(cur, '.adlc'))) return cur;
+      if (cur === fsRoot) break;
+      cur = dirname(cur);
+    }
+    return null;
   }
 
-  const { root: fsRoot } = parse(cur);
-  let topGitRoot = null;
-  let topAdlcRoot = null;
-
-  while (true) {
-    if (storeOverride) {
-      if (!isAbsolute(storeOverride)) {
-        if (existsSync(join(cur, storeOverride))) return cur;
-      }
-    }
-    if (existsSync(join(cur, '.adlc', 'tickets.json')) || existsSync(join(cur, '.adlc', 'tickets', '.store.json'))) {
-      return cur;
-    }
-    if (existsSync(join(cur, '.adlc'))) {
-      topAdlcRoot = cur;
-    }
-    if (existsSync(join(cur, '.git'))) {
-      topGitRoot = cur;
-    }
-    if (cur === fsRoot) break;
-    cur = dirname(cur);
-  }
-
-  if (storeOverride && isAbsolute(storeOverride) && existsSync(storeOverride)) {
-    if (topAdlcRoot) return topAdlcRoot;
-    if (topGitRoot) return topGitRoot;
-  }
-  return null;
+  return findInnermostCheckoutRoot(absPath, {
+    storeOverride,
+    homeDir,
+    pluginDir: PLUGIN_ROOT,
+    allowFileStart: true,
+    preserveSpelling: true,
+  });
 }
 
-export function anchorPath(rawPath, payload) {
+function declaredOuterWorkspaces(payload) {
+  const base = nonPluginProcessCwd() ?? process.cwd();
+  return WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : [payload?.[k]]))
+    .filter((s) => typeof s === 'string' && s.trim())
+    .map((s) => (isAbsolute(s.trim()) ? s.trim() : resolve(base, s.trim())));
+}
+
+function declaredOuterWorkspace(payload, targetHint = null) {
+  const all = declaredOuterWorkspaces(payload);
+  if (all.length === 0) return null;
+  if (typeof targetHint === 'string' && targetHint.trim() && isAbsolute(targetHint.trim())) {
+    const matched = all.find((w) => isPathInside(targetHint.trim(), w));
+    if (matched) return matched;
+  }
+  return all[0];
+}
+
+export function anchorPath(rawPath, payload, env = null) {
   if (!rawPath) return { abs: null, anchored: false };
   const normRawPath = typeof rawPath === 'string' ? rawPath.replace(/\\/g, '/') : rawPath;
   if (isAbsolute(normRawPath)) return { abs: normRawPath, anchored: true };
-  const ws = WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : []))
-    .find((s) => typeof s === 'string' && s.trim());
+  const toolWorkdir = isToolPayload(payload) ? extractCwdFromArgs(extractArgs(payload)) : null;
+  const ws =
+    WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : [])).find(
+      (s) => typeof s === 'string' && s.trim()
+    ) ??
+    [
+      payload?.cwd,
+      payload?.workingDirectory,
+      payload?.working_directory,
+      payload?.workspaceRoot,
+      env?.AGY_WORKSPACE,
+      env?.ANTIGRAVITY_WORKSPACE,
+      env?.GEMINI_WORKSPACE,
+      env?.PROJECT_ROOT,
+      env?.WORKSPACE_ROOT,
+    ].find((s) => typeof s === 'string' && s.trim());
   if (ws) {
-    const absWs = isAbsolute(ws) ? ws : resolve(process.cwd(), ws);
+    const absWs = isAbsolute(ws) ? ws : resolve(nonPluginProcessCwd() ?? process.cwd(), ws);
+    if (typeof toolWorkdir === 'string' && toolWorkdir.trim() && normRawPath !== toolWorkdir.trim().replace(/\\/g, '/')) {
+      const absToolWd = isAbsolute(toolWorkdir.trim()) ? toolWorkdir.trim() : resolve(absWs, toolWorkdir.trim());
+      return { abs: join(absToolWd, normRawPath), anchored: true };
+    }
     return { abs: join(absWs, normRawPath), anchored: true };
+  }
+  if (typeof toolWorkdir === 'string' && toolWorkdir.trim() && isAbsolute(toolWorkdir.trim())) {
+    if (normRawPath === toolWorkdir.trim().replace(/\\/g, '/')) {
+      return { abs: toolWorkdir.trim(), anchored: true };
+    }
+    return { abs: join(toolWorkdir.trim(), normRawPath), anchored: true };
   }
   return { abs: null, anchored: false };
 }
@@ -213,29 +295,7 @@ function isToolPayload(p) {
 }
 
 export function extractCwdFromArgs(args) {
-  if (!args || typeof args !== 'object') return null;
-  // Check canonical top-level fields first (strict order, no decoy ambiguity)
-  const direct = [
-    args.Cwd,
-    args.cwd,
-    args.workdir,
-    args.workDir,
-    args.working_dir,
-    args.workingDir,
-    args.workingDirectory,
-    args.options?.Cwd,
-    args.options?.cwd,
-    args.params?.Cwd,
-    args.params?.cwd,
-    args.payload?.Cwd,
-    args.payload?.cwd,
-  ];
-  for (const c of direct) {
-    if (typeof c === 'string' && c.trim().length > 0) {
-      return c.trim();
-    }
-  }
-  return null;
+  return extractToolWorkdir(args);
 }
 
 /**
@@ -261,6 +321,27 @@ export function getTrustRootSecretHomes(env = process.env) {
   return homes;
 }
 
+export function isSecretStatePath(p, env = process.env) {
+  if (!p || typeof p !== 'string') return false;
+  const norm = p.replace(/\\/g, '/');
+  const homes = getTrustRootSecretHomes(env);
+  for (const homeDir of homes) {
+    if (!homeDir) continue;
+    const legacyMasterKeyFile = `${homeDir}/.adlc/.master-key`;
+    const globalAdlcDir = `${homeDir}/.adlc`;
+    const newAuthKeyFile = `${homeDir}/.config/adlc/secrets/.auth-key`;
+    const newSecretsDir = `${homeDir}/.config/adlc`;
+    if (norm === legacyMasterKeyFile || norm === globalAdlcDir || norm.startsWith(globalAdlcDir + '/')) return true;
+    if (norm === newAuthKeyFile || norm === newSecretsDir || norm.startsWith(newSecretsDir + '/')) return true;
+  }
+  if (/(^|\/|\b)(\.master-key|\.auth-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\.adlc\/sessions|\.adlc\/session-ledger|\.env\.local)/i.test(norm)) return true;
+  if (norm[0] === '~') {
+    const afterTilde = norm.slice(1);
+    if (afterTilde.startsWith('/.adlc') || afterTilde.startsWith('/.config/adlc')) return true;
+  }
+  return false;
+}
+
 export function isTrustRootOrSecretPath(p, env = process.env) {
   if (!p || typeof p !== 'string') return false;
   const norm = p.replace(/\\/g, '/');
@@ -277,28 +358,7 @@ export function isTrustRootOrSecretPath(p, env = process.env) {
       /(^|\/)(\.mocharc(\.(js|cjs|mjs|json|yaml|yml))?|jest\.config\.(js|cjs|mjs|ts|json)|vitest\.config\.(js|cjs|mjs|ts))$/i.test(norm)) {
     return true;
   }
-
-  const homes = getTrustRootSecretHomes(env);
-  for (const homeDir of homes) {
-    if (!homeDir) continue;
-    const legacyMasterKeyFile = `${homeDir}/.adlc/.master-key`;
-    const globalAdlcDir = `${homeDir}/.adlc`;
-    const newAuthKeyFile = `${homeDir}/.config/adlc/secrets/.auth-key`;
-    const newSecretsDir = `${homeDir}/.config/adlc`;
-    if (norm === legacyMasterKeyFile || norm === globalAdlcDir || norm.startsWith(globalAdlcDir + '/')) return true;
-    if (norm === newAuthKeyFile || norm === newSecretsDir || norm.startsWith(newSecretsDir + '/')) return true;
-  }
-  if (/(^|\/|\b)(\.master-key|\.auth-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\.adlc\/sessions|\.adlc\/session-ledger|\.env\.local)/i.test(norm)) return true;
-  // A raw (unexpanded) home-tilde reference: normRaw at the call site can carry
-  // literal shell command text (e.g. `cat ~/.adlc/.master-key`) that a shell only
-  // expands at execution time, so this must catch the tilde form directly —
-  // independent of the resolved-homedir comparison above. `norm` already had every
-  // backslash normalized to `/` above, so only the forward-slash form can occur here.
-  if (norm[0] === '~') {
-    const afterTilde = norm.slice(1);
-    if (afterTilde.startsWith('/.adlc') || afterTilde.startsWith('/.config/adlc')) return true;
-  }
-  return false;
+  return isSecretStatePath(p, env);
 }
 
 /**
@@ -333,20 +393,55 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
 
     const paths = extractFilePaths(payload);
 
-    // CRITICAL: Forbid ANY tool (readonly, mutating, or other) from accessing master key or trust-root secrets!
+    // CRITICAL: Forbid ANY tool (readonly, mutating, or other) from accessing master key or trust-root secrets,
+    // and forbid any non-readonly tool from overwriting protected runtime/test-runner binaries or configs!
+    const pathGuard = cls === 'readonly' ? isSecretStatePath : isTrustRootOrSecretPath;
     for (const raw of paths) {
-      const { abs } = anchorPath(raw, payload);
+      const { abs } = anchorPath(raw, payload, env);
       const canonicalAbs = canonicalizeExisting(abs);
       const normRaw = typeof raw === 'string' ? raw.replace(/\\/g, '/') : '';
       const normAbs = typeof abs === 'string' ? abs.replace(/\\/g, '/') : '';
       const normCanonical = typeof canonicalAbs === 'string' ? canonicalAbs.replace(/\\/g, '/') : '';
-      if (isTrustRootOrSecretPath(normAbs, env) || isTrustRootOrSecretPath(normCanonical, env) || isTrustRootOrSecretPath(normRaw, env)) {
+      if (pathGuard(normAbs, env) || pathGuard(normCanonical, env) || pathGuard(normRaw, env)) {
         return deny('frozen rail — modification of master key or trust-root session secrets is strictly prohibited (access or disclosure forbidden)');
       }
     }
 
-    // Step 2 — classify first. Reads of non-secret files are allowed.
-    if (cls === 'readonly') return allow();
+    const earlyDeclaredWs = declaredOuterWorkspace(payload, wsRoot);
+    if (hasConflictingToolWorkdirs(args, earlyDeclaredWs ?? wsRoot ?? nonPluginProcessCwd() ?? process.cwd())) {
+      return deny('shell command specifies conflicting working directories — failing closed');
+    }
+
+    const structuredToolWd = !isShellTool(tool, args) ? extractCwdFromArgs(args) : null;
+    if (enforcing && typeof structuredToolWd === 'string' && structuredToolWd.trim()) {
+      const wdTrimmed = structuredToolWd.trim();
+      const structuredBound =
+        declaredOuterWorkspace(payload, isAbsolute(wdTrimmed) ? wdTrimmed : wsRoot) ?? wsRoot;
+      if (!structuredBound) {
+        return deny('structured tool workdir attempts to access filesystem paths outside workspace — strictly prohibited under enforcement');
+      }
+      const candidateWd = isAbsolute(wdTrimmed) ? wdTrimmed : resolve(structuredBound, wdTrimmed);
+      if (!isPathInside(candidateWd, structuredBound)) {
+        return deny('structured tool workdir attempts to access filesystem paths outside workspace — strictly prohibited under enforcement');
+      }
+    }
+
+    // Step 2 — classify first. Reads of non-secret files are allowed once tool workdirs are confined.
+    if (cls === 'readonly') {
+      if (enforcing) {
+        for (const raw of paths) {
+          const rawNorm = typeof raw === 'string' ? raw.replace(/\\/g, '/') : '';
+          if (rawNorm && !isAbsolute(rawNorm)) {
+            const { abs, anchored } = anchorPath(raw, payload, env);
+            const relBound = declaredOuterWorkspace(payload, abs) ?? wsRoot;
+            if (!anchored || !relBound || !isPathInside(abs, relBound)) {
+              return deny(`relative target path "${raw}" attempts to access filesystem paths outside workspace — failing closed`);
+            }
+          }
+        }
+      }
+      return allow();
+    }
 
     if (paths.length > 0) {
       const localCache = trackerCache ?? new Map();
@@ -358,16 +453,23 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
       let canonicalStoreOverride = null;
       if (storeOverride && typeof storeOverride === 'string' && storeOverride.trim()) {
         const trimmed = storeOverride.trim();
-        canonicalStoreOverride = canonicalizeExisting(isAbsolute(trimmed) ? trimmed : resolve(process.cwd(), trimmed));
+        canonicalStoreOverride = canonicalizeExisting(isAbsolute(trimmed) ? trimmed : resolve(wsRoot ?? nonPluginProcessCwd() ?? process.cwd(), trimmed));
       }
 
       // Steps 3–4 — resolve each target; fail closed on anything unanchorable (H1/H2/H3),
       // no-op allow only for an absolute path in a genuinely non-ADLC location (G2).
       for (const raw of paths) {
-        const { abs, anchored } = anchorPath(raw, payload);
+        const { abs, anchored } = anchorPath(raw, payload, env);
         if (!anchored) {
           if (enforcing) return deny(`unanchorable path "${raw}" (relative, no workspace root) — failing closed`);
           continue;
+        }
+        const rawNorm = typeof raw === 'string' ? raw.replace(/\\/g, '/') : '';
+        if (enforcing && rawNorm && !isAbsolute(rawNorm)) {
+          const relBound = declaredOuterWorkspace(payload, abs) ?? wsRoot;
+          if (!relBound || !isPathInside(abs, relBound)) {
+            return deny(`relative target path "${raw}" attempts to access filesystem paths outside workspace — failing closed`);
+          }
         }
         const canonicalAbs = canonicalizeExisting(abs);
 
@@ -444,31 +546,70 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
 
     const isShell = isShellTool(tool, args);
     const cmd = isShell ? extractCommandString(args) : '';
+    const rawShellCwd = isShell ? extractCwdFromArgs(args) : null;
+    const resolvedDeclaredWs = declaredOuterWorkspace(
+      payload,
+      rawShellCwd && typeof rawShellCwd === 'string' && isAbsolute(rawShellCwd) ? rawShellCwd : wsRoot
+    );
+    const shellAnchorBase = resolvedDeclaredWs ?? wsRoot ?? nonPluginProcessCwd() ?? process.cwd();
 
+    if (isShell && hasConflictingToolWorkdirs(args, shellAnchorBase)) {
+      return deny('shell command specifies conflicting working directories — failing closed');
+    }
+
+    let resolvedShellCheckoutRoot = null;
     if (cmd) {
-      const cmdCwd = extractCwdFromArgs(args) ?? args?.Cwd ?? args?.cwd;
-      const cmdRoot = (cmdCwd && typeof cmdCwd === 'string' ? (isAbsolute(cmdCwd) ? cmdCwd : (wsRoot ? resolve(wsRoot, cmdCwd) : null)) : null) ?? wsRoot ?? null;
+      const cmdCwd = extractCwdFromArgs(args);
+      const transcriptDiscoveredRoot = !wsRoot && !resolvedDeclaredWs
+        ? (() => {
+            const tp = resolveTranscriptPath({ payload, conversationId: resolveSessionId({ payload, env }), env });
+            return tp ? discoverTranscriptCheckoutRoot(tp, env, { anchorBase: resolvedDeclaredWs }) : null;
+          })()
+        : null;
+      const shellWorkspaceBound =
+        resolvedDeclaredWs ??
+        wsRoot ??
+        transcriptDiscoveredRoot ??
+        (cmdCwd && typeof cmdCwd === 'string' && isAbsolute(cmdCwd) ? findAdlcRoot(cmdCwd, env) : null);
+      if (enforcing && typeof cmdCwd === 'string' && cmdCwd.trim()) {
+        if (!shellWorkspaceBound) {
+          return deny('shell command attempts to access filesystem paths outside workspace — strictly prohibited under enforcement');
+        }
+        const candidateCmdRoot = isAbsolute(cmdCwd) ? cmdCwd : resolve(shellWorkspaceBound, cmdCwd);
+        if (!isPathInside(candidateCmdRoot, shellWorkspaceBound)) {
+          return deny('shell command attempts to access filesystem paths outside workspace — strictly prohibited under enforcement');
+        }
+      }
+      const cmdRoot = (cmdCwd && typeof cmdCwd === 'string' ? (isAbsolute(cmdCwd) ? cmdCwd : (shellWorkspaceBound ? resolve(shellWorkspaceBound, cmdCwd) : null)) : null) ?? wsRoot ?? shellWorkspaceBound ?? null;
+      resolvedShellCheckoutRoot = cmdRoot ? findAdlcRoot(cmdRoot, env) : null;
       const effectiveRoot = cmdRoot ?? process.cwd();
+      const containmentRoot = shellWorkspaceBound ?? effectiveRoot;
       // CRITICAL: Master key and trust-root secret access is strictly prohibited under ALL modes
-      if (isTrustRootSecretAccess(cmd, overrideEscaped) && !isReadonlyCommand(cmd, { root: effectiveRoot, env })) {
+      if (isTrustRootSecretAccess(cmd, overrideEscaped) && !isReadonlyCommand(cmd, { root: containmentRoot, cwd: effectiveRoot, env })) {
         return deny('shell modification of ticket store or trust-root rails is strictly prohibited');
       }
-      if (hasShellTrustRootSecretAccess(cmd, { root: effectiveRoot, env })) {
+      if (
+        hasShellTrustRootSecretAccess(cmd, { root: containmentRoot, cwd: effectiveRoot, env }) ||
+        (shellWorkspaceBound && effectiveRoot !== shellWorkspaceBound && hasShellTrustRootSecretAccess(cmd, { root: shellWorkspaceBound, cwd: shellWorkspaceBound, env }))
+      ) {
         return deny('shell access to master key or trust-root session secrets is strictly prohibited');
       }
-      if (hasShellSymlinkOrSecretEscape(cmd, { root: effectiveRoot, env })) {
+      if (hasShellSymlinkOrSecretEscape(cmd, { root: containmentRoot, cwd: effectiveRoot, env })) {
         return deny('shell command accesses or indirects through symlink targeting trust root or escaping workspace');
       }
-      if (enforcing && isUnauthorizedWorkspaceEscape(cmd, { root: cmdRoot })) {
+      if (enforcing && isUnauthorizedWorkspaceEscape(cmd, { root: shellWorkspaceBound, cwd: cmdRoot })) {
         return deny('shell command attempts to access filesystem paths outside workspace — strictly prohibited under enforcement');
       }
     }
 
     if (isShell) {
       const sessionID = resolveSessionId({ payload, env });
-      const pathTracker = wsRoot ? (trackerCache?.get(wsRoot) ?? createPersistentTracker(wsRoot, env)) : null;
-      if (enforcing && pathTracker?.isInvalidated?.(sessionID)) {
-        return deny('session invalidated due to secret disclosure — failing closed');
+      const checkRoots = new Set([wsRoot, resolvedShellCheckoutRoot].filter(Boolean));
+      for (const r of checkRoots) {
+        const pathTracker = trackerCache?.get(r) ?? createPersistentTracker(r, env);
+        if (enforcing && pathTracker?.isInvalidated?.(sessionID)) {
+          return deny('session invalidated due to secret disclosure — failing closed');
+        }
       }
       if (cmd) {
         if (!paths.length) {
@@ -530,7 +671,8 @@ export function runFromStdin(raw, envArg = process.env) {
   const sessionID = resolveSessionId({ payload, env });
 
   const paths = extractFilePaths(payload);
-  const cwdCandidates = [args?.Cwd, args?.cwd, args?.workdir, args?.workingDirectory, payload?.cwd, payload?.workspaceRoot];
+  const extractedWorkdir = extractCwdFromArgs(args);
+  const cwdCandidates = [extractedWorkdir, payload?.cwd, payload?.workingDirectory, payload?.working_directory, payload?.workspaceRoot];
   for (const c of cwdCandidates) {
     if (typeof c === 'string' && c.trim()) {
       paths.push(c.trim());
@@ -544,11 +686,16 @@ export function runFromStdin(raw, envArg = process.env) {
 
   const distinctRoots = new Set();
   const wsRoot = resolveWorkspaceRoot(payload, env);
-  if (wsRoot) distinctRoots.add(wsRoot);
+  const outerDeclaredWs = declaredOuterWorkspace(
+    payload,
+    extractedWorkdir && typeof extractedWorkdir === 'string' && isAbsolute(extractedWorkdir) ? extractedWorkdir : wsRoot
+  );
+  const fallbackProcCwd = nonPluginProcessCwd();
+  const shellAnchorBase = outerDeclaredWs ?? wsRoot ?? fallbackProcCwd ?? process.cwd();
 
   if (paths.length > 0) {
     for (const p of paths) {
-      const { abs } = anchorPath(p, payload);
+      const { abs } = anchorPath(p, payload, env);
       if (abs) {
         const root = findAdlcRoot(abs, env);
         if (root) distinctRoots.add(root);
@@ -556,19 +703,32 @@ export function runFromStdin(raw, envArg = process.env) {
     }
   }
 
+  const isShell = isShellTool(toolName, args);
+  const cmd = extractCommandString(args);
+  const shellCwd = extractedWorkdir;
+  const actualCwd = (shellCwd && typeof shellCwd === 'string' ? (isAbsolute(shellCwd) ? shellCwd : resolve(shellAnchorBase, shellCwd)) : null) ?? wsRoot ?? fallbackProcCwd ?? process.cwd();
+  const shellTargetRoot = shellCwd && typeof shellCwd === 'string' ? findAdlcRoot(actualCwd, env) : null;
+  if (shellTargetRoot) distinctRoots.add(shellTargetRoot);
+
+  if (distinctRoots.size === 0 && wsRoot) {
+    distinctRoots.add(wsRoot);
+  }
+
   const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
   if (distinctRoots.size === 0 && transcriptPath) {
-    const transcriptRoot = findAdlcRoot(transcriptPath, env) ?? discoverRootFromTranscriptRecords(parseTranscriptRecords(transcriptPath), env);
+    const transcriptRoot = discoverTranscriptCheckoutRoot(transcriptPath, env, { anchorBase: outerDeclaredWs });
     if (transcriptRoot) distinctRoots.add(transcriptRoot);
   }
 
-  const isShell = isShellTool(toolName, args);
-  const cmd = extractCommandString(args);
-  const shellCwd = extractCwdFromArgs(args) ?? args?.Cwd ?? args?.cwd;
-  const actualCwd = (shellCwd && typeof shellCwd === 'string' ? (isAbsolute(shellCwd) ? shellCwd : resolve(wsRoot ?? process.cwd(), shellCwd)) : null) ?? wsRoot ?? process.cwd();
-  const repoRoot = (shellCwd && typeof shellCwd === 'string' ? findAdlcRoot(actualCwd, env) : null) ?? wsRoot ?? Array.from(distinctRoots)[0] ?? process.cwd();
-  if (repoRoot) distinctRoots.add(repoRoot);
-  const isMut = isShell ? (!isReadonlyCommand(cmd, { root: actualCwd, env }) && !isVerificationCommand(cmd, { root: repoRoot, toolArgs: args })) : cls !== 'readonly';
+  const priorDiscoveredRoot = Array.from(distinctRoots)[0] ?? null;
+  const repoRoot = shellTargetRoot ?? wsRoot ?? priorDiscoveredRoot ?? (env === process.env && fallbackProcCwd ? findAdlcRoot(fallbackProcCwd, env) : null);
+  if (repoRoot && distinctRoots.size === 0) distinctRoots.add(repoRoot);
+  const verifyRoot = shellTargetRoot ?? wsRoot ?? priorDiscoveredRoot ?? repoRoot;
+  const allowImplicitCwd = hasUnambiguousWorkspaceCwd(payload, env, verifyRoot);
+  const isMut = isShell
+    ? (!isReadonlyCommand(cmd, { root: verifyRoot ?? actualCwd, cwd: actualCwd, env }) &&
+       !isVerificationCommand(cmd, { root: verifyRoot, workdirAnchorBase: shellAnchorBase, toolArgs: args, allowImplicitCwd }))
+    : cls !== 'readonly';
 
   for (const root of distinctRoots) {
     const tracker = getTracker(root);
@@ -619,46 +779,149 @@ export function printStatus(root = process.cwd(), env = process.env, payload = {
   console.log(`Flail Status: ${flail.verdict.toUpperCase()}${flail.summary ? ` (${flail.summary})` : ''}`);
 }
 
+export function hasUnambiguousWorkspaceCwd(payload, env = process.env, expectedRoot = null) {
+  const baseCwd = nonPluginProcessCwd() ?? process.cwd();
+  const toCanonical = (s) =>
+    canonicalizePath(isAbsolute(s.trim()) ? resolve(s.trim()) : resolve(baseCwd, s.trim()));
+  const declared = WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : [payload?.[k]]))
+    .filter((s) => typeof s === 'string' && s.trim())
+    .map(toCanonical);
+  const uniqueDeclared = [...new Set(declared)];
+
+  const explicitPayloadDir = [
+    payload?.cwd,
+    payload?.workingDirectory,
+    payload?.working_directory,
+    payload?.workspaceRoot,
+  ].find((s) => typeof s === 'string' && s.trim());
+
+  const explicitEnvWorkspace = [
+    env?.AGY_WORKSPACE,
+    env?.ANTIGRAVITY_WORKSPACE,
+    env?.GEMINI_WORKSPACE,
+    env?.PROJECT_ROOT,
+    env?.WORKSPACE_ROOT,
+  ].find((s) => typeof s === 'string' && s.trim());
+
+  if (uniqueDeclared.length > 1 && !explicitPayloadDir && !explicitEnvWorkspace) {
+    return false;
+  }
+
+  if (typeof expectedRoot === 'string' && expectedRoot.trim()) {
+    const canonicalExpected = canonicalizePath(resolve(expectedRoot.trim()));
+    const implicitDir =
+      explicitPayloadDir ??
+      (uniqueDeclared.length === 1 ? uniqueDeclared[0] : null) ??
+      explicitEnvWorkspace ??
+      (env === process.env ? nonPluginProcessCwd() : null) ??
+      env?.PWD ??
+      env?.INIT_CWD ??
+      null;
+    if (!implicitDir || typeof implicitDir !== 'string' || !implicitDir.trim()) {
+      return false;
+    }
+    return toCanonical(implicitDir) === canonicalExpected;
+  }
+
+  return true;
+}
+
 export function resolveWorkspaceRoot(payload, env = process.env) {
   const storeOverride = env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null;
-  const hasStoreOverride = storeOverride && existsSync(isAbsolute(storeOverride) ? storeOverride : join(process.cwd(), storeOverride));
+  const homeDir = resolveUserHome(env) || homedir();
+  const baseCwd = nonPluginProcessCwd() ?? process.cwd();
+  const hasStoreOverride =
+    storeOverride && existsSync(isAbsolute(storeOverride) ? storeOverride : join(baseCwd, storeOverride));
+
+  const outerDeclared = declaredOuterWorkspace(payload);
+  const toolWorkdirs = extractAllToolWorkdirs(extractArgs(payload));
+  const toolFilePaths = isToolPayload(payload) ? extractFilePaths(payload) : [];
+  const anchoredToolCandidates = [...toolWorkdirs, ...toolFilePaths]
+    .filter((s) => typeof s === 'string' && s.trim())
+    .map((s) => (isAbsolute(s.trim()) ? s.trim() : resolve(outerDeclared ?? baseCwd, s.trim())));
+
+  const dynamicCwds = [
+    payload?.cwd,
+    payload?.workingDirectory,
+    payload?.working_directory,
+    payload?.workspaceRoot,
+    ...anchoredToolCandidates,
+    env === process.env ? nonPluginProcessCwd() : null,
+  ].filter((s) => typeof s === 'string' && s.trim());
+
+  const upgradeWorktree = (rootCandidate) =>
+    preferInnermostCheckout(rootCandidate, dynamicCwds, {
+      storeOverride,
+      homeDir,
+      pluginDir: PLUGIN_ROOT,
+      allowFileStart: true,
+      preserveSpelling: true,
+    }) ?? rootCandidate;
+
+  const explicitPayloadDirs = [
+    payload?.cwd,
+    payload?.workingDirectory,
+    payload?.working_directory,
+    payload?.workspaceRoot,
+  ].filter((s) => typeof s === 'string' && s.trim());
+  for (const pd of explicitPayloadDirs) {
+    const candidate = isAbsolute(pd) ? pd.trim() : join(baseCwd, pd.trim());
+    const found = findAdlcRoot(candidate, env);
+    if (found) return upgradeWorktree(found);
+    if (hasStoreOverride && existsSync(candidate) && lstatSync(candidate).isDirectory()) {
+      return upgradeWorktree(candidate);
+    }
+  }
 
   const pathKeys = ['transcriptPath', 'transcript_path', 'artifactPath', 'artifact_path', 'logPath', 'log_path'];
   for (const pk of pathKeys) {
     const p = payload?.[pk];
     if (typeof p === 'string' && p.trim()) {
-      const found = findAdlcRoot(dirname(p), env);
-      if (found) return found;
+      const trimmedP = p.trim();
+      const found = /transcript.*\.jsonl$/i.test(trimmedP)
+        ? discoverTranscriptCheckoutRoot(trimmedP, env)
+        : findAdlcRoot(dirname(trimmedP), env);
+      if (found) return upgradeWorktree(found);
     }
   }
 
   const allWorkspaces = WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : [payload?.[k]]))
     .filter((s) => typeof s === 'string' && s.trim());
   for (const ws of allWorkspaces) {
-    const candidate = isAbsolute(ws) ? ws : join(process.cwd(), ws);
+    const candidate = isAbsolute(ws) ? ws : join(baseCwd, ws);
     const found = findAdlcRoot(candidate, env);
-    if (found) return found;
+    if (found) return upgradeWorktree(found);
     if (hasStoreOverride && existsSync(candidate) && lstatSync(candidate).isDirectory()) {
-      return candidate;
+      return upgradeWorktree(candidate);
     }
   }
 
+  // Non-plugin process.cwd() MUST precede env.PWD and env.INIT_CWD: Node's
+  // child_process.spawn(..., { cwd: worktree }) updates process.cwd() without
+  // mutating inherited env.PWD or npm's env.INIT_CWD, which otherwise point back
+  // at the parent checkout and corrupt the parent's .adlc/sessions.json.
   const envCandidates = [
     env?.AGY_WORKSPACE,
     env?.ANTIGRAVITY_WORKSPACE,
     env?.GEMINI_WORKSPACE,
     env?.PROJECT_ROOT,
     env?.WORKSPACE_ROOT,
-    env?.INIT_CWD,
+    env === process.env ? nonPluginProcessCwd() : null,
     env?.PWD,
-    env === process.env ? process.cwd() : null,
+    env?.INIT_CWD,
   ].filter((s) => typeof s === 'string' && s.trim());
 
   for (const c of envCandidates) {
     const found = findAdlcRoot(c, env);
-    if (found) return found;
+    if (found) return upgradeWorktree(found);
     if (hasStoreOverride && existsSync(c) && lstatSync(c).isDirectory()) {
-      return c;
+      return upgradeWorktree(c);
+    }
+  }
+  for (const tw of toolWorkdirs) {
+    if (isAbsolute(tw)) {
+      const found = findAdlcRoot(tw, env);
+      if (found) return upgradeWorktree(found);
     }
   }
   return null;
@@ -740,39 +1003,75 @@ export function extractToolCalls(record) {
   return rawCalls.map(unwrapCall).filter(Boolean);
 }
 
-export function discoverRootFromTranscriptRecords(records, env = process.env) {
+export function discoverRootFromTranscriptRecords(records, env = process.env, { anchorBase = null } = {}) {
   if (!Array.isArray(records) || records.length === 0) return null;
+  const storeOverride = env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null;
+  const homeDir = resolveUserHome(env) || homedir();
+  const discovered = [];
   for (const r of records) {
     const calls = extractToolCalls(r);
     for (const c of calls) {
-      const paths = extractFilePaths({ toolCall: c });
       const args = extractArgs({ toolCall: c });
-      const cwdCandidates = [args?.Cwd, args?.cwd, args?.workdir, args?.workingDirectory];
-      for (const cwd of cwdCandidates) {
-        if (typeof cwd === 'string' && cwd.trim()) {
-          paths.push(cwd.trim());
-        }
-      }
-      for (const p of paths) {
-        if (typeof p === 'string' && isAbsolute(p)) {
-          const canonical = canonicalizeExisting(p);
-          const candidate = findAdlcRoot(canonical, env) ?? findAdlcRoot(p, env);
-          if (candidate) return candidate;
+      const orderedCandidates = [
+        ...extractAllToolWorkdirs(args),
+        ...extractFilePaths({ toolCall: c }),
+      ];
+      for (const p of orderedCandidates) {
+        if (typeof p === 'string' && p.trim()) {
+          const resolvedP = isAbsolute(p) ? p : (anchorBase ? resolve(anchorBase, p) : null);
+          if (!resolvedP) continue;
+          const canonical = canonicalizeExisting(resolvedP);
+          const candidate = findAdlcRoot(canonical, env) ?? findAdlcRoot(resolvedP, env);
+          if (candidate) discovered.push(candidate);
         }
       }
     }
   }
-  return null;
+  if (discovered.length === 0) return null;
+  let best = discovered[0];
+  for (let i = 1; i < discovered.length; i += 1) {
+    const next = discovered[i];
+    const upgraded = preferInnermostCheckout(best, [next], {
+      storeOverride,
+      homeDir,
+      pluginDir: PLUGIN_ROOT,
+      preserveSpelling: true,
+    });
+    if (upgraded && canonicalizePath(upgraded) !== canonicalizePath(best)) {
+      best = upgraded;
+    }
+  }
+  return best;
+}
+
+function discoverTranscriptCheckoutRoot(transcriptPath, env = process.env, { anchorBase = null, readFull = false } = {}) {
+  if (!transcriptPath) return null;
+  const pathRoot = findAdlcRoot(transcriptPath, env);
+  const records = parseTranscriptRecords(transcriptPath, readFull ? { readFull: true } : undefined);
+  const recordRoot = discoverRootFromTranscriptRecords(records, env, { anchorBase: anchorBase ?? pathRoot });
+  return recordRoot ?? pathRoot;
 }
 
 export function preInvocation(payload, { env = process.env } = {}) {
   try {
     let root = resolveWorkspaceRoot(payload, env);
-    if (!root) {
-      const transcriptPath = resolveTranscriptPath({ payload, env });
-      if (transcriptPath) {
-        const records = parseTranscriptRecords(transcriptPath, { readFull: true });
-        root = discoverRootFromTranscriptRecords(records, env);
+    const transcriptPath = resolveTranscriptPath({ payload, env });
+    if (transcriptPath) {
+      const outerDeclaredWs = declaredOuterWorkspace(payload, root);
+      const transcriptRoot = discoverTranscriptCheckoutRoot(transcriptPath, env, {
+        anchorBase: outerDeclaredWs,
+        readFull: true,
+      });
+      if (!root) {
+        root = transcriptRoot;
+      } else if (transcriptRoot) {
+        root =
+          preferInnermostCheckout(root, [transcriptRoot], {
+            storeOverride: env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null,
+            homeDir: resolveUserHome(env) || homedir(),
+            pluginDir: PLUGIN_ROOT,
+            preserveSpelling: true,
+          }) ?? root;
       }
     }
     if (!root) return { injectSteps: [] };
@@ -828,7 +1127,10 @@ export function tokenizeCommand(cmd) {
   return tokens;
 }
 
-export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMutated = false, shellMutated = false } = {}) {
+export function isVerificationCommand(
+  cmd,
+  { root, workdirAnchorBase = null, toolArgs, allowImplicitCwd = true, packageManifestMutated = false, shellMutated = false } = {}
+) {
   if (typeof cmd !== 'string' || !cmd) return false;
   const trimmed = cmd.trim();
   if (!trimmed) return false;
@@ -848,12 +1150,21 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
 
   const realRoot = root ? realpathOr(resolve(root)) : null;
 
-  // All verification commands must execute with an explicit Cwd bound to the repository root
-  const cwd = extractCwdFromArgs(toolArgs) ?? toolArgs?.Cwd ?? toolArgs?.cwd;
-  if (typeof cwd !== 'string' || !cwd) return false;
-  const absCwd = isAbsolute(cwd) ? cwd : resolve(root, cwd);
-  const realCwd = realpathOr(absCwd);
-  if (!realRoot || relative(realRoot, realCwd) !== '') return false;
+  // When an explicit working directory is supplied (Cwd, cwd, dir_path, etc.), it
+  // MUST resolve to the repository root itself (never a subdirectory or sibling).
+  // When omitted (Antigravity's run_command schema has no Cwd parameter), bind to
+  // realRoot iff the workspace root is unambiguous (not an ambiguous multi-root workspace).
+  const wdBase = workdirAnchorBase ?? root ?? process.cwd();
+  if (hasConflictingToolWorkdirs(toolArgs, wdBase)) return false;
+  const cwd = extractCwdFromArgs(toolArgs);
+  if (typeof cwd === 'string' && cwd) {
+    if (!root || !realRoot) return false;
+    const absCwd = isAbsolute(cwd) ? cwd : resolve(wdBase, cwd);
+    const realCwd = realpathOr(absCwd);
+    if (relative(realRoot, realCwd) !== '') return false;
+  } else if (!allowImplicitCwd || !realRoot) {
+    return false;
+  }
 
   // If command includes arguments/paths, validate that all positional paths resolve inside root
   if (realRoot) {
@@ -903,41 +1214,80 @@ export function isVerificationCommand(cmd, { root, toolArgs, packageManifestMuta
 
 export { hasDiscoverableTests };
 
-export function isUnauthorizedWorkspaceEscape(cmd, { root = null } = {}) {
+function isAllowedSystemExecOrNullPath(p) {
+  return (
+    p === '/dev/null' ||
+    /^\/(bin|usr\/bin|usr\/local\/bin|opt\/homebrew\/bin)(\/|$)/.test(p)
+  );
+}
+
+function isTrustedCurrentExecPath(p) {
+  if (!p || !process.execPath) return false;
+  const normExec = process.execPath.replace(/\\/g, '/');
+  if (p === normExec) return true;
+  try {
+    return p === realpathSync(process.execPath).replace(/\\/g, '/');
+  } catch {
+    return false;
+  }
+}
+
+export function isUnauthorizedWorkspaceEscape(cmd, { root = null, cwd = root } = {}) {
   if (!cmd || typeof cmd !== 'string') return false;
   const norm = cmd.replace(/\\/g, '/');
-  // Explicit references to home, root, etc, or system dirs
-  if (/(^|[\s=;,"'\/\\$.()[\]])(~|\$HOME|\$\{HOME\}|\/home(\/|\b)|\/root(\/|\b)|\/etc(\/|\b)|\/proc(\/|\b)|\/sys(\/|\b)|\/dev(\/|\b)|\/tmp(\/|\b)|\/var(\/|\b))/i.test(norm)) {
+
+  // Shell home-directory expansion (~ at token/assignment start, $HOME, ${HOME}) always escapes the workspace
+  if (/(^|[\s=;,"'(])~(?=$|[\s/;"')])|(\$HOME\b|\$\{HOME\})/.test(norm)) {
     return true;
   }
-  // Searching via find with -exec, -execdir, -ok, -delete or outside cwd
-  if (/\bfind\b/i.test(norm)) {
-    if (/(-exec|-execdir|-ok|-delete)/i.test(norm)) return true;
-    if (/(^|\s)(\/|\.\.|\/home|~|\$HOME|\/tmp|\/proc|\/var)/i.test(norm)) return true;
+
+  // Searching via find with -exec, -execdir, -ok, -delete
+  if (/\bfind\b/i.test(norm) && /(-exec|-execdir|-ok|-delete)\b/i.test(norm)) {
+    return true;
   }
+
   // Parent directory traversal escaping root: matches "../", bare "..", "cd ..", etc.
   if (/(^|[\s=;,"'\/\\$.()[\]])\.\.(?=$|[\s=;,"'\/\\$.()[\]])/.test(norm)) {
     return true;
   }
 
-  // Path containment check against root: check any path-shaped tokens
-  if (root && typeof root === 'string') {
-    const tokens = tokenizeCommand(cmd);
-    for (const rawToken of tokens) {
-      if (!rawToken || rawToken.length > 4096) continue;
-      let t = rawToken.replace(/^[0-9]*[><]+/, '').replace(/^--?[a-zA-Z0-9_-]+=/, '').trim();
-      if (t.startsWith('"') && t.endsWith('"') && t.length >= 2) t = t.slice(1, -1);
-      if (t.startsWith("'") && t.endsWith("'") && t.length >= 2) t = t.slice(1, -1);
-      if (!t || t.startsWith('-') || /^(;|&&|\|\||\|)$/.test(t)) continue;
-      // If token is an absolute path (excluding standard system binary locations /bin, /usr/bin)
-      if (t.startsWith('/') || /^[a-zA-Z]:[/\\]/.test(t)) {
-        if (/^\/(bin|usr\/bin|usr\/local\/bin)\b/.test(t)) continue;
-        const rel = relative(root, t);
-        if (rel.startsWith('..') || isAbsolute(rel)) {
-          return true;
-        }
-      }
+  const hasValidRoot = typeof root === 'string' && root.trim().length > 0;
+  const effectiveCwd = typeof cwd === 'string' && cwd.trim().length > 0 ? cwd : root;
+  if (hasValidRoot && effectiveCwd && !isPathInside(effectiveCwd, root)) {
+    return true;
+  }
+  const checkAbsPath = (candidate, { isCommandToken = false } = {}) => {
+    if (isAllowedSystemExecOrNullPath(candidate)) return false;
+    if (isCommandToken && isTrustedCurrentExecPath(candidate)) return false;
+    if (hasValidRoot) {
+      return !isPathInside(candidate, root);
     }
+    return /^\/(home|Users|root|etc|proc|sys|dev|tmp|var|private|opt)(\/|$)/i.test(candidate);
+  };
+
+  // Token-level check (handles quoted arguments, --flag=/abs/path, and redirects like 2>/dev/null)
+  const items = collectShellCandidateTokens(cmd);
+  const allowedCommandExecPaths = new Set();
+  for (const { rawToken: t, isCommandToken } of items) {
+    if (t.startsWith('/') || /^[a-zA-Z]:[/\\]/.test(t)) {
+      const normT = t.replace(/\\/g, '/');
+      if (isCommandToken && isTrustedCurrentExecPath(normT)) {
+        allowedCommandExecPaths.add(normT);
+      }
+      if (checkAbsPath(normT, { isCommandToken })) return true;
+    } else if (hasValidRoot && effectiveCwd && (t.includes('/') || t.includes('\\')) && !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(t)) {
+      const resolvedRel = resolve(effectiveCwd, t);
+      if (!isPathInside(resolvedRel, root)) return true;
+    }
+  }
+
+  // Embedded absolute-path check inside subshells/substitutions (e.g. $(cat /etc/passwd) or `find /`)
+  const embeddedRegex = /(?:^|[\s=;,"'`$(><])(\/[A-Za-z0-9_./~-]*)/g;
+  let match;
+  while ((match = embeddedRegex.exec(norm)) !== null) {
+    const absPath = match[1];
+    if (absPath && allowedCommandExecPaths.has(absPath) && match.index === 0) continue;
+    if (absPath && checkAbsPath(absPath)) return true;
   }
 
   return false;
@@ -970,71 +1320,128 @@ export function isTrustRootSecretAccess(cmd, overrideEscaped = null) {
   return false;
 }
 
-export function hasShellTrustRootSecretAccess(cmd, { root = process.cwd(), env = process.env } = {}) {
+function collectShellCandidateTokens(cmd) {
+  const baseTokens = tokenizeCommand(cmd);
+  const items = [];
+  let expectingCommand = true;
+  for (const rawToken of baseTokens) {
+    if (!rawToken || rawToken.length > 4096) continue;
+    if (/^(;|&&|\|\||\|)$/.test(rawToken)) {
+      expectingCommand = true;
+      continue;
+    }
+    const inlineOutRedirect = /^[0-9]*>+/.test(rawToken);
+    if (!inlineOutRedirect && expectingCommand && /^[A-Za-z_][A-Za-z0-9_]*=/.test(rawToken)) {
+      const rhs = rawToken.slice(rawToken.indexOf('=') + 1).trim();
+      if (rhs) items.push({ rawToken: rhs, isOutRedirect: false, isCommandToken: false });
+      continue;
+    }
+    const hadFlagPrefix = /^--?[a-zA-Z0-9_-]+=/.test(rawToken);
+    let cleaned = rawToken.replace(/^[0-9]*[><]+/, '').replace(/^--?[a-zA-Z0-9_-]+=/, '').trim();
+    if (cleaned.startsWith('"') && cleaned.endsWith('"') && cleaned.length >= 2) cleaned = cleaned.slice(1, -1);
+    if (cleaned.startsWith("'") && cleaned.endsWith("'") && cleaned.length >= 2) cleaned = cleaned.slice(1, -1);
+    if (!cleaned || cleaned.startsWith('-')) continue;
+    const isCommandToken = expectingCommand && !inlineOutRedirect && !hadFlagPrefix;
+    if (isCommandToken) expectingCommand = false;
+    items.push({ rawToken: cleaned, isOutRedirect: inlineOutRedirect, isCommandToken });
+  }
+  const redirectMatches = cmd.match(/[0-9]*[><]+\s*([^<>&|;\s]+)/g);
+  if (redirectMatches) {
+    for (const rm of redirectMatches) {
+      const isOutRedirect = rm.includes('>');
+      let target = rm.replace(/^[0-9]*[><]+\s*/, '').trim();
+      if (target.startsWith('"') && target.endsWith('"') && target.length >= 2) target = target.slice(1, -1);
+      if (target.startsWith("'") && target.endsWith("'") && target.length >= 2) target = target.slice(1, -1);
+      if (target) {
+        items.push({ rawToken: target, isOutRedirect, isCommandToken: false });
+      }
+    }
+  }
+  return items;
+}
+
+export function hasShellTrustRootSecretAccess(cmd, { root = process.cwd(), cwd = root, env = process.env } = {}) {
   if (!cmd || typeof cmd !== 'string') return false;
 
   // Catch wildcard globs targeting dotfiles or candidate secret names, or unexpanded globs with file readers
   if (/\b(cat|head|tail|less|more|od|xxd|strings|source|\.)\s+.*[*?[\]{}]/i.test(cmd)) {
     return true;
   }
-  const tokens = tokenizeCommand(cmd);
-  const redirectMatches = cmd.match(/[0-9]*[><]+\s*([^<>&|;\s]+)/g);
-  if (redirectMatches) {
-    for (const rm of redirectMatches) {
-      const target = rm.replace(/^[0-9]*[><]+\s*/, '').trim();
-      if (target) tokens.push(target);
-    }
+
+  const effectiveCwd = cwd ?? root;
+  const readonlyCmd = isReadonlyCommand(cmd, { root, cwd: effectiveCwd, env });
+  const normCmd = cmd.replace(/\\/g, '/');
+  if (!readonlyCmd && /(^|[\s=;,"'\/$.()[\]])(node_modules\/\.bin\/(node|mocha|jest|vitest|npm|npx|adlc)(\.exe|\.cmd|\.ps1)?|\.mocharc(\.(js|cjs|mjs|json|yaml|yml))?|jest\.config\.(js|cjs|mjs|ts|json)|vitest\.config\.(js|cjs|mjs|ts))(?=$|[\s=;,"'\/$.()[\]])/i.test(normCmd)) {
+    const itemsCheck = collectShellCandidateTokens(cmd);
+    const onlyInvokedAsCommand =
+      itemsCheck.length > 0 &&
+      !/[\r\n;&|<>\$`()={}]/.test(cmd) &&
+      itemsCheck.every((it) => it.isCommandToken || !/(node_modules\/\.bin\/|\.mocharc|jest\.config\.|vitest\.config\.)/i.test(it.rawToken.replace(/\\/g, '/')));
+    if (!onlyInvokedAsCommand) return true;
   }
 
-  for (const rawToken of tokens) {
-    if (!rawToken || rawToken.length > 4096) continue;
-    let t = rawToken.replace(/^[0-9]*[><]+/, '').replace(/^--?[a-zA-Z0-9_-]+=/, '').trim();
-    if (t.startsWith('"') && t.endsWith('"') && t.length >= 2) t = t.slice(1, -1);
-    if (t.startsWith("'") && t.endsWith("'") && t.length >= 2) t = t.slice(1, -1);
-    if (!t || t.startsWith('-') || /^(;|&&|\|\||\|)$/.test(t)) continue;
-
-    const absCandidate = isAbsolute(t) ? t : resolve(root, t);
+  const items = collectShellCandidateTokens(cmd);
+  for (const { rawToken: t, isOutRedirect, isCommandToken } of items) {
+    const absCandidate = isAbsolute(t) ? t : resolve(effectiveCwd, t);
+    const lexCanonical = canonicalizePath(absCandidate);
+    let realCanonical = lexCanonical;
     try {
       if (existsSync(absCandidate) || lstatSync(absCandidate).isSymbolicLink()) {
-        const canonical = realpathSync(absCandidate);
-        if (isTrustRootOrSecretPath(canonical, env)) {
-          return true;
-        }
+        realCanonical = realpathSync(absCandidate);
       }
     } catch {}
+
+    if (
+      isSecretStatePath(absCandidate, env) ||
+      isSecretStatePath(lexCanonical, env) ||
+      isSecretStatePath(realCanonical, env)
+    ) {
+      return true;
+    }
+
+    if (isOutRedirect || (!isCommandToken && !readonlyCmd)) {
+      if (
+        isTrustRootOrSecretPath(absCandidate, env) ||
+        isTrustRootOrSecretPath(lexCanonical, env) ||
+        isTrustRootOrSecretPath(realCanonical, env)
+      ) {
+        return true;
+      }
+    } else if (isCommandToken && (t.includes('/') || t.includes('\\'))) {
+      const normLex = lexCanonical.replace(/\\/g, '/');
+      if (
+        root &&
+        isPathInside(lexCanonical, root) &&
+        /(^|\/)(node|node\.exe)$/i.test(normLex) &&
+        !/\/node_modules\/\.bin\//i.test(normLex)
+      ) {
+        return true;
+      }
+    }
   }
   return false;
 }
 
-export function hasShellSymlinkOrSecretEscape(cmd, { root = process.cwd(), env = process.env } = {}) {
+export function hasShellSymlinkOrSecretEscape(cmd, { root = process.cwd(), cwd = root, env = process.env } = {}) {
   if (!cmd || typeof cmd !== 'string') return false;
-  const tokens = tokenizeCommand(cmd);
-  const redirectMatches = cmd.match(/[0-9]*[><]+\s*([^<>&|;\s]+)/g);
-  if (redirectMatches) {
-    for (const rm of redirectMatches) {
-      const target = rm.replace(/^[0-9]*[><]+\s*/, '').trim();
-      if (target) tokens.push(target);
-    }
-  }
+  const effectiveCwd = cwd ?? root;
+  const simpleReadVerb = !/[\r\n;&|<>\$`()={}\\~]/.test(cmd) && /^\s*(cat|head|tail|ls|stat|file|wc)\b/.test(cmd);
+  const items = collectShellCandidateTokens(cmd);
 
-  for (const rawToken of tokens) {
-    if (!rawToken || rawToken.length > 4096) continue;
-    let t = rawToken.replace(/^[0-9]*[><]+/, '').replace(/^--?[a-zA-Z0-9_-]+=/, '').trim();
-    if (t.startsWith('"') && t.endsWith('"') && t.length >= 2) t = t.slice(1, -1);
-    if (t.startsWith("'") && t.endsWith("'") && t.length >= 2) t = t.slice(1, -1);
-    if (!t || t.startsWith('-') || /^(;|&&|\|\||\|)$/.test(t)) continue;
-
-    const absCandidate = isAbsolute(t) ? t : resolve(root, t);
+  for (const { rawToken: t, isOutRedirect, isCommandToken } of items) {
+    const absCandidate = isAbsolute(t) ? t : resolve(effectiveCwd, t);
     try {
       const isSymlink = lstatSync(absCandidate).isSymbolicLink();
       if (isSymlink || existsSync(absCandidate)) {
         const canonical = realpathSync(absCandidate);
-        if (isTrustRootOrSecretPath(canonical, env)) {
+        if (isSecretStatePath(canonical, env)) {
           return true;
         }
-        if (isSymlink) {
-          const rel = relative(root, canonical);
-          if (rel.startsWith('..') || isAbsolute(rel)) {
+        if ((isOutRedirect || (!isCommandToken && !simpleReadVerb)) && isTrustRootOrSecretPath(canonical, env)) {
+          return true;
+        }
+        if (isSymlink && !isAllowedSystemExecOrNullPath(absCandidate.replace(/\\/g, '/'))) {
+          if (root && !isPathInside(canonical, root)) {
             return true;
           }
         }
@@ -1048,7 +1455,7 @@ export function hasShellSymlinkOrSecretEscape(cmd, { root = process.cwd(), env =
   return false;
 }
 
-export function isReadonlyCommand(cmd, { root = process.cwd(), env = process.env } = {}) {
+export function isReadonlyCommand(cmd, { root = process.cwd(), cwd = root, env = process.env } = {}) {
   if (typeof cmd !== 'string' || !cmd) return false;
   const trimmed = cmd.trim();
   if (!trimmed) return false;
@@ -1056,8 +1463,8 @@ export function isReadonlyCommand(cmd, { root = process.cwd(), env = process.env
   if (/[\r\n;&|<>\$`()={}\\~]/.test(trimmed)) return false;
 
   // Reject commands targeting session secrets, session store, or ledger
-  if (isUnauthorizedWorkspaceEscape(trimmed, { root }) || isTrustRootSecretAccess(trimmed)) return false;
-  if (hasShellSymlinkOrSecretEscape(trimmed, { root, env })) return false;
+  if (isUnauthorizedWorkspaceEscape(trimmed, { root, cwd }) || isTrustRootSecretAccess(trimmed)) return false;
+  if (hasShellSymlinkOrSecretEscape(trimmed, { root, cwd, env })) return false;
 
   const tokens = tokenizeCommand(trimmed);
   if (tokens.length === 0) return false;
@@ -1117,8 +1524,8 @@ export function isReadonlyCommand(cmd, { root = process.cwd(), env = process.env
     return true;
   }
 
-  const safeBins = ['ls', 'pwd', 'cat', 'head', 'tail', 'which', 'uname', 'whoami', 'date', 'echo', 'printf'];
-  const fileReaderBins = new Set(['cat', 'head', 'tail', 'ls']);
+  const safeBins = ['ls', 'pwd', 'cat', 'head', 'tail', 'grep', 'rg', 'which', 'uname', 'whoami', 'date', 'echo', 'printf'];
+  const fileReaderBins = new Set(['cat', 'head', 'tail', 'ls', 'grep', 'rg']);
   if (safeBins.includes(bin)) {
     for (let i = 1; i < tokens.length; i++) {
       const t = tokens[i];
@@ -1177,10 +1584,24 @@ export function postToolUse(payload, { env = process.env } = {}) {
 
     const distinctRoots = new Set();
     const wsRoot = resolveWorkspaceRoot(payload, env);
-    if (wsRoot) distinctRoots.add(wsRoot);
+    const outerDeclaredWs = declaredOuterWorkspace(payload, wsRoot);
     const transcriptPath = resolveTranscriptPath({ payload, conversationId: sessionID, env });
-    if (transcriptPath) {
-      const transcriptRoot = findAdlcRoot(transcriptPath, env) ?? discoverRootFromTranscriptRecords(parseTranscriptRecords(transcriptPath), env);
+    const transcriptRoot = transcriptPath
+      ? discoverTranscriptCheckoutRoot(transcriptPath, env, { anchorBase: outerDeclaredWs })
+      : null;
+    if (wsRoot && transcriptRoot) {
+      const upgraded = preferInnermostCheckout(wsRoot, [transcriptRoot], {
+        storeOverride: env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null,
+        homeDir: resolveUserHome(env) || homedir(),
+        pluginDir: PLUGIN_ROOT,
+        preserveSpelling: true,
+      });
+      distinctRoots.add(upgraded ?? wsRoot);
+      if (canonicalizePath(transcriptRoot) !== canonicalizePath(upgraded ?? wsRoot)) {
+        distinctRoots.add(transcriptRoot);
+      }
+    } else {
+      if (wsRoot) distinctRoots.add(wsRoot);
       if (transcriptRoot) distinctRoots.add(transcriptRoot);
     }
     const exitCode = payload?.exit_code ?? payload?.exitCode ?? payload?.result?.exitCode ?? payload?.toolResult?.exitCode;
@@ -1225,10 +1646,20 @@ export function onStop(payload, { env = process.env } = {}) {
       }
     }
 
-    // Fallback: If root cannot be determined from payload or env (e.g. agy headless mode),
-    // discover root from absolute file paths in the transcript
-    if (!root && records.length > 0) {
-      root = discoverRootFromTranscriptRecords(records, env);
+    const outerDeclaredWs = declaredOuterWorkspace(payload, root);
+    const discoveredTranscriptRoot = records.length > 0
+      ? discoverRootFromTranscriptRecords(records, env, { anchorBase: outerDeclaredWs })
+      : null;
+    if (!root) {
+      root = discoveredTranscriptRoot;
+    } else if (discoveredTranscriptRoot) {
+      root =
+        preferInnermostCheckout(root, [discoveredTranscriptRoot], {
+          storeOverride: env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null,
+          homeDir: resolveUserHome(env) || homedir(),
+          pluginDir: PLUGIN_ROOT,
+          preserveSpelling: true,
+        }) ?? root;
     }
 
     if (!root) {
@@ -1351,11 +1782,17 @@ export function onStop(payload, { env = process.env } = {}) {
     }
 
     let callSeq = 0;
+    let rootCallSeq = 0;
     let mutatingCallSeq = 0;
     let lastMutationCallIdx = -1;
     let lastSuccessTestCallIdx = -1;
     let packageManifestMutated = false;
     let shellMutated = false;
+    const isNestedWorktreeSession =
+      Boolean(outerDeclaredWs) &&
+      canonicalizePath(outerDeclaredWs) !== canonicalizePath(root) &&
+      isPathInside(root, outerDeclaredWs);
+    const fileAnchorBase = isNestedWorktreeSession ? outerDeclaredWs : root;
 
     for (let i = 0; i < records.length; i++) {
       const r = records[i];
@@ -1418,8 +1855,41 @@ export function onStop(payload, { env = process.env } = {}) {
         const filePaths = extractFilePaths({ toolCall: c });
 
         const isShell = isShellTool(name, args);
-        const isMutating = !isShell && classifyTool(name) !== 'readonly';
-        if (isMutating) mutatingCallSeq++;
+        const isMutating = !isShell && classifyTool(name, args) !== 'readonly';
+
+        const rawCallWorkdir = extractCwdFromArgs(args);
+        const callEffectiveAnchor =
+          rawCallWorkdir && typeof rawCallWorkdir === 'string' && rawCallWorkdir.trim()
+            ? (isAbsolute(rawCallWorkdir.trim()) ? rawCallWorkdir.trim() : resolve(fileAnchorBase, rawCallWorkdir.trim()))
+            : fileAnchorBase;
+
+        // Determine whether this call targeted an outer checkout before entering a nested worktree
+        let callTargetsOuterOnly = false;
+        if (isNestedWorktreeSession) {
+          const resolvedFileRoots = filePaths
+            .filter((p) => typeof p === 'string' && p.trim())
+            .map((p) => (isAbsolute(p.trim()) ? p.trim() : resolve(callEffectiveAnchor, p.trim())))
+            .map((absP) => findAdlcRoot(canonicalizeExisting(absP), env) ?? findAdlcRoot(absP, env))
+            .filter(Boolean);
+          const resolvedWorkdirRoot =
+            rawCallWorkdir && typeof rawCallWorkdir === 'string' && rawCallWorkdir.trim()
+              ? (findAdlcRoot(canonicalizeExisting(callEffectiveAnchor), env) ?? findAdlcRoot(callEffectiveAnchor, env))
+              : null;
+          const resolvedCallRoots = [
+            ...(resolvedWorkdirRoot ? [resolvedWorkdirRoot] : []),
+            ...resolvedFileRoots,
+          ];
+          if (
+            resolvedCallRoots.length > 0 &&
+            resolvedCallRoots.every((cr) => canonicalizePath(cr) !== canonicalizePath(root))
+          ) {
+            callTargetsOuterOnly = true;
+          }
+        }
+        if (!callTargetsOuterOnly) {
+          rootCallSeq++;
+        }
+        if (isMutating && !callTargetsOuterOnly) mutatingCallSeq++;
 
         if (isMutating) {
           if (filePaths.some((p) => /(^|[/\\])\.adlc([/\\]|$)/i.test(p)) || (overrideEscaped && filePaths.some((p) => overrideEscaped.test(p)))) {
@@ -1441,7 +1911,7 @@ export function onStop(payload, { env = process.env } = {}) {
             };
           }
           if (filePaths.some((p) => {
-            const abs = isAbsolute(p) ? p : resolve(root, p);
+            const abs = isAbsolute(p) ? p : resolve(callEffectiveAnchor, p);
             const rel = relative(root, abs);
             return rel.startsWith('..') || isAbsolute(rel);
           })) {
@@ -1469,16 +1939,17 @@ export function onStop(payload, { env = process.env } = {}) {
         if (isShell) {
           const cmd = extractCommandString(args);
           const normCmd = cmd.replace(/\\/g, '/');
-          const cmdCwd = extractCwdFromArgs(args) ?? args?.Cwd ?? args?.cwd;
-          const actualCwd = (cmdCwd && typeof cmdCwd === 'string' ? (isAbsolute(cmdCwd) ? cmdCwd : resolve(root, cmdCwd)) : null) ?? root;
-          const repoRoot = (cmdCwd && typeof cmdCwd === 'string' ? findAdlcRoot(actualCwd, env) : null) ?? root;
-          if ((/(^|[\s=;,"'\/$.()[\]])(\.adlc|\.master-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc|\.system_generated|transcript.*\.jsonl)/i.test(normCmd) || (overrideEscaped && (overrideEscaped.test(cmd) || overrideEscaped.test(normCmd))) || hasShellTrustRootSecretAccess(cmd, { root: actualCwd, env }) || hasShellSymlinkOrSecretEscape(cmd, { root: actualCwd, env })) && !isReadonlyCommand(cmd, { root: actualCwd, env })) {
+          const cmdCwd = extractCwdFromArgs(args);
+          const allowImplicitCwd = hasUnambiguousWorkspaceCwd(payload, env, root);
+          const shellAnchorBase = outerDeclaredWs && isPathInside(root, outerDeclaredWs) ? outerDeclaredWs : root;
+          const actualCwd = (cmdCwd && typeof cmdCwd === 'string' ? (isAbsolute(cmdCwd) ? cmdCwd : resolve(shellAnchorBase, cmdCwd)) : null) ?? root;
+          if ((/(^|[\s=;,"'\/$.()[\]])(\.adlc|\.master-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\/dev\/shm\/\.adlc|\.system_generated|transcript.*\.jsonl)/i.test(normCmd) || (overrideEscaped && (overrideEscaped.test(cmd) || overrideEscaped.test(normCmd))) || hasShellTrustRootSecretAccess(cmd, { root, cwd: actualCwd, env }) || hasShellSymlinkOrSecretEscape(cmd, { root, cwd: actualCwd, env })) && !isReadonlyCommand(cmd, { root, cwd: actualCwd, env })) {
             return {
               decision: 'continue',
               reason: 'ADLC Rails-Guard: Shell modification of trust-root store or transcript is strictly prohibited.',
             };
           }
-          if (isVerificationCommand(cmd, { root: repoRoot, toolArgs: args, packageManifestMutated, shellMutated })) {
+          if (isVerificationCommand(cmd, { root, workdirAnchorBase: shellAnchorBase, toolArgs: args, allowImplicitCwd, packageManifestMutated, shellMutated })) {
             const exitCode = r?.exit_code ?? r?.exitCode ?? c?.exitCode;
             const status = r?.status ?? c?.status;
             const isExplicitSuccess = exitCode === 0 || status === 'DONE' || status === 'done' || status === 'success' || r?.success === true;
@@ -1486,16 +1957,16 @@ export function onStop(payload, { env = process.env } = {}) {
 
             const outStr = typeof r?.content === 'string' ? r.content : (typeof r?.output === 'string' ? r.output : JSON.stringify(r ?? {}));
             const isZeroTests = /\b(tests|pass)\s+0\b/i.test(outStr) || /\b0\s+(tests|passing)\b/i.test(outStr);
-            const hasTests = hasDiscoverableTests(repoRoot);
+            const hasTests = hasDiscoverableTests(root);
 
             if (isExplicitSuccess && !isExplicitFailure && hasTests && !isZeroTests) {
               lastSuccessTestCallIdx = currentCallIdx;
             }
-          } else if (!isReadonlyCommand(cmd, { root: actualCwd, env }) && !isVerificationCommand(cmd, { root: repoRoot, toolArgs: args })) {
-            mutatingCallSeq++;
+          } else if (!isReadonlyCommand(cmd, { root: callTargetsOuterOnly ? outerDeclaredWs : root, cwd: actualCwd, env }) && !isVerificationCommand(cmd, { root, workdirAnchorBase: shellAnchorBase, toolArgs: args, allowImplicitCwd })) {
+            if (!callTargetsOuterOnly) mutatingCallSeq++;
             lastMutationCallIdx = currentCallIdx;
             shellMutated = true;
-            if (/(^|[\s=;,"'\/$.()[\]])(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|npm\s+(pkg|install|i|add|remove|rm|uninstall))\b/i.test(cmd)) {
+            if (/(^|[\s=;,"'\/$.()[\]])(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|vitest\.config|jest\.config|\.mocharc|node_modules\/\.bin|npm\s+(pkg|install|i|add|remove|rm|uninstall))\b/i.test(normCmd)) {
               packageManifestMutated = true;
             }
           }
@@ -1511,7 +1982,7 @@ export function onStop(payload, { env = process.env } = {}) {
       };
     }
     const trackedTotal = tracker.totalCalls ? tracker.totalCalls(sessionID) : 0;
-    if (trackedTotal > 0 && callSeq !== trackedTotal) {
+    if (trackedTotal > 0 && rootCallSeq !== trackedTotal) {
       return {
         decision: 'continue',
         reason: 'ADLC Rails-Guard: Untracked or missing tool execution records detected in transcript during Stop verification.',

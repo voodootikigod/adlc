@@ -598,3 +598,103 @@ test('TRUST_ROOT_RAILS freezes bare .adlc, .adlc/tickets, and .adlc/sessions.loc
     assert.match(res.deny_reason, /frozen rail/i);
   }
 });
+
+test('decide(): call_mcp_tool denies mutating/unknown inner tools on frozen rails and allows read-only codegraph_explore', (t) => {
+  const root = adlcRepo(t, { rails: ['frozen.txt'], id: 'T1' });
+  const deniedWrite = decide({
+    workspacePaths: [root],
+    toolCall: {
+      name: 'call_mcp_tool',
+      args: {
+        ServerName: 'filesystem',
+        ToolName: 'write_file',
+        Arguments: { path: join(root, 'frozen.txt'), content: 'tamper' },
+      },
+    },
+  }, { env: { ADLC_P4_ENFORCEMENT: '1' } });
+  assert.equal(deniedWrite.allow_tool, false);
+  assert.match(deniedWrite.deny_reason, /frozen rail/i);
+
+  const deniedResourceSecret = decide({
+    workspacePaths: [root],
+    toolCall: {
+      name: 'read_resource',
+      args: {
+        ServerName: 'filesystem',
+        Uri: `file://${join(root, '.' + 'adlc', '.session-secret')}`,
+      },
+    },
+  }, { env: { ADLC_P4_ENFORCEMENT: '1' } });
+  assert.equal(deniedResourceSecret.allow_tool, false);
+
+  const deniedEncodedResourceSecret = decide({
+    workspacePaths: [root],
+    toolCall: {
+      name: 'read_resource',
+      args: {
+        ServerName: 'filesystem',
+        Uri: `file://localhost${root}/%2eadlc/.session-secret`,
+      },
+    },
+  }, { env: { ADLC_P4_ENFORCEMENT: '1' } });
+  assert.equal(deniedEncodedResourceSecret.allow_tool, false);
+
+  const allowedExplore = decide({
+    workspacePaths: [root],
+    toolCall: {
+      name: 'call_mcp_tool',
+      args: {
+        ServerName: 'codegraph',
+        ToolName: 'codegraph_explore',
+        Arguments: { query: 'decide' },
+      },
+    },
+  }, { env: { ADLC_P4_ENFORCEMENT: '1' } });
+  assert.equal(allowedExplore.allow_tool, true);
+});
+
+test('decide(): shell Cwd / dir_path escaping workspace or conflicting workdir keys are denied under enforcement', (t) => {
+  const root = adlcRepo(t, { rails: ['frozen.txt'], id: 'T1' });
+  const sibling = tmp(t, 'gemini-outside-cwd-');
+
+  for (const args of [
+    { CommandLine: 'cat /etc/passwd', Cwd: '/etc' },
+    { command: 'ls', dir_path: sibling },
+    { CommandLine: 'cat secret.txt', Cwd: '../outside' },
+    { CommandLine: 'ls', Cwd: root, workdir: sibling },
+  ]) {
+    const res = decide({
+      workspacePaths: [root],
+      toolCall: { name: 'run_command', args },
+    }, { env: { ADLC_P4_ENFORCEMENT: '1' } });
+    assert.equal(res.allow_tool, false, JSON.stringify(args));
+    assert.equal(res.decision, 'deny');
+  }
+});
+
+test('decide(): shell commands overwriting runner configs or node_modules/.bin are denied while system node --test is allowed', (t) => {
+  const root = adlcRepo(t, { rails: ['frozen.txt'], id: 'T1' });
+
+  for (const cmd of [
+    'cp evil.mjs vitest.config.mjs',
+    'mv evil.sh node_modules/.bin/vitest',
+    'echo "export default {}" > vitest.config.mjs',
+    './node evil.mjs',
+  ]) {
+    const res = decide({
+      workspacePaths: [root],
+      toolCall: { name: 'run_command', args: { CommandLine: cmd, Cwd: root } },
+    }, { env: { ADLC_P4_ENFORCEMENT: '1' } });
+    assert.equal(res.allow_tool, false, cmd);
+    assert.equal(res.decision, 'deny');
+  }
+
+  const allowedNode = decide({
+    workspacePaths: [root],
+    toolCall: {
+      name: 'run_command',
+      args: { CommandLine: `${process.execPath} --test`, Cwd: root },
+    },
+  }, { env: { ADLC_P4_ENFORCEMENT: '1' } });
+  assert.equal(allowedNode.allow_tool, true, allowedNode.deny_reason);
+});

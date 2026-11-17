@@ -103,7 +103,8 @@ export function detectEditChurn(logLines, threshold = DEFAULT_FLAIL_THRESHOLD) {
  * Resolve transcript path for a given agy conversation ID or payload.
  */
 export function resolveTranscriptPath({ payload, conversationId, env = process.env } = {}) {
-  const appDataDir = env?.ANTIGRAVITY_APP_DATA_DIR ?? env?.GEMINI_CLI_DATA_DIR ?? join(homedir(), '.gemini', 'antigravity-cli');
+  const effectiveHome = env?.HOME || env?.USERPROFILE || homedir();
+  const appDataDir = env?.ANTIGRAVITY_APP_DATA_DIR ?? env?.GEMINI_CLI_DATA_DIR ?? join(effectiveHome, '.gemini', 'antigravity-cli');
   const direct = payload?.transcriptPath ?? payload?.transcript_path ?? payload?.logPath ?? payload?.log_path;
   const cidFromPayload = payload?.conversationId ?? payload?.conversation_id ?? payload?.conversationID ?? payload?.sessionID ?? payload?.sessionId ?? payload?.params?.conversationId ?? payload?.params?.conversation_id;
   const cidFromEnv = env?.ADLC_SESSION_ID ?? env?.AGY_SESSION_ID ?? env?.GEMINI_SESSION_ID;
@@ -115,7 +116,14 @@ export function resolveTranscriptPath({ payload, conversationId, env = process.e
         const lstat = lstatSync(direct);
         if (!lstat.isSymbolicLink() && lstat.isFile()) {
           const real = realpathSync(direct);
-          const allowedRoots = [appDataDir, env?.ANTIGRAVITY_WORKSPACE, env?.WORKSPACE_ROOT];
+          const allowedRoots = [
+            appDataDir,
+            env?.AGY_WORKSPACE,
+            env?.ANTIGRAVITY_WORKSPACE,
+            env?.GEMINI_WORKSPACE,
+            env?.PROJECT_ROOT,
+            env?.WORKSPACE_ROOT,
+          ];
           const isAllowed = allowedRoots.filter(Boolean).some((r) => {
             try {
               const realR = realpathSync(r);
@@ -253,6 +261,19 @@ export function parseTranscriptRecords(filePath, options = {}) {
   }
 }
 
+function isNonErrorStepRecord(obj) {
+  const stepType = typeof obj.type === 'string' ? obj.type.toUpperCase() : '';
+  const status = typeof obj.status === 'string' ? obj.status.toUpperCase() : '';
+  if (status === 'ERROR') return false;
+  if (stepType === 'USER_INPUT' || stepType === 'PLANNER_RESPONSE') return true;
+  if (status === 'DONE') {
+    const body = typeof obj.content === 'string' ? obj.content : '';
+    if (/Showing lines \d+-\d+ of \d+/.test(body)) return true;
+    if (/Command exited with code 0\./.test(body)) return true;
+  }
+  return false;
+}
+
 export function parseTranscriptSteps(filePath, maxScanBytes = MAX_SCAN_BYTES) {
   const records = parseTranscriptRecords(filePath, maxScanBytes);
   const steps = [];
@@ -261,6 +282,7 @@ export function parseTranscriptSteps(filePath, maxScanBytes = MAX_SCAN_BYTES) {
       if (typeof obj === 'string' && obj.trim()) steps.push([obj]);
       continue;
     }
+    if (isNonErrorStepRecord(obj)) continue;
     const stepLines = [];
     if (typeof obj.content === 'string') {
       stepLines.push(...obj.content.split('\n'));
@@ -270,6 +292,9 @@ export function parseTranscriptSteps(filePath, maxScanBytes = MAX_SCAN_BYTES) {
     }
     if (typeof obj.message === 'string') {
       stepLines.push(...obj.message.split('\n'));
+    }
+    if (typeof obj.error === 'string') {
+      stepLines.push(...obj.error.split('\n'));
     }
     if (stepLines.length > 0) {
       steps.push(stepLines);

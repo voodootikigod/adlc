@@ -11,7 +11,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { validateInput } from './schema.mjs';
 import { hasCrossModelApprove } from './cross-model.mjs';
-import { LegacyTicketStore, loadTicketSnapshot } from '@adlc/tickets';
+import { LegacyTicketStore, loadTicketSnapshot, normalizeManifestDirAndCwd } from '@adlc/tickets';
 
 function now() {
   return new Date().toISOString();
@@ -382,6 +382,7 @@ export function runProsecution(input, {
   requireCrossModel = false,
   authorProvider,
 } = {}) {
+  ({ dir, cwd } = normalizeManifestDirAndCwd(dir, { cwd: cwd ?? process.cwd() }));
   const errors = validateInput(input);
   if (!ticket) errors.push('ticket is required for P5 evidence');
   // FAIL CLOSED: a trust-root-tier prosecution cannot prove the reviewer was a

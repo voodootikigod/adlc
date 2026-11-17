@@ -453,11 +453,20 @@ const verificationCommandCases = [
     reason: /unverified file edits/,
   },
   {
-    name: "onStop: rejects bare node --test when Cwd is omitted",
+    name: "onStop: rejects bare node --test when Cwd is omitted in ambiguous multi-root workspace",
     calls: [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/app.js' } }], }), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test' } }], exit_code: 0, }), JSON.stringify({ content: 'Finished.' }) ],
-    options: { conversationId: 'test-session-omitted-cwd' },
+    options: {
+      conversationId: 'test-session-omitted-cwd',
+      beforeStop: ({ root, payload }) => { payload.workspacePaths = [root, join(root, '__second_root__')]; },
+    },
     decision: 'continue',
     reason: /unverified file edits/,
+  },
+  {
+    name: "onStop: accepts headless agy run_command without Cwd in unambiguous single-root workspace",
+    calls: [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/app.js' } }], }), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }], exit_code: 0, }), JSON.stringify({ content: 'Finished.' }) ],
+    options: { preInvocation: true, conversationId: 'test-session-headless-single-root-npm-test', trackerCalls: [{ isMutating: true }, { isMutating: false }] },
+    decision: 'stop',
   },
   {
     name: "onStop: rejects node --test --test-global-setup",
@@ -495,18 +504,30 @@ const verificationCommandCases = [
     reason: /unverified file edits/,
   },
   {
-    name: "onStop: rejects node --test test/ when Cwd is omitted",
+    name: "onStop: rejects node --test test/ when Cwd is omitted in ambiguous multi-root workspace",
     calls: [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/core.js' } }], }), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test test/' } }], exit_code: 0, }), JSON.stringify({ content: 'Finished.' }) ],
-    options: { conversationId: 'test-session-node-test-no-cwd' },
+    options: {
+      conversationId: 'test-session-node-test-no-cwd',
+      beforeStop: ({ root, payload }) => { payload.workspacePaths = [root, join(root, '__second_root__')]; },
+    },
     decision: 'continue',
     reason: /unverified file edits/,
   },
   {
-    name: "onStop: rejects npm test when Cwd is omitted",
+    name: "onStop: rejects npm test when Cwd is omitted in ambiguous multi-root workspace",
     calls: [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/core.js' } }], }), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }], exit_code: 0, }), JSON.stringify({ content: 'Finished.' }) ],
-    options: { conversationId: 'test-session-npm-test-no-cwd' },
+    options: {
+      conversationId: 'test-session-npm-test-no-cwd',
+      beforeStop: ({ root, payload }) => { payload.workspacePaths = [root, join(root, '__second_root__')]; },
+    },
     decision: 'continue',
     reason: /unverified file edits/,
+  },
+  {
+    name: "onStop: accepts Gemini CLI run_shell_command with dir_path as verification",
+    calls: (root) => [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/core.js' } }], }), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_shell_command', args: { command: 'npm run preflight', dir_path: root } }], exit_code: 0, }), JSON.stringify({ content: 'Finished.' }) ],
+    options: { preInvocation: true, conversationId: 'test-session-gemini-cli-dir-path', trackerCalls: [{ isMutating: true }, { isMutating: false }] },
+    decision: 'stop',
   },
   {
     name: "onStop: rejects npm test with forwarded filter args like npm test -- -t foo",
@@ -3193,4 +3214,69 @@ test('isVerificationCommand: rejects node --test when shadowed by node_modules/.
   writeFileSync(fakeNode, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   const isVer = isVerificationCommand('node --test', { root, toolArgs: { Cwd: root } });
   assert.equal(isVer, false, 'node_modules/.bin/node binary must not shadow system node runner');
+});
+
+test('onStop: rejects verification command run against a foreign clean ADLC repo or omitted Cwd from a subdirectory payload.cwd', (t) => {
+  const { root, env } = setupTempRepo(t, { enforcement: '1' });
+  const { root: foreignCleanRepo } = setupTempRepo(t, { enforcement: '1' });
+
+  // 1. Cwd pointing at a different clean ADLC repository cannot satisfy Stop verification for `root`
+  const foreignTranscript = join(root, 'foreign-transcript.jsonl');
+  writeFileSync(
+    foreignTranscript,
+    [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'write_to_file', args: { TargetFile: join(root, 'src', 'app.js') } }],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test', Cwd: foreignCleanRepo } }],
+        exit_code: 0,
+      }),
+    ].join('\n') + '\n'
+  );
+  const foreignPayload = {
+    workspacePaths: [root],
+    transcriptPath: foreignTranscript,
+    conversationId: 'sess-foreign-verify',
+  };
+  preInvocation(foreignPayload, { env });
+  const tracker = createPersistentTracker(root, env);
+  tracker.recordToolCall('sess-foreign-verify', { isMutating: true });
+  tracker.recordToolCall('sess-foreign-verify', { isMutating: true });
+  const foreignStop = onStop(foreignPayload, { env });
+  assert.equal(foreignStop.decision, 'continue');
+  assert.match(foreignStop.reason, /unverified file edits/i);
+
+  // 2. Omitted Cwd when payload.cwd is a subdirectory inside `root` does NOT satisfy full-repo verification
+  const subDir = join(root, 'src');
+  mkdirSync(subDir, { recursive: true });
+  const subTranscript = join(root, 'subdir-implicit-transcript.jsonl');
+  writeFileSync(
+    subTranscript,
+    [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'write_to_file', args: { TargetFile: join(root, 'src', 'app.js') } }],
+      }),
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }],
+        exit_code: 0,
+      }),
+    ].join('\n') + '\n'
+  );
+  const subPayload = {
+    workspacePaths: [root],
+    cwd: subDir,
+    transcriptPath: subTranscript,
+    conversationId: 'sess-subdir-implicit',
+  };
+  preInvocation(subPayload, { env });
+  tracker.recordToolCall('sess-subdir-implicit', { isMutating: true });
+  tracker.recordToolCall('sess-subdir-implicit', { isMutating: true });
+  const subStop = onStop(subPayload, { env });
+  assert.equal(subStop.decision, 'continue');
+  assert.match(subStop.reason, /unverified file edits/i);
 });

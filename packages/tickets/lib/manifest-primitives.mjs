@@ -17,7 +17,7 @@ import {
 } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { randomBytes, createHmac, timingSafeEqual } from 'node:crypto';
-import { dirname, join, relative, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { sha256, canonicalJson } from './canonical.mjs';
 
 export const SEGMENT_DIRNAME = 'manifest.d';
@@ -259,7 +259,36 @@ export function writeLineageToken(dir = '.adlc', token) {
   }
 }
 
-export function peekOpenSegment(dir = '.adlc', { cwd = (dir && dir !== '.adlc' ? dirname(dir) : process.cwd()) } = {}) {
+/**
+ * Normalize `(dir, opts)` across both calling conventions used in ADLC:
+ * 1. Explicit target checkout `{ cwd }` with default/relative `dir` (e.g.
+ *    `dir = ".adlc", cwd = "/other/repo"` -> `dir = "/other/repo/.adlc"`).
+ * 2. Multi-segment relative `dir` whose `opts.cwd` came from `dirname(dir)`
+ *    (e.g. `record.mjs` passing `dir = ".worktrees/lane-a/.adlc",
+ *    cwd = ".worktrees/lane-a"` -> `dir = "<pwd>/.worktrees/lane-a/.adlc"`,
+ *    never double-joining `.worktrees/lane-a/.worktrees/lane-a/.adlc`).
+ * 3. Omitted `opts.cwd` with an explicit `dir` (e.g. `"/other/repo/.adlc"` or
+ *    `".worktrees/lane-a/.adlc"` -> `cwd = dirname(resolve(dir))`).
+ */
+export function normalizeManifestDirAndCwd(dir = '.adlc', opts = {}) {
+  const effectiveDir = dir ?? '.adlc';
+  if (opts?.cwd === undefined || opts?.cwd === null) {
+    const resolvedDir = resolve(effectiveDir);
+    const defaultCwd = effectiveDir === '.adlc' ? process.cwd() : dirname(resolvedDir);
+    return { dir: resolvedDir, cwd: defaultCwd };
+  }
+  const resolvedCwd = resolve(opts.cwd);
+  const resolvedDir = isAbsolute(effectiveDir)
+    ? resolve(effectiveDir)
+    : effectiveDir !== '.adlc' && resolve(dirname(effectiveDir)) === resolvedCwd
+      ? resolve(effectiveDir)
+      : resolve(resolvedCwd, effectiveDir);
+  return { dir: resolvedDir, cwd: resolvedCwd };
+}
+
+export function peekOpenSegment(dir = '.adlc', opts = {}) {
+  ({ dir, cwd: opts } = normalizeManifestDirAndCwd(dir, opts));
+  const cwd = opts;
   const branch = currentBranch(cwd);
   const token = readLineageToken(dir);
   if (branch !== null && token && token.branch === branch) {
@@ -299,7 +328,9 @@ export function firstEntryOf(dir = '.adlc', segmentName) {
  *  exact ref, not the lossy filename slug). Identity only — verifies no signature.
  *  null: detached HEAD or no match. Throws: several matches, any invalid object
  *  in manifest.d/, or an oversized/unreadable first entry. */
-export function recoverOpenSegment(dir = '.adlc', { cwd = (dir && dir !== '.adlc' ? dirname(dir) : process.cwd()) } = {}) {
+export function recoverOpenSegment(dir = '.adlc', opts = {}) {
+  let cwd;
+  ({ dir, cwd } = normalizeManifestDirAndCwd(dir, opts));
   const peeked = peekOpenSegment(dir, { cwd });
   if (peeked) return peeked;
   const branch = currentBranch(cwd);
@@ -340,8 +371,9 @@ export function recoverOpenSegment(dir = '.adlc', { cwd = (dir && dir !== '.adlc
   return { name: candidates[0], isNew: false };
 }
 
-export function assertSegmentPathCommittable(dir = '.adlc', name) {
-  const probeCwd = dirname(dir);
+export function assertSegmentPathCommittable(dir = '.adlc', name, opts = {}) {
+  let probeCwd;
+  ({ dir, cwd: probeCwd } = normalizeManifestDirAndCwd(dir, opts));
   const env = { ...process.env };
   delete env.ADLC_MANIFEST_KEY;
   delete env.GIT_DIR;
@@ -432,7 +464,10 @@ function isChainIntact(lines, key) {
   return true;
 }
 
-export function resolveOpenSegment(dir = '.adlc', { cwd = (dir && dir !== '.adlc' ? dirname(dir) : process.cwd()), key = null } = {}) {
+export function resolveOpenSegment(dir = '.adlc', opts = {}) {
+  const key = opts?.key ?? null;
+  let cwd;
+  ({ dir, cwd } = normalizeManifestDirAndCwd(dir, opts));
   const markerDoc = readBoundedJsonNoFollow(markerPath(dir));
   if (markerDoc && markerDoc.auth === 'keyed' && key === null) {
     throw new Error(
@@ -503,7 +538,7 @@ export function resolveOpenSegment(dir = '.adlc', { cwd = (dir && dir !== '.adlc
   const ulid = generateSegmentUlid();
   const slug = deriveSlug(branch ?? '');
   const name = `${slug}-${ulid}.jsonl`;
-  assertSegmentPathCommittable(dir, name);
+  assertSegmentPathCommittable(dir, name, { cwd });
   if (branch !== null) writeLineageToken(dir, { segment: name, ulid, branch });
   return { name, isNew: true, anchor, ...(branch !== null ? { branch } : {}) };
 }

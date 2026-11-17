@@ -2,7 +2,7 @@
 // Shared primitives are single-sourced in ./manifest-primitives.mjs and re-exported here.
 
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { sha256 } from './canonical.mjs';
 import {
   segmentPath,
@@ -19,6 +19,7 @@ import {
   peekOpenSegment,
   recoverOpenSegment,
   resolveOpenSegment,
+  normalizeManifestDirAndCwd,
 } from './manifest-primitives.mjs';
 
 export {
@@ -36,6 +37,7 @@ export {
   peekOpenSegment,
   recoverOpenSegment,
   resolveOpenSegment,
+  normalizeManifestDirAndCwd,
 };
 
 function readRawLines(filePath) {
@@ -100,7 +102,8 @@ export function readForestEntries(dir) {
  * when it cannot tell: broken chain, non-empty chain with no signed entry, empty
  * own segment, keyless/ambiguous recovery candidate, detached HEAD with segments.
  */
-export function readOwnChains(dir, { cwd = dirname(dir), allowRecovery = false, key = null } = {}) {
+export function readOwnChains(dir, { cwd, allowRecovery = false, key = null } = {}) {
+  ({ dir, cwd } = normalizeManifestDirAndCwd(dir, { cwd }));
   const rootRaw = readRawLines(join(dir, 'manifest.jsonl'));
   // Root and a token-matched (peeked) segment are not identity-ambiguous the
   // way a RECOVERED segment is — root is canonically root, and the local

@@ -74,6 +74,14 @@ test('every shipped rail-path resolver is the canonical one, byte for byte', () 
   ]) assert.equal(readFileSync(join(ROOT, output), 'utf8'), source, `${output} drifted; run the generator`);
 });
 
+test('every shipped workspace-root resolver is the canonical one, byte for byte', () => {
+  const source = readFileSync(join(ROOT, 'packages/core/lib/workspace-root.mjs'), 'utf8')
+    .replace('// GENERATED-WORKSPACE-ROOT SOURCE.', '// GENERATED FILE — DO NOT EDIT DIRECTLY.');
+  for (const output of [
+    'plugins/adlc-gemini/generated-workspace-root.mjs',
+  ]) assert.equal(readFileSync(join(ROOT, output), 'utf8'), source, `${output} drifted; run the generator`);
+});
+
 test('no harness re-implements the glob matcher instead of importing it', () => {
   // Byte-equality above only binds the files that exist. This catches the other
   // direction: a NEW hand-rolled copy, which is how the drift started last time.
