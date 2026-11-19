@@ -79,6 +79,9 @@ test('every shipped workspace-root resolver is the canonical one, byte for byte'
     .replace('// GENERATED-WORKSPACE-ROOT SOURCE.', '// GENERATED FILE — DO NOT EDIT DIRECTLY.');
   for (const output of [
     'plugins/adlc-gemini/generated-workspace-root.mjs',
+    'plugins/adlc-claude-code/hooks/generated-workspace-root.mjs',
+    'plugins/adlc-codex/hooks/generated-workspace-root.mjs',
+    'plugins/adlc-copilot/hooks/generated-workspace-root.mjs',
   ]) assert.equal(readFileSync(join(ROOT, output), 'utf8'), source, `${output} drifted; run the generator`);
 });
 

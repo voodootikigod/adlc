@@ -37,10 +37,19 @@
 
 import { existsSync, readFileSync, openSync, fstatSync, readSync, closeSync, writeSync, realpathSync, lstatSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, dirname, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadTicketStoreReadOnly, ticketStoreExists } from './generated-ticket-reader.mjs';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
+import {
+  canonicalizePath,
+  extractAllToolWorkdirs,
+  findInnermostCheckoutRoot,
+  inspectGitCheckout,
+  isPathInside,
+  preferInnermostCheckout,
+} from './generated-workspace-root.mjs';
+import { collectPatchPaths } from './generated-shell.mjs';
 import {
   resolveTrustedBinary,
   ownershipRejection,
@@ -116,8 +125,8 @@ function realpathOrSelf(path) {
 
 // Enforcing gate: a malformed/conflicting pointer fails closed, matching
 // adlc-rails-guard.mjs's resolveActiveTicketId().
-function resolveActiveTicketId(root) {
-  const resolved = resolveActiveTicketIdCanonical({ root, env: process.env });
+function resolveActiveTicketId(root, env = process.env) {
+  const resolved = resolveActiveTicketIdCanonical({ root, env });
   if (!resolved.ok) fail(resolved.message);
   return { id: resolved.value?.id ?? undefined };
 }
@@ -417,50 +426,294 @@ function readOptionalTranscript(path) {
   try { return readFileSync(path, 'utf8'); } catch { return null; }
 }
 
+function collectDynamicTargets(value, baseDir, rootPayload = value, out = [], seen = new Set()) {
+  if (!value) return out;
+  if (typeof value === 'string') {
+    const patches = new Set();
+    collectPatchPaths(value, patches);
+    for (const p of patches) out.push(resolve(baseDir, p));
+    return out;
+  }
+  if (typeof value !== 'object' || seen.has(value)) return out;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const item of value) collectDynamicTargets(item, baseDir, rootPayload, out, seen);
+    return out;
+  }
+  const stripped =
+    value === rootPayload ? (({ cwd: _envelopeCwd, ...rest }) => rest)(value) : value;
+  for (const wd of extractAllToolWorkdirs(stripped)) {
+    out.push(resolve(baseDir, wd));
+  }
+  for (const [key, child] of Object.entries(value)) {
+    if (
+      ['path', 'filePath', 'file_path', 'target', 'targetPath', 'target_path'].includes(key) &&
+      typeof child === 'string' &&
+      child.trim()
+    ) {
+      out.push(resolve(baseDir, child.trim()));
+    } else if (['paths', 'filePaths', 'file_paths'].includes(key) && Array.isArray(child)) {
+      for (const item of child) {
+        if (typeof item === 'string' && item.trim()) out.push(resolve(baseDir, item.trim()));
+        else collectDynamicTargets(item, baseDir, rootPayload, out, seen);
+      }
+    } else if (['command', 'cmd', 'patch', 'input'].includes(key) && typeof child === 'string') {
+      const patches = new Set();
+      collectPatchPaths(child, patches);
+      for (const p of patches) out.push(resolve(baseDir, p));
+    } else if (child && typeof child === 'object') {
+      collectDynamicTargets(child, baseDir, rootPayload, out, seen);
+    }
+  }
+  return out;
+}
+
+function hasLocalDefaultTicketStore(dir) {
+  return (
+    existsSync(join(dir, '.adlc', 'tickets', '.store.json')) ||
+    existsSync(join(dir, '.adlc', 'tickets.json'))
+  );
+}
+
+function sanitizeDiscoveryStoreOverride(rawOverride, startDir, baseCwd = startDir) {
+  if (typeof rawOverride !== 'string' || !rawOverride.trim()) return null;
+  const trimmed = rawOverride.trim();
+  const resolvedStart = resolve(startDir);
+  const boundary = findInnermostCheckoutRoot(resolvedStart, {
+    storeOverride: null,
+    requireStore: false,
+    allowFileStart: true,
+    preserveSpelling: true,
+  });
+  const anchor = boundary ?? resolvedStart;
+  const anchorInfo = inspectGitCheckout(canonicalizePath(anchor));
+  const anchorParent = dirname(resolve(anchor));
+  const enclosing =
+    anchorParent !== resolve(anchor)
+      ? findInnermostCheckoutRoot(anchorParent, {
+          storeOverride: null,
+          requireStore: true,
+          preserveSpelling: true,
+        })
+      : null;
+  if (isAbsolute(trimmed)) {
+    if (enclosing && isPathInside(trimmed, enclosing) && !isPathInside(trimmed, anchor)) {
+      return null;
+    }
+    if ((anchorInfo?.kind === 'worktree' || enclosing) && hasLocalDefaultTicketStore(anchor) && !isPathInside(trimmed, anchor)) {
+      return null;
+    }
+    return trimmed;
+  }
+  const lexRel = relative('/anchor', resolve('/anchor', trimmed));
+  const escapesLexically =
+    lexRel === '..' || lexRel.startsWith('../') || lexRel.startsWith('..\\') || isAbsolute(lexRel);
+  if (escapesLexically) {
+    if (boundary && baseCwd) {
+      const resolvedBase = resolve(baseCwd);
+      if (isPathInside(resolvedBase, boundary)) {
+        const fromBase = resolve(resolvedBase, trimmed);
+        if (isPathInside(fromBase, boundary) && existsSync(fromBase)) {
+          return fromBase;
+        }
+      }
+    }
+    return null;
+  }
+  if (boundary) {
+    return isPathInside(resolve(boundary, trimmed), boundary) ? trimmed : null;
+  }
+  const atStart = resolve(resolvedStart, trimmed);
+  if (existsSync(atStart) && !isPathInside(atStart, resolvedStart)) return null;
+  return trimmed;
+}
+
+function envForCheckout(checkoutRoot, outerRoot, processCwd, baseEnv = process.env) {
+  const next = { ...baseEnv };
+  const sameAsPrimary = canonicalizePath(resolve(checkoutRoot)) === canonicalizePath(resolve(outerRoot));
+  const checkoutInfo = inspectGitCheckout(canonicalizePath(resolve(checkoutRoot)));
+  const parentDir = dirname(resolve(checkoutRoot));
+  const enclosingCheckout =
+    parentDir !== resolve(checkoutRoot)
+      ? findInnermostCheckoutRoot(parentDir, {
+          storeOverride: null,
+          requireStore: true,
+          preserveSpelling: true,
+        })
+      : null;
+  const isNestedWorktree = checkoutInfo?.kind === 'worktree' || enclosingCheckout !== null;
+  const localStorePresent = hasLocalDefaultTicketStore(checkoutRoot);
+  if (sameAsPrimary && !isNestedWorktree) {
+    for (const key of ['ADLC_TICKET_STORE', 'ADLC_TICKETS']) {
+      const val = next[key];
+      if (typeof val !== 'string' || !val.trim()) continue;
+      const trimmed = val.trim();
+      if (isAbsolute(trimmed)) continue;
+      const fromCheckout = resolve(checkoutRoot, trimmed);
+      if (isPathInside(fromCheckout, checkoutRoot)) {
+        if (
+          !existsSync(fromCheckout) &&
+          isPathInside(processCwd, checkoutRoot) &&
+          isPathInside(resolve(processCwd, trimmed), checkoutRoot) &&
+          existsSync(resolve(processCwd, trimmed))
+        ) {
+          next[key] = resolve(processCwd, trimmed);
+        }
+        continue;
+      }
+      if (
+        isPathInside(processCwd, checkoutRoot) &&
+        isPathInside(resolve(processCwd, trimmed), checkoutRoot) &&
+        existsSync(resolve(processCwd, trimmed))
+      ) {
+        next[key] = resolve(processCwd, trimmed);
+      } else if (localStorePresent) {
+        delete next[key];
+      }
+    }
+    return next;
+  }
+  if (!sameAsPrimary && (!isPathInside(checkoutRoot, outerRoot) || existsSync(join(checkoutRoot, '.adlc', 'current-ticket.json')))) {
+    delete next.ADLC_TICKET;
+  }
+  for (const key of ['ADLC_TICKET_STORE', 'ADLC_TICKETS']) {
+    const val = next[key];
+    if (typeof val !== 'string' || !val.trim()) continue;
+    const trimmed = val.trim();
+    const resolvedRel = resolve(checkoutRoot, trimmed);
+    const keepRelative =
+      !isAbsolute(trimmed) && isPathInside(resolvedRel, checkoutRoot) && existsSync(resolvedRel);
+    const fromBaseCwd =
+      sameAsPrimary &&
+      !isAbsolute(trimmed) &&
+      isPathInside(processCwd, checkoutRoot) &&
+      isPathInside(resolve(processCwd, trimmed), checkoutRoot) &&
+      existsSync(resolve(processCwd, trimmed))
+        ? resolve(processCwd, trimmed)
+        : null;
+    if (fromBaseCwd) {
+      next[key] = fromBaseCwd;
+      continue;
+    }
+    const outsideOuter =
+      (sameAsPrimary || !isPathInside(trimmed, outerRoot)) &&
+      (!enclosingCheckout || !isPathInside(trimmed, enclosingCheckout) || isPathInside(trimmed, checkoutRoot));
+    const keepExternal =
+      isAbsolute(trimmed) &&
+      outsideOuter &&
+      !localStorePresent;
+    if (!keepRelative && !keepExternal) {
+      delete next[key];
+    }
+  }
+  return next;
+}
+
+function resolveCandidateBuildGateRoots(outerRoot, dynamicPaths, storeOverride) {
+  const roots = new Set();
+  if (dynamicPaths.length === 0) {
+    roots.add(outerRoot);
+    return [...roots];
+  }
+  const nestedProbeStoreOverride =
+    storeOverride &&
+    ((!isAbsolute(storeOverride) &&
+      (!isPathInside(resolve(outerRoot, storeOverride), outerRoot) ||
+        !existsSync(resolve(outerRoot, storeOverride)))) ||
+      (isAbsolute(storeOverride) && isPathInside(storeOverride, outerRoot)))
+      ? null
+      : storeOverride;
+  const foreignStoreOverride =
+    storeOverride && isAbsolute(storeOverride) && !isPathInside(storeOverride, outerRoot)
+      ? storeOverride
+      : null;
+  let anyOutsideNestedWorktree = false;
+  for (const absTarget of dynamicPaths) {
+    if (isPathInside(absTarget, outerRoot)) {
+      const inner =
+        preferInnermostCheckout(outerRoot, [absTarget], {
+          storeOverride: nestedProbeStoreOverride,
+          allowFileStart: true,
+          preserveSpelling: true,
+        }) ?? outerRoot;
+      roots.add(inner);
+      if (inner === outerRoot) anyOutsideNestedWorktree = true;
+    } else {
+      anyOutsideNestedWorktree = true;
+      const foreign = findInnermostCheckoutRoot(absTarget, {
+        storeOverride: foreignStoreOverride,
+        allowFileStart: true,
+        requireStore: true,
+        preserveSpelling: true,
+      });
+      if (foreign) roots.add(foreign);
+    }
+  }
+  if (anyOutsideNestedWorktree) roots.add(outerRoot);
+  return [...roots];
+}
+
 async function main() {
   // The payload is read FIRST: it names the repository every check below is
   // about (see payloadRoot). The existence checks that used to gate the stdin
   // read were anchored on process.cwd(), which is not that repository.
-  const payload = await stdinJson();
+  const rawPayload = await stdinJson();
+  const payload =
+    rawPayload && typeof rawPayload === 'object' ? { ...rawPayload } : {};
+  if (typeof payload.toolArgs === 'string' && payload.tool_input === undefined) {
+    try {
+      payload.tool_input = JSON.parse(payload.toolArgs);
+    } catch {
+      payload.tool_input = payload.toolArgs;
+    }
+  }
   const processCwd = process.cwd();
-  const root = payloadRoot(payload, processCwd);
-  if (realpathOrSelf(root) !== realpathOrSelf(processCwd)) {
-    console.error(`adlc-build-gate: resolving the repository from the payload cwd ${root} (process cwd ${processCwd})`);
+  const toolCwd = payloadRoot(payload, processCwd);
+  const rawStoreOverride = process.env.ADLC_TICKET_STORE ?? process.env.ADLC_TICKETS ?? null;
+  const storeOverride = sanitizeDiscoveryStoreOverride(rawStoreOverride, toolCwd, processCwd);
+  const outerRoot = findInnermostCheckoutRoot(toolCwd, { storeOverride, preserveSpelling: true }) ?? toolCwd;
+  const dynamicPaths = collectDynamicTargets(payload, toolCwd, payload);
+  const candidateRoots = resolveCandidateBuildGateRoots(outerRoot, dynamicPaths, storeOverride);
+  const primaryDisplayRoot = candidateRoots[0] ?? outerRoot;
+  if (realpathOrSelf(primaryDisplayRoot) !== realpathOrSelf(processCwd)) {
+    console.error(`adlc-build-gate: resolving the repository from the payload cwd ${primaryDisplayRoot} (process cwd ${processCwd})`);
   }
 
-  if (!existsSync(join(root, '.adlc'))) process.exit(0); // not an ADLC repo → allow
-  if (!ticketStoreExists(root, process.env)) process.exit(0); // no tickets → nothing to gate → allow
-
-  const active = resolveActiveTicketId(root);
-  if (!active.id) process.exit(0); // no active ticket declared → allow (opt-in gate)
-
-  let ticket;
-  try {
-    ticket = loadTicketStoreReadOnly({ root, env: process.env }).tickets.find((t) => t.id === active.id);
-  } catch (e) {
-    fail(`cannot read the ticket store (${e.message}) — active ticket ${active.id}'s risk cannot be verified, failing closed`);
-  }
-  if (!ticket) fail(`active ticket ${active.id} not found in the ticket store — failing closed`);
+  const adlcRoots = candidateRoots.filter(
+    (r) => existsSync(join(r, '.adlc')) && ticketStoreExists(r, envForCheckout(r, outerRoot, processCwd))
+  );
+  if (adlcRoots.length === 0) process.exit(0); // not an ADLC repo / no tickets → allow
 
   const bypassRequested = process.env.ADLC_BUILD_GATE_BYPASS === '1';
-  // Copilot 1.0.73 preToolUse stdin exposes no session transcript field, so this
-  // branch is the ONLY one taken on Copilot today (the gate is inert — see the
-  // file header). The lookup is kept forward-compatible: if a future Copilot
-  // build exposes a transcript/log field, decide() engages automatically; a
-  // transcript that IS provided but unreadable still fails closed there.
   const transcriptPath = payload.transcriptPath ?? payload.transcript_path ?? payload.logPath;
+
+  for (const root of adlcRoots) {
+    const checkoutEnv = envForCheckout(root, outerRoot, processCwd);
+    const active = resolveActiveTicketId(root, checkoutEnv);
+    if (!active.id) continue; // no active ticket declared → opt-in gate
+
+    let ticket;
+    try {
+      ticket = loadTicketStoreReadOnly({ root, env: checkoutEnv }).tickets.find((t) => t.id === active.id);
+    } catch (e) {
+      fail(`cannot read the ticket store (${e.message}) — active ticket ${active.id}'s risk cannot be verified, failing closed`);
+    }
+    if (!ticket) fail(`active ticket ${active.id} not found in the ticket store — failing closed`);
+
+    if (transcriptPath === undefined) continue;
+    const result = decide({ ticket, transcriptPath, bypassRequested });
+    if (result.decision === 'allow') continue;
+    if (result.decision === 'pending-bypass') {
+      if (recordBuildGateBypass(active.id, result.signals, result.depth, result.sessionBytes, { cwd: root })) continue;
+      fail('ADLC_BUILD_GATE_BYPASS is set but the override could not be recorded to the gate-manifest (is @adlc/cli installed and .adlc writable?). An unaudited bypass is refused — the build is blocked.');
+    }
+    fail(result.reason);
+  }
+
   if (transcriptPath === undefined) {
     console.error('adlc-build-gate: no session transcript exposed by Copilot (1.0.73) — context-fitness cannot be measured, so this gate is inert; allowing.');
-    process.exit(0);
   }
-  const result = decide({ ticket, transcriptPath, bypassRequested });
-
-  if (result.decision === 'allow') process.exit(0);
-  if (result.decision === 'pending-bypass') {
-    if (recordBuildGateBypass(active.id, result.signals, result.depth, result.sessionBytes, { cwd: root })) process.exit(0); // audited → allow
-    fail('ADLC_BUILD_GATE_BYPASS is set but the override could not be recorded to the gate-manifest (is @adlc/cli installed and .adlc writable?). An unaudited bypass is refused — the build is blocked.');
-  }
-  fail(result.reason);
+  process.exit(0);
 }
 
 // Only run as a hook when executed directly (`node adlc-build-gate.mjs`), not

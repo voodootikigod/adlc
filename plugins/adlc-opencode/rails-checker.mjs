@@ -8,8 +8,24 @@
 // freeze) that adlc-codex and adlc-pi already implement.
 
 import { existsSync, statSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
-import { loadTickets, globMatch, classifyShellCommand, collectPatchPaths, resolveRailPath, ticketStoreExists, TICKET_TRUST_ROOT_RAILS } from '@adlc/core';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import {
+  loadTickets,
+  globMatch,
+  classifyShellCommand,
+  collectPatchPaths,
+  resolveRailPath,
+  ticketStoreExists,
+  TICKET_TRUST_ROOT_RAILS,
+  canonicalizePath as canonicalizeWorkspacePath,
+  extractAllToolWorkdirs,
+  extractToolWorkdir,
+  findInnermostCheckoutRoot,
+  hasConflictingToolWorkdirs,
+  inspectGitCheckout,
+  isPathInside,
+  preferInnermostCheckout,
+} from '@adlc/core';
 import {
   resolveActiveTicketAgainst,
   resolveActiveTicketId as resolveActiveTicketIdCanonical,
@@ -132,7 +148,8 @@ export function resolveActiveTicketId(root, env) {
  *   { active: true, conflict: true, reason }           — tamper signal, fail closed
  *   { active: true, conflict: false, ticketId, rails } — rails in force
  */
-export function resolveRailsInForce(root, env) {
+export function resolveRailsInForce(root, rawEnv) {
+  const env = envForSecondaryCheckout(root, root, rawEnv ?? {});
   if (env.ADLC_P4_ENFORCEMENT !== '1') {
     return { active: false, reason: 'enforcement inactive (ADLC_P4_ENFORCEMENT !== "1")' };
   }
@@ -653,7 +670,189 @@ export function railHit(target, rails, root, { ancestors = true } = {}) {
  *    target cannot be extracted is DENIED while rails are in force (fail closed —
  *    an unrecognized third-party write tool must not slip past on arg shape).
  */
-export function checkToolCall({ tool, args, root = process.cwd(), env = process.env }) {
+function hasLocalDefaultStore(dir) {
+  return (
+    existsSync(join(dir, '.adlc', 'tickets', '.store.json')) ||
+    existsSync(join(dir, '.adlc', 'tickets.json'))
+  );
+}
+
+export function sanitizeDiscoveryStoreOverride(rawOverride, startDir, baseCwd = startDir) {
+  if (typeof rawOverride !== 'string' || !rawOverride.trim()) return null;
+  const trimmed = rawOverride.trim();
+  const resolvedStart = resolve(startDir);
+  const boundary = findInnermostCheckoutRoot(resolvedStart, {
+    storeOverride: null,
+    requireStore: false,
+    allowFileStart: true,
+    preserveSpelling: true,
+  });
+  const anchor = boundary ?? resolvedStart;
+  const anchorInfo = inspectGitCheckout(canonicalizeWorkspacePath(anchor));
+  const anchorParent = dirname(resolve(anchor));
+  const enclosing =
+    anchorParent !== resolve(anchor)
+      ? findInnermostCheckoutRoot(anchorParent, {
+          storeOverride: null,
+          requireStore: true,
+          preserveSpelling: true,
+        })
+      : null;
+  if (isAbsolute(trimmed)) {
+    if (enclosing && isPathInside(trimmed, enclosing) && !isPathInside(trimmed, anchor)) {
+      return null;
+    }
+    if ((anchorInfo?.kind === 'worktree' || enclosing) && hasLocalDefaultStore(anchor) && !isPathInside(trimmed, anchor)) {
+      return null;
+    }
+    return trimmed;
+  }
+  const lexRel = relative('/anchor', resolve('/anchor', trimmed));
+  const escapesLexically =
+    lexRel === '..' || lexRel.startsWith('../') || lexRel.startsWith('..\\') || isAbsolute(lexRel);
+  if (escapesLexically) {
+    if (boundary && baseCwd) {
+      const resolvedBase = resolve(baseCwd);
+      if (isPathInside(resolvedBase, boundary)) {
+        const fromBase = resolve(resolvedBase, trimmed);
+        if (isPathInside(fromBase, boundary) && existsSync(fromBase)) {
+          return fromBase;
+        }
+      }
+    }
+    return null;
+  }
+  if (boundary) {
+    return isPathInside(resolve(boundary, trimmed), boundary) ? trimmed : null;
+  }
+  const atStart = resolve(resolvedStart, trimmed);
+  if (existsSync(atStart) && !isPathInside(atStart, resolvedStart)) return null;
+  return trimmed;
+}
+
+export function envForSecondaryCheckout(checkoutRoot, primaryRoot, env, baseCwd = null) {
+  if (!checkoutRoot || !env) return env;
+  const sameAsPrimary =
+    !primaryRoot ||
+    canonicalizeWorkspacePath(resolve(checkoutRoot)) === canonicalizeWorkspacePath(resolve(primaryRoot));
+  const checkoutInfo = inspectGitCheckout(canonicalizeWorkspacePath(resolve(checkoutRoot)));
+  const parentDir = dirname(resolve(checkoutRoot));
+  const enclosingCheckout =
+    parentDir !== resolve(checkoutRoot)
+      ? findInnermostCheckoutRoot(parentDir, {
+          storeOverride: null,
+          requireStore: true,
+          preserveSpelling: true,
+        })
+      : null;
+  const isNestedWorktree = checkoutInfo?.kind === 'worktree' || enclosingCheckout !== null;
+  const localStorePresent = hasLocalDefaultStore(checkoutRoot);
+  const next = { ...env };
+  if (sameAsPrimary && !isNestedWorktree) {
+    for (const key of ['ADLC_TICKET_STORE', 'ADLC_TICKETS']) {
+      const val = next[key];
+      if (typeof val !== 'string' || !val.trim()) continue;
+      const trimmed = val.trim();
+      if (isAbsolute(trimmed)) continue;
+      const fromCheckout = resolve(checkoutRoot, trimmed);
+      if (isPathInside(fromCheckout, checkoutRoot)) {
+        if (
+          !existsSync(fromCheckout) &&
+          baseCwd &&
+          isPathInside(resolve(baseCwd), checkoutRoot) &&
+          isPathInside(resolve(baseCwd, trimmed), checkoutRoot) &&
+          existsSync(resolve(baseCwd, trimmed))
+        ) {
+          next[key] = resolve(baseCwd, trimmed);
+        }
+        continue;
+      }
+      if (
+        baseCwd &&
+        isPathInside(resolve(baseCwd), checkoutRoot) &&
+        isPathInside(resolve(baseCwd, trimmed), checkoutRoot) &&
+        existsSync(resolve(baseCwd, trimmed))
+      ) {
+        next[key] = resolve(baseCwd, trimmed);
+      } else if (localStorePresent) {
+        delete next[key];
+      }
+    }
+    return next;
+  }
+  if (
+    !sameAsPrimary &&
+    (!isPathInside(checkoutRoot, primaryRoot) ||
+      existsSync(join(checkoutRoot, '.adlc', 'current-ticket.json')))
+  ) {
+    delete next.ADLC_TICKET;
+  }
+  for (const key of ['ADLC_TICKET_STORE', 'ADLC_TICKETS']) {
+    const val = next[key];
+    if (typeof val !== 'string' || !val.trim()) continue;
+    const trimmed = val.trim();
+    const resolvedRel = resolve(checkoutRoot, trimmed);
+    const keepRelative =
+      !isAbsolute(trimmed) && isPathInside(resolvedRel, checkoutRoot) && existsSync(resolvedRel);
+    const fromBaseCwd =
+      sameAsPrimary &&
+      baseCwd &&
+      !isAbsolute(trimmed) &&
+      isPathInside(resolve(baseCwd), checkoutRoot) &&
+      isPathInside(resolve(baseCwd, trimmed), checkoutRoot) &&
+      existsSync(resolve(baseCwd, trimmed))
+        ? resolve(baseCwd, trimmed)
+        : null;
+    if (fromBaseCwd) {
+      next[key] = fromBaseCwd;
+      continue;
+    }
+    const outsideOuter =
+      (sameAsPrimary || !isPathInside(trimmed, primaryRoot)) &&
+      (!enclosingCheckout || !isPathInside(trimmed, enclosingCheckout) || isPathInside(trimmed, checkoutRoot));
+    const keepExternal =
+      isAbsolute(trimmed) &&
+      outsideOuter &&
+      !localStorePresent;
+    if (!keepRelative && !keepExternal) {
+      delete next[key];
+    }
+  }
+  return next;
+}
+
+export function resolveOwningCheckoutRoot(absTarget, primaryRoot, env) {
+  const storeOverride = env?.ADLC_TICKET_STORE ?? env?.ADLC_TICKETS ?? null;
+  if (isPathInside(absTarget, primaryRoot)) {
+    const innerOverride =
+      storeOverride &&
+      ((!isAbsolute(storeOverride) &&
+        (!isPathInside(resolve(primaryRoot, storeOverride), primaryRoot) ||
+          !existsSync(resolve(primaryRoot, storeOverride)))) ||
+        (isAbsolute(storeOverride) && isPathInside(storeOverride, primaryRoot)))
+        ? null
+        : storeOverride;
+    return (
+      preferInnermostCheckout(primaryRoot, [absTarget], {
+        storeOverride: innerOverride,
+        allowFileStart: true,
+        preserveSpelling: true,
+      }) ?? primaryRoot
+    );
+  }
+  const foreignStoreOverride =
+    storeOverride && isAbsolute(storeOverride) && !isPathInside(storeOverride, primaryRoot)
+      ? storeOverride
+      : null;
+  return findInnermostCheckoutRoot(absTarget, {
+    storeOverride: foreignStoreOverride,
+    allowFileStart: true,
+    requireStore: true,
+    preserveSpelling: true,
+  });
+}
+
+export function checkToolCall({ tool, args, root = process.cwd(), cwd = root, env = process.env }) {
   const name = String(tool ?? '').toLowerCase();
   if (READONLY_TOOLS.includes(name)) {
     // Reading a rail is legitimate; allow by name. Residual risk: a hostile
@@ -662,8 +861,46 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
     // (opencode-native-flush plan Phase 2.5) and, at commit time, the CI gate.
     return { decision: 'allow', reason: `tool "${name}" is read-only` };
   }
+  const baseCwd = typeof cwd === 'string' && cwd.trim() !== '' ? cwd : root;
   if (SHELL_TOOLS.includes(name)) {
-    return checkShellCall({ command: args?.command, workdir: args?.workdir, root, env });
+    const explicitWorkdirs = extractAllToolWorkdirs(args).map((w) => resolve(baseCwd, w));
+    if (hasConflictingToolWorkdirs(args, baseCwd)) {
+      const force = resolveRailsInForce(root, env);
+      if (force.conflict) return { decision: 'deny', reason: force.reason };
+      const anyForeignActive = explicitWorkdirs.some((wd) => {
+        const owning = resolveOwningCheckoutRoot(wd, root, env);
+        if (!owning) return false;
+        const st = resolveRailsInForce(owning, envForSecondaryCheckout(owning, root, env));
+        return st.active || st.conflict;
+      });
+      if (force.active || anyForeignActive) {
+        return {
+          decision: 'deny',
+          reason: 'shell command specifies conflicting working directories; target paths cannot be verified against the frozen rails',
+        };
+      }
+    }
+    const primaryForce = resolveRailsInForce(root, env);
+    if (!primaryForce.active && env?.ADLC_P4_ENFORCEMENT === '1' && explicitWorkdirs.length === 1) {
+      const owning = resolveOwningCheckoutRoot(explicitWorkdirs[0], root, env);
+      if (owning && canonicalizeWorkspacePath(resolve(owning)) !== canonicalizeWorkspacePath(resolve(root))) {
+        return checkShellCall({
+          command: args?.command,
+          workdir: explicitWorkdirs[0],
+          workdirs: [explicitWorkdirs[0]],
+          root: owning,
+          env: envForSecondaryCheckout(owning, root, env),
+        });
+      }
+    }
+    const candidateWorkdirs = baseCwd !== root ? [baseCwd, ...explicitWorkdirs] : explicitWorkdirs;
+    return checkShellCall({
+      command: args?.command,
+      workdir: extractToolWorkdir(args) ?? (baseCwd !== root ? baseCwd : undefined),
+      workdirs: candidateWorkdirs,
+      root,
+      env,
+    });
   }
   // Operators can extend the ungated list for benign third-party tools that a
   // railed build legitimately needs (e.g. ADLC_UNGATED_TOOLS="symbols_index").
@@ -872,14 +1109,54 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
     return { decision: 'allow', reason: `tool "${name}" is not gated in-session (CI diff gate covers it)` };
   }
   const force = resolveRailsInForce(root, env);
-  if (!force.active) return { decision: 'allow', reason: force.reason };
-  if (force.conflict) return { decision: 'deny', reason: force.reason };
-
+  const explicitWorkdirs = extractAllToolWorkdirs(args);
+  const effectiveCwd = explicitWorkdirs.length > 0 ? resolve(baseCwd, explicitWorkdirs[0]) : baseCwd;
   const targets = extractTargets(args);
-  if (targets.length === 0) {
+  const canonicalPrimary = canonicalizeWorkspacePath(resolve(root));
+
+  const secondaryStates = new Map();
+  if (env?.ADLC_P4_ENFORCEMENT === '1') {
+    const probeAbs = [
+      ...explicitWorkdirs.map((wd) => resolve(baseCwd, wd)),
+      ...targets.flatMap((t) =>
+        explicitWorkdirs.length > 0
+          ? explicitWorkdirs.map((wd) => resolve(resolve(baseCwd, wd), t))
+          : [isAbsolute(t) ? resolve(t) : resolve(effectiveCwd, t)]
+      ),
+    ];
+    for (const abs of probeAbs) {
+      const owning = resolveOwningCheckoutRoot(abs, root, env);
+      if (!owning) continue;
+      const canonOwning = canonicalizeWorkspacePath(resolve(owning));
+      if (canonOwning === canonicalPrimary || secondaryStates.has(canonOwning)) continue;
+      secondaryStates.set(canonOwning, {
+        root: owning,
+        force: resolveRailsInForce(owning, envForSecondaryCheckout(owning, root, env)),
+      });
+    }
+  }
+  const activeSecondary = [...secondaryStates.values()].filter((s) => s.force.active && !s.force.conflict);
+  const conflictedSecondary = [...secondaryStates.values()].filter((s) => s.force.conflict);
+
+  if (!force.active && activeSecondary.length === 0 && conflictedSecondary.length === 0) {
+    return { decision: 'allow', reason: force.reason };
+  }
+  if (hasConflictingToolWorkdirs(args, baseCwd)) {
     return {
       decision: 'deny',
-      reason: `mutating/unknown tool "${name}" carries no extractable target path — failing closed while rails are in force (active ticket ${force.ticketId})`,
+      reason: 'tool call specifies conflicting working directories; target paths cannot be verified against the frozen rails',
+    };
+  }
+  if (force.conflict) return { decision: 'deny', reason: force.reason };
+  if (conflictedSecondary.length > 0) {
+    return { decision: 'deny', reason: conflictedSecondary[0].force.reason };
+  }
+
+  if (targets.length === 0) {
+    const activeTicketId = force.ticketId ?? activeSecondary[0]?.force.ticketId;
+    return {
+      decision: 'deny',
+      reason: `mutating/unknown tool "${name}" carries no extractable target path — failing closed while rails are in force (active ticket ${activeTicketId})`,
     };
   }
   // Known structured mutators write a single concrete file — ancestor-directory
@@ -887,9 +1164,30 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
   // rail). Unknown tools stay fail-closed with ancestor detection on.
   const singleFile = MUTATING_TOOLS.includes(name);
   for (const target of targets) {
-    const hit = railHit(target, force.rails, root, { ancestors: !singleFile });
-    if (hit) {
-      return { decision: 'deny', reason: `frozen rail "${hit}" (active ticket ${force.ticketId})` };
+    const absTarget = isAbsolute(target) ? resolve(target) : resolve(effectiveCwd, target);
+    const owning = resolveOwningCheckoutRoot(absTarget, root, env);
+    const canonOwning = owning ? canonicalizeWorkspacePath(resolve(owning)) : null;
+    const secondary = canonOwning ? secondaryStates.get(canonOwning) : null;
+    if (secondary?.force.active) {
+      const secondaryHit = railHit(absTarget, secondary.force.rails, secondary.root, { ancestors: !singleFile });
+      if (secondaryHit) {
+        return { decision: 'deny', reason: `frozen rail "${secondaryHit}" (active ticket ${secondary.force.ticketId})` };
+      }
+      continue;
+    }
+    if (force.active) {
+      if (!isPathInside(absTarget, root)) {
+        return {
+          decision: 'deny',
+          reason: `target "${target}" resolves outside the repository root and cannot be verified against frozen rails (active ticket ${force.ticketId})`,
+        };
+      }
+      const hit =
+        (effectiveCwd === root ? railHit(target, force.rails, root, { ancestors: !singleFile }) : null) ??
+        railHit(absTarget, force.rails, root, { ancestors: !singleFile });
+      if (hit) {
+        return { decision: 'deny', reason: `frozen rail "${hit}" (active ticket ${force.ticketId})` };
+      }
     }
   }
   return { decision: 'allow', reason: 'no target is a frozen rail' };
@@ -910,12 +1208,38 @@ export function checkToolCall({ tool, args, root = process.cwd(), env = process.
  * same deny as `cd`.
  * The CI diff gate remains the unbypassable backstop.
  */
-export function checkShellCall({ command, workdir, root = process.cwd(), env = process.env }) {
+export function checkShellCall({ command, workdir, workdirs, root = process.cwd(), env = process.env }) {
   const force = resolveRailsInForce(root, env);
-  if (!force.active) return { decision: 'allow', reason: force.reason };
   if (force.conflict) return { decision: 'deny', reason: force.reason };
 
   const c = classifyShellCommand(command);
+  const canonicalRoot = canonicalizeWorkspacePath(resolve(root));
+  const candidateDirs = Array.isArray(workdirs) && workdirs.length > 0
+    ? workdirs
+    : typeof workdir === 'string' && workdir.trim() !== ''
+      ? [workdir]
+      : [];
+
+  let anySecondaryActive = false;
+  if (!force.active && env?.ADLC_P4_ENFORCEMENT === '1') {
+    const shellProbes = [
+      ...candidateDirs.map((w) => resolve(root, w)),
+      ...c.paths.flatMap((p) =>
+        candidateDirs.length > 0
+          ? candidateDirs.map((w) => resolve(resolve(root, w), p))
+          : [isAbsolute(p) ? resolve(p) : resolve(root, p)]
+      ),
+    ];
+    for (const abs of shellProbes) {
+      const owning = resolveOwningCheckoutRoot(abs, root, env);
+      if (!owning || canonicalizeWorkspacePath(resolve(owning)) === canonicalRoot) continue;
+      const st = resolveRailsInForce(owning, envForSecondaryCheckout(owning, root, env));
+      if (st.conflict) return { decision: 'deny', reason: st.reason };
+      if (st.active) anySecondaryActive = true;
+    }
+  }
+  if (!force.active && !anySecondaryActive) return { decision: 'allow', reason: force.reason };
+
   if (c.readOnly) {
     if (c.writeOption) {
       return { decision: 'deny', reason: 'read-only shell command uses an output option; use a structured edit tool or a literal path-transparent mutation' };
@@ -928,8 +1252,12 @@ export function checkShellCall({ command, workdir, root = process.cwd(), env = p
   if (c.opaque) {
     return { decision: 'deny', reason: 'mutating shell command uses an opaque form (git apply/checkout/patch/tar…); use a structured edit tool or a literal path-transparent mutation' };
   }
-  const movesWorkdir = typeof workdir === 'string' && workdir.trim() !== ''
-    && resolve(root, workdir.trim()) !== resolve(root);
+  const movesWorkdir = candidateDirs.some(
+    (w) =>
+      typeof w === 'string' &&
+      w.trim() !== '' &&
+      canonicalizeWorkspacePath(resolve(root, w.trim())) !== canonicalRoot
+  );
   if (c.changesCwd || movesWorkdir) {
     return { decision: 'deny', reason: 'mutating shell command changes cwd; target paths cannot be verified against the frozen rails' };
   }
@@ -940,9 +1268,34 @@ export function checkShellCall({ command, workdir, root = process.cwd(), env = p
     return { decision: 'deny', reason: 'mutating shell command carries no literal target paths — failing closed while rails are in force' };
   }
   for (const target of c.paths) {
-    const hit = railHit(target, force.rails, root);
-    if (hit) {
-      return { decision: 'deny', reason: `shell mutation targets frozen rail "${hit}" (active ticket ${force.ticketId})` };
+    const absTarget = isAbsolute(target) ? resolve(target) : resolve(root, target);
+    if (absTarget !== '/dev/null') {
+      const owning = resolveOwningCheckoutRoot(absTarget, root, env);
+      if (owning && canonicalizeWorkspacePath(resolve(owning)) !== canonicalRoot) {
+        const secondaryForce = resolveRailsInForce(owning, envForSecondaryCheckout(owning, root, env));
+        if (secondaryForce.conflict) return { decision: 'deny', reason: secondaryForce.reason };
+        if (secondaryForce.active) {
+          const secondaryHit = railHit(absTarget, secondaryForce.rails, owning);
+          if (secondaryHit) {
+            return { decision: 'deny', reason: `shell mutation targets frozen rail "${secondaryHit}" (active ticket ${secondaryForce.ticketId})` };
+          }
+          if (isPathInside(owning, root) || !force.active) {
+            continue;
+          }
+        }
+      }
+      if (force.active && !isPathInside(absTarget, root)) {
+        return {
+          decision: 'deny',
+          reason: `shell mutation target "${target}" resolves outside the repository root and cannot be verified against the frozen rails (active ticket ${force.ticketId})`,
+        };
+      }
+    }
+    if (force.active) {
+      const hit = railHit(target, force.rails, root);
+      if (hit) {
+        return { decision: 'deny', reason: `shell mutation targets frozen rail "${hit}" (active ticket ${force.ticketId})` };
+      }
     }
   }
   return { decision: 'allow', reason: 'shell mutation targets no frozen rail' };

@@ -14,7 +14,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdirSync, existsSync, readFileSync, symlinkSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -956,4 +956,274 @@ test('a package-level store BELOW the git root still enforces its rails', (t) =>
   // entirely and the rail would still be found.
   const r = runRailsIn(join(pkg, 'secret'), join(pkg, 'secret', 'x.js'), home);
   assert.equal(r.verdict, 'deny');
+});
+
+test('nested git worktree (.worktrees/<lane>) enforces its own rails even when CLAUDE_PROJECT_DIR points at the outer repo', async (t) => {
+  const { execFileSync } = await import('node:child_process');
+  const git = (cwd, ...args) =>
+    execFileSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'Test',
+        GIT_AUTHOR_EMAIL: 'test@example.com',
+        GIT_COMMITTER_NAME: 'Test',
+        GIT_COMMITTER_EMAIL: 'test@example.com',
+      },
+    });
+  const primary = tmp(t, 'adlc-cc-wt-primary-');
+  git(primary, 'init', '-b', 'main');
+  mkdirSync(join(primary, '.adlc'), { recursive: true });
+  writeFileSync(
+    join(primary, '.adlc', 'tickets.json'),
+    JSON.stringify({ tickets: [{ id: 'T-MAIN', title: 'main', rails: ['src/frozen.js'] }] })
+  );
+  mkdirSync(join(primary, 'src'), { recursive: true });
+  writeFileSync(join(primary, 'src', 'frozen.js'), 'export const frozen = 1;\n');
+  git(primary, 'add', '-A');
+  git(primary, 'commit', '-m', 'init');
+
+  const lane = join(primary, '.worktrees', 'lane-a');
+  git(primary, 'worktree', 'add', '-b', 'lane-a', lane);
+  writeFileSync(join(lane, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T-MAIN' }));
+
+  const env = { ...process.env, CLAUDE_PROJECT_DIR: primary, PATH: WITH_ADLC };
+  delete env.ADLC_RAILS_BYPASS;
+
+  let out = '';
+  try {
+    out = runHook([HOOK, 'rails'], {
+      input: JSON.stringify({
+        cwd: lane,
+        tool_name: 'Write',
+        tool_input: { file_path: join(lane, 'src', 'frozen.js'), content: 'tamper' },
+      }),
+      encoding: 'utf8',
+      env,
+    });
+  } catch (e) {
+    out = e.stdout ?? '';
+  }
+  assert.match(out, /"permissionDecision":"deny"/, `expected nested worktree rail edit to be denied, got: ${out}`);
+
+  // MultiEdit spanning outer repo frozen rail + nested worktree non-rail file MUST still be denied
+  let mixedOuterOut = '';
+  try {
+    mixedOuterOut = runHook([HOOK, 'rails'], {
+      input: JSON.stringify({
+        cwd: lane,
+        tool_name: 'MultiEdit',
+        tool_input: {
+          edits: [
+            { file_path: join(primary, 'src', 'frozen.js') },
+            { file_path: join(lane, 'src', 'free.js') },
+          ],
+        },
+      }),
+      encoding: 'utf8',
+      env,
+    });
+  } catch (e) {
+    mixedOuterOut = e.stdout ?? '';
+  }
+  assert.match(mixedOuterOut, /"permissionDecision":"deny"/, `expected mixed outer rail edit to be denied, got: ${mixedOuterOut}`);
+
+  // MultiEdit spanning outer repo non-rail file + nested worktree frozen rail MUST ALSO be denied
+  let mixedInnerOut = '';
+  try {
+    mixedInnerOut = runHook([HOOK, 'rails'], {
+      input: JSON.stringify({
+        cwd: primary,
+        tool_name: 'MultiEdit',
+        tool_input: {
+          edits: [
+            { file_path: join(primary, 'src', 'free.js') },
+            { file_path: join(lane, 'src', 'frozen.js') },
+          ],
+        },
+      }),
+      encoding: 'utf8',
+      env,
+    });
+  } catch (e) {
+    mixedInnerOut = e.stdout ?? '';
+  }
+  assert.match(mixedInnerOut, /"permissionDecision":"deny"/, `expected mixed nested worktree rail edit to be denied, got: ${mixedInnerOut}`);
+
+  // Unaudited ADLC_RAILS_BYPASS=1 on a mixed MultiEdit targeting a nested worktree rail MUST be refused when adlc is unavailable
+  let unauditedNestedBypassOut = '';
+  try {
+    unauditedNestedBypassOut = runHook([HOOK, 'rails'], {
+      input: JSON.stringify({
+        cwd: primary,
+        tool_name: 'MultiEdit',
+        tool_input: {
+          edits: [
+            { file_path: join(primary, 'src', 'free.js') },
+            { file_path: join(lane, 'src', 'frozen.js') },
+          ],
+        },
+      }),
+      encoding: 'utf8',
+      env: { ...env, ADLC_RAILS_BYPASS: '1', PATH: '' },
+    });
+  } catch (e) {
+    unauditedNestedBypassOut = e.stdout ?? '';
+  }
+  assert.match(unauditedNestedBypassOut, /"permissionDecision":"deny"/, `unaudited nested bypass must be refused: ${unauditedNestedBypassOut}`);
+
+  // Forged subdirectory .git (empty or with fake HEAD) inside an ADLC git repo MUST NOT release enclosing rails
+  const forgedSub = join(primary, 'src', 'forged');
+  mkdirSync(join(forgedSub, '.git'), { recursive: true });
+  writeFileSync(join(forgedSub, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  const envNoProjectDir = { ...process.env, PATH: WITH_ADLC };
+  delete envNoProjectDir.CLAUDE_PROJECT_DIR;
+  delete envNoProjectDir.ADLC_RAILS_BYPASS;
+  let forgedOut = '';
+  try {
+    forgedOut = runHook([HOOK, 'rails'], {
+      cwd: forgedSub,
+      input: JSON.stringify({
+        cwd: forgedSub,
+        tool_name: 'Write',
+        tool_input: { file_path: join(primary, 'src', 'frozen.js'), content: 'tamper' },
+      }),
+      encoding: 'utf8',
+      env: envNoProjectDir,
+    });
+  } catch (e) {
+    forgedOut = e.stdout ?? '';
+  }
+  assert.match(forgedOut, /"permissionDecision":"deny"/, `forged subdirectory .git must not escape enclosing ADLC repo: ${forgedOut}`);
+
+  // Editing primary checkout's frozen rail while CLAUDE_PROJECT_DIR / input.cwd is inside nested worktree MUST ALSO deny
+  let laneToPrimaryOut = '';
+  try {
+    laneToPrimaryOut = runHook([HOOK, 'rails'], {
+      cwd: lane,
+      input: JSON.stringify({
+        cwd: lane,
+        tool_name: 'Write',
+        tool_input: { file_path: join(primary, 'src', 'frozen.js'), content: 'tamper' },
+      }),
+      encoding: 'utf8',
+      env: { ...env, CLAUDE_PROJECT_DIR: lane },
+    });
+  } catch (e) {
+    laneToPrimaryOut = e.stdout ?? '';
+  }
+  assert.match(laneToPrimaryOut, /"permissionDecision":"deny"/, `worktree-to-primary rail edit must be denied: ${laneToPrimaryOut}`);
+
+  // Build-gate enforces high-risk target checkout even when CLAUDE_PROJECT_DIR points at a normal-risk checkout
+  const highRiskForeign = tmp(t, 'claude-foreign-high-');
+  git(highRiskForeign, 'init', '-b', 'main');
+  mkdirSync(join(highRiskForeign, '.adlc'), { recursive: true });
+  writeFileSync(
+    join(highRiskForeign, '.adlc', 'tickets.json'),
+    JSON.stringify({
+      tickets: [{ id: 'T-HIGH-FOREIGN', title: 'Foreign High', category: 'architecture', scope: ['src/**'] }],
+    })
+  );
+  writeFileSync(join(highRiskForeign, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T-HIGH-FOREIGN' }));
+  let foreignBgOut = '';
+  try {
+    foreignBgOut = runHook([HOOK, 'buildgate'], {
+      cwd: primary,
+      input: JSON.stringify({
+        cwd: primary,
+        tool_name: 'Write',
+        tool_input: { file_path: join(highRiskForeign, 'src', 'auth.js'), content: 'x' },
+      }),
+      encoding: 'utf8',
+      env,
+    });
+  } catch (e) {
+    foreignBgOut = e.stdout ?? '';
+  }
+  assert.match(foreignBgOut, /"permissionDecision":"deny"/, `foreign high-risk target must trigger build-gate: ${foreignBgOut}`);
+
+  // Nested worktree with its own ticket store enforces its own rails even when ADLC_TICKET_STORE and ADLC_TICKET point at outer checkout
+  writeFileSync(
+    join(lane, '.adlc', 'tickets.json'),
+    JSON.stringify({ tickets: [{ id: 'T-INNER', title: 'Inner', rails: ['inner-only/frozen.js'] }] })
+  );
+  writeFileSync(join(lane, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T-INNER' }));
+  let outerStoreOverrideOut = '';
+  try {
+    outerStoreOverrideOut = runHook([HOOK, 'rails'], {
+      cwd: dirname(primary),
+      input: JSON.stringify({
+        cwd: primary,
+        tool_name: 'Write',
+        tool_input: { file_path: '.worktrees/lane-a/inner-only/frozen.js', content: 'tamper' },
+      }),
+      encoding: 'utf8',
+      env: {
+        ...env,
+        ADLC_TICKET: 'T-MAIN',
+        ADLC_TICKET_STORE: join(primary, '.adlc', 'tickets.json'),
+      },
+    });
+  } catch (e) {
+    outerStoreOverrideOut = e.stdout ?? '';
+  }
+  assert.match(outerStoreOverrideOut, /"permissionDecision":"deny"/, `nested worktree must not let outer ADLC_TICKET_STORE hide T-INNER rail: ${outerStoreOverrideOut}`);
+
+  // External out-of-repo ADLC_TICKET_STORE must also NOT override a nested worktree's own local .adlc/tickets.json
+  const extLowStore = join(dirname(primary), 'cc-ext-low.json');
+  writeFileSync(extLowStore, JSON.stringify({ tickets: [{ id: 'T-INNER', title: 'Low', rails: [] }] }));
+  let extOverrideWithLocalStoreOut = '';
+  try {
+    extOverrideWithLocalStoreOut = runHook([HOOK, 'rails'], {
+      cwd: dirname(primary),
+      input: JSON.stringify({
+        cwd: primary,
+        tool_name: 'Write',
+        tool_input: { file_path: '.worktrees/lane-a/inner-only/frozen.js', content: 'tamper' },
+      }),
+      encoding: 'utf8',
+      env: {
+        ...env,
+        ADLC_TICKET: 'T-INNER',
+        ADLC_TICKET_STORE: extLowStore,
+      },
+    });
+  } catch (e) {
+    extOverrideWithLocalStoreOut = e.stdout ?? '';
+  }
+  assert.match(extOverrideWithLocalStoreOut, /"permissionDecision":"deny"/, `local .adlc/tickets.json in nested worktree must take precedence over external ADLC_TICKET_STORE: ${extOverrideWithLocalStoreOut}`);
+
+  // Conversely, when a nested worktree has NO local ticket store, storeOverrideForNestedProbe preserves an external absolute ADLC_TICKET_STORE so CLAUDE_PROJECT_DIR upgrades to the nested worktree
+  const laneExt = join(primary, '.worktrees', 'lane-ext');
+  git(primary, 'worktree', 'add', '-b', 'lane-ext', laneExt);
+  rmSync(join(laneExt, '.adlc', 'tickets.json'), { force: true });
+  mkdirSync(join(laneExt, '.adlc'), { recursive: true });
+  writeFileSync(join(laneExt, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T-EXT-WT' }));
+  const extHighStore = join(dirname(primary), 'cc-ext-high.json');
+  writeFileSync(
+    extHighStore,
+    JSON.stringify({ tickets: [{ id: 'T-EXT-WT', title: 'Ext', rails: ['ext-only/frozen.js'] }] })
+  );
+  let extNestedUpgradeOut = '';
+  try {
+    extNestedUpgradeOut = runHook([HOOK, 'rails'], {
+      cwd: dirname(primary),
+      input: JSON.stringify({
+        cwd: laneExt,
+        tool_name: 'Write',
+        tool_input: { file_path: join(laneExt, 'ext-only', 'frozen.js'), content: 'tamper' },
+      }),
+      encoding: 'utf8',
+      env: {
+        ...env,
+        CLAUDE_PROJECT_DIR: primary,
+        ADLC_TICKET: 'T-EXT-WT',
+        ADLC_TICKET_STORE: extHighStore,
+      },
+    });
+  } catch (e) {
+    extNestedUpgradeOut = e.stdout ?? '';
+  }
+  assert.match(extNestedUpgradeOut, /"permissionDecision":"deny"/, `external ADLC_TICKET_STORE on storeless nested worktree must upgrade CLAUDE_PROJECT_DIR to nested worktree: ${extNestedUpgradeOut}`);
 });

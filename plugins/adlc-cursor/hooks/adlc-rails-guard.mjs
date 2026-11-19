@@ -19,10 +19,11 @@
 // path is a conflicting active-ticket signal, which checkRail reports as a denial.
 
 import { fileURLToPath } from 'node:url';
-import { isAbsolute, resolve, relative, dirname, basename } from 'node:path';
+import { isAbsolute, resolve, relative, dirname, basename, join } from 'node:path';
 import { realpathSync, existsSync } from 'node:fs';
 import { checkRail, classifyTool, isShellTool, railPreconditions } from '../rails-checker.mjs';
 import { normalizeRootPath } from '../lib/workspace-resolve.mjs';
+import { findInnermostCheckoutRoot, inspectGitCheckout, preferInnermostCheckout } from '@adlc/core';
 
 /** Best-effort realpath; falls back to the lexical path (a write may create it). */
 function realOr(p) {
@@ -54,7 +55,7 @@ function realpathDeepest(absPath) {
 // is pinned against a real payload in ADR 0006 (Unverified).
 const TOOL_NAME_KEYS = ['tool_name', 'toolName', 'tool', 'name'];
 const INPUT_BAG_KEYS = ['tool_input', 'toolInput', 'input', 'args', 'arguments', 'params', 'parameters'];
-const PATH_KEYS = ['file_path', 'filePath', 'path', 'target_file', 'targetFile', 'target', 'target_path', 'targetPath'];
+const PATH_KEYS = ['file_path', 'filePath', 'path', 'notebook_path', 'notebookPath', 'target_file', 'targetFile', 'target', 'target_path', 'targetPath'];
 const ROOT_KEYS = ['workspace_roots', 'workspaceRoots', 'workspace_root', 'workspaceRoot', 'project_root', 'projectRoot', 'cwd', 'root'];
 
 function firstString(obj, keys) {
@@ -188,32 +189,186 @@ export function absoluteRoot(raw) {
  * (or a symlinked root alias) must be attributed to the repo it actually resolves
  * into, not the one whose name lexically prefixes it.
  */
-export function resolveOwning(payload, filePath, fallback, env = process.env) {
+const EXPLICIT_WORKSPACE_KEYS = ['workspace_roots', 'workspaceRoots', 'workspace_root', 'workspaceRoot', 'project_root', 'projectRoot', 'root'];
+
+function hasExplicitWorkspaceDeclaration(payload) {
+  return Boolean(firstString(payload, EXPLICIT_WORKSPACE_KEYS));
+}
+
+function hasLocalDefaultTicketStore(dir) {
+  return (
+    existsSync(join(dir, '.adlc', 'tickets', '.store.json')) ||
+    existsSync(join(dir, '.adlc', 'tickets.json'))
+  );
+}
+
+function storeOverrideForNestedProbe(rawOverride, outerDir) {
+  if (!rawOverride || typeof rawOverride !== 'string' || !rawOverride.trim()) return null;
+  const trimmed = rawOverride.trim();
+  if (!isAbsolute(trimmed)) {
+    const resolvedRel = resolve(outerDir, trimmed);
+    return contains(outerDir, resolvedRel) && existsSync(resolvedRel) ? trimmed : null;
+  }
+  return contains(outerDir, trimmed) ? null : trimmed;
+}
+
+function sanitizeDiscoveryStoreOverride(rawOverride, startDir, baseCwd = startDir) {
+  if (typeof rawOverride !== 'string' || !rawOverride.trim()) return null;
+  const trimmed = rawOverride.trim();
+  const resolvedStart = resolve(startDir);
+  const boundary = findInnermostCheckoutRoot(resolvedStart, {
+    storeOverride: null,
+    requireStore: false,
+    allowFileStart: true,
+    preserveSpelling: true,
+  });
+  const anchor = boundary ?? resolvedStart;
+  const anchorInfo = inspectGitCheckout(realpathDeepest(resolve(anchor)));
+  const anchorParent = dirname(resolve(anchor));
+  const enclosing =
+    anchorParent !== resolve(anchor)
+      ? findInnermostCheckoutRoot(anchorParent, {
+          storeOverride: null,
+          requireStore: true,
+          preserveSpelling: true,
+        })
+      : null;
+  if (isAbsolute(trimmed)) {
+    if (enclosing && contains(enclosing, trimmed) && !contains(anchor, trimmed)) {
+      return null;
+    }
+    if ((anchorInfo?.kind === 'worktree' || enclosing) && hasLocalDefaultTicketStore(anchor) && !contains(anchor, trimmed)) {
+      return null;
+    }
+    return trimmed;
+  }
+  const lexRel = relative('/anchor', resolve('/anchor', trimmed));
+  const escapesLexically =
+    lexRel === '..' || lexRel.startsWith('../') || lexRel.startsWith('..\\') || isAbsolute(lexRel);
+  if (escapesLexically) {
+    if (boundary && baseCwd) {
+      const resolvedBase = resolve(baseCwd);
+      if (contains(boundary, resolvedBase)) {
+        const fromBase = resolve(resolvedBase, trimmed);
+        if (contains(boundary, fromBase) && existsSync(fromBase)) {
+          return fromBase;
+        }
+      }
+    }
+    return null;
+  }
+  if (boundary) {
+    return contains(boundary, resolve(boundary, trimmed)) ? trimmed : null;
+  }
+  const atStart = resolve(resolvedStart, trimmed);
+  if (existsSync(atStart) && !contains(resolvedStart, atStart)) return null;
+  return trimmed;
+}
+
+export function envForCheckoutRoot(checkoutRoot, outerAnchor, env) {
+  if (!checkoutRoot || !env) return env;
+  const sameAsOuter =
+    !outerAnchor || realpathDeepest(resolve(checkoutRoot)) === realpathDeepest(resolve(outerAnchor));
+  const checkoutInfo = inspectGitCheckout(realpathDeepest(resolve(checkoutRoot)));
+  const parentDir = dirname(resolve(checkoutRoot));
+  const enclosingCheckout =
+    parentDir !== resolve(checkoutRoot)
+      ? findInnermostCheckoutRoot(parentDir, {
+          storeOverride: null,
+          requireStore: true,
+          preserveSpelling: true,
+        })
+      : null;
+  const isNestedWorktree = checkoutInfo?.kind === 'worktree' || enclosingCheckout !== null;
+  const localStorePresent = hasLocalDefaultTicketStore(checkoutRoot);
+  const next = { ...env };
+  if (sameAsOuter && !isNestedWorktree) {
+    for (const key of ['ADLC_TICKET_STORE', 'ADLC_TICKETS']) {
+      const val = next[key];
+      if (typeof val !== 'string' || !val.trim()) continue;
+      const trimmed = val.trim();
+      if (isAbsolute(trimmed)) continue;
+      if (!contains(checkoutRoot, resolve(checkoutRoot, trimmed)) && localStorePresent) {
+        delete next[key];
+      }
+    }
+    return next;
+  }
+  if (
+    !sameAsOuter &&
+    (!contains(outerAnchor, checkoutRoot) ||
+      existsSync(join(checkoutRoot, '.adlc', 'current-ticket.json')))
+  ) {
+    delete next.ADLC_TICKET;
+  }
+  for (const key of ['ADLC_TICKET_STORE', 'ADLC_TICKETS']) {
+    const val = next[key];
+    if (typeof val !== 'string' || !val.trim()) continue;
+    const trimmed = val.trim();
+    const resolvedRel = resolve(checkoutRoot, trimmed);
+    const keepRelative =
+      !isAbsolute(trimmed) && contains(checkoutRoot, resolvedRel) && existsSync(resolvedRel);
+    const outsideOuter =
+      (sameAsOuter || !contains(outerAnchor, trimmed)) &&
+      (!enclosingCheckout || !contains(enclosingCheckout, trimmed) || contains(checkoutRoot, trimmed));
+    const keepExternal =
+      isAbsolute(trimmed) &&
+      outsideOuter &&
+      !localStorePresent;
+    if (!keepRelative && !keepExternal) {
+      delete next[key];
+    }
+  }
+  return next;
+}
+
+export function resolveOwningInternal(payload, filePath, fallback, env = process.env) {
   const roots = candidateRoots(payload);
+  const rawStoreOverride = env?.ADLC_TICKET_STORE ?? env?.ADLC_TICKETS ?? null;
+  const cwdOnlyRoot = roots.length > 0 && !hasExplicitWorkspaceDeclaration(payload);
   const base = roots[0] ?? fallback ?? hostProjectRoot(env);
-  // Resolve the edited path to an ABSOLUTE path. A relative path with `..`
-  // traversal (e.g. `../backend/src/auth.js`) is resolved against the primary root
-  // the way the agent's cwd would, so it's attributed to the root it actually
-  // resolves into — not blindly to roots[0]. The absolute path is returned and used
-  // for the rail check: passing the ORIGINAL relative path plus the owning root to
-  // checkRail would make it `join(owningRoot, relativeToPrimary)` and mangle the
-  // path whenever the roots differ in depth/name (caught by Gemini round-19).
-  // With no base, a relative path has nothing to resolve against.
   const absFile = !filePath
     ? undefined
     : isAbsolute(filePath) ? resolve(filePath) : (base != null ? resolve(base, filePath) : undefined);
+  const climbIfCwdOnly = (chosen) => {
+    if (!cwdOnlyRoot || !chosen) return chosen;
+    const safeOverride = sanitizeDiscoveryStoreOverride(rawStoreOverride, chosen, chosen);
+    return findInnermostCheckoutRoot(chosen, { storeOverride: safeOverride, preserveSpelling: true }) ?? chosen;
+  };
   if (absFile) {
+    const upgradeWorktree = (chosen) => {
+      const climbed = climbIfCwdOnly(chosen);
+      return (
+        preferInnermostCheckout(climbed, [absFile], {
+          storeOverride: storeOverrideForNestedProbe(rawStoreOverride, climbed),
+          allowFileStart: true,
+          preserveSpelling: true,
+        }) ?? climbed
+      );
+    };
     const owning = roots
+      .map((raw) => climbIfCwdOnly(raw))
       .filter((raw) => contains(raw, absFile))
       .map((raw) => ({ raw, real: realpathDeepest(resolve(raw)) }))
       .sort((a, b) => b.real.length - a.real.length)[0];
-    if (owning) return { root: owning.raw, absFile };
-    // Neither payload-declared roots nor CURSOR_PROJECT_DIR silently claim an
-    // external target: a file outside every candidate workspace root stays
-    // unresolved unless the caller explicitly supplied `fallback`.
-    if (fallback == null && base != null && !contains(base, absFile)) return { root: null, absFile };
+    if (owning) return { root: upgradeWorktree(owning.raw), absFile, outerRoot: owning.raw };
+    const climbedBase = climbIfCwdOnly(base);
+    if (fallback == null && climbedBase != null && !contains(climbedBase, absFile)) return { root: null, absFile, outerRoot: null };
+    if (climbedBase != null) return { root: upgradeWorktree(climbedBase), absFile, outerRoot: climbedBase };
   }
-  return { root: base ?? null, absFile };
+  const climbedForBase = base != null ? climbIfCwdOnly(base) : null;
+  const resolvedBase = climbedForBase != null
+    ? (preferInnermostCheckout(climbedForBase, [payload?.cwd], {
+        storeOverride: storeOverrideForNestedProbe(rawStoreOverride, climbedForBase),
+        preserveSpelling: true,
+      }) ?? climbedForBase)
+    : null;
+  return { root: resolvedBase, absFile, outerRoot: climbedForBase };
+}
+
+export function resolveOwning(payload, filePath, fallback, env = process.env) {
+  const { root, absFile } = resolveOwningInternal(payload, filePath, fallback, env);
+  return { root, absFile };
 }
 
 /** Symlink-aware, boundary-aware containment of an absolute path in a root. */
@@ -286,10 +441,29 @@ export function decide(payload, { root, env = process.env } = {}) {
       // outcome — any 'deny' (conflict/corrupt) → deny; else any 'active' root → deny
       // (can't verify it against that root's frozen rails); else (all inactive) allow.
       const declared = candidateRoots(payload);
+      const rawStoreOverride = env?.ADLC_TICKET_STORE ?? env?.ADLC_TICKETS ?? null;
+      const cwdOnly = declared.length > 0 && !hasExplicitWorkspaceDeclaration(payload);
       const host = hostProjectRoot(env);
-      const roots = root != null ? [root] : declared.length ? declared : host != null ? [host] : [];
-      if (!roots.length) return unresolvedRootVerdict(tool, env);
-      const states = roots.map((r) => railPreconditions({ root: r, env }));
+      const rawRoots = root != null ? [root] : declared.length ? declared : host != null ? [host] : [];
+      if (!rawRoots.length) return unresolvedRootVerdict(tool, env);
+      const rootPairs = rawRoots.map((r) => {
+        const climbed =
+          root == null && cwdOnly
+            ? (findInnermostCheckoutRoot(r, {
+                storeOverride: sanitizeDiscoveryStoreOverride(rawStoreOverride, r, r),
+                preserveSpelling: true,
+              }) ?? r)
+            : r;
+        const chosen =
+          preferInnermostCheckout(climbed, [payload?.cwd], {
+            storeOverride: storeOverrideForNestedProbe(rawStoreOverride, climbed),
+            preserveSpelling: true,
+          }) ?? climbed;
+        return { root: chosen, outerRoot: climbed };
+      });
+      const states = rootPairs.map(({ root: r, outerRoot }) =>
+        railPreconditions({ root: r, env: envForCheckoutRoot(r, outerRoot, env) })
+      );
       const denied = states.find((s) => s.state === 'deny');
       if (denied) {
         return {
@@ -320,11 +494,12 @@ export function decide(payload, { root, env = process.env } = {}) {
     if (classifyTool(tool) === 'readonly') return { permission: 'allow' };
     const owners = filePaths.map((filePath) => ({
       filePath,
-      owned: root != null ? { root, absFile: undefined } : resolveOwning(payload, filePath, undefined, env),
+      owned: root != null ? { root, absFile: undefined, outerRoot: root } : resolveOwningInternal(payload, filePath, undefined, env),
     }));
     if (owners.some(({ owned }) => owned.root == null)) return unresolvedRootVerdict(tool, env);
     for (const { filePath, owned } of owners) {
-      const verdict = checkRail({ filePath: owned.absFile ?? filePath, tool, root: owned.root, env });
+      const targetEnv = envForCheckoutRoot(owned.root, owned.outerRoot, env);
+      const verdict = checkRail({ filePath: owned.absFile ?? filePath, tool, root: owned.root, env: targetEnv });
       if (verdict.decision === 'deny') {
         return {
           permission: 'deny',

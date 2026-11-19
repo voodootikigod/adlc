@@ -8,9 +8,17 @@
 // those pieces. index.ts is a typed shim around createExtension().
 
 import { readdirSync, statSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
+import {
+  classifyShellCommand,
+  extractAllToolWorkdirs,
+  hasConflictingToolWorkdirs,
+} from '@adlc/core';
 import {
   resolveActiveTicket,
+  resolveOwningCheckoutRoot,
+  envForSecondaryCheckout,
+  extractToolPaths,
   checkStructuredWrite,
   checkShellCommand,
   checkCustomTool,
@@ -243,7 +251,8 @@ export function createExtension({ env = process.env } = {}) {
       const mtime = (p) => {
         try { return statSync(isAbsolute(p) ? p : join(cwd, p)).mtimeMs; } catch { return 'absent'; }
       };
-      const configured = env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? '.adlc/tickets.json';
+      const cwdEnv = envForSecondaryCheckout(cwd, cwd, env, cwd);
+      const configured = cwdEnv.ADLC_TICKET_STORE ?? cwdEnv.ADLC_TICKETS ?? '.adlc/tickets.json';
       let storeStamp = mtime(configured);
       if (storeStamp === 'absent' && configured === '.adlc/tickets.json') {
         try {
@@ -255,11 +264,22 @@ export function createExtension({ env = process.env } = {}) {
           if (statSync(storePath).isDirectory()) storeStamp = readdirSync(storePath).sort().map((name) => `${name}:${mtime(join(storePath, name))}`).join(',');
         } catch {}
       }
-      return `${env.ADLC_TICKET ?? ''}|${mtime('.adlc/current-ticket.json')}|${storeStamp}`;
+      return `${cwdEnv.ADLC_TICKET ?? ''}|${mtime('.adlc/current-ticket.json')}|${storeStamp}`;
+    }
+
+    function resolveEffectiveRoot(cwd) {
+      if (!cwd) return activeCwd;
+      return (
+        resolveAdlcRoot(
+          cwd,
+          env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null,
+          handoffAdlcRoots
+        ) ?? cwd
+      );
     }
 
     function reload(cwd) {
-      activeCwd = cwd ?? activeCwd;
+      activeCwd = resolveEffectiveRoot(cwd);
       active = resolveActiveTicket(activeCwd, env);
       ticketStamp = stampTicketFiles(activeCwd);
       return active;
@@ -268,7 +288,7 @@ export function createExtension({ env = process.env } = {}) {
     // Live ticket lifecycle: a ticket activated or switched mid-session is
     // picked up on the next turn via a cheap mtime check.
     function maybeReload(cwd) {
-      const nextCwd = cwd ?? activeCwd;
+      const nextCwd = resolveEffectiveRoot(cwd);
       if (nextCwd !== activeCwd || stampTicketFiles(nextCwd) !== ticketStamp) reload(nextCwd);
     }
 
@@ -438,7 +458,7 @@ export function createExtension({ env = process.env } = {}) {
           sessionId: handoffSessionId,
           usage: handoffUsage(ctx),
           ticketId: active.ticketId ?? null,
-          root: activeCwd,
+          root: ctx?.cwd ?? activeCwd,
           manifestKey,
           sticky: handoffSticky,
           adlcRoots: handoffAdlcRoots,
@@ -461,60 +481,130 @@ export function createExtension({ env = process.env } = {}) {
           reason: `ADLC Locked: enforcement context failed to load for "${active.ticketId}". ${active.error ?? ''}`,
         };
       }
-      if (!active.ticket) return undefined;
+      let effectiveRoot = activeCwd;
+      let effectiveActive = active;
+      let secondaryShellTicketId = null;
+      if (!effectiveActive.ticket) {
+        const baseCallCwd = ctx?.cwd ?? activeCwd;
+        const explicitWorkdirs = extractAllToolWorkdirs(event.input).map((w) => resolve(baseCallCwd, w));
+        const probeBase = explicitWorkdirs[0] ?? baseCallCwd;
+        const rawProbes = [];
+        if (typeof event.input?.path === 'string' && event.input.path.trim()) {
+          rawProbes.push(resolve(probeBase, event.input.path.trim()));
+        }
+        rawProbes.push(...explicitWorkdirs);
+        if (event.toolName === 'bash' && typeof event.input?.command === 'string') {
+          for (const p of classifyShellCommand(event.input.command).paths) {
+            rawProbes.push(resolve(probeBase, p));
+          }
+        } else if (event.toolName !== 'write' && event.toolName !== 'edit' && event.toolName !== 'bash') {
+          for (const p of extractToolPaths(event.input, probeBase)) {
+            rawProbes.push(resolve(probeBase, p));
+          }
+        }
+        for (const rawProbe of rawProbes) {
+          const owning = resolveOwningCheckoutRoot(rawProbe, activeCwd, env);
+          if (!owning || owning === activeCwd) continue;
+          const owningActive = resolveActiveTicket(
+            owning,
+            envForSecondaryCheckout(owning, activeCwd, env)
+          );
+          if (owningActive.ticketId && (owningActive.error || !owningActive.ticket)) {
+            return {
+              block: true,
+              reason: `ADLC Locked: enforcement context failed to load for "${owningActive.ticketId}". ${owningActive.error ?? ''}`,
+            };
+          }
+          if (owningActive.ticket) {
+            if (event.toolName === 'bash' && explicitWorkdirs.length === 0) {
+              secondaryShellTicketId = owningActive.ticketId;
+            } else {
+              effectiveRoot = owning;
+              effectiveActive = owningActive;
+            }
+            break;
+          }
+        }
+      }
+      if (!effectiveActive.ticket && !secondaryShellTicketId) return undefined;
 
       if (event.toolName === 'write' || event.toolName === 'edit') {
         const filePath = event.input?.path;
         if (typeof filePath !== 'string' || filePath.trim() === '') {
           // A mutating tool whose target cannot be extracted fails CLOSED.
-          return { block: true, reason: `Blocked ${event.toolName}: no extractable target path (ticket ${active.ticketId})` };
+          return { block: true, reason: `Blocked ${event.toolName}: no extractable target path (ticket ${effectiveActive.ticketId})` };
         }
-        const verdict = checkStructuredWrite(filePath, active.ticket, activeCwd);
+        const resolvedFilePath = isAbsolute(filePath) ? filePath : resolve(ctx.cwd ?? effectiveRoot, filePath);
+        const verdict = checkStructuredWrite(resolvedFilePath, effectiveActive.ticket, effectiveRoot, { env });
         if (verdict.decision === 'deny') {
           ctx.ui.notify(`Blocked ${event.toolName}: ${verdict.reason}`, 'error');
           noteGate({ ctx, type: 'rail-deny', detail: { tool: event.toolName, path: filePath, reason: verdict.reason } });
-          return { block: true, reason: `Blocked ${event.toolName}: ${verdict.reason} (ticket ${active.ticketId})` };
+          return { block: true, reason: `Blocked ${event.toolName}: ${verdict.reason} (ticket ${effectiveActive.ticketId})` };
         }
+        const owningForBg = resolveOwningCheckoutRoot(resolvedFilePath, effectiveRoot, env);
+        const bgRoot = owningForBg ?? effectiveRoot;
+        const bgEnv = envForSecondaryCheckout(bgRoot, activeCwd, env);
+        const bgTicket =
+          bgRoot === effectiveRoot
+            ? effectiveActive.ticket
+            : resolveActiveTicket(bgRoot, bgEnv).ticket ?? effectiveActive.ticket;
         // Build-gate backstop (spec 2.1): a high-risk ticket in a degraded
         // context may not take structured mutations without an audited override.
         const gate = checkBuildGate({
-          ticket: active.ticket,
+          ticket: bgTicket,
           usage: safeUsage(ctx),
           compacted: fitness.isCompacted(),
-          env,
-          root: activeCwd,
+          env: bgEnv,
+          root: bgRoot,
         });
         if (gate.decision === 'deny') {
           ctx.ui.notify(`Build gate: ${gate.reason}`, 'error');
           noteGate({ ctx, type: 'build-gate-deny', detail: { tool: event.toolName, path: filePath, reason: gate.reason } });
-          return { block: true, reason: `Blocked ${event.toolName} by the ADLC build gate: ${gate.reason} (ticket ${active.ticketId})` };
+          return { block: true, reason: `Blocked ${event.toolName} by the ADLC build gate: ${gate.reason} (ticket ${effectiveActive.ticketId})` };
         }
         // Flail advisory (spec 2.2): never blocks.
         steerFlailAdvisories(filePath, ctx);
         // Snapshot the target so a post-write violation restores exactly this
         // state — never HEAD, never any other file.
-        rememberSnapshot(event.toolCallId, { kind: 'file', snap: snapshotFile(activeCwd, filePath) });
+        rememberSnapshot(event.toolCallId, { kind: 'file', snap: snapshotFile(bgRoot, resolvedFilePath) });
         return undefined;
       }
 
       if (event.toolName === 'bash') {
         const command = event.input?.command;
         if (typeof command !== 'string') {
-          return { block: true, reason: `Blocked bash: no extractable command (ticket ${active.ticketId})` };
+          return { block: true, reason: `Blocked bash: no extractable command (ticket ${effectiveActive.ticketId})` };
         }
-        const verdict = checkShellCommand(command, active.ticket, activeCwd);
+        const baseCallCwd = ctx.cwd ?? effectiveRoot;
+        if (hasConflictingToolWorkdirs(event.input, baseCallCwd)) {
+          const conflictReason = 'mutating shell command specifies conflicting working directories; target paths cannot be verified against the frozen rails';
+          ctx.ui.notify(`Blocked shell command: ${conflictReason}`, 'error');
+          noteGate({ ctx, type: 'shell-deny', detail: { reason: conflictReason } });
+          return { block: true, reason: `Blocked command: ${conflictReason} (ticket ${effectiveActive.ticketId})` };
+        }
+        const explicitWds = extractAllToolWorkdirs(event.input).map((w) => resolve(baseCallCwd, w));
+        const candidateWorkdirs =
+          effectiveRoot !== activeCwd && explicitWds.length > 0
+            ? explicitWds
+            : [baseCallCwd, ...explicitWds];
+        const reportingTicketId = effectiveActive.ticketId ?? secondaryShellTicketId;
+        const verdict = checkShellCommand(command, effectiveActive.ticket, effectiveRoot, {
+          workdir: candidateWorkdirs[candidateWorkdirs.length - 1],
+          workdirs: candidateWorkdirs,
+          env,
+        });
         if (verdict.decision === 'deny') {
           ctx.ui.notify(`Blocked shell command: ${verdict.reason}`, 'error');
           noteGate({ ctx, type: 'shell-deny', detail: { reason: verdict.reason } });
-          return { block: true, reason: `Blocked command: ${verdict.reason} (ticket ${active.ticketId})` };
+          return { block: true, reason: `Blocked command: ${verdict.reason} (ticket ${reportingTicketId})` };
         }
-        if (verdict.mutating) {
+        if (verdict.mutating && effectiveActive.ticket) {
           // Allowed transparent mutation: snapshot the rail set + dirty-file
           // stamps so the result gate inspects only what THIS call changed.
           try {
             const lsFiles = await git(['ls-files']);
             const status = await git(['status', '--porcelain']);
-            rememberSnapshot(event.toolCallId, snapshotForBash(activeCwd, active.ticket, lsFiles, status));
+            rememberSnapshot(event.toolCallId, snapshotForBash(effectiveRoot, effectiveActive.ticket, lsFiles, status));
           } catch {
             // Snapshot failure must not fail open silently at result time.
             rememberSnapshot(event.toolCallId, { kind: 'bash', railFiles: new Map(), preStamps: new Map(), degraded: true });
@@ -525,11 +615,14 @@ export function createExtension({ env = process.env } = {}) {
 
       // Third-party (custom) tool coverage (spec 2.5): rail-check extractable
       // targets; record no-target unknown tools as unvetted.
-      const custom = checkCustomTool(event.toolName, event.input, active.ticket, activeCwd);
+      const custom = checkCustomTool(event.toolName, event.input, effectiveActive.ticket, effectiveRoot, {
+        cwd: ctx.cwd ?? effectiveRoot,
+        env,
+      });
       if (custom.decision === 'deny') {
         ctx.ui.notify(`Blocked ${event.toolName}: ${custom.reason}`, 'error');
         noteGate({ ctx, type: 'custom-tool-deny', detail: { tool: event.toolName, reason: custom.reason } });
-        return { block: true, reason: `Blocked ${event.toolName}: ${custom.reason} (ticket ${active.ticketId})` };
+        return { block: true, reason: `Blocked ${event.toolName}: ${custom.reason} (ticket ${effectiveActive.ticketId})` };
       }
       if (custom.unvetted && !unvettedSeen.has(event.toolName)) {
         // Once per tool name per session — evidence, not noise.

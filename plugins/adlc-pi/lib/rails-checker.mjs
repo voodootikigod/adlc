@@ -9,8 +9,22 @@
 // — documented in docs/integrations/pi.md.
 
 import { existsSync } from 'node:fs';
-import { isAbsolute, join, relative } from 'node:path';
-import { loadTickets, globMatch, inScope, classifyShellCommand, resolveRailPath, TICKET_TRUST_ROOT_RAILS } from '@adlc/core';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import {
+  loadTickets,
+  globMatch,
+  inScope,
+  classifyShellCommand,
+  resolveRailPath,
+  TICKET_TRUST_ROOT_RAILS,
+  canonicalizePath as canonicalizeWorkspacePath,
+  extractAllToolWorkdirs,
+  findInnermostCheckoutRoot,
+  hasConflictingToolWorkdirs,
+  inspectGitCheckout,
+  isPathInside,
+  preferInnermostCheckout,
+} from '@adlc/core';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
 
 // The ticket file and the active-ticket pointer are the rail trust root: frozen
@@ -54,7 +68,8 @@ export function canonicalizePath(filePath, root) {
  *   ticketId + ticket        → enforce with this ticket
  *   ticketId + error string  → enforcement requested but broken → fail closed
  */
-export function resolveActiveTicket(root, env = process.env) {
+export function resolveActiveTicket(root, rawEnv = process.env) {
+  const env = envForSecondaryCheckout(root, root, rawEnv ?? {});
   // The pointer parse, the accepted keys, and the conflict rule come from the
   // canonical contract (generated from packages/tickets/lib/pointer.mjs); only the
   // {ticketId, ticket, error} shape below is pi-specific. A denial keeps this
@@ -96,9 +111,194 @@ export function railHit(filePath, ticket, root) {
   return null;
 }
 
-/** Is a path within the ticket's declared scope? Empty scope = unrestricted. */
+function hasLocalDefaultStore(dir) {
+  return (
+    existsSync(join(dir, '.adlc', 'tickets', '.store.json')) ||
+    existsSync(join(dir, '.adlc', 'tickets.json'))
+  );
+}
+
+export function sanitizeDiscoveryStoreOverride(rawOverride, startDir, baseCwd = startDir) {
+  if (typeof rawOverride !== 'string' || !rawOverride.trim()) return null;
+  const trimmed = rawOverride.trim();
+  const resolvedStart = resolve(startDir);
+  const boundary = findInnermostCheckoutRoot(resolvedStart, {
+    storeOverride: null,
+    requireStore: false,
+    allowFileStart: true,
+    preserveSpelling: true,
+  });
+  const anchor = boundary ?? resolvedStart;
+  const anchorInfo = inspectGitCheckout(canonicalizeWorkspacePath(anchor));
+  const anchorParent = dirname(resolve(anchor));
+  const enclosing =
+    anchorParent !== resolve(anchor)
+      ? findInnermostCheckoutRoot(anchorParent, {
+          storeOverride: null,
+          requireStore: true,
+          preserveSpelling: true,
+        })
+      : null;
+  if (isAbsolute(trimmed)) {
+    if (enclosing && isPathInside(trimmed, enclosing) && !isPathInside(trimmed, anchor)) {
+      return null;
+    }
+    if ((anchorInfo?.kind === 'worktree' || enclosing) && hasLocalDefaultStore(anchor) && !isPathInside(trimmed, anchor)) {
+      return null;
+    }
+    return trimmed;
+  }
+  const lexRel = relative('/anchor', resolve('/anchor', trimmed));
+  const escapesLexically =
+    lexRel === '..' || lexRel.startsWith('../') || lexRel.startsWith('..\\') || isAbsolute(lexRel);
+  if (escapesLexically) {
+    if (boundary && baseCwd) {
+      const resolvedBase = resolve(baseCwd);
+      if (isPathInside(resolvedBase, boundary)) {
+        const fromBase = resolve(resolvedBase, trimmed);
+        if (isPathInside(fromBase, boundary) && existsSync(fromBase)) {
+          return fromBase;
+        }
+      }
+    }
+    return null;
+  }
+  if (boundary) {
+    return isPathInside(resolve(boundary, trimmed), boundary) ? trimmed : null;
+  }
+  const atStart = resolve(resolvedStart, trimmed);
+  if (existsSync(atStart) && !isPathInside(atStart, resolvedStart)) return null;
+  return trimmed;
+}
+
+export function envForSecondaryCheckout(checkoutRoot, primaryRoot, env = process.env, baseCwd = null) {
+  if (!checkoutRoot || !env) return env;
+  const sameAsPrimary =
+    !primaryRoot ||
+    canonicalizeWorkspacePath(resolve(checkoutRoot)) === canonicalizeWorkspacePath(resolve(primaryRoot));
+  const checkoutInfo = inspectGitCheckout(canonicalizeWorkspacePath(resolve(checkoutRoot)));
+  const parentDir = dirname(resolve(checkoutRoot));
+  const enclosingCheckout =
+    parentDir !== resolve(checkoutRoot)
+      ? findInnermostCheckoutRoot(parentDir, {
+          storeOverride: null,
+          requireStore: true,
+          preserveSpelling: true,
+        })
+      : null;
+  const isNestedWorktree = checkoutInfo?.kind === 'worktree' || enclosingCheckout !== null;
+  const localStorePresent = hasLocalDefaultStore(checkoutRoot);
+  const next = { ...env };
+  if (sameAsPrimary && !isNestedWorktree) {
+    for (const key of ['ADLC_TICKET_STORE', 'ADLC_TICKETS']) {
+      const val = next[key];
+      if (typeof val !== 'string' || !val.trim()) continue;
+      const trimmed = val.trim();
+      if (isAbsolute(trimmed)) continue;
+      const fromCheckout = resolve(checkoutRoot, trimmed);
+      if (isPathInside(fromCheckout, checkoutRoot)) {
+        if (
+          !existsSync(fromCheckout) &&
+          baseCwd &&
+          isPathInside(resolve(baseCwd), checkoutRoot) &&
+          isPathInside(resolve(baseCwd, trimmed), checkoutRoot) &&
+          existsSync(resolve(baseCwd, trimmed))
+        ) {
+          next[key] = resolve(baseCwd, trimmed);
+        }
+        continue;
+      }
+      if (
+        baseCwd &&
+        isPathInside(resolve(baseCwd), checkoutRoot) &&
+        isPathInside(resolve(baseCwd, trimmed), checkoutRoot) &&
+        existsSync(resolve(baseCwd, trimmed))
+      ) {
+        next[key] = resolve(baseCwd, trimmed);
+      } else if (localStorePresent) {
+        delete next[key];
+      }
+    }
+    return next;
+  }
+  if (
+    !sameAsPrimary &&
+    (!isPathInside(checkoutRoot, primaryRoot) ||
+      existsSync(join(checkoutRoot, '.adlc', 'current-ticket.json')))
+  ) {
+    delete next.ADLC_TICKET;
+  }
+  for (const key of ['ADLC_TICKET_STORE', 'ADLC_TICKETS']) {
+    const val = next[key];
+    if (typeof val !== 'string' || !val.trim()) continue;
+    const trimmed = val.trim();
+    const resolvedRel = resolve(checkoutRoot, trimmed);
+    const keepRelative =
+      !isAbsolute(trimmed) && isPathInside(resolvedRel, checkoutRoot) && existsSync(resolvedRel);
+    const fromBaseCwd =
+      sameAsPrimary &&
+      baseCwd &&
+      !isAbsolute(trimmed) &&
+      isPathInside(resolve(baseCwd), checkoutRoot) &&
+      isPathInside(resolve(baseCwd, trimmed), checkoutRoot) &&
+      existsSync(resolve(baseCwd, trimmed))
+        ? resolve(baseCwd, trimmed)
+        : null;
+    if (fromBaseCwd) {
+      next[key] = fromBaseCwd;
+      continue;
+    }
+    const outsideOuter =
+      (sameAsPrimary || !isPathInside(trimmed, primaryRoot)) &&
+      (!enclosingCheckout || !isPathInside(trimmed, enclosingCheckout) || isPathInside(trimmed, checkoutRoot));
+    const keepExternal =
+      isAbsolute(trimmed) &&
+      outsideOuter &&
+      !localStorePresent;
+    if (!keepRelative && !keepExternal) {
+      delete next[key];
+    }
+  }
+  return next;
+}
+
+export function resolveOwningCheckoutRoot(absTarget, primaryRoot, env = process.env) {
+  const storeOverride = env?.ADLC_TICKET_STORE ?? env?.ADLC_TICKETS ?? null;
+  if (isPathInside(absTarget, primaryRoot)) {
+    const innerOverride =
+      storeOverride &&
+      ((!isAbsolute(storeOverride) &&
+        (!isPathInside(resolve(primaryRoot, storeOverride), primaryRoot) ||
+          !existsSync(resolve(primaryRoot, storeOverride)))) ||
+        (isAbsolute(storeOverride) && isPathInside(storeOverride, primaryRoot)))
+        ? null
+        : storeOverride;
+    return (
+      preferInnermostCheckout(primaryRoot, [absTarget], {
+        storeOverride: innerOverride,
+        allowFileStart: true,
+        preserveSpelling: true,
+      }) ?? primaryRoot
+    );
+  }
+  const foreignStoreOverride =
+    storeOverride && isAbsolute(storeOverride) && !isPathInside(storeOverride, primaryRoot)
+      ? storeOverride
+      : null;
+  return findInnermostCheckoutRoot(absTarget, {
+    storeOverride: foreignStoreOverride,
+    allowFileStart: true,
+    requireStore: true,
+    preserveSpelling: true,
+  });
+}
+
+/** Is a path within the ticket's declared scope? Empty scope = unrestricted within root. */
 export function pathInScope(filePath, ticket, root) {
+  const absTarget = isAbsolute(filePath) ? resolve(filePath) : resolve(root, filePath);
+  if (!isPathInside(absTarget, root)) return false;
   const canonical = canonicalizePath(filePath, root);
+  if (canonical === '..' || canonical.startsWith('../') || isAbsolute(canonical)) return false;
   // The trust roots are NEVER in scope for agent modification.
   if (TRUST_ROOT_RAILS.some((trustRoot) => globMatch(trustRoot, canonical))) return false;
   if (!ticket?.scope || ticket.scope.length === 0) return true;
@@ -111,7 +311,33 @@ export function pathInScope(filePath, ticket, root) {
  * Decision for a structured file mutation (pi `write`/`edit` — input.path per
  * the pinned v0.80.3 tool schemas). Rails first (symlink-aware), then scope.
  */
-export function checkStructuredWrite(filePath, ticket, root) {
+export function checkStructuredWrite(filePath, ticket, root, { env = process.env } = {}) {
+  const absTarget = isAbsolute(filePath) ? resolve(filePath) : resolve(root, filePath);
+  const owning = resolveOwningCheckoutRoot(absTarget, root, env);
+  if (
+    owning &&
+    canonicalizeWorkspacePath(resolve(owning)) !== canonicalizeWorkspacePath(resolve(root))
+  ) {
+    const owningActive = resolveActiveTicket(owning, envForSecondaryCheckout(owning, root, env));
+    if (owningActive.error) {
+      return { decision: 'deny', reason: owningActive.error };
+    }
+    if (owningActive.ticket) {
+      const foreignHit = railHit(absTarget, owningActive.ticket, owning);
+      if (foreignHit) {
+        return { decision: 'deny', reason: `"${filePath}" matches frozen rail "${foreignHit}"` };
+      }
+      if (!pathInScope(absTarget, owningActive.ticket, owning)) {
+        return { decision: 'deny', reason: `"${filePath}" is out of the ticket's declared scope` };
+      }
+      if (isPathInside(owning, root) || !ticket) {
+        return { decision: 'allow', reason: 'target is neither a frozen rail nor out of scope' };
+      }
+    }
+  }
+  if (!ticket) {
+    return { decision: 'allow', reason: 'target is neither a frozen rail nor out of scope' };
+  }
   const hit = railHit(filePath, ticket, root);
   if (hit) {
     return { decision: 'deny', reason: `"${filePath}" matches frozen rail "${hit}"` };
@@ -146,7 +372,7 @@ export function isSafeBranchCreation(command) {
  *   mutation with no literal targets        → deny (fail closed)
  *   literal targets                         → deny only on a frozen-rail hit
  */
-export function checkShellCommand(command, ticket, root) {
+export function checkShellCommand(command, ticket, root, { workdir = null, workdirs = null, env = process.env } = {}) {
   if (isSafeBranchCreation(command)) {
     return { decision: 'allow', mutating: false, reason: 'pure branch creation cannot touch a rail' };
   }
@@ -165,7 +391,19 @@ export function checkShellCommand(command, ticket, root) {
   if (c.opaque) {
     return { decision: 'deny', mutating: true, reason: 'mutating shell command uses an opaque form (git apply/checkout/patch/tar…); use a structured edit tool or a literal path-transparent mutation' };
   }
-  if (c.changesCwd) {
+  const canonicalRoot = canonicalizeWorkspacePath(resolve(root));
+  const candidateDirs = Array.isArray(workdirs)
+    ? workdirs
+    : typeof workdir === 'string' && workdir.trim() !== ''
+      ? [workdir]
+      : [];
+  const movesWorkdir = candidateDirs.some(
+    (w) =>
+      typeof w === 'string' &&
+      w.trim() !== '' &&
+      canonicalizeWorkspacePath(resolve(root, w.trim())) !== canonicalRoot
+  );
+  if (c.changesCwd || movesWorkdir) {
     return { decision: 'deny', mutating: true, reason: 'mutating shell command changes cwd; target paths cannot be verified against the frozen rails' };
   }
   if (c.expands) {
@@ -175,9 +413,37 @@ export function checkShellCommand(command, ticket, root) {
     return { decision: 'deny', mutating: true, reason: 'mutating shell command carries no literal target paths — failing closed while a ticket is active' };
   }
   for (const target of c.paths) {
-    const hit = railHit(target, ticket, root);
-    if (hit) {
-      return { decision: 'deny', mutating: true, reason: `shell mutation targets frozen rail "${hit}"` };
+    const absTarget = isAbsolute(target) ? resolve(target) : resolve(root, target);
+    if (absTarget !== '/dev/null') {
+      const owning = resolveOwningCheckoutRoot(absTarget, root, env);
+      if (owning && canonicalizeWorkspacePath(resolve(owning)) !== canonicalRoot) {
+        const owningActive = resolveActiveTicket(owning, envForSecondaryCheckout(owning, root, env));
+        if (owningActive.error) {
+          return { decision: 'deny', mutating: true, reason: owningActive.error };
+        }
+        if (owningActive.ticket) {
+          const secondaryHit = railHit(absTarget, owningActive.ticket, owning);
+          if (secondaryHit) {
+            return { decision: 'deny', mutating: true, reason: `shell mutation targets frozen rail "${secondaryHit}"` };
+          }
+          if (isPathInside(owning, root) || !ticket) {
+            continue;
+          }
+        }
+      }
+      if (ticket && !isPathInside(absTarget, root)) {
+        return {
+          decision: 'deny',
+          mutating: true,
+          reason: `shell mutation target "${target}" resolves outside the repository root; target paths cannot be verified against the frozen rails`,
+        };
+      }
+    }
+    if (ticket) {
+      const hit = railHit(target, ticket, root);
+      if (hit) {
+        return { decision: 'deny', mutating: true, reason: `shell mutation targets frozen rail "${hit}"` };
+      }
     }
   }
   return { decision: 'allow', mutating: true, reason: 'shell mutation targets no frozen rail' };
@@ -226,19 +492,56 @@ export function extractToolPaths(input, root, depth = 0) {
  * gate — for anything this extraction cannot see (deeper nesting, spoofed
  * read-only names), the CI rails-guard diff gate is the backstop.
  */
-export function checkCustomTool(toolName, input, ticket, root) {
+export function checkCustomTool(toolName, input, ticket, root, { cwd = root, env = process.env } = {}) {
   const name = String(toolName ?? '').toLowerCase();
   if (READONLY_TOOLS.includes(name)) {
     return { decision: 'allow', reason: 'known read-only tool' };
   }
-  const paths = extractToolPaths(input, root);
+  const baseCwd = typeof cwd === 'string' && cwd.trim() !== '' ? cwd : root;
+  if (hasConflictingToolWorkdirs(input, baseCwd)) {
+    return {
+      decision: 'deny',
+      reason: `custom tool "${toolName}" specifies conflicting working directories`,
+    };
+  }
+  const explicitWorkdirs = extractAllToolWorkdirs(input);
+  const effectiveCwd = explicitWorkdirs.length > 0 ? resolve(baseCwd, explicitWorkdirs[0]) : baseCwd;
+  const paths = new Set([
+    ...extractToolPaths(input, root),
+    ...(effectiveCwd !== root
+      ? extractToolPaths(input, effectiveCwd).map((p) => (isAbsolute(p) ? p : resolve(effectiveCwd, p)))
+      : []),
+  ]);
   for (const path of paths) {
-    const hit = railHit(path, ticket, root);
-    if (hit) {
-      return { decision: 'deny', reason: `custom tool "${toolName}" targets frozen rail "${hit}" via "${path}"` };
+    const absPath = isAbsolute(path) ? resolve(path) : resolve(effectiveCwd, path);
+    const owning = resolveOwningCheckoutRoot(absPath, root, env);
+    if (
+      owning &&
+      canonicalizeWorkspacePath(resolve(owning)) !== canonicalizeWorkspacePath(resolve(root))
+    ) {
+      const owningActive = resolveActiveTicket(owning, envForSecondaryCheckout(owning, root, env));
+      if (owningActive.error) return { decision: 'deny', reason: owningActive.error };
+      if (owningActive.ticket) {
+        const foreignHit = railHit(absPath, owningActive.ticket, owning);
+        if (foreignHit) {
+          return { decision: 'deny', reason: `custom tool "${toolName}" targets frozen rail "${foreignHit}" via "${path}"` };
+        }
+      }
+    }
+    if (ticket) {
+      if (!isPathInside(absPath, root)) {
+        return {
+          decision: 'deny',
+          reason: `custom tool "${toolName}" targets path outside repository root via "${path}"`,
+        };
+      }
+      const hit = railHit(path, ticket, root) ?? railHit(absPath, ticket, root);
+      if (hit) {
+        return { decision: 'deny', reason: `custom tool "${toolName}" targets frozen rail "${hit}" via "${path}"` };
+      }
     }
   }
-  if (paths.length === 0) {
+  if (paths.size === 0) {
     return { decision: 'allow', reason: 'no extractable file target', unvetted: true };
   }
   return { decision: 'allow', reason: 'targets hit no frozen rail' };
