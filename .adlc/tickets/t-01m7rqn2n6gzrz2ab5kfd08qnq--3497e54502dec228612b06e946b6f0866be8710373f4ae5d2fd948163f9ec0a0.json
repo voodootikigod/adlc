@@ -1,0 +1,26 @@
+{
+  "body": "Complete repo-wide workspace/worktree root resolution (Part 2 of PR #1403) across adlc-claude-code, adlc-codex, adlc-copilot, adlc-cursor, adlc-opencode, and adlc-pi:\n1. scripts/ticket-readers/generate.mjs + scripts/test/ticket-reader-generation.test.mjs: emit generated-workspace-root.mjs for self-contained hook harnesses (adlc-claude-code, adlc-codex, adlc-copilot) and assert byte-for-byte identity against packages/core/lib/workspace-root.mjs.\n2. plugins/adlc-claude-code, plugins/adlc-codex, plugins/adlc-copilot: resolve nested .worktrees/* checkouts and per-call tool workdir / shell cd prefixes ahead of outer workspace roots, scrub outer workdir keys on shell-prefix sub-evaluations, and guard conflicting multi-target worktrees.\n3. plugins/adlc-cursor, plugins/adlc-opencode, plugins/adlc-pi: import canonical workspace-root helpers from @adlc/core directly, prefer nested worktrees and owning checkouts in rails-checker, preflight, shell-advisory, stop, handoff-gate, and extension hooks, and add cwd-and-worktree regression tests across all six harnesses.",
+  "edges": [],
+  "id": "T-01M7RQN2N6GZRZ2AB5KFD08QNQ",
+  "rails": [
+    "packages/core/lib/workspace-root.mjs",
+    "plugins/adlc-gemini/hooks/**",
+    "plugins/adlc-gemini/rails-checker.mjs"
+  ],
+  "scope": [
+    "plugins/adlc-claude-code/hooks/**",
+    "plugins/adlc-codex/hooks/**",
+    "plugins/adlc-copilot/hooks/**",
+    "plugins/adlc-cursor/hooks/**",
+    "plugins/adlc-cursor/rails-checker.mjs",
+    "plugins/adlc-cursor/test/**",
+    "plugins/adlc-opencode/index.mjs",
+    "plugins/adlc-opencode/rails-checker.mjs",
+    "plugins/adlc-opencode/test/**",
+    "plugins/adlc-pi/lib/**",
+    "plugins/adlc-pi/test/**",
+    "scripts/ticket-readers/generate.mjs",
+    "scripts/test/ticket-reader-generation.test.mjs"
+  ],
+  "title": "Unify workspace/worktree root and per-tool CWD resolution across remaining 6 harness plugins (Part 2)"
+}

@@ -487,6 +487,7 @@ test('a hostile project package cannot read the manifest key from the SessionSta
     'generated-ticket-reader.mjs',
     'generated-glob-match.mjs',
     'generated-trusted-binary.mjs',
+    'generated-workspace-root.mjs',
   ]) {
     writeFileSync(join(hooks, f), readFileSync(join(HOOKS_DIR, f), 'utf8'));
   }

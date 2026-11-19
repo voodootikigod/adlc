@@ -73,6 +73,7 @@ import { homedir, tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { loadTicketStoreReadOnly, ticketStoreExists } from './generated-ticket-reader.mjs';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
+import { findInnermostCheckoutRoot, inspectGitCheckout, preferInnermostCheckout } from './generated-workspace-root.mjs';
 import {
   resolveTrustedBinary,
   ownershipRejection,
@@ -127,6 +128,113 @@ function isInside(child, parent) {
 // against this, not the walked-up cwd, or `secret.js` from `src/` would resolve
 // to repo-root `secret.js` and dodge the `src/**` rail.
 let baseDir = null;
+let initialOuterDir = null;
+let initialProcessCwd = null;
+
+function hasLocalDefaultTicketStore(dir) {
+  return (
+    existsSync(join(dir, '.adlc', 'tickets', '.store.json')) ||
+    existsSync(join(dir, '.adlc', 'tickets.json'))
+  );
+}
+
+function storeOverrideForNestedProbe(rawOverride, outerDir) {
+  if (!rawOverride || typeof rawOverride !== 'string' || !rawOverride.trim()) return null;
+  const trimmed = rawOverride.trim();
+  if (!isAbsolute(trimmed)) {
+    const resolvedRel = resolve(outerDir, trimmed);
+    return isInside(resolvedRel, outerDir) && existsSync(resolvedRel) ? trimmed : null;
+  }
+  return isInside(trimmed, outerDir) ? null : trimmed;
+}
+
+function envForCheckoutRoot(checkoutRoot, outerAnchor = initialOuterDir) {
+  const realCheckout = realOrSelf(checkoutRoot);
+  const realOuter = outerAnchor ? realOrSelf(outerAnchor) : realCheckout;
+  const sameAsOuter = realCheckout === realOuter;
+  const homeDir = realOrSelf(process.env.HOME || homedir());
+  const checkoutInfo = inspectGitCheckout(realCheckout);
+  const parentDir = dirname(resolve(checkoutRoot));
+  const enclosingCheckout =
+    parentDir !== resolve(checkoutRoot)
+      ? findInnermostCheckoutRoot(parentDir, {
+          storeOverride: null,
+          homeDir,
+          requireStore: true,
+          preserveSpelling: true,
+        })
+      : null;
+  const isNestedWorktree = checkoutInfo?.kind === 'worktree' || enclosingCheckout !== null;
+  const localStorePresent = hasLocalDefaultTicketStore(checkoutRoot);
+  const next = { ...process.env };
+  if (sameAsOuter && !isNestedWorktree) {
+    for (const key of ['ADLC_TICKET_STORE', 'ADLC_TICKETS']) {
+      const val = next[key];
+      if (typeof val !== 'string' || !val.trim()) continue;
+      const trimmed = val.trim();
+      if (isAbsolute(trimmed)) continue;
+      const fromCheckout = resolve(checkoutRoot, trimmed);
+      if (isInside(fromCheckout, realCheckout)) {
+        if (
+          !existsSync(fromCheckout) &&
+          initialProcessCwd &&
+          isInside(initialProcessCwd, realCheckout) &&
+          isInside(resolve(initialProcessCwd, trimmed), realCheckout) &&
+          existsSync(resolve(initialProcessCwd, trimmed))
+        ) {
+          next[key] = resolve(initialProcessCwd, trimmed);
+        }
+        continue;
+      }
+      if (
+        initialProcessCwd &&
+        isInside(initialProcessCwd, realCheckout) &&
+        isInside(resolve(initialProcessCwd, trimmed), realCheckout) &&
+        existsSync(resolve(initialProcessCwd, trimmed))
+      ) {
+        next[key] = resolve(initialProcessCwd, trimmed);
+      } else {
+        delete next[key];
+      }
+    }
+    return next;
+  }
+  if (!sameAsOuter && (!isInside(realCheckout, realOuter) || existsSync(join(checkoutRoot, '.adlc', 'current-ticket.json')))) {
+    delete next.ADLC_TICKET;
+  }
+  for (const key of ['ADLC_TICKET_STORE', 'ADLC_TICKETS']) {
+    const val = next[key];
+    if (typeof val !== 'string' || !val.trim()) continue;
+    const trimmed = val.trim();
+    const resolvedRel = resolve(checkoutRoot, trimmed);
+    const keepRelative =
+      !isAbsolute(trimmed) && isInside(resolvedRel, realCheckout) && existsSync(resolvedRel);
+    const fromBaseCwd =
+      sameAsOuter &&
+      initialProcessCwd &&
+      !isAbsolute(trimmed) &&
+      isInside(initialProcessCwd, realCheckout) &&
+      isInside(resolve(initialProcessCwd, trimmed), realCheckout) &&
+      existsSync(resolve(initialProcessCwd, trimmed))
+        ? resolve(initialProcessCwd, trimmed)
+        : null;
+    if (fromBaseCwd) {
+      next[key] = fromBaseCwd;
+      continue;
+    }
+    const outsideOuter =
+      (sameAsOuter || !isInside(trimmed, realOuter)) &&
+      (!enclosingCheckout || !isInside(trimmed, enclosingCheckout) || isInside(trimmed, realCheckout));
+    const keepExternal =
+      isAbsolute(trimmed) &&
+      outsideOuter &&
+      !localStorePresent;
+    if (!keepRelative && !keepExternal) {
+      delete next[key];
+    }
+  }
+  return next;
+}
 
 // Round-5 review: the top-level crash handler (below, wrapping `await main()`)
 // cannot see `main()`'s local `input`, so an unexpected error before/around
@@ -199,11 +307,17 @@ const ADLC_CLI_TIMEOUT_MS = 5000;
  * the calls that sign or verify the manifest. Returns null when no trusted adlc
  * exists or it could not be started; untrustedBinaryReason tells those apart.
  */
-function runAdlc(args, { keyed = false } = {}) {
+function runAdlc(args, { keyed = false, cwd = undefined } = {}) {
   const candidate = resolveTrustedBinary('adlc', process.env.PATH);
   if (!candidate) return null;
   const env = keyed ? process.env : withoutHookSecrets(process.env);
-  const options = { encoding: 'utf8', timeout: ADLC_CLI_TIMEOUT_MS, killSignal: 'SIGKILL', env };
+  const options = {
+    encoding: 'utf8',
+    timeout: ADLC_CLI_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+    env,
+    ...(cwd ? { cwd } : {}),
+  };
   const script = nodeScriptPath(candidate);
   const r = script
     ? spawnSync(process.execPath, [script, ...args], options)
@@ -282,10 +396,38 @@ async function main() {
   // (`input.cwd`), captured BEFORE any chdir. It must NOT be CLAUDE_PROJECT_DIR:
   // the tool may run in a subdir while CLAUDE_PROJECT_DIR points at the repo root,
   // and `file_path: "secret.js"` is relative to the tool's cwd, not the root.
+  initialProcessCwd = process.cwd();
   baseDir = typeof input.cwd === 'string' && input.cwd.length > 0 ? resolve(input.cwd) : process.cwd();
 
   // Operate in the project root so the tools resolve `.adlc/` correctly.
-  const dir = process.env.CLAUDE_PROJECT_DIR || input.cwd || process.cwd();
+  // When CLAUDE_PROJECT_DIR points at an outer checkout while `input.cwd` (or an
+  // edited target path) sits inside a verified nested linked git worktree
+  // (`<repo>/.worktrees/<lane>`), upgrade to that worktree so rail globs and
+  // ticket lookups bind to the worktree rather than the outer `.worktrees/` prefix.
+  const storeOverrideForRoot = process.env.ADLC_TICKET_STORE || process.env.ADLC_TICKETS || null;
+  const homeDirForRoot = realOrSelf(process.env.HOME || homedir());
+  const rawTargetCandidates = targetFilePaths(input)
+    .filter((p) => typeof p === 'string' && p.trim().length > 0)
+    .map((p) => resolve(baseDir, p.trim()));
+  const rawProjectDir = process.env.CLAUDE_PROJECT_DIR || input.cwd || process.cwd();
+  initialOuterDir = resolve(rawProjectDir);
+  const dir = (() => {
+    if (!process.env.CLAUDE_PROJECT_DIR) return rawProjectDir;
+    const preferOpts = {
+      storeOverride: storeOverrideForNestedProbe(storeOverrideForRoot, process.env.CLAUDE_PROJECT_DIR),
+      homeDir: homeDirForRoot,
+      allowFileStart: true,
+      preserveSpelling: true,
+    };
+    if (rawTargetCandidates.length === 0) {
+      return preferInnermostCheckout(process.env.CLAUDE_PROJECT_DIR, [input.cwd], preferOpts);
+    }
+    const perTargetRoots = rawTargetCandidates.map((cand) =>
+      preferInnermostCheckout(process.env.CLAUDE_PROJECT_DIR, [cand], preferOpts)
+    );
+    const uniqueTargetRoots = [...new Set(perTargetRoots.filter(Boolean))];
+    return uniqueTargetRoots.length === 1 ? uniqueTargetRoots[0] : process.env.CLAUDE_PROJECT_DIR;
+  })();
   try {
     process.chdir(dir);
   } catch {
@@ -341,29 +483,50 @@ async function main() {
   const startDir = realOrSelf(process.cwd());
   let adlcRoot = null;
   let gitRoot = null;
+  let adlcGitRoot = null;
   for (let cur = process.cwd(), i = 0; i < 256; i++) {
     const real = realOrSelf(cur);
     const atHome = real === homeDir;
-    const examine = !atHome || real === startDir || existsSync(join(cur, '.git'));
+      const hasDotGit = existsSync(join(cur, '.git'));
+    const examine = !atHome || real === startDir || hasDotGit;
     if (examine) {
-      if (gitRoot === null && existsSync(join(cur, '.git'))) gitRoot = cur;
-      if (adlcRoot === null && ticketStoreExists(cur, process.env)) adlcRoot = cur;
+      const curEnv = envForCheckoutRoot(cur, cur);
+      if (gitRoot === null && hasDotGit) gitRoot = cur;
+      if (hasDotGit && !atHome && ticketStoreExists(cur, curEnv)) adlcGitRoot = cur;
+      if (adlcRoot === null && ticketStoreExists(cur, curEnv)) adlcRoot = cur;
+      if (inspectGitCheckout(real)?.kind === 'worktree') break; // verified linked worktree boundary
     }
     const parent = dirname(cur);
     if (parent === cur || atHome) break; // filesystem root, or never ascend above $HOME
     cur = parent;
   }
-  // Prefer the store at the git root; else the nearest-ancestor ADLC root — but
-  // NEVER one that sits OUTSIDE the enclosing git repo. The fallback previously
-  // applied even when a gitRoot was found, so a store in any ancestor above a
-  // non-ADLC repo (`~/work/.adlc` over `~/work/my-repo`) captured that repo and
-  // chdir'd out of it. That is the same escape the $HOME guard blocks, one level
-  // down, and it contradicted this walk's own contract ("only fall back … when
-  // there is no enclosing git repo"). A store at or BELOW the git root is still
-  // honored, so a package-level store in a monorepo keeps working.
-  const root = gitRoot && ticketStoreExists(gitRoot, process.env)
-    ? gitRoot
-    : (adlcRoot && (!gitRoot || isInside(adlcRoot, gitRoot)) ? adlcRoot : null);
+  // Prefer an enclosing git checkout that actually owns an ADLC ticket store
+  // (`adlcGitRoot`, so a forged subdirectory `.git` inside an ADLC repo can never
+  // hide the enclosing repo's store); else the store at the git root; else the
+  // nearest-ancestor ADLC root — but NEVER one that sits OUTSIDE an enclosing
+  // non-ADLC git repo.
+  const walkedRoot = adlcGitRoot
+    ? adlcGitRoot
+    : gitRoot && ticketStoreExists(gitRoot, envForCheckoutRoot(gitRoot, gitRoot))
+      ? gitRoot
+      : (adlcRoot && (!gitRoot || isInside(adlcRoot, gitRoot)) ? adlcRoot : null);
+  if (walkedRoot && !process.env.CLAUDE_PROJECT_DIR) {
+    initialOuterDir = walkedRoot;
+  }
+  const root = (() => {
+    if (!walkedRoot || rawTargetCandidates.length === 0) return walkedRoot;
+    const preferOpts = {
+      storeOverride: storeOverrideForNestedProbe(storeOverrideForRoot, walkedRoot),
+      homeDir: homeDirForRoot,
+      allowFileStart: true,
+      preserveSpelling: true,
+    };
+    const perTarget = rawTargetCandidates.map((cand) =>
+      preferInnermostCheckout(walkedRoot, [cand], preferOpts)
+    );
+    const unique = [...new Set(perTarget.filter(Boolean))];
+    return unique.length === 1 ? unique[0] : walkedRoot;
+  })();
   if (root) {
     try {
       process.chdir(root);
@@ -1131,14 +1294,14 @@ function denyRail(reason) {
  * the record was durably written (adlc present and `gate-manifest record` exited
  * 0). A bypass without a successful audit is not a valid override.
  */
-function recordBypass(relPath, why) {
+function recordBypass(relPath, why, { cwd = undefined } = {}) {
   const r = runAdlc([
     'gate-manifest',
     'record',
     'rails-bypass',
     '--data',
     JSON.stringify({ path: relPath, reason: why }),
-  ], { keyed: true });
+  ], { keyed: true, cwd });
   return !!r && r.status === 0;
 }
 
@@ -1168,12 +1331,6 @@ function recordBypass(relPath, why) {
 // gap — declare rails with literal directory prefixes for symlink resolution to
 // apply; the CI gate remains the commit-time backstop.
 function rails(input) {
-  if (!existsSync('.adlc')) return; // not an ADLC repo
-  if (!ticketStoreExists(process.cwd(), process.env)) return; // no tickets → no rails declared
-  let ticketSnapshot;
-  const defaultDirectory = existsSync(join('.adlc', 'tickets', '.store.json'));
-  const ticketsPath = process.env.ADLC_TICKET_STORE ?? process.env.ADLC_TICKETS ?? (defaultDirectory ? join('.adlc', 'tickets') : join('.adlc', 'tickets.json'));
-
   // TRUST THE MATCHER: hooks.json routes only mutating edit tools to this hook,
   // so any tool that arrives is one we chose to gate — no in-code tool allowlist
   // (which would drift from the matcher and fail OPEN for a newly-matched tool).
@@ -1223,7 +1380,7 @@ function rails(input) {
   // A bypass is only honored if it is IN SCOPE and can be AUDITED. Out of scope →
   // deny. If recording fails (adlc missing, .adlc unwritable, record errors), an
   // unaudited override is refused.
-  const bypassOrDeny = (tag, denyReason) => {
+  const bypassOrDeny = (tag, denyReason, { auditCwd = undefined, targetOverride = null } = {}) => {
     if (bypassActive) {
       if (bypassWildcardOnly) {
         return denyRail(
@@ -1231,12 +1388,13 @@ function rails(input) {
             `Use ADLC_RAILS_BYPASS=1 for a deliberate session-wide override, or a specific path glob. ${denyReason}`
         );
       }
-      const targets = fps.length ? fps.map((fp) => toRepoRelative(fp)) : [subject];
+      const targets = targetOverride ?? (fps.length ? fps.map((fp) => toRepoRelative(fp)) : [subject]);
       const inScope = bypassUnscoped || targets.every((t) => globMatch(bypassRaw, t));
       if (!inScope) {
         return denyRail(`ADLC_RAILS_BYPASS is ${bypassScopeDesc} and does not authorize ${subject}. ${denyReason}`);
       }
-      if (recordBypass(subject, tag)) {
+      const auditSubject = targetOverride ? targetOverride.join(', ') : subject;
+      if (recordBypass(auditSubject, tag, { cwd: auditCwd })) {
         emitBypassNotice(targets);
         return; // audited, in-scope override → allow
       }
@@ -1247,6 +1405,102 @@ function rails(input) {
     }
     return denyRail(denyReason);
   };
+
+  // Enforce rails of any verified nested linked worktree targeted in a mixed edit
+  // even when process.cwd() stayed in the outer repository.
+  if (fps.length > 0) {
+    const currentRoot = realOrSelf(process.cwd());
+    const storeOverride = process.env.ADLC_TICKET_STORE || process.env.ADLC_TICKETS || null;
+    const homeDir = realOrSelf(process.env.HOME || homedir());
+    for (const fp of fps) {
+      const absTarget = resolve(baseDir ?? process.cwd(), fp);
+      const owningRoot = findInnermostCheckoutRoot(absTarget, {
+        storeOverride: storeOverrideForNestedProbe(storeOverride, currentRoot),
+        homeDir,
+        allowFileStart: true,
+        preserveSpelling: true,
+      });
+      if (!owningRoot || realOrSelf(owningRoot) === currentRoot) continue;
+      if (isInside(absTarget, currentRoot) && isInside(currentRoot, realOrSelf(owningRoot))) {
+        continue;
+      }
+      if (
+        isInside(realOrSelf(owningRoot), currentRoot) &&
+        existsSync(join(currentRoot, '.adlc')) &&
+        inspectGitCheckout(realOrSelf(owningRoot))?.kind !== 'worktree'
+      ) {
+        continue;
+      }
+      const owningEnv = envForCheckoutRoot(owningRoot, initialOuterDir);
+      if (!existsSync(join(owningRoot, '.adlc')) || !ticketStoreExists(owningRoot, owningEnv)) continue;
+      const relLex = relative(owningRoot, absTarget).split('\\').join('/');
+      const relReal = relative(realOrSelf(owningRoot), realResolve(absTarget)).split('\\').join('/');
+      let nestedSnap;
+      try {
+        nestedSnap = loadTicketStoreReadOnly({ root: owningRoot, env: owningEnv });
+      } catch (e) {
+        bypassOrDeny(
+          'unparseable-tickets-bypass',
+          `cannot read ticket store in target checkout ${owningRoot} (${e.message}); rails cannot be verified, so edits are blocked.`,
+          { auditCwd: owningRoot, targetOverride: [relReal] }
+        );
+        continue;
+      }
+      const nestedDecls = [];
+      let nestedAny = false;
+      let nestedMalformed = null;
+      for (const t of nestedSnap?.tickets ?? []) {
+        if (!t || typeof t !== 'object' || Array.isArray(t)) {
+          nestedMalformed = { tag: 'invalid-ticket-entry-bypass', reason: `ticket store in ${owningRoot} has a ticket entry that is not an object;` };
+          break;
+        }
+        if (t.rails !== undefined && !Array.isArray(t.rails)) {
+          nestedMalformed = { tag: 'invalid-rails-field-bypass', reason: `a ticket in ${owningRoot} has a non-array "rails" field;` };
+          break;
+        }
+        const expired = t.completed === true;
+        for (const r of t.rails ?? []) {
+          if (typeof r !== 'string') {
+            nestedMalformed = { tag: 'invalid-rail-entry-bypass', reason: `a ticket in ${owningRoot} has a non-string rail entry;` };
+            break;
+          }
+          nestedAny = true;
+          if (expired) continue;
+          nestedDecls.push({ glob: r.split('\\').join('/'), ticket: typeof t.id === 'string' ? t.id : '?' });
+        }
+        if (nestedMalformed) break;
+      }
+      if (nestedMalformed) {
+        bypassOrDeny(
+          nestedMalformed.tag,
+          `${nestedMalformed.reason} rails cannot be verified, so edits are blocked.`,
+          { auditCwd: owningRoot, targetOverride: [relReal] }
+        );
+        continue;
+      }
+      if (!nestedAny) continue;
+      nestedDecls.push({
+        glob: nestedSnap.backend === 'directory' ? '.adlc/tickets/**' : '.adlc/tickets.json',
+        ticket: '(rail trust root)',
+      });
+      nestedDecls.push({ glob: '.adlc/current-ticket.json', ticket: '(rail trust root)' });
+      const hit = nestedDecls.find((r) => globMatch(r.glob, relLex) || globMatch(r.glob, relReal));
+      if (hit) {
+        bypassOrDeny(
+          `rail ${hit.glob} (ticket ${hit.ticket})`,
+          `${relReal} is a frozen rail declared by ticket ${hit.ticket} in checkout ${owningRoot} (rails: "${hit.glob}"). Edits to frozen rails are blocked during build.`,
+          { auditCwd: owningRoot, targetOverride: [relReal] }
+        );
+      }
+    }
+  }
+
+  const activeEnv = envForCheckoutRoot(process.cwd(), initialOuterDir);
+  if (!existsSync('.adlc')) return; // not an ADLC repo
+  if (!ticketStoreExists(process.cwd(), activeEnv)) return; // no tickets → no rails declared
+  let ticketSnapshot;
+  const defaultDirectory = existsSync(join('.adlc', 'tickets', '.store.json'));
+  const ticketsPath = activeEnv.ADLC_TICKET_STORE ?? activeEnv.ADLC_TICKETS ?? (defaultDirectory ? join('.adlc', 'tickets') : join('.adlc', 'tickets.json'));
 
   // Fail closed on ANY state where rails cannot be trustworthily determined: an
   // unparseable file, an unexpected envelope, or a malformed rails field. Only a
@@ -1260,7 +1514,7 @@ function rails(input) {
 
   let parsed;
   try {
-    ticketSnapshot = loadTicketStoreReadOnly({ root: process.cwd(), env: process.env });
+    ticketSnapshot = loadTicketStoreReadOnly({ root: process.cwd(), env: activeEnv });
     parsed = { tickets: ticketSnapshot.tickets };
   } catch (e) {
     return failClosed(`cannot read ticket store (${e.message});`, 'unparseable-tickets-bypass');
@@ -1486,8 +1740,8 @@ function rails(input) {
  * `conflict: true` means fail closed: a conflicting signal, an unparseable
  * pointer, OR an object pointer whose id key is unrecognized.
  */
-function resolveActiveTicketIdForBuildGate() {
-  const resolved = resolveActiveTicketIdCanonical({ root: '.', env: process.env });
+function resolveActiveTicketIdForBuildGate(root = '.', env = process.env) {
+  const resolved = resolveActiveTicketIdCanonical({ root, env });
   if (!resolved.ok) return { id: null, conflict: true, code: resolved.code, message: resolved.message };
   return { id: resolved.value?.id ?? null, conflict: false };
 }
@@ -1599,7 +1853,7 @@ function denyBuildGate(reason) {
  * the same mechanism rails' recordBypass uses). Returns true ONLY if the
  * record was durably written.
  */
-function recordBuildGateBypass(ticketId, signals, depth, sessionBytes) {
+function recordBuildGateBypass(ticketId, signals, depth, sessionBytes, { cwd = undefined } = {}) {
   const r = runAdlc([
     'gate-manifest',
     'record',
@@ -1608,15 +1862,16 @@ function recordBuildGateBypass(ticketId, signals, depth, sessionBytes) {
     ticketId,
     '--data',
     JSON.stringify({ signals, depth, sessionBytes }),
-  ], { keyed: true });
+  ], { keyed: true, cwd });
   return !!r && r.status === 0;
 }
 
-function buildgate(input) {
-  if (!existsSync('.adlc')) return; // not an ADLC repo → allow
-  if (!ticketStoreExists(process.cwd(), process.env)) return; // no tickets → nothing to gate → allow
+function buildgateForRoot(input, rootDir) {
+  const rootEnv = envForCheckoutRoot(rootDir, initialOuterDir);
+  if (!existsSync(join(rootDir, '.adlc'))) return; // not an ADLC repo → allow
+  if (!ticketStoreExists(rootDir, rootEnv)) return; // no tickets → nothing to gate → allow
 
-  const active = resolveActiveTicketIdForBuildGate();
+  const active = resolveActiveTicketIdForBuildGate(rootDir, rootEnv);
   if (active.conflict) {
     // Report the canonical reason. Assuming an ADLC_TICKET-vs-pointer conflict
     // misreports every other fail-closed cause — most often a malformed pointer,
@@ -1629,7 +1884,7 @@ function buildgate(input) {
 
   let parsed;
   try {
-    parsed = { tickets: loadTicketStoreReadOnly({ root: process.cwd(), env: process.env }).tickets };
+    parsed = { tickets: loadTicketStoreReadOnly({ root: rootDir, env: rootEnv }).tickets };
   } catch (e) {
     return denyBuildGate(
       `cannot read .adlc/tickets.json (${e.message}) — active ticket ${active.id}'s risk cannot be verified, failing closed`
@@ -1669,12 +1924,6 @@ function buildgate(input) {
 
   const sessionBytes = fileSize(tp);
   if (sessionBytes < 0) {
-    // existsSync(tp) passed above, but the file could not be stat'd/opened
-    // here — a permissions error, or a TOCTOU race where the file was
-    // deleted/replaced/swapped for a directory between the two checks. Either
-    // way the context-fitness signal cannot be computed for a ticket we
-    // already know is high-risk, so this must fail closed rather than treat
-    // the unreadable file as "zero bytes, not degraded".
     return denyBuildGate(
       `active ticket ${active.id} is high-risk but transcript_path could not be read after the ` +
         `existence check (permission error, or the file changed underneath us) — the context-fitness ` +
@@ -1693,10 +1942,6 @@ function buildgate(input) {
     }
   }
   if (windowText == null) {
-    // Same fail-closed reasoning as above: fileSize succeeded but the actual
-    // read of the (possibly windowed) transcript failed. Silently treating
-    // this as depth=0 would let an unverifiable session through, exactly the
-    // bypass this gate exists to prevent.
     return denyBuildGate(
       `active ticket ${active.id} is high-risk but the transcript window could not be read — the ` +
         `context-fitness signal cannot be verified, failing closed`
@@ -1704,15 +1949,12 @@ function buildgate(input) {
   }
   const depth = countToolCallsForBuildGate(windowText);
 
-  // Inclusive >= — depth tracks HARD_DEPTH (see BUILD_GATE_DEPTH_THRESHOLD's
-  // comment); bytes uses this file's own recalibrated BUILD_GATE_BYTES_THRESHOLD
-  // (see its comment for why it deliberately no longer aliases HARD_BYTES).
   const degraded = depth >= BUILD_GATE_DEPTH_THRESHOLD || sessionBytes >= BUILD_GATE_BYTES_THRESHOLD;
   if (!degraded) return; // high-risk, but this session isn't deep yet → allow
 
   const bypass = process.env.ADLC_BUILD_GATE_BYPASS === '1';
   if (bypass) {
-    if (recordBuildGateBypass(active.id, signals, depth, sessionBytes)) return; // audited → allow
+    if (recordBuildGateBypass(active.id, signals, depth, sessionBytes, { cwd: rootDir })) return; // audited → allow
     return denyBuildGate(
       `ADLC_BUILD_GATE_BYPASS is set but the override could not be recorded to the gate-manifest ` +
         `(${adlcUnavailableCause()}). An unaudited bypass is refused — the build is blocked.`
@@ -1726,6 +1968,32 @@ function buildgate(input) {
       `(or an isolated subagent) rather than continuing here. To override deliberately, set ` +
       `ADLC_BUILD_GATE_BYPASS=1 (the bypass is recorded to the gate-manifest).`
   );
+}
+
+function buildgate(input) {
+  const roots = [process.cwd()];
+  const seenReal = new Set([realOrSelf(process.cwd())]);
+  const storeOverride = process.env.ADLC_TICKET_STORE || process.env.ADLC_TICKETS || null;
+  const homeDir = realOrSelf(process.env.HOME || homedir());
+  for (const fp of targetFilePaths(input)) {
+    if (typeof fp !== 'string' || !fp.trim()) continue;
+    const absTarget = resolve(baseDir ?? process.cwd(), fp.trim());
+    const owningRoot = findInnermostCheckoutRoot(absTarget, {
+      storeOverride: storeOverrideForNestedProbe(storeOverride, process.cwd()),
+      homeDir,
+      allowFileStart: true,
+      preserveSpelling: true,
+    });
+    if (!owningRoot) continue;
+    const realOwning = realOrSelf(owningRoot);
+    if (seenReal.has(realOwning)) continue;
+    if (isInside(absTarget, process.cwd()) && isInside(process.cwd(), realOwning)) continue;
+    seenReal.add(realOwning);
+    roots.push(owningRoot);
+  }
+  for (const candidateRoot of roots) {
+    buildgateForRoot(input, candidateRoot);
+  }
 }
 
 

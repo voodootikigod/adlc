@@ -28,8 +28,8 @@ import {
   isSafeSessionId,
   resolveHandoffSessionId,
 } from '@adlc/context-handoff';
-import { ticketStoreExists } from '@adlc/core';
-import { extractToolPaths, READONLY_TOOLS } from './rails-checker.mjs';
+import { findInnermostCheckoutRoot, ticketStoreExists } from '@adlc/core';
+import { extractToolPaths, READONLY_TOOLS, sanitizeDiscoveryStoreOverride } from './rails-checker.mjs';
 
 /**
  * Tools that never mutate, so the deny-set leaves them alone.
@@ -250,115 +250,11 @@ export function observeHandoffSignals(usage) {
  */
 export function resolveAdlcRoot(root, storeOverride = null, adlcRoots = null) {
   if (typeof root !== 'string' || root === '') return null;
-  const start = trustedRealpath(resolve(root));
-
-  // A RELATIVE override names a store per-directory, so it participates in the
-  // walk. An ABSOLUTE one lives outside the tree and is true of every directory
-  // equally — it says THAT ADLC is in force, never WHERE the repo is, so it is
-  // deliberately excluded here and handled once, below.
-  const perDirectoryOverride = storeOverride && !isAbsolute(storeOverride) ? storeOverride : null;
-
-  // Walk once, unbounded, recording what each ancestor is. The boundary
-  // decision needs to see the WHOLE chain before it can be made — see below.
-  /** @type {{ dir: string, remembered: boolean, store: boolean, checkout: boolean }[]} */
-  const chain = [];
-  let dir = start;
-  for (;;) {
-    chain.push({
-      dir,
-      remembered: adlcRoots ? adlcRoots.has(dir) : false,
-      store: ticketStoreExists(dir, perDirectoryOverride),
-      checkout: looksLikeCheckout(dir),
-    });
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-
-  // Is some ancestor a real ADLC repo — a git checkout that also holds a ticket
-  // store — containing this path?
-  //
-  // This is the tiebreaker between two requirements that otherwise conflict,
-  // given that no filesystem test can tell a forged checkout from a real one:
-  //  - a `.git` an agent can create must not release an enclosing ADLC repo
-  //    (a bare `mkdir src/.git` + HEAD turned deny into allow, even cold, once
-  //    the process restarted and the session_start memory was gone);
-  //  - a ticket store sitting above an unrelated checkout — a stray
-  //    `~/.adlc/tickets.json` — must not enforce over every repo beneath it.
-  // An enclosing git+store ancestor distinguishes them: the first case has one,
-  // the second does not (a home directory is not a checkout). So the boundary
-  // is honoured only when nothing above it is a real ADLC repo.
-  // …and the test is per-directory: is there a real ADLC repo STRICTLY above
-  // this one? A boundary is climbed past only while one remains above it, so
-  // the walk stops at the OUTERMOST enclosing ADLC repo rather than sailing
-  // past it. Disabling the boundary outright instead let a stray parent
-  // `.adlc/tickets.json` outrank the repo itself (measured), which is the very
-  // shadowing the boundary exists to prevent.
-  const adlcRepoAbove = chain.map(() => false);
-  for (let i = chain.length - 2; i >= 0; i -= 1) {
-    adlcRepoAbove[i] = adlcRepoAbove[i + 1] || (chain[i + 1].checkout && chain[i + 1].store);
-  }
-
-  let outermost = null;
-  let checkoutRoot = null;
-  let insideCheckout = true;
-  for (const [i, link] of chain.entries()) {
-    if (link.remembered || (insideCheckout && link.store)) outermost = link.dir;
-    // The boundary applies from the NEXT ancestor up, so a checkout root that
-    // holds the store still counts as one.
-    if (insideCheckout && link.checkout) {
-      checkoutRoot = link.dir;
-      if (!adlcRepoAbove[i]) insideCheckout = false;
-    }
-  }
-  if (outermost !== null) return outermost;
-
-  // An external absolute store: ADLC is in force, but the store says nothing
-  // about WHERE, so structure answers it — the checkout root, falling back to
-  // the working directory when there is no checkout. Letting the walk answer it
-  // instead matched every ancestor and marched enforcement to `/`, where
-  // durable deny state would have landed; answering it with the cwd alone split
-  // one checkout into a separate deny store per subdirectory, so an open deny
-  // stopped being repo-wide.
-  if (!ticketStoreExists(start, storeOverride)) return null;
-  return checkoutRoot ?? start;
-}
-
-/**
- * Does this directory hold something that could actually be a git checkout?
- *
- * `.git` existing is not enough, because `mkdir .git` is a thing an agent can
- * do — and before this check that was a one-command opt-out of an enclosing
- * repo's deny on the very first gated call, before any root was remembered. A
- * real checkout has `.git/HEAD`, or a `.git` FILE holding a `gitdir:` pointer
- * (worktrees and submodules).
- *
- * This shape check is a filter, not the defence. No filesystem test separates a
- * real vendored checkout from one an agent constructed — an agent that can
- * write files can write whatever git would have written — so escalating it
- * raises the effort and never decides. What actually decides is `resolveAdlcRoot`,
- * which honours a boundary only when nothing above it is a real ADLC repo; see
- * the `enclosingAdlcRepo` comment there for why that resolves the conflict this
- * check cannot.
- *
- * @param {string} dir
- * @returns {boolean}
- */
-function looksLikeCheckout(dir) {
-  const gitPath = join(dir, '.git');
-  try {
-    const stats = lstatSync(gitPath);
-    if (stats.isFile()) {
-      // Not any file: git writes exactly `gitdir: <path>`. Accepting a regular
-      // file on sight made `echo x > src/.git` the same one-command escape the
-      // HEAD check had just closed for directories.
-      if (stats.size > GITDIR_POINTER_MAX_BYTES) return false;
-      return readFileSync(gitPath, 'utf8').trimStart().startsWith('gitdir:');
-    }
-    return stats.isDirectory() && existsSync(join(gitPath, 'HEAD'));
-  } catch {
-    return false;
-  }
+  const safeStoreOverride = sanitizeDiscoveryStoreOverride(storeOverride, root, root);
+  return findInnermostCheckoutRoot(root, {
+    storeOverride: safeStoreOverride,
+    rememberedRoots: adlcRoots,
+  });
 }
 
 
@@ -948,7 +844,8 @@ export function checkHandoff({
   // cannot outrank the repo it is trying to escape.
   const repoRoot = resolveAdlcRoot(root, storeOverride, adlcRoots);
   if (repoRoot === null) return { decision: 'allow' };
-  if (adlcRoots && ticketStoreExists(repoRoot, storeOverride)) adlcRoots.record(repoRoot);
+  const safeStoreOverride = sanitizeDiscoveryStoreOverride(storeOverride, repoRoot, root);
+  if (adlcRoots && ticketStoreExists(repoRoot, safeStoreOverride)) adlcRoots.record(repoRoot);
 
   const shell = isShellTool(toolName);
   // Extraction uses the cwd pi supplied, because a tool's relative path is

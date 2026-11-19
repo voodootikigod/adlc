@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { railPreconditions, TRUST_ROOT_RAILS } from '../rails-checker.mjs';
-import { candidateRoots } from './adlc-rails-guard.mjs';
+import { envForCheckoutRoot, resolveOwning } from './adlc-rails-guard.mjs';
 import { ticketStoreExists } from '@adlc/core';
 
 // Field names the command string may arrive under. Cursor's docs name
@@ -74,15 +74,16 @@ export function adviseShell(payload, { root, env = process.env } = {}) {
     const command = extractCommand(payload);
     if (!command) return { permission: 'allow' };
 
-    const owningRoot = root ?? candidateRoots(payload)[0] ?? process.cwd();
+    const owningRoot = root ?? resolveOwning(payload, undefined, undefined, env).root ?? process.cwd();
+    const effectiveEnv = envForCheckoutRoot(owningRoot, owningRoot, env);
 
     // Rail set: the active ticket's rails when enforcement is active; the
     // trust roots alone otherwise (they are worth flagging in any ADLC repo).
     let rails = [];
-    const pre = railPreconditions({ root: owningRoot, env });
+    const pre = railPreconditions({ root: owningRoot, env: effectiveEnv });
     if (pre.state === 'active') {
       rails = pre.rails;
-    } else if (ticketStoreExists(owningRoot, env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null)) {
+    } else if (ticketStoreExists(owningRoot, effectiveEnv.ADLC_TICKET_STORE ?? effectiveEnv.ADLC_TICKETS ?? null)) {
       rails = [...TRUST_ROOT_RAILS];
     } else {
       return { permission: 'allow' }; // not an ADLC repo → nothing to advise on

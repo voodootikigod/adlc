@@ -3,10 +3,20 @@
 // ./generated-shell.mjs (generated from packages/core/lib/shell.mjs by
 // scripts/ticket-readers/generate.mjs) so this hook runs standalone without
 // resolving @adlc/core from node_modules at runtime.
-import { isAbsolute, resolve, dirname, join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { isAbsolute, relative, resolve, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadTicketStoreReadOnly } from './generated-ticket-reader.mjs';
 import { resolveRailPath } from './generated-railpath.mjs';
+import {
+  canonicalizePath,
+  findInnermostCheckoutRoot,
+  inspectGitCheckout,
+  preferInnermostCheckout,
+  isPathInside,
+  extractAllToolWorkdirs,
+  hasConflictingToolWorkdirs,
+} from './generated-workspace-root.mjs';
 import {
   resolveActiveTicketId as resolveActiveTicketIdCanonical,
   resolveActiveTicketAgainst,
@@ -69,28 +79,57 @@ function notice(message) {
 // cannot import @adlc/core, and a hand-kept copy is what drifted before.
 import { globMatch } from './generated-glob-match.mjs';
 
-function collectPaths(value, out = new Set()) {
+function collectStructuredTargets(
+  value,
+  defaultBase,
+  rootPayload = value,
+  inheritedWorkdirs = [],
+  out = []
+) {
+  const emitWithWorkdirs = (raw, workdirs) => {
+    if (!raw.trim()) return;
+    const [firstWorkdir] = workdirs;
+    const base = firstWorkdir ? resolve(defaultBase, firstWorkdir) : defaultBase;
+    const candidateBases =
+      workdirs.length > 0 ? workdirs.map((wd) => resolve(defaultBase, wd)) : [defaultBase];
+    out.push({
+      raw,
+      base,
+      abs: resolve(base, raw),
+      probeAbs: candidateBases.map((b) => resolve(b, raw)),
+      isShellVerb: false,
+    });
+  };
   if (typeof value === 'string') {
-    collectPatchPaths(value, out);
+    const patches = new Set();
+    collectPatchPaths(value, patches);
+    for (const p of patches) emitWithWorkdirs(p, inheritedWorkdirs);
     return out;
   }
   if (!value || typeof value !== 'object') return out;
   if (Array.isArray(value)) {
-    for (const item of value) collectPaths(item, out);
+    for (const item of value) {
+      collectStructuredTargets(item, defaultBase, rootPayload, inheritedWorkdirs, out);
+    }
     return out;
   }
+  const directWorkdirs = extractAllToolWorkdirs(stripEnvelopeCwd(value, rootPayload));
+  const activeWorkdirs = directWorkdirs.length > 0 ? directWorkdirs : inheritedWorkdirs;
+  const emitFromNode = (raw) => emitWithWorkdirs(raw, activeWorkdirs);
   for (const [key, child] of Object.entries(value)) {
     if (['path', 'filePath', 'file_path', 'target', 'targetPath', 'target_path'].includes(key) && typeof child === 'string') {
-      out.add(child);
+      emitFromNode(child);
     } else if (['paths', 'filePaths', 'file_paths'].includes(key) && Array.isArray(child)) {
       for (const item of child) {
-        if (typeof item === 'string') out.add(item);
-        else collectPaths(item, out);
+        if (typeof item === 'string') emitFromNode(item);
+        else collectStructuredTargets(item, defaultBase, rootPayload, activeWorkdirs, out);
       }
     } else if (['command', 'cmd', 'patch', 'input'].includes(key) && typeof child === 'string') {
-      collectPatchPaths(child, out);
+      const patches = new Set();
+      collectPatchPaths(child, patches);
+      for (const p of patches) emitFromNode(p);
     } else {
-      collectPaths(child, out);
+      collectStructuredTargets(child, defaultBase, rootPayload, activeWorkdirs, out);
     }
   }
   return out;
@@ -112,23 +151,41 @@ function collectCommandText(value, out = []) {
   return out;
 }
 
-function firstShellWorkdir(value) {
-  if (!value || typeof value !== 'object') return null;
+function stripEnvelopeCwd(value, rootPayload) {
+  if (value !== rootPayload || !value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const { cwd: _envelopeCwd, ...rest } = value;
+  return rest;
+}
+
+function hasShellWorkdirConflict(value, baseDir, rootPayload = value) {
+  if (!value || typeof value !== 'object') return false;
   if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = firstShellWorkdir(item);
-      if (found) return found;
-    }
-    return null;
+    return value.some((item) => hasShellWorkdirConflict(item, baseDir, rootPayload));
   }
-  for (const [key, child] of Object.entries(value)) {
-    if (['workdir', 'cwd', 'workingDirectory', 'working_directory'].includes(key) && typeof child === 'string') {
-      return child;
-    }
-    const found = firstShellWorkdir(child);
-    if (found) return found;
+  if (hasConflictingToolWorkdirs(stripEnvelopeCwd(value, rootPayload), baseDir)) {
+    return true;
   }
-  return null;
+  for (const child of Object.values(value)) {
+    if (child && typeof child === 'object' && hasShellWorkdirConflict(child, baseDir, rootPayload)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function allShellWorkdirs(value, rootPayload = value, out = []) {
+  if (!value || typeof value !== 'object') return out;
+  if (Array.isArray(value)) {
+    for (const item of value) allShellWorkdirs(item, rootPayload, out);
+    return out;
+  }
+  for (const wd of extractAllToolWorkdirs(stripEnvelopeCwd(value, rootPayload))) {
+    if (!out.includes(wd)) out.push(wd);
+  }
+  for (const child of Object.values(value)) {
+    if (child && typeof child === 'object') allShellWorkdirs(child, rootPayload, out);
+  }
+  return out;
 }
 
 function railMatchesPath(rail, path) {
@@ -144,24 +201,25 @@ function toolName(payload) {
 }
 
 function isShellToolName(name) {
-  return /(^|\.)(bash|shell|exec|exec_command|run_command|write_stdin)$/i.test(String(name));
+  return /(^|\.)(bash|shell|exec|exec_command|run_command|run_shell_command|run_terminal_cmd|write_stdin)$/i.test(String(name));
 }
 
-function collectShellInvocations(value, out = []) {
+function collectShellInvocations(value, out = [], rootPayload = value) {
   if (!value || typeof value !== 'object') return out;
   if (Array.isArray(value)) {
-    for (const item of value) collectShellInvocations(item, out);
+    for (const item of value) collectShellInvocations(item, out, rootPayload);
     return out;
   }
   if (isShellToolName(toolName(value))) {
     const name = String(toolName(value));
-    const workdir = firstShellWorkdir(value);
+    const workdirs = allShellWorkdirs(value, rootPayload);
+    const workdir = workdirs[0] ?? null;
     for (const commandText of collectCommandText(value)) {
-      out.push({ commandText, workdir, name });
+      out.push({ commandText, workdir, workdirs, name });
     }
     return out;
   }
-  for (const child of Object.values(value)) collectShellInvocations(child, out);
+  for (const child of Object.values(value)) collectShellInvocations(child, out, rootPayload);
   return out;
 }
 
@@ -217,17 +275,18 @@ async function stdinText() {
  * build-gate copies did not, so the same pointer enforced here and silently
  * disabled enforcement there. Any denial fails closed.
  */
-function resolveActiveTicketId() {
-  const resolved = resolveActiveTicketIdCanonical({ root: process.cwd(), env: process.env });
+function resolveActiveTicketId(root = process.cwd(), env = process.env) {
+  const resolved = resolveActiveTicketIdCanonical({ root, env });
   if (!resolved.ok) fail(resolved.message);
   return { id: resolved.value?.id ?? undefined };
 }
 
-function normalizePath(path, baseCwd = process.cwd()) {
+function normalizePath(path, baseCwd = process.cwd(), repoRoot = baseCwd) {
   const normalized = path.replaceAll('\\', '/');
   const candidate = resolve(baseCwd, normalized);
-  const projectRelative = resolveRailPath(candidate, process.cwd());
-  return projectRelative.startsWith('..') ? normalized : projectRelative;
+  const projectRelative = resolveRailPath(candidate, repoRoot);
+  if (!projectRelative.startsWith('..')) return projectRelative;
+  return isAbsolute(normalized) || isPathInside(baseCwd, repoRoot) ? normalized : projectRelative;
 }
 
 // Everything below runs inside main() so that an uncaught throw anywhere in it
@@ -251,6 +310,74 @@ if (raw.trim()) {
 if (exceedsDepth(payload, MAX_PAYLOAD_DEPTH)) {
   fail(`hook payload nesting exceeds ${MAX_PAYLOAD_DEPTH} levels — refusing to classify it`);
 }
+
+function hasLocalDefaultTicketStore(dir) {
+  return (
+    existsSync(join(dir, '.adlc', 'tickets', '.store.json')) ||
+    existsSync(join(dir, '.adlc', 'tickets.json'))
+  );
+}
+
+function sanitizeDiscoveryStoreOverride(rawOverride, startDir, baseCwd = startDir) {
+  if (typeof rawOverride !== 'string' || !rawOverride.trim()) return null;
+  const trimmed = rawOverride.trim();
+  const resolvedStart = resolve(startDir);
+  const boundary = findInnermostCheckoutRoot(resolvedStart, {
+    storeOverride: null,
+    requireStore: false,
+    allowFileStart: true,
+    preserveSpelling: true,
+  });
+  const anchor = boundary ?? resolvedStart;
+  const anchorInfo = inspectGitCheckout(canonicalizePath(anchor));
+  const anchorParent = dirname(resolve(anchor));
+  const enclosing =
+    anchorParent !== resolve(anchor)
+      ? findInnermostCheckoutRoot(anchorParent, {
+          storeOverride: null,
+          requireStore: true,
+          preserveSpelling: true,
+        })
+      : null;
+  if (isAbsolute(trimmed)) {
+    if (enclosing && isPathInside(trimmed, enclosing) && !isPathInside(trimmed, anchor)) {
+      return null;
+    }
+    if ((anchorInfo?.kind === 'worktree' || enclosing) && hasLocalDefaultTicketStore(anchor) && !isPathInside(trimmed, anchor)) {
+      return null;
+    }
+    return trimmed;
+  }
+  const lexRel = relative('/anchor', resolve('/anchor', trimmed));
+  const escapesLexically =
+    lexRel === '..' || lexRel.startsWith('../') || lexRel.startsWith('..\\') || isAbsolute(lexRel);
+  if (escapesLexically) {
+    if (boundary && baseCwd) {
+      const resolvedBase = resolve(baseCwd);
+      if (isPathInside(resolvedBase, boundary)) {
+        const fromBase = resolve(resolvedBase, trimmed);
+        if (isPathInside(fromBase, boundary) && existsSync(fromBase)) {
+          return fromBase;
+        }
+      }
+    }
+    return null;
+  }
+  if (boundary) {
+    return isPathInside(resolve(boundary, trimmed), boundary) ? trimmed : null;
+  }
+  const atStart = resolve(resolvedStart, trimmed);
+  if (existsSync(atStart) && !isPathInside(atStart, resolvedStart)) return null;
+  return trimmed;
+}
+
+const toolCwd =
+  typeof payload?.cwd === 'string' && payload.cwd.trim() !== ''
+    ? resolve(payload.cwd)
+    : process.cwd();
+const rawStoreOverride = process.env.ADLC_TICKET_STORE ?? process.env.ADLC_TICKETS ?? null;
+const storeOverride = sanitizeDiscoveryStoreOverride(rawStoreOverride, toolCwd, process.cwd());
+const root = findInnermostCheckoutRoot(toolCwd, { storeOverride, preserveSpelling: true }) ?? toolCwd;
 
 // Recovery Exception & Inspection Bash Exception (context-rot-threshold-
 // calibration spec §1.3), applied to THIS gate too — evaluated before
@@ -286,7 +413,7 @@ if (exceedsDepth(payload, MAX_PAYLOAD_DEPTH)) {
       // the package, only locates it, but a repository that ships its own
       // @adlc/context-handoff controls what path this resolves to (see
       // adlc-handoff-gate.mjs's identical comment for the full residual).
-      const entry = resolveContextHandoffEntry({ projectRoot: process.cwd() });
+      const entry = resolveContextHandoffEntry({ projectRoot: root });
       const trustedRecoveryCliPath = entry ? join(dirname(dirname(entry)), 'bin', 'handoff.mjs') : null;
       if (trustedRecoveryCliPath) {
         const sessionId = resolveHandoffSessionIdLocal({
@@ -304,6 +431,7 @@ if (exceedsDepth(payload, MAX_PAYLOAD_DEPTH)) {
             sessionId,
             trustedEnv: process.env,
             adlcBinPath: resolveTrustedBinary('adlc', process.env.PATH),
+            cwd: root,
           });
           process.exit(0); // allow — never gated on the audit record above succeeding
         }
@@ -321,44 +449,210 @@ if (explicitEnforcement !== undefined && explicitEnforcement !== '1') {
   fail('ADLC_P4_ENFORCEMENT must be 0, 1, or unset');
 }
 
-const activeTicket = resolveActiveTicketId();
-const ticketId = activeTicket.id;
-if (!ticketId) {
-  if (explicitEnforcement === '1') fail('ADLC_P4_ENFORCEMENT=1 but no active ticket source resolved');
-  notice('P4 rail hook inactive: no current ticket selected');
-  process.exit(0);
-}
-
-let snapshot;
-try { snapshot = loadTicketStoreReadOnly({ root: process.cwd(), env: process.env }); }
-catch (error) { fail(`ticket store failed to load: ${error.message}`); }
-const tickets = snapshot.tickets;
-
-const ticket = tickets.find((t) => t.id === ticketId);
-if (!ticket) fail(`unknown active ticket: ${ticketId}`);
-// Re-resolve against the loaded store so the pinned ticketHash is verified by the
-// same contract every other reader uses. allowLegacyPointer keeps the documented
-// 1.x bridge: a pointer that pins no hash still resolves (this harness never
-// required one), but a hash that IS present is always verified.
-const activeAgainstStore = resolveActiveTicketAgainst(snapshot, { root: process.cwd(), env: process.env, allowLegacyPointer: true });
-if (!activeAgainstStore.ok) fail(activeAgainstStore.message);
-const ticketsPath = process.env.ADLC_TICKET_STORE ?? process.env.ADLC_TICKETS ?? (snapshot.backend === 'directory' ? '.adlc/tickets' : '.adlc/tickets.json');
-const declaredRails = ticket.rails ?? [];
-if (explicitEnforcement !== '1' && ticket.completed === true) {
-  notice(`P4 rail hook inactive: ticket ${ticketId} is completed`);
-  process.exit(0);
-}
-if (declaredRails.length === 0) {
-  if (explicitEnforcement === '1') fail(`ticket ${ticketId} has no rails`);
-  notice(`P4 rail hook inactive: ticket ${ticketId} has no rails`);
-  process.exit(0);
-}
-const rails = [...declaredRails, snapshot.backend === 'directory' ? '.adlc/tickets/**' : normalizePath(ticketsPath), '.adlc/current-ticket.json'];
-
-const rawPaths = collectPaths(payload);
-const paths = Array.from(rawPaths).map((path) => normalizePath(path));
+const structuredTargets = collectStructuredTargets(payload, toolCwd, payload);
+const allPayloadWorkdirs = allShellWorkdirs(payload, payload).map((wd) => resolve(toolCwd, wd));
 const shellInvocations = collectShellInvocations(payload);
 const shellTool = shellInvocations.length > 0;
+const nestedProbeStoreOverride =
+  storeOverride &&
+  ((!isAbsolute(storeOverride) &&
+    (!isPathInside(resolve(root, storeOverride), root) || !existsSync(resolve(root, storeOverride)))) ||
+    (isAbsolute(storeOverride) && isPathInside(storeOverride, root)))
+    ? null
+    : storeOverride;
+const foreignStoreOverride =
+  storeOverride && isAbsolute(storeOverride) && !isPathInside(storeOverride, root)
+    ? storeOverride
+    : null;
+
+function envForCheckout(checkoutRoot) {
+  const next = { ...process.env };
+  const sameAsPrimary = canonicalizePath(resolve(checkoutRoot)) === canonicalizePath(resolve(root));
+  const checkoutInfo = inspectGitCheckout(canonicalizePath(resolve(checkoutRoot)));
+  const parentDir = dirname(resolve(checkoutRoot));
+  const enclosingCheckout =
+    parentDir !== resolve(checkoutRoot)
+      ? findInnermostCheckoutRoot(parentDir, {
+          storeOverride: null,
+          requireStore: true,
+          preserveSpelling: true,
+        })
+      : null;
+  const isNestedWorktree = checkoutInfo?.kind === 'worktree' || enclosingCheckout !== null;
+  const localStorePresent = hasLocalDefaultTicketStore(checkoutRoot);
+  if (sameAsPrimary && !isNestedWorktree) {
+    for (const key of ['ADLC_TICKET_STORE', 'ADLC_TICKETS']) {
+      const val = next[key];
+      if (typeof val !== 'string' || !val.trim()) continue;
+      const trimmed = val.trim();
+      if (isAbsolute(trimmed)) continue;
+      const fromCheckout = resolve(checkoutRoot, trimmed);
+      if (isPathInside(fromCheckout, checkoutRoot)) {
+        if (
+          !existsSync(fromCheckout) &&
+          isPathInside(process.cwd(), checkoutRoot) &&
+          isPathInside(resolve(process.cwd(), trimmed), checkoutRoot) &&
+          existsSync(resolve(process.cwd(), trimmed))
+        ) {
+          next[key] = resolve(process.cwd(), trimmed);
+        }
+        continue;
+      }
+      if (
+        isPathInside(process.cwd(), checkoutRoot) &&
+        isPathInside(resolve(process.cwd(), trimmed), checkoutRoot) &&
+        existsSync(resolve(process.cwd(), trimmed))
+      ) {
+        next[key] = resolve(process.cwd(), trimmed);
+      } else if (localStorePresent) {
+        delete next[key];
+      }
+    }
+    return next;
+  }
+  if (!sameAsPrimary && (!isPathInside(checkoutRoot, root) || existsSync(join(checkoutRoot, '.adlc', 'current-ticket.json')))) {
+    delete next.ADLC_TICKET;
+  }
+  for (const key of ['ADLC_TICKET_STORE', 'ADLC_TICKETS']) {
+    const val = next[key];
+    if (typeof val !== 'string' || !val.trim()) continue;
+    const trimmed = val.trim();
+    const resolvedRel = resolve(checkoutRoot, trimmed);
+    const keepRelative =
+      !isAbsolute(trimmed) && isPathInside(resolvedRel, checkoutRoot) && existsSync(resolvedRel);
+    const fromBaseCwd =
+      sameAsPrimary &&
+      !isAbsolute(trimmed) &&
+      isPathInside(process.cwd(), checkoutRoot) &&
+      isPathInside(resolve(process.cwd(), trimmed), checkoutRoot) &&
+      existsSync(resolve(process.cwd(), trimmed))
+        ? resolve(process.cwd(), trimmed)
+        : null;
+    if (fromBaseCwd) {
+      next[key] = fromBaseCwd;
+      continue;
+    }
+    const outsideOuter =
+      (sameAsPrimary || !isPathInside(trimmed, root)) &&
+      (!enclosingCheckout || !isPathInside(trimmed, enclosingCheckout) || isPathInside(trimmed, checkoutRoot));
+    const keepExternal =
+      isAbsolute(trimmed) &&
+      outsideOuter &&
+      !localStorePresent;
+    if (!keepRelative && !keepExternal) {
+      delete next[key];
+    }
+  }
+  return next;
+}
+
+function loadCheckoutRails(checkoutRoot) {
+  const checkoutEnv = envForCheckout(checkoutRoot);
+  const activeTicket = resolveActiveTicketId(checkoutRoot, checkoutEnv);
+  const ticketId = activeTicket.id;
+  if (!ticketId) return { active: false, reason: 'no-ticket' };
+  let snapshot;
+  try { snapshot = loadTicketStoreReadOnly({ root: checkoutRoot, env: checkoutEnv }); }
+  catch (error) { fail(`ticket store failed to load: ${error.message}`); }
+  const ticket = snapshot.tickets.find((t) => t.id === ticketId);
+  if (!ticket) fail(`unknown active ticket: ${ticketId}`);
+  const activeAgainstStore = resolveActiveTicketAgainst(snapshot, { root: checkoutRoot, env: checkoutEnv, allowLegacyPointer: true });
+  if (!activeAgainstStore.ok) fail(activeAgainstStore.message);
+  const ticketsPath = checkoutEnv.ADLC_TICKET_STORE ?? checkoutEnv.ADLC_TICKETS ?? (snapshot.backend === 'directory' ? '.adlc/tickets' : '.adlc/tickets.json');
+  const declaredRails = ticket.rails ?? [];
+  if (explicitEnforcement !== '1' && ticket.completed === true) {
+    return { active: false, reason: 'completed', ticketId };
+  }
+  if (declaredRails.length === 0) {
+    return { active: false, reason: 'no-rails', ticketId };
+  }
+  const rails = [
+    ...declaredRails,
+    snapshot.backend === 'directory' ? '.adlc/tickets/**' : normalizePath(ticketsPath, checkoutRoot, checkoutRoot),
+    '.adlc/current-ticket.json',
+  ];
+  return { active: true, ticketId, rails };
+}
+
+const primaryState = loadCheckoutRails(root);
+const shellProbePaths = [];
+for (const { commandText, workdirs } of shellInvocations) {
+  const sp = new Set();
+  collectShellPaths(commandText, sp);
+  const candidateWorkdirs = workdirs && workdirs.length > 0 ? workdirs : [null];
+  for (const wd of candidateWorkdirs) {
+    const shellBase = wd ? resolve(toolCwd, wd) : toolCwd;
+    shellProbePaths.push(shellBase);
+    for (const p of sp) shellProbePaths.push(resolve(shellBase, p));
+  }
+}
+const absProbeTargets = [
+  ...structuredTargets.flatMap((t) => t.probeAbs),
+  ...allPayloadWorkdirs,
+  ...shellProbePaths,
+];
+const nestedRoots = new Set();
+for (const absTarget of absProbeTargets) {
+  const candidateRoot = isPathInside(absTarget, root)
+    ? preferInnermostCheckout(root, [absTarget], {
+        storeOverride: nestedProbeStoreOverride,
+        allowFileStart: true,
+        preserveSpelling: true,
+      })
+    : findInnermostCheckoutRoot(absTarget, {
+        storeOverride: foreignStoreOverride,
+        allowFileStart: true,
+        requireStore: true,
+        preserveSpelling: true,
+      });
+  if (candidateRoot && candidateRoot !== root) nestedRoots.add(candidateRoot);
+}
+const allNestedStates = new Map();
+const nestedStates = new Map();
+for (const nr of nestedRoots) {
+  const st = loadCheckoutRails(nr);
+  allNestedStates.set(nr, st);
+  if (st.active) nestedStates.set(nr, st);
+}
+
+if (!primaryState.active && nestedStates.size === 0) {
+  if (explicitEnforcement === '1') {
+    for (const st of allNestedStates.values()) {
+      if (st.reason === 'no-ticket') fail('ADLC_P4_ENFORCEMENT=1 but no active ticket source resolved');
+      if (st.reason === 'no-rails') fail(`ticket ${st.ticketId} has no rails`);
+    }
+  }
+  if (primaryState.reason === 'no-ticket') {
+    if (explicitEnforcement === '1') fail('ADLC_P4_ENFORCEMENT=1 but no active ticket source resolved');
+    notice('P4 rail hook inactive: no current ticket selected');
+    process.exit(0);
+  }
+  if (primaryState.reason === 'completed') {
+    notice(`P4 rail hook inactive: ticket ${primaryState.ticketId} is completed`);
+    process.exit(0);
+  }
+  if (explicitEnforcement === '1') fail(`ticket ${primaryState.ticketId} has no rails`);
+  notice(`P4 rail hook inactive: ticket ${primaryState.ticketId} has no rails`);
+  process.exit(0);
+}
+
+if (hasShellWorkdirConflict(payload, toolCwd)) {
+  fail('shell payload specifies conflicting working directories');
+}
+
+const seenStructured = new Set();
+const resolvedTargets = [];
+for (const entry of structuredTargets) {
+  const key = `${entry.base}\0${entry.raw}`;
+  if (seenStructured.has(key)) continue;
+  seenStructured.add(key);
+  resolvedTargets.push({
+    raw: entry.raw,
+    base: entry.base,
+    abs: entry.abs,
+    isShellVerb: false,
+  });
+}
 let shellMutating = false;
 let cwdChangingShellMutation = false;
 let expandingShellMutation = false;
@@ -390,8 +684,16 @@ if (shellTool) {
     if (commandPaths.size === 0) {
       fail('mutating shell payload did not include literal editable paths');
     }
-    const shellBaseCwd = workdir ? resolve(process.cwd(), workdir) : process.cwd();
-    for (const path of commandPaths) paths.push(normalizePath(path, shellBaseCwd));
+    const firstVerb = shellTokens(commandText)[0] ?? '';
+    const shellBaseCwd = workdir ? resolve(toolCwd, workdir) : toolCwd;
+    for (const path of commandPaths) {
+      resolvedTargets.push({
+        raw: path,
+        base: shellBaseCwd,
+        abs: resolve(shellBaseCwd, path),
+        isShellVerb: path === firstVerb && !looksPathLike(path),
+      });
+    }
   }
 }
 
@@ -402,15 +704,39 @@ if (expandingShellMutation) {
   fail('mutating shell payload uses shell expansion; use a structured edit tool or literal project-relative shell target paths');
 }
 
-if (paths.length === 0) {
+if (resolvedTargets.length === 0) {
   if (shellTool && !shellMutating && shellInvocations.length > 0 && shellInvocations.every(({ commandText }) => shellIsPositivelyReadOnly(commandText))) {
     notice('shell command has no editable rail targets');
     process.exit(0);
   }
   fail(shellTool ? 'shell payload did not include literal editable paths or a known read-only command' : 'active hook payload did not include any editable paths');
 }
-const blocked = paths.filter((path) => rails.some((rail) => railMatchesPath(rail, path)));
-if (blocked.length > 0) fail(`blocked rail edit for ${ticketId}: ${blocked.join(', ')}`);
+
+const delegatedRoots = Array.from(nestedRoots).filter(
+  (nr) => isPathInside(nr, root) || nestedStates.has(nr)
+);
+const primaryTargets = resolvedTargets.filter(({ abs }) => !delegatedRoots.some((nr) => isPathInside(abs, nr)));
+if (primaryState.active) {
+  const primaryPaths = primaryTargets.map(({ raw, base }) => normalizePath(raw, base, root));
+  const blocked = primaryPaths.filter((path) => primaryState.rails.some((rail) => railMatchesPath(rail, path)));
+  if (blocked.length > 0) fail(`blocked rail edit for ${primaryState.ticketId}: ${blocked.join(', ')}`);
+}
+for (const [nr, st] of allNestedStates.entries()) {
+  const nestedTargets = resolvedTargets.filter(({ abs }) => isPathInside(abs, nr));
+  if (nestedTargets.length === 0) continue;
+  if (st.active) {
+    const nestedPaths = nestedTargets.map(({ raw, base }) => normalizePath(raw, base, nr));
+    const blocked = nestedPaths.filter((path) => st.rails.some((rail) => railMatchesPath(rail, path)));
+    if (blocked.length > 0) fail(`blocked rail edit for ${st.ticketId}: ${blocked.join(', ')}`);
+  } else if (explicitEnforcement === '1' && nestedTargets.some((t) => !t.isShellVerb)) {
+    if (st.reason === 'no-ticket') fail('ADLC_P4_ENFORCEMENT=1 but no active ticket source resolved');
+    if (st.reason === 'no-rails') fail(`ticket ${st.ticketId} has no rails`);
+  }
+}
+if (primaryTargets.some((t) => !t.isShellVerb) && !primaryState.active && explicitEnforcement === '1') {
+  if (primaryState.reason === 'no-ticket') fail('ADLC_P4_ENFORCEMENT=1 but no active ticket source resolved');
+  if (primaryState.reason === 'no-rails') fail(`ticket ${primaryState.ticketId} has no rails`);
+}
 
 process.exit(0);
 }

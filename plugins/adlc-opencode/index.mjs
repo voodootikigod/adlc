@@ -16,7 +16,20 @@
 // @opencode/plugin is the identity function, so the object literal is exported
 // directly and the module imports nothing from the host at load.
 
-import { checkToolCall, resolveRailsInForce, resolveActiveTicketId, railHit, extractTargets, READONLY_TOOLS, UNGATED_TOOLS, SHELL_TOOLS } from './rails-checker.mjs';
+import {
+  checkToolCall,
+  resolveRailsInForce,
+  resolveActiveTicketId,
+  railHit,
+  extractTargets,
+  envForSecondaryCheckout,
+  resolveOwningCheckoutRoot,
+  sanitizeDiscoveryStoreOverride,
+  READONLY_TOOLS,
+  UNGATED_TOOLS,
+  SHELL_TOOLS,
+} from './rails-checker.mjs';
+import { extractAllToolWorkdirs, findInnermostCheckoutRoot, isPathInside, preferInnermostCheckout } from '@adlc/core';
 import { checkPreflight, auditGateManifest, auditAdversarialReview } from './lib/session-hooks.mjs';
 import { createDepthTracker, checkBuildGate } from './lib/build-gate.mjs';
 import { checkHandoff, createStickyDenyState, createInitLatch } from './lib/handoff-gate.mjs';
@@ -93,11 +106,20 @@ function isWithin(child, parent) {
  * contains the launch directory and is not the filesystem root, because a
  * non-git ("global") project reports a root unrelated to where the work is.
  */
-function resolveRoot(location) {
+function resolveRoot(location, env = process.env) {
   const launch = nonEmpty(location?.directory);
   const project = nonEmpty(location?.project?.directory);
-  if (project && launch && resolve(project) !== resolve('/') && isWithin(launch, project)) return project;
-  return launch ?? project ?? process.cwd();
+  const rawStoreOverride = env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null;
+  if (project && launch && resolve(project) !== resolve('/') && isPathInside(launch, project)) {
+    const storeOverride = sanitizeDiscoveryStoreOverride(rawStoreOverride, launch, launch);
+    return preferInnermostCheckout(project, [launch], { storeOverride, preserveSpelling: true }) ?? project;
+  }
+  const start = launch ?? project;
+  if (start) {
+    const storeOverride = sanitizeDiscoveryStoreOverride(rawStoreOverride, start, start);
+    return findInnermostCheckoutRoot(start, { storeOverride, preserveSpelling: true }) ?? start;
+  }
+  return process.cwd();
 }
 
 /**
@@ -129,11 +151,19 @@ function adlcCommandOf(prompt) {
 }
 
 async function setup(ctx = {}) {
-  // The repo root used to locate .adlc/ and to canonicalize edited paths.
-  const root = resolveRoot(ctx.location);
   // Per-repo plugin options as the base, real env vars override (see optionsToEnv).
   const optEnv = optionsToEnv(ctx.options ?? {});
-  const env = { ...optEnv, ...process.env };
+  const rawEnv = { ...optEnv, ...process.env };
+  // The repo root used to locate .adlc/ and to canonicalize edited paths.
+  const root = resolveRoot(ctx.location, rawEnv);
+  const rawLaunchDir = nonEmpty(ctx.location?.directory);
+  const launchCwd = rawLaunchDir && isPathInside(rawLaunchDir, root) ? rawLaunchDir : root;
+  const rawProjectDir = nonEmpty(ctx.location?.project?.directory);
+  const outerAnchor =
+    rawProjectDir && rawLaunchDir && resolve(rawProjectDir) !== resolve('/') && isPathInside(rawLaunchDir, rawProjectDir)
+      ? rawProjectDir
+      : root;
+  const env = envForSecondaryCheckout(root, outerAnchor, rawEnv, launchCwd);
   // Kill switch: the context-rot handoff deny-set (slice 5) is not yet
   // stable enough for real sessions — it was blocking edits/shell wholesale
   // across workstreams, so it defaults OFF. checkHandoff() and its test
@@ -342,7 +372,7 @@ async function setup(ctx = {}) {
       }
     }
 
-    const verdict = checkToolCall({ tool, args, root, env });
+    const verdict = checkToolCall({ tool, args, root, cwd: launchCwd, env });
     if (verdict.decision === 'deny') {
       return deny(`ADLC rails-guard: blocked ${tool} — ${verdict.reason}`);
     }
@@ -350,12 +380,27 @@ async function setup(ctx = {}) {
     // Phase 2.3 build-gate backstop: a structured mutation on a HIGH-RISK
     // ticket in a context-degraded session is denied even off-rails.
     if (isStructuredMutator(String(tool).toLowerCase())) {
-      const gate = checkBuildGate({ sessionID: e?.sessionID, tracker, root, env });
-      if (gate.decision === 'deny') {
-        return deny(`ADLC build-gate: blocked ${tool} — ${gate.reason}`);
+      const explicitWds = extractAllToolWorkdirs(args);
+      const buildBaseCwd = explicitWds.length > 0 ? resolve(launchCwd, explicitWds[0]) : launchCwd;
+      const candidateBuildRoots = [root];
+      for (const wd of explicitWds) {
+        const owningWd = resolveOwningCheckoutRoot(resolve(launchCwd, wd), root, env);
+        if (owningWd && !candidateBuildRoots.includes(owningWd)) candidateBuildRoots.push(owningWd);
       }
-      if (gate.overridden) {
-        notify(`ADLC build-gate: audited override recorded for ${tool}`, 'warning');
+      for (const rawTarget of extractTargets(args)) {
+        const abs = isAbsolute(rawTarget) ? resolve(rawTarget) : resolve(buildBaseCwd, rawTarget);
+        const owning = resolveOwningCheckoutRoot(abs, root, env);
+        if (owning && !candidateBuildRoots.includes(owning)) candidateBuildRoots.push(owning);
+      }
+      for (const candidateRoot of candidateBuildRoots) {
+        const candidateEnv = envForSecondaryCheckout(candidateRoot, root, env);
+        const gate = checkBuildGate({ sessionID: e?.sessionID, tracker, root: candidateRoot, env: candidateEnv });
+        if (gate.decision === 'deny') {
+          return deny(`ADLC build-gate: blocked ${tool} — ${gate.reason}`);
+        }
+        if (gate.overridden) {
+          notify(`ADLC build-gate: audited override recorded for ${tool}`, 'warning');
+        }
       }
     }
   });
@@ -421,20 +466,26 @@ async function setup(ctx = {}) {
         e.message = message;
         notify(message, 'error');
       };
-      const force = resolveRailsInForce(root, env);
-      if (!force.active) return;
-      if (force.conflict) {
-        railDeny('ADLC rails-guard: active-ticket conflict — rails cannot be resolved');
-        return;
-      }
       const targets = (Array.isArray(e?.resources) ? e.resources : [])
         .filter((p) => typeof p === 'string' && p.trim());
-      for (const target of targets) {
-        const hit = railHit(target, force.rails, root);
-        if (hit) {
-          railDeny(`ADLC rails-guard: denied permission "${kind}" — frozen rail "${hit}" (active ticket ${force.ticketId})`);
+      if (targets.length > 0) {
+        const permVerdict = checkToolCall({
+          tool: 'edit',
+          args: { files: targets },
+          root,
+          cwd: launchCwd,
+          env,
+        });
+        if (permVerdict.decision === 'deny') {
+          railDeny(`ADLC rails-guard: denied permission "${kind}" — ${permVerdict.reason}`);
           return;
         }
+        return;
+      }
+      const force = resolveRailsInForce(root, env);
+      if (force.active && force.conflict) {
+        railDeny('ADLC rails-guard: active-ticket conflict — rails cannot be resolved');
+        return;
       }
     } catch { /* the permission lever must never break the host */ }
   });

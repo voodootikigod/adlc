@@ -33,7 +33,7 @@
 
 import { fileURLToPath } from 'node:url';
 import { isAbsolute, join } from 'node:path';
-import { decide, extractToolName, extractFilePaths, resolveOwning } from './adlc-rails-guard.mjs';
+import { decide, envForCheckoutRoot, extractToolName, extractFilePaths, resolveOwningInternal } from './adlc-rails-guard.mjs';
 import { classifyTool, isShellTool } from '../rails-checker.mjs';
 import { loadTickets, ticketStoreExists } from '@adlc/core';
 import { resolveSessionIdentity } from '../lib/session-identity.mjs';
@@ -123,6 +123,7 @@ export async function consultBuildGate(payload, {
   const cls = classifyTool(extractToolName(payload));
   const mutating = cls === 'mutating' || (cls === 'other' && !isShellTool(extractToolName(payload)));
   try {
+    env = envForCheckoutRoot(root, root, env);
     const storeOverride = env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null;
     const ticketsPath = storeOverride ? (isAbsolute(storeOverride) ? storeOverride : join(root, storeOverride)) : join(root, '.adlc', 'tickets.json');
     if (!ticketStoreExists(root, storeOverride)) return null; // not an ADLC repo → no-op
@@ -258,10 +259,16 @@ export async function dispatch(payload, { root, env = process.env, now, importMo
 
   if (env.ADLC_BUILD_GATE_ENFORCEMENT !== '1') return rails; // buildgate is default-OFF
 
-  const owningRoots = root != null ? [root] : owningRootsForTargets(payload, env);
-  if (owningRoots.includes(null)) return unresolvedBuildGate(payload, toolName, rails);
-  for (const owningRoot of owningRoots) {
-    const gate = await consultBuildGate(payload, { root: owningRoot, env, now, importModule });
+  const owningEntries =
+    root != null
+      ? [{ root, outerRoot: root }]
+      : owningEntriesForTargets(payload, env);
+  if (owningEntries.some((entry) => entry.root == null)) {
+    return unresolvedBuildGate(payload, toolName, rails);
+  }
+  for (const entry of owningEntries) {
+    const targetEnv = envForCheckoutRoot(entry.root, entry.outerRoot, env);
+    const gate = await consultBuildGate(payload, { root: entry.root, env: targetEnv, now, importModule });
     if (gate) return gate;
   }
   return rails;
@@ -272,10 +279,19 @@ export async function dispatch(payload, { root, env = process.env, now, importMo
  * path-less resolution), preserving `null` when any target has no resolvable
  * workspace root so no target can hide an unresolved one by ordering.
  */
-function owningRootsForTargets(payload, env) {
+function owningEntriesForTargets(payload, env) {
   const paths = extractFilePaths(payload);
   const targets = paths.length ? paths : [undefined];
-  return [...new Set(targets.map((p) => resolveOwning(payload, p, undefined, env).root))];
+  const seen = new Set();
+  const out = [];
+  for (const p of targets) {
+    const { root, outerRoot } = resolveOwningInternal(payload, p, undefined, env);
+    const key = root ?? '__null__';
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ root, outerRoot });
+  }
+  return out;
 }
 
 async function readStdin() {
