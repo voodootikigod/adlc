@@ -31,6 +31,7 @@ import { tmp } from '@adlc/core/test-kit';
 import {
   Sandbox, SANDBOX_MODES, NETWORK, READ_POLICY, detectBackend, resolveSandboxMode,
 } from '../lib/sandbox.mjs';
+import { SafeSandbox } from '../lib/safe-sandbox.mjs';
 import { modelPlaneFilesystem, homeStateOf, allocateModelPlaneTmpDir, isSharedTmpRoot } from '../lib/model-plane.mjs';
 import { modelPlaneEnv } from '../lib/env-scrub.mjs';
 import * as claudeCode from '../lib/adapters/claude-code.mjs';
@@ -590,4 +591,77 @@ test('canWrite: a read-only entry under HOME or the private tmp (an attested fil
   assert.equal(s.canWrite(`${home}/pinned.json`), false, 'a read-only leaf under HOME is not');
   assert.equal(s.canWrite(`${PRIVATE_TMP}/ro-tool`), false, 'a read-only leaf under the private tmp is not');
   assert.equal(s.canWrite(`${PRIVATE_TMP}/x`), true, 'the private tmp otherwise is');
+});
+
+test('SafeSandbox HOST model-plane profile isolates PID/IPC/UTS namespaces on Linux so /proc/*/environ never leaks parent ADLC_MANIFEST_KEY', { skip: backend?.name === 'bubblewrap' ? false : 'requires Linux bubblewrap' }, async (t) => {
+  const root = scratch(t, 'mp-proc-pid-');
+  const worktree = join(root, 'wt');
+  mkdirSync(worktree, { recursive: true });
+
+  const hostSandbox = new SafeSandbox({
+    mode: SANDBOX_MODES.SANDBOX,
+    backend: { name: 'bubblewrap', platform: 'linux' },
+    worktree,
+    syntheticHome: null,
+    writablePaths: [],
+    network: NETWORK.ALLOW,
+    readPolicy: READ_POLICY.HOST,
+  });
+  const allowArgv = hostSandbox.wrap(['/bin/true']);
+  assert.ok(allowArgv.includes('--unshare-pid'));
+  assert.ok(allowArgv.includes('--unshare-ipc'));
+  assert.ok(allowArgv.includes('--unshare-uts'));
+  assert.ok(!allowArgv.includes('--unshare-net'));
+
+  const denyNetHost = new SafeSandbox({
+    mode: SANDBOX_MODES.SANDBOX,
+    backend: { name: 'bubblewrap', platform: 'linux' },
+    worktree,
+    syntheticHome: null,
+    writablePaths: [],
+    network: NETWORK.DENY,
+    readPolicy: READ_POLICY.HOST,
+  });
+  assert.ok(denyNetHost.wrap(['/bin/true']).includes('--unshare-net'));
+
+  const sentinel = `CANARY_MANIFEST_SECRET_${process.pid}_${Date.now()}`;
+  const probeScript = `
+    import { readdirSync, readFileSync } from 'node:fs';
+    let found = false;
+    for (const entry of readdirSync('/proc')) {
+      if (!/^\\d+$/.test(entry)) continue;
+      try {
+        const raw = readFileSync('/proc/' + entry + '/environ', 'utf8');
+        if (raw.includes(${JSON.stringify(sentinel)})) found = true;
+      } catch {}
+    }
+    console.log(found ? 'LEAKED' : 'CLEAN');
+  `;
+  const parentWrapper = `
+    import { spawnSync } from 'node:child_process';
+    const argv = JSON.parse(process.argv[1]);
+    const cleanEnv = { PATH: process.env.PATH, HOME: process.env.HOME };
+    const res = spawnSync(argv[0], argv.slice(1), { env: cleanEnv, encoding: 'utf8' });
+    process.stdout.write(res.stdout || '');
+    process.stderr.write(res.stderr || '');
+    process.exit(res.status ?? 1);
+  `;
+  const { spawnSync } = await import('node:child_process');
+  const wrappedProbe = hostSandbox.wrap([process.execPath, '-e', probeScript]);
+  const contained = spawnSync(
+    process.execPath,
+    ['-e', parentWrapper, JSON.stringify(wrappedProbe)],
+    { cwd: worktree, env: { ...process.env, ADLC_MANIFEST_KEY: sentinel }, encoding: 'utf8' },
+  );
+  assert.equal(contained.status, 0, contained.stderr);
+  assert.equal(contained.stdout.trim(), 'CLEAN', 'sandboxed worker must not see parent ADLC_MANIFEST_KEY via /proc/*/environ');
+
+  // Control: without --unshare-pid, scanning /proc/*/environ from a child DOES recover the parent's secret
+  const unwrapped = spawnSync(
+    process.execPath,
+    ['-e', parentWrapper, JSON.stringify([process.execPath, '-e', probeScript])],
+    { cwd: worktree, env: { ...process.env, ADLC_MANIFEST_KEY: sentinel }, encoding: 'utf8' },
+  );
+  assert.equal(unwrapped.status, 0, unwrapped.stderr);
+  assert.equal(unwrapped.stdout.trim(), 'LEAKED', 'control proves /proc/*/environ leaks parent secret without --unshare-pid');
 });

@@ -95,13 +95,25 @@ export class SafeSandbox extends Sandbox {
       });
       return [this.launcherPath ?? 'sandbox-exec', '-p', profile, ...innerArgv];
     }
-    if (this.backend?.name === 'bubblewrap' && this.readPolicy === READ_POLICY.BOUNDED) {
+    if (this.backend?.name === 'bubblewrap') {
       const writeRoots = [this.worktree, this.syntheticHome, ...(this.writablePaths ?? [])].filter(Boolean);
-      for (const p of [...writeRoots, ...(this.readOnlyPaths ?? [])]) {
+      const roPaths = this.readPolicy === READ_POLICY.BOUNDED ? (this.readOnlyPaths ?? []) : [];
+      for (const p of [...writeRoots, ...roPaths]) {
         if (!(typeof p === 'string' && p.startsWith('/') && !p.includes('\0'))) throw new TypeError('Invalid sandbox mount path');
       }
       const writeBinds = writeRoots.flatMap((rw) => ['--bind', rw, rw]);
-      const roBinds = (this.readOnlyPaths ?? []).flatMap((ro) => ['--ro-bind', ro, ro]);
+      if (this.readPolicy === READ_POLICY.HOST) {
+        return [
+          this.launcherPath ?? 'bwrap',
+          ...(this.network === NETWORK.DENY ? ['--unshare-net'] : []),
+          '--unshare-pid', '--unshare-ipc', '--unshare-uts',
+          '--die-with-parent', '--chdir', this.worktree,
+          '--ro-bind', '/', '/', '--dev-bind', '/dev', '/dev', '--proc', '/proc',
+          ...writeBinds,
+          '--', ...innerArgv,
+        ];
+      }
+      const roBinds = roPaths.flatMap((ro) => ['--ro-bind', ro, ro]);
       return [
         this.launcherPath ?? 'bwrap',
         ...(this.network === NETWORK.DENY ? ['--unshare-net'] : []),
