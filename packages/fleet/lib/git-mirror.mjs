@@ -80,12 +80,58 @@ function refSha(git, fullRef) {
  * config would execute as the host user. A positive allowlist, never a deny-list (codex r14 #1).
  */
 export const MIRROR_CONFIG_ALLOWED_KEYS = Object.freeze([
-  'core.repositoryformatversion', 'core.filemode', 'core.bare', 'core.logallrefupdates',
+  'core.repositoryformatversion', 'core.filemode', 'core.bare',
   'core.ignorecase', 'core.precomposeunicode', 'core.symlinks',
 ]);
 
 /** Host git invocations INSIDE the mirror carry these, whatever the mirror's own config says. */
-export const HOST_SAFE_GIT_FLAGS = Object.freeze(['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.sshCommand=/bin/false']);
+export const HOST_SAFE_GIT_FLAGS = Object.freeze(['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.sshCommand=/bin/false', '-c', 'core.logallrefupdates=false']);
+
+export const DEFAULT_MAX_MIRROR_DEPTH = 32;
+export const DEFAULT_MAX_MIRROR_ENTRIES = 65536;
+export const DEFAULT_MAX_MIRROR_BYTES = 512 * 1024 * 1024;
+
+/** Walk the mirror iteratively without following symlinks; refuse links, special files, hardlinks, shallow/alternates/grafts files, and unbounded trees. */
+export function assertGitDirTreeSafe(mirrorPath, {
+  maxDepth = DEFAULT_MAX_MIRROR_DEPTH,
+  maxEntries = DEFAULT_MAX_MIRROR_ENTRIES,
+  maxBytes = DEFAULT_MAX_MIRROR_BYTES,
+} = {}) {
+  let entryCount = 0;
+  let totalBytes = 0;
+  const stack = [{ dir: mirrorPath, rel: '', depth: 0 }];
+  while (stack.length > 0) {
+    const { dir, rel, depth } = stack.pop();
+    if (depth > maxDepth) {
+      throw new Error(`Unsafe git mirror: directory depth exceeds ${maxDepth} at ${rel}`);
+    }
+    for (const name of readdirSync(dir)) {
+      entryCount += 1;
+      if (entryCount > maxEntries) {
+        throw new Error(`Unsafe git mirror: entry count exceeds ${maxEntries}`);
+      }
+      const relPath = rel ? `${rel}/${name}` : name;
+      const full = join(dir, name);
+      const st = lstatSync(full);
+      if (
+        st.isSymbolicLink() ||
+        (!st.isFile() && !st.isDirectory()) ||
+        (st.isFile() && st.nlink > 1) ||
+        relPath === 'objects/info/alternates' || relPath === 'info/grafts' || relPath === 'shallow'
+      ) {
+        throw new Error('Unsafe git mirror entry: ' + relPath);
+      }
+      if (st.isFile()) {
+        totalBytes += st.size;
+        if (totalBytes > maxBytes) {
+          throw new Error(`Unsafe git mirror: total size exceeds ${maxBytes} bytes`);
+        }
+      } else {
+        stack.push({ dir: full, rel: relPath, depth: depth + 1 });
+      }
+    }
+  }
+}
 
 /**
  * Refuse a mirror whose `config` carries any key outside the allowlist, any `config.worktree`
@@ -94,6 +140,7 @@ export const HOST_SAFE_GIT_FLAGS = Object.freeze(['-c', 'core.fsmonitor=false', 
  */
 export function assertMirrorConfigPristine({ mirror, gitAt = defaultGit } = {}) {
   requireArgs('assertMirrorConfigPristine', { mirror }, ['mirror']);
+  assertGitDirTreeSafe(mirror);
   const git = gitAt(mirror);
   const configPath = join(mirror, 'config');
   let listing = '';

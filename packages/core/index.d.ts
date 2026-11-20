@@ -416,6 +416,57 @@ export function sweepStaleTemps(
 ): number;
 export function clearRecord(recordPath: string): void;
 
+// lib/sandbox-runner.mjs
+export type SandboxType = 'bwrap' | 'sandbox-exec';
+export type SandboxRunResult = { exitCode: number; stdout: string; stderr: string; timedOut: boolean };
+export const SENSITIVE_HOME_DIRS: readonly string[];
+export const SENSITIVE_HOME_FILES: readonly string[];
+export const USER_EPHEMERAL_ROOTS: readonly string[];
+export const SANDBOX_PROFILES: Record<string, { binary: string; description: string }>;
+export function sanitizeCandidateEnv(baseEnv?: Record<string, string | undefined>): Record<string, string>;
+export function resolveSandboxBinary(name: string, opts?: Record<string, unknown>): string | null;
+export function detectSandbox(opts?: { which?: (cmd: string) => string | null; pathEnv?: string; fsOps?: Record<string, unknown>; spawn?: Function }): SandboxType | null;
+export function buildSandboxedArgs(
+  sandboxType: SandboxType,
+  cloneDir: string,
+  cmdArgs: string[],
+  opts?: Record<string, unknown>
+): string[];
+export function spawnSandboxed(
+  sandboxType: string,
+  cloneDir: string,
+  cmdArgs: string[],
+  spawnOpts?: Record<string, unknown>
+): SandboxRunResult;
+export function spawnCandidateCmd(
+  cmdArgs: string[],
+  cloneDir: string,
+  opts?: Record<string, unknown>
+): SandboxRunResult;
+export function buildMacOSSbpl(cloneDir: string, opts?: Record<string, unknown>): string;
+export const seatbeltWrap: typeof buildMacOSSbpl;
+export function collectMaskedEnvFiles(
+  roots: Array<string | null | undefined>,
+  cloneDir: string,
+  opts?: Record<string, unknown>
+): string[];
+export function collectWorktreeSiblingMasks(
+  roots: Array<string | null | undefined>,
+  cloneDir: string,
+  workDir?: string
+): string[];
+export function collectBwrapHomeMasks(homeDir: string | null | undefined, cloneDir: string, workDir: string): string[];
+export function resolveEnvMasks(
+  roots: Array<string | null | undefined>,
+  cloneDir: string,
+  opts?: Record<string, unknown>
+): string[];
+export function resolveCommonGitInfo(startDir: string): { commonGitDir: string | null; commonGitRoot: string | null };
+export function buildBwrapIsolationMounts(opts: Record<string, unknown>): string[];
+export function realpathSafe(p: string): string;
+export function isUnderOrEqual(root: string, target: string): boolean;
+export function isInsideClone(cloneLogical: string, cloneReal: string, target: string): boolean;
+
 // lib/cluster.mjs
 export const BASE_STOPWORDS: ReadonlySet<string>;
 export function jaccard(setA: ReadonlySet<unknown>, setB: ReadonlySet<unknown>): number;

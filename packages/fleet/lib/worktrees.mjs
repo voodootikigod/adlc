@@ -169,7 +169,8 @@ export function createWorktree(repo, ticketId, { integrationBranch, git = defaul
 }
 
 /** Restore a worktree to its clean cut state between strikes (§6.3). */
-export function resetWorktree(worktreePath, git = defaultGit(worktreePath)) {
+export function resetWorktree(worktreePath, git = defaultGit(worktreePath), cutTip = null) {
+  if (typeof cutTip === 'string' && cutTip.length > 0) git('reset', '--hard', cutTip);
   git('checkout', '--', '.');
   git('clean', '-fd');
 }
@@ -179,10 +180,23 @@ export function resetWorktree(worktreePath, git = defaultGit(worktreePath)) {
  * `.adlc/` (§6.3) so fleet-provisioned control files never enter the diff — the
  * protected-path integrity scan (§8.3d) covers those separately.
  */
-export function commitWorker(worktreePath, ticketId, git = defaultGit(worktreePath)) {
+export function commitWorker(worktreePath, ticketId, git = defaultGit(worktreePath), { cutTip = null } = {}) {
   git('add', '-A', '--', ':!.claude', ':!.adlc');
-  git('commit', '-q', '-m', `feat(${ticketId}): fleet worker build`);
-  return git('rev-parse', 'HEAD');
+  try {
+    git('commit', '-q', '-m', `feat(${ticketId}): fleet worker build`);
+  } catch (err) {
+    const clean = git('status', '--porcelain', '--', ':!.claude', ':!.adlc').trim() === '';
+    if (
+      clean &&
+      typeof cutTip === 'string' &&
+      cutTip !== '' &&
+      Number(git('rev-list', '--count', `${cutTip}..HEAD`).trim()) > 0
+    ) {
+      return git('rev-parse', 'HEAD').trim();
+    }
+    throw err;
+  }
+  return git('rev-parse', 'HEAD').trim();
 }
 
 /**

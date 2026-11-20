@@ -6,7 +6,7 @@
 
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { checkSyntax, syntaxLanguage, tail } from '@adlc/core';
+import { checkSyntax, syntaxLanguage, tail, sanitizeCandidateEnv, detectSandbox, spawnSandboxed } from '@adlc/core';
 import { writeFileAtomic, NO_JOURNAL } from './inflight.mjs';
 
 // Enough of a failing witness's output to show its failure line, small enough
@@ -32,8 +32,34 @@ export function runWitness(witnessSpec, cwd, runFn = defaultRun) {
  * exit status either, so it is told apart from a timeout by spawnSync's error
  * code rather than by a null status.
  */
-function defaultRun(cmd, args, cwd) {
-  const r = spawnSync(cmd, args, { cwd, timeout: 60_000, encoding: 'utf8', stdio: 'pipe', shell: false });
+export function defaultRun(cmd, args, cwd, { detect = detectSandbox, unsafeNoSandbox = false } = {}) {
+  const env = sanitizeCandidateEnv(process.env);
+  if (!unsafeNoSandbox) {
+    const sandboxType = detect();
+    if (!sandboxType) {
+      throw new Error(
+        'No OS sandbox binary found (bwrap on Linux, sandbox-exec on macOS). ' +
+        'Pass --unsafe-no-sandbox to run witness commands without sandboxing ' +
+        '(ONLY safe inside a disposable VM or container).'
+      );
+    }
+    const r = spawnSandboxed(sandboxType, cwd, [cmd, ...args], { timeout: 60_000, env });
+    const stderr = r.stderr ?? '';
+    const output = tail(`${r.stdout ?? ''}${stderr}`.trim(), OUTPUT_TAIL);
+    if (!r.timedOut && r.exitCode !== 0) {
+      if (/(?:bwrap:\s*execvp|sandbox-exec:)[^\n]*No such file or directory/i.test(stderr)) {
+        return { status: null, timedOut: false, output, spawnError: `ENOENT: ${stderr.trim()}` };
+      }
+      if (/(?:bwrap:\s*execvp|sandbox-exec:)[^\n]*Permission denied/i.test(stderr)) {
+        return { status: null, timedOut: false, output, spawnError: `EACCES: ${stderr.trim()}` };
+      }
+    }
+    return { status: r.exitCode, timedOut: r.timedOut, output, spawnError: null };
+  }
+  process.stderr.write(
+    'WARNING: Running witness command WITHOUT OS sandbox protection (--unsafe-no-sandbox).\n'
+  );
+  const r = spawnSync(cmd, args, { cwd, timeout: 60_000, encoding: 'utf8', stdio: 'pipe', shell: false, env });
   const timedOut = r.error?.code === 'ETIMEDOUT' || (!r.error && r.signal === 'SIGTERM');
   const spawnError = r.error && !timedOut ? `${r.error.code ?? 'error'}: ${r.error.message}` : null;
   const output = tail(`${r.stdout ?? ''}${r.stderr ?? ''}`.trim(), OUTPUT_TAIL);

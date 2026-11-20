@@ -123,11 +123,44 @@ export function shellHasMutation(text) {
   );
 }
 
+const SINGLE_LITERAL_INTERPRETER_WRITES = [
+  /^\s*node\s+(?:-[ep]|--eval|--print)\s+"require\('(?:node:)?fs'\)\.(?:writeFileSync|appendFileSync)\('([A-Za-z0-9_./-]+)',\s*'[^'"\\$`\r\n]*'\);?"\s*$/,
+  /^\s*node\s+(?:-[ep]|--eval|--print)\s+'require\("(?:node:)?fs"\)\.(?:writeFileSync|appendFileSync)\("([A-Za-z0-9_./-]+)",\s*"[^'"\\$`\r\n]*"\);?'\s*$/,
+  /^\s*python3?\s+-c\s+"open\('([A-Za-z0-9_./-]+)',\s*'[wa]'\)\.write\('[^'"\\$`\r\n]*'\)"\s*$/,
+  /^\s*python3?\s+-c\s+'open\("([A-Za-z0-9_./-]+)",\s*"[wa]"\)\.write\("[^'"\\$`\r\n]*"\)'\s*$/,
+  /^\s*ruby\s+-e\s+"File\.write\('([A-Za-z0-9_./-]+)',\s*'[^'"\\$`\r\n]*'\)"\s*$/,
+  /^\s*ruby\s+-e\s+'File\.write\("([A-Za-z0-9_./-]+)",\s*"[^'"\\$`\r\n]*"\)'\s*$/,
+];
+
+function singleLiteralInterpreterWriteTarget(text) {
+  for (const re of SINGLE_LITERAL_INTERPRETER_WRITES) {
+    const m = re.exec(text);
+    if (m) return m[1];
+  }
+  return null;
+}
+
 /** Mutating via a command whose write targets can't be read off the command line. */
 export function shellHasOpaqueMutation(text) {
+  const cmd = String(text ?? '');
+  const hasSingleLiteralWrite = singleLiteralInterpreterWriteTarget(cmd) !== null;
   return (
-    /\bgit\s+(?:apply|am|checkout|restore|reset|clean|merge|rebase|cherry-pick|stash|commit)\b/.test(text) ||
-    /\b(?:patch|tar|unzip)\b/.test(text)
+    /\bgit\s+(?:apply|am|checkout|restore|reset|clean|merge|rebase|cherry-pick|stash|commit)\b/.test(cmd) ||
+    /\b(?:patch|tar|unzip)\b/.test(cmd) ||
+    /\b(?:sh|bash|dash|zsh|ksh)\b[^;&|]*\s-[a-zA-Z]*c\b/.test(cmd) ||
+    /(?:^|[;&|()\n]\s*)(?:eval|exec|source)\s+\S+/.test(cmd) ||
+    /(?:^|[;&|()\n]\s*)\.\s+\S+/.test(cmd) ||
+    /\bnode\b[^;&|]*\s(?:-r|--require|--import|--loader)(?:=|\s|$)/.test(cmd) ||
+    /\bperl\b[^;&|]*\s-[a-zA-Z]*[ei]\b/.test(cmd) ||
+    /\blua\b[^;&|]*\s-e\b/.test(cmd) ||
+    /\bphp\b[^;&|]*\s-r\b/.test(cmd) ||
+    /\bdeno\s+eval\b/.test(cmd) ||
+    /\bbun\b[^;&|]*\s-e\b/.test(cmd) ||
+    (!hasSingleLiteralWrite && (
+      /\bnode\b[^;&|]*\s(?:-[ep]|--eval|--print)(?:=|\s|$)/.test(cmd) ||
+      /\bpython3?\b[^;&|]*\s-c\b/.test(cmd) ||
+      /\bruby\b[^;&|]*\s-e\b/.test(cmd)
+    ))
   );
 }
 
@@ -195,6 +228,41 @@ function splitOnUnquotedSeparators(text) {
   return segments;
 }
 
+const MUTATING_BRANCH_FLAGS = new Set([
+  '-d', '-D', '--delete',
+  '-m', '-M', '--move',
+  '-c', '-C', '--copy',
+  '-f', '--force',
+  '-u', '--set-upstream-to', '--unset-upstream',
+  '--edit-description',
+]);
+
+const READONLY_BRANCH_FLAGS = new Set([
+  '-a', '--all',
+  '-r', '--remotes',
+  '-v', '-vv', '--verbose',
+  '--show-current',
+  '--color', '--no-color',
+]);
+
+const LISTING_BRANCH_FLAGS = new Set([
+  '-l', '--list',
+  '--contains', '--no-contains',
+  '--merged', '--no-merged',
+]);
+
+function isReadOnlyGitBranch(segment) {
+  const tokens = shellTokens(segment);
+  if (tokens[0] !== 'git' || tokens[1] !== 'branch') return false;
+  const args = tokens.slice(2);
+  if (args.some((token) => MUTATING_BRANCH_FLAGS.has(token) || token.startsWith('--set-upstream-to='))) {
+    return false;
+  }
+  const everyReadOnly = args.every((token) => READONLY_BRANCH_FLAGS.has(token) || READONLY_BRANCH_FLAGS.has(token.split('=')[0]));
+  const hasListing = args.some((token) => LISTING_BRANCH_FLAGS.has(token) || LISTING_BRANCH_FLAGS.has(token.split('=')[0]));
+  return everyReadOnly || hasListing;
+}
+
 /**
  * Positively read-only only if EVERY command segment is individually a known
  * read-only command (empty string counts). Splitting on separators is
@@ -205,7 +273,7 @@ function splitOnUnquotedSeparators(text) {
 export function shellIsPositivelyReadOnly(text) {
   const normalized = String(text ?? '').trim();
   if (normalized === '') return true;
-  const readOnlyPrefix = /^(?:git\s+(?:status|diff|show|log|rev-parse|branch|ls-files)\b|pwd\b|ls\b|rg\b|grep\b|cat\b|sed\s+-n\b|head\b|tail\b|wc\b|nl\b|node\s+(?:--check|--test)\b|npm\s+(?:test|run\s+test)\b|adlc\s+(?:hollow-test|rails-guard|flail-detector|preflight|run\s+p[34])\b)/;
+  const readOnlyPrefix = /^(?:git\s+(?:status|diff|show|log|rev-parse|ls-files)\b|pwd\b|ls\b|rg\b|grep\b|cat\b|sed\s+-n\b|head\b|tail\b|wc\b|nl\b|node\s+(?:--check|--test)\b|npm\s+(?:test|run\s+test)\b|adlc\s+(?:hollow-test|rails-guard|flail-detector|preflight|run\s+p[34])\b)/;
   // `adlc flail-detector --record` and `adlc rails-guard --record` append a
   // signed entry to the manifest ledger (#626). Reject any `--record` token
   // on an `adlc` segment so a ledger write is never classified read-only.
@@ -215,7 +283,12 @@ export function shellIsPositivelyReadOnly(text) {
   return segments
     .map((s) => s.trim())
     .filter((s) => s !== '')
-    .every((segment) => readOnlyPrefix.test(segment) && !adlcRecordOption.test(segment));
+    .every((segment) => {
+      if (/(?:^|[;&|()\s])GIT_EXTERNAL_DIFF=/.test(segment)) return false;
+      if (/^git\s+.*(?:^|[\s"'])--(?:ext-diff|textconv)(?:$|[\s"'])/.test(segment)) return false;
+      if (adlcRecordOption.test(segment)) return false;
+      return isReadOnlyGitBranch(segment) || readOnlyPrefix.test(segment);
+    });
 }
 
 /** A nominally read-only command smuggling a write via an output option. */
@@ -227,7 +300,7 @@ export function shellHasWriteOption(text) {
   // separate argument (`git diff "--output" file` — identical to unquoted
   // `git diff --output file` once the shell strips the quotes) closes the
   // option's own quote right where `=`/whitespace was assumed to be.
-  return /(?:^|[\s"'])--(?:output|output-file|test-reporter-destination|reporter-destination)['"]?(?:=|\s+)\S+/.test(text);
+  return /(?:^|[\s"'])--(?:output|output-file|test-reporter-destination|reporter-destination|out-file|save|write|in-place|pre|pre-glob)['"]?(?:=|\s+)\S+/.test(text);
 }
 
 export function shellChangesCwd(text) {
@@ -240,6 +313,9 @@ export function shellHasExpansion(text) {
 
 /** Collect literal path candidates (redirect targets, quoted paths, sed w-files, tokens). */
 export function collectShellPaths(text, out) {
+  const interpTarget = singleLiteralInterpreterWriteTarget(text);
+  if (interpTarget) out.add(interpTarget);
+
   const redirectPattern = /(?:[0-9])?>>?\s*(?:"([^"]+)"|'([^']+)'|([^\s;&|<>]+))/g;
   let redirect;
   while ((redirect = redirectPattern.exec(text)) !== null) {

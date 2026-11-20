@@ -5,9 +5,10 @@
 // in-flight record is what lets the next run do it (see inflight.mjs).
 
 import { readFileSync } from 'node:fs';
+import { relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { tokenizeCommand } from '@adlc/core';
-import { writeFileAtomic, NO_JOURNAL } from './inflight.mjs';
+import { tokenizeCommand, sanitizeCandidateEnv, detectSandbox, spawnSandboxed } from '@adlc/core';
+import { writeFileAtomic, NO_JOURNAL, escapesRepoOrSymlink } from './inflight.mjs';
 
 export { tokenizeCommand };
 
@@ -43,9 +44,23 @@ export function substituteToken(tokens, placeholder, value) {
  *   before any file is written; begin throwing aborts before planting
  * @returns {{ stdout: string, stderr: string, exitCode: number | null, timedOut: boolean }}
  */
-export function runWithPlants(plants, reviewCmd, baseRef, cwd, timeoutMs, { journal = NO_JOURNAL } = {}) {
+export function runWithPlants(plants, reviewCmd, baseRef, cwd, timeoutMs, {
+  journal = NO_JOURNAL,
+  detect = detectSandbox,
+  sandboxReviewCmd = process.env.ADLC_SANDBOX_REVIEW_CMD === '1',
+  unsafeNoSandbox = false,
+} = {}) {
   // Group plants by absolutePath.
   const byFile = groupByFile(plants);
+
+  // Refuse any target outside the repository or reached through a symlink
+  // before anything is read or journaled (NO_JOURNAL callers included).
+  for (const [absPath] of byFile) {
+    const rel = relative(cwd, absPath);
+    if (escapesRepoOrSymlink(cwd, rel)) {
+      throw new Error(`Refusing to plant outside repository or through symlink: ${absPath}`);
+    }
+  }
 
   // Save originals keyed by absolutePath.
   const originals = new Map();
@@ -75,14 +90,35 @@ export function runWithPlants(plants, reviewCmd, baseRef, cwd, timeoutMs, { jour
       return { stdout: '', stderr: 'empty review command', exitCode: 1, timedOut: false };
     }
 
-    // Run the review command.
-    const result = spawnSync(argv[0], argv.slice(1), {
-      shell: false,
-      cwd,
-      timeout: timeoutMs,
-      encoding: 'utf8',
-      stdio: 'pipe',
-    });
+    // Run the review command. The child env is always scrubbed. The OS sandbox
+    // is opt-in (ADLC_SANDBOX_REVIEW_CMD=1): live reviewers need outbound HTTPS,
+    // and a sandbox wrapper would become the child's parent (process.ppid).
+    const env = sanitizeCandidateEnv(process.env);
+    let result;
+    const sandboxType = sandboxReviewCmd ? detect() : null;
+    if (sandboxReviewCmd && !sandboxType && !unsafeNoSandbox) {
+      throw new Error(
+        'ADLC_SANDBOX_REVIEW_CMD=1 requested OS sandboxing for --review-cmd, ' +
+        'but no usable OS sandbox backend (bwrap on Linux, sandbox-exec on macOS) is available. ' +
+        'Pass --unsafe-no-sandbox only inside a disposable VM or container.'
+      );
+    }
+    if (sandboxType) {
+      const r = spawnSandboxed(sandboxType, cwd, argv, { cwd, timeout: timeoutMs, env });
+      result = { stdout: r.stdout, stderr: r.stderr, status: r.exitCode, signal: r.timedOut ? 'SIGTERM' : null };
+    } else {
+      if (sandboxReviewCmd && unsafeNoSandbox) {
+        process.stderr.write('WARNING: ADLC_SANDBOX_REVIEW_CMD=1 bypassed via --unsafe-no-sandbox.\n');
+      }
+      result = spawnSync(argv[0], argv.slice(1), {
+        shell: false,
+        cwd,
+        timeout: timeoutMs,
+        encoding: 'utf8',
+        stdio: 'pipe',
+        env,
+      });
+    }
 
     const timedOut = result.signal === 'SIGTERM' || result.status === null;
     return {

@@ -455,11 +455,11 @@ const DECLARED_HOME_STATE = {
     files: ['.gemini/oauth_creds.json', '.gemini/google_accounts.json'],
   },
   agy: {
-    dirs: ['.antigravity', '.gemini/tmp', '.gemini/sessions', '.cache/gemini'],
+    dirs: ['.antigravity/logs', '.antigravity/sessions', '.antigravity/tmp', '.gemini/tmp', '.gemini/sessions', '.cache/gemini'],
     files: ['.gemini/oauth_creds.json', '.gemini/google_accounts.json'],
   },
   jetski: {
-    dirs: ['.jetski', '.gemini/tmp', '.gemini/sessions', '.cache/gemini'],
+    dirs: ['.jetski/logs', '.jetski/sessions', '.jetski/tmp', '.gemini/tmp', '.gemini/sessions', '.cache/gemini'],
     files: ['.gemini/oauth_creds.json', '.gemini/google_accounts.json'],
   },
   opencode: {

@@ -138,17 +138,25 @@ function normalizeRelativePath(cwd, path) {
   return normalized;
 }
 
+const DIRECTORY_IGNORE_PATHS = new Set(['.adlc/tickets', '.adlc/ticket-archive']);
+
 function ignoredPathSet(cwd, paths) {
   return new Set(
     [...DEFAULT_IGNORED_PATHS, ...paths]
-      .map((path) => normalizeRelativePath(cwd, path))
+      .map((rawPath) => {
+        const norm = normalizeRelativePath(cwd, rawPath);
+        if (!norm) return null;
+        const hasTrailingSlash = String(rawPath).replaceAll('\\', '/').endsWith('/');
+        const isKnownDir = DIRECTORY_IGNORE_PATHS.has(norm) || norm === 'manifest.d' || norm.endsWith('/manifest.d');
+        return (hasTrailingSlash || isKnownDir) ? `${norm}/` : norm;
+      })
       .filter(Boolean)
   );
 }
 
 function isIgnoredPath(relativePath, ignoredPaths) {
   const normalized = relativePath.replaceAll('\\', '/');
-  return [...ignoredPaths].some((path) => normalized === path || normalized.startsWith(`${path}/`));
+  return [...ignoredPaths].some((ig) => ig.endsWith('/') ? (normalized === ig.slice(0, -1) || normalized.startsWith(ig)) : normalized === ig);
 }
 
 // ── Untracked-file refusal (#365 Decision 2 / AC15) ──────────────────────────────────────────

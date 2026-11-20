@@ -10,7 +10,7 @@
 // agy/jetski meters per-model quota pools.
 
 import { accessSync, constants, statSync } from 'node:fs';
-import { join, isAbsolute } from 'node:path';
+import { dirname, join, isAbsolute } from 'node:path';
 import { defaultExec, mapResult, modelArgs } from './_shared.mjs';
 
 export const name = 'gemini';
@@ -63,6 +63,10 @@ export function detectBinary(targets = ['jetski', 'agy'], env = process.env, pla
         const candidate = join(dir, binName + ext);
         try {
           const stat = statSync(candidate);
+          if (platform !== 'win32') {
+            const parentStat = statSync(dirname(candidate));
+            if ((stat.mode & 0o022) !== 0 || (parentStat.mode & 0o022) !== 0) continue;
+          }
           if (stat.isFile()) {
             accessSync(candidate, constants.X_OK);
             return candidate;

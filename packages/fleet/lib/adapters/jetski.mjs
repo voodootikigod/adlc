@@ -9,7 +9,7 @@ export const pool = 'default';
  * runs the JetSki CLI, which keeps its own state, so it declares both.
  */
 export const homeState = Object.freeze({
-  dirs: Object.freeze(['.jetski', '.gemini/tmp', '.gemini/sessions', '.cache/gemini']),
+  dirs: Object.freeze(['.jetski/logs', '.jetski/sessions', '.jetski/tmp', '.gemini/tmp', '.gemini/sessions', '.cache/gemini']),
   files: Object.freeze(['.gemini/oauth_creds.json', '.gemini/google_accounts.json']),
 });
 export const aliases = Object.freeze(['default']);
