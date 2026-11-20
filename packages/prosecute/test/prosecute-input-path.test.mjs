@@ -79,13 +79,23 @@ test('revisionIgnorePaths and adlc-prosecute reject in-tree --input and provenan
     assert.match(badTranscript.stderr, /in-repository evidence path must live under/);
     rmSync(join(dir, '.adlc', 'bad-transcript.json'));
 
-    // A symlink is refused even when it sits under .adlc/.
+    // A symlink (including a dangling symlink) is refused even when it sits under .adlc/.
     writeFileSync(join(external, 'real.json'), '{}');
     symlinkSync(join(external, 'real.json'), join(dir, '.adlc', 'link.json'));
     const symlinked = runBin([...RECORD, '--input', '.adlc/link.json'], dir);
     assert.equal(symlinked.status, 1);
     assert.match(symlinked.stderr, /evidence path must not be a symlink/);
     rmSync(join(dir, '.adlc', 'link.json'));
+
+    symlinkSync(join(external, 'nonexistent.json'), join(dir, '.adlc', 'dangling.json'));
+    const dangling = runBin([...RECORD, '--input', '.adlc/dangling.json'], dir);
+    assert.equal(dangling.status, 1);
+    assert.match(dangling.stderr, /evidence path must not be a symlink/);
+    rmSync(join(dir, '.adlc', 'dangling.json'));
+
+    const missingInput = runBin(['--input', '.adlc/missing.json', '--ticket', 'T1', '--base', 'main'], dir);
+    assert.equal(missingInput.status, 1);
+    assert.match(missingInput.stderr, /^error: could not read input:/m);
 
     // A regular file under .adlc/ and an external temp file are both accepted.
     writeFileSync(join(dir, '.adlc', 'passes.json'), '{}');

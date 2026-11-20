@@ -350,6 +350,8 @@ export function runStdioServer({
       for (const child of activeChildren) child.kill('SIGTERM');
     };
     if (signal) signal.addEventListener('abort', onAbort);
+    const SHUTDOWN_SIGNALS = ['SIGTERM', 'SIGINT', 'SIGHUP'];
+    for (const sig of SHUTDOWN_SIGNALS) process.on(sig, onAbort);
 
     // Requests execute with bounded concurrency and queue capacity; responses preserve request order.
     let tail = Promise.resolve();
@@ -359,11 +361,11 @@ export function runStdioServer({
         let parsedId = null;
         try { parsedId = JSON.parse(line)?.id; } catch { /* malformed */ }
         if (parsedId !== undefined && parsedId !== null) {
-          tail = tail.then(() => send({
+          send({
             jsonrpc: '2.0',
             id: parsedId,
             error: { code: -32000, message: 'Server busy: request queue limit exceeded' },
-          }));
+          });
         }
         return;
       }
@@ -392,6 +394,7 @@ export function runStdioServer({
     });
     lines.on('close', async () => {
       signal?.removeEventListener('abort', onAbort);
+      for (const sig of SHUTDOWN_SIGNALS) process.off(sig, onAbort);
       await Promise.allSettled([...inflight]);
       resolvePromise();
     });

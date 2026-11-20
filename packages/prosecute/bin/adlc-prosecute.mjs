@@ -7,8 +7,8 @@ import { detectTicketStore, GitTreeTicketStore } from '@adlc/tickets';
 import { runProsecution, resolveProsecutionRevision, revisionIgnorePaths } from '../lib/run.mjs';
 import { classifyTrustRootTier } from '../lib/tier.mjs';
 import { usageWarnings } from '../lib/schema.mjs';
-import { recordCrossModelReview, carryForwardCrossModelReview, hasCrossModelApproveForRevision, manifestChainTrustworthy, manifestChainBreakReason, CROSS_MODEL_GATE, scopeObservedEntriesToAuthor } from '../lib/cross-model.mjs';
-import { readObservedAttestations, assertNoTruncation, mirrorObservedAttestations } from '../lib/attestation-store.mjs';
+import { recordCrossModelReview, carryForwardCrossModelReview, hasCrossModelApproveForRevision, evaluateCrossModelRevision, manifestChainTrustworthy, manifestChainBreakReason, CROSS_MODEL_GATE } from '../lib/cross-model.mjs';
+import { readObservedAttestations, mirrorObservedAttestations } from '../lib/attestation-store.mjs';
 import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 import { loadManifestKeyFromEnvLocal } from '../lib/load-env-local.mjs';
 
@@ -18,8 +18,10 @@ import { loadManifestKeyFromEnvLocal } from '../lib/load-env-local.mjs';
 function assertSafeEvidencePath(rawPath, cwd, dir) {
   if (typeof rawPath !== 'string' || rawPath === '') return;
   const abs = resolve(cwd, rawPath);
-  if (existsSync(abs) && lstatSync(abs).isSymbolicLink()) {
-    opError(`evidence path must not be a symlink: ${rawPath}`);
+  try {
+    if (lstatSync(abs).isSymbolicLink()) opError(`evidence path must not be a symlink: ${rawPath}`);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
   }
   const realCwd = realpathSync(cwd);
   const realAbs = existsSync(abs) ? realpathSync(abs) : resolve(realCwd, relative(cwd, abs));
@@ -1056,34 +1058,12 @@ if (positionals[0] === 'tier-check') {
     }
   }
 
-  const satisfied = hasCrossModelApproveForRevision({ dir: values.dir, revision, authorProvider, key, observedEntries });
-  // #364 — WHY it failed, not just THAT it failed. hasCrossModelApproveForRevision checks the
-  // chain before examining any entry, so "the chain does not verify" and "no entry matches this
-  // revision" arrive here as the same `false`. Reporting both as a missing attestation sends the
-  // operator to run a distinct-provider adversarial review and record one — work that cannot
-  // clear a broken chain (record-cross-model refuses to append onto it). The review is the
-  // wasted cost. `satisfied` still decides the exit code; this only attributes the cause.
-  //
-  // Short-circuit on `satisfied`: hasCrossModelApproveForRevision returns true ONLY after its
-  // own manifestChainTrustworthy check passed, so satisfied ⇒ the chain verified. Re-deriving
-  // it would re-read and re-verify the whole ledger on the PASS path for an answer already
-  // known (cross-model review finding, MEDIUM). The || keeps the failing path exact.
+  const satisfied = hasCrossModelApproveForRevision({ dir: values.dir, revision, authorProvider, key, observedEntries, ticket: values.ticket });
   const chainTrustworthy = satisfied || manifestChainTrustworthy(values.dir, key);
-  // Same short-circuit logic for the THIRD cause (#355): only worth re-deriving on the
-  // failing path, and only meaningful when a store was actually supplied.
   let truncationDetected = false;
   if (!satisfied && chainTrustworthy && observedEntries !== undefined) {
-    // Forest-aware for the same reason as mirror-attestations above: this
-    // must see the SAME entries hasCrossModelApproveForRevision evaluated
-    // (forest-wide since slice 2), or a segmented repo's truncation
-    // attribution silently degrades to "root-only", the exact regression
-    // this diagnostic branch exists to distinguish from a real gap.
     const { entries: prEntries } = readManifestForest(values.dir);
-    // Same author-scoping hasCrossModelApproveForRevision applies internally (round-4
-    // finding): recomputing this with UNSCOPED observedEntries would misreport a
-    // cross-author revision collision as truncation instead of a missing attestation.
-    const authorScopedObserved = scopeObservedEntriesToAuthor(observedEntries, authorProvider);
-    truncationDetected = !assertNoTruncation({ prEntries, observedEntries: authorScopedObserved, revision, key }).ok;
+    truncationDetected = evaluateCrossModelRevision({ prEntries, observedEntries, revision, authorProvider, key, ticket: values.ticket }).truncationDetected;
   }
   if (values.json) {
     printJson({ trustRootTier: true, reasons: tier.reasons, crossModelRequired: true, satisfied, revision, keyAvailable: true, chainTrustworthy, truncationDetected, skippedOwnRails });

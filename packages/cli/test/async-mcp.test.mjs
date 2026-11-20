@@ -104,19 +104,26 @@ console.log("ok");
     const call = (id) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'adlc_gate', arguments: { gate: 'spec-lint' } } });
     input.write(`${JSON.stringify(call(1))}\n`);
     input.write(`${JSON.stringify(call(2))}\n`);
-    input.write(`${JSON.stringify(call(3))}\n`);
+    for (let id = 100; id < 150; id++) {
+      input.write(`${JSON.stringify(call(id))}\n`);
+    }
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(responses.length, 50, 'all 50 rejected requests emit -32000 immediately without accumulating on tail');
+    for (let i = 0; i < 50; i++) {
+      assert.equal(responses[i].id, 100 + i);
+      assert.equal(responses[i].error.code, -32000);
+      assert.match(responses[i].error.message, /Server busy/);
+    }
     await new Promise((r) => setTimeout(r, 320));
     input.write(`${JSON.stringify(call(4))}\n`);
     input.end();
     await done;
 
-    assert.equal(responses.length, 4);
-    assert.deepEqual(responses.map((r) => r.id), [1, 2, 3, 4]);
-    assert.equal(responses[0].result.isError, false);
-    assert.equal(responses[1].result.isError, false);
-    assert.equal(responses[2].error.code, -32000);
-    assert.match(responses[2].error.message, /Server busy/);
-    assert.equal(responses[3].result.isError, false);
+    assert.equal(responses.length, 53);
+    const byId = new Map(responses.map((r) => [r.id, r]));
+    assert.equal(byId.get(1).result.isError, false);
+    assert.equal(byId.get(2).result.isError, false);
+    assert.equal(byId.get(4).result.isError, false);
 
     const events = readFileSync(logFile, 'utf8').trim().split('\n').map((l) => l.split(' '));
     const starts = events.filter(([k]) => k === 'start').map(([, t]) => Number(t));
@@ -137,6 +144,17 @@ console.log("ok");
     ac.abort();
     await abortDone;
     assert.ok(Date.now() - abortStart < 1500, 'abort must kill running child well before its 3s sleep');
+
+    // Process shutdown signals (SIGTERM/SIGINT/SIGHUP) also terminate active children when no AbortSignal is passed
+    const in3 = new PassThrough();
+    const out3 = new PassThrough();
+    const sigStart = Date.now();
+    const sigDone = runStdioServer({ input: in3, output: out3, maxConcurrency: 1, maxInflight: 2 });
+    in3.write(`${JSON.stringify(longCall(20))}\n`);
+    await new Promise((r) => setTimeout(r, 60));
+    process.emit('SIGHUP');
+    await sigDone;
+    assert.ok(Date.now() - sigStart < 1500, 'process SIGHUP must kill running child well before its 3s sleep');
   } finally {
     if (prevBin === undefined) delete process.env.ADLC_CLI_BIN;
     else process.env.ADLC_CLI_BIN = prevBin;

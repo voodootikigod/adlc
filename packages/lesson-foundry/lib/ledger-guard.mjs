@@ -13,29 +13,39 @@ function defaultGit(...args) {
   return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
 }
 
+function probeLedger(path, exists, lstat) {
+  try {
+    const st = lstat(path);
+    return { present: Boolean(st.isSymbolicLink() || exists(path)), st, err: null };
+  } catch (err) {
+    if (!exists(path)) return { present: false, st: null, err: null };
+    return { present: true, st: null, err: lstat === lstatSync && err?.code === 'ENOENT' ? null : err };
+  }
+}
+
 // Set process.exitCode and RETURN in callers — never process.exit() here. process.exit
 // terminates before buffered stdout/stderr is flushed, so a caller capturing our diagnostics
 // (our own tests, or a CI log) can see empty output on failure.
 export function scanFindingsLedger(ledger = LEDGER, { exists = existsSync, lstat = lstatSync, read = readFileSync } = {}) {
-  if (!exists(ledger)) {
+  const probed = probeLedger(ledger, exists, lstat);
+  if (!probed.present) {
     console.log(`scan-findings-ledger: no ledger at ${ledger} — nothing to scan.`);
     return 0;
   }
-
-  let st;
-  try {
-    st = lstat(ledger);
-  } catch (err) {
-    console.error(`scan-findings-ledger: cannot read ${ledger}: ${err.message}`);
+  if (probed.err) {
+    console.error(`scan-findings-ledger: cannot read ${ledger}: ${probed.err.message}`);
     return 1;
   }
-  if (st.isSymbolicLink()) {
-    console.error(`scan-findings-ledger: ${ledger} is a symbolic link — refusing to follow symlinks.`);
-    return 2;
-  }
-  if (!st.isFile()) {
-    console.error(`scan-findings-ledger: cannot read ${ledger}: path is not a regular file`);
-    return 1;
+  const st = probed.st;
+  if (st !== null) {
+    if (st.isSymbolicLink()) {
+      console.error(`scan-findings-ledger: ${ledger} is a symbolic link — refusing to follow symlinks.`);
+      return 2;
+    }
+    if (!st.isFile()) {
+      console.error(`scan-findings-ledger: cannot read ${ledger}: path is not a regular file`);
+      return 1;
+    }
   }
 
   let text;
@@ -166,31 +176,23 @@ export function guardFindingsLedgerAppendOnly(baseRef, { run = defaultGit, read 
     return 1;
   }
 
-  if (exists(LEDGER)) {
-    let st;
-    try {
-      st = lstat(LEDGER);
-    } catch (err) {
-      if (lstat !== lstatSync || existsSync(LEDGER)) {
-        console.error(`guard-findings-ledger-append-only: cannot read ${LEDGER}: ${err.message}`);
-        return 1;
-      }
-      st = null;
+  const probed = probeLedger(LEDGER, exists, lstat);
+  let candidateBuf;
+  if (probed.present) {
+    if (probed.err) {
+      console.error(`guard-findings-ledger-append-only: cannot read ${LEDGER}: ${probed.err.message}`);
+      return 1;
     }
-    if (st !== null) {
-      if (st.isSymbolicLink()) {
+    if (probed.st !== null) {
+      if (probed.st.isSymbolicLink()) {
         console.error(`guard-findings-ledger-append-only: ${LEDGER} is a symbolic link — refusing to follow symlinks.`);
         return 2;
       }
-      if (!st.isFile()) {
+      if (!probed.st.isFile()) {
         console.error(`guard-findings-ledger-append-only: cannot read ${LEDGER}: path is not a regular file`);
         return 1;
       }
     }
-  }
-
-  let candidateBuf;
-  if (exists(LEDGER)) {
     try {
       const raw = read(LEDGER);
       candidateBuf = Buffer.isBuffer(raw) ? raw : Buffer.from(String(raw ?? ''), 'utf8');

@@ -60,6 +60,18 @@ test('guardFindingsLedgerAppendOnly and scanFindingsLedger return 2 when .adlc/f
     assert.strictEqual(guardSymlink.code, 2);
     assert.match(guardSymlink.stderr, /symbolic link|symlink/i);
 
+    // Dangling symlink (target does not exist, so existsSync is false) is still rejected in both paths
+    rmSync(ledgerPath, { force: true });
+    symlinkSync(join(dir, 'nonexistent-target.jsonl'), ledgerPath);
+    const scanDangling = captureConsole(() => scanFindingsLedger());
+    assert.strictEqual(scanDangling.code, 2);
+    assert.match(scanDangling.stderr, /symbolic link|symlink/i);
+    const guardDangling = captureConsole(() =>
+      guardFindingsLedgerAppendOnly('main', { run: baseRun }),
+    );
+    assert.strictEqual(guardDangling.code, 2);
+    assert.match(guardDangling.stderr, /symbolic link|symlink/i);
+
     rmSync(ledgerPath, { force: true });
     mkdirSync(ledgerPath, { recursive: true });
 
@@ -78,6 +90,40 @@ test('guardFindingsLedgerAppendOnly and scanFindingsLedger return 2 when .adlc/f
     );
     assert.strictEqual(lstatErr.code, 1);
     assert.match(lstatErr.stderr, /cannot read/);
+
+    const customLstatEnoent = captureConsole(() =>
+      scanFindingsLedger('x', { exists: () => true, lstat: () => { const e = new Error('enoent'); e.code = 'ENOENT'; throw e; } }),
+    );
+    assert.strictEqual(customLstatEnoent.code, 1);
+
+    rmSync(ledgerPath, { recursive: true, force: true });
+    const mockAppendPass = captureConsole(() =>
+      guardFindingsLedgerAppendOnly('main', {
+        run: (...args) => {
+          if (args[0] === 'merge-base') return 'abc123\n';
+          if (args[0] === 'ls-tree') return `100644 blob 1\t${LEDGER}\n`;
+          if (args[0] === 'show') return '{"desc":"one"}\n';
+          throw new Error(`unexpected ${args.join(' ')}`);
+        },
+        exists: () => true,
+        read: () => Buffer.from('{"desc":"one"}\n{"desc":"two"}\n', 'utf8'),
+      }),
+    );
+    assert.strictEqual(mockAppendPass.code, 0);
+
+    writeFileSync(ledgerPath, 'not-json\n', 'utf8');
+    const stubAbsentOverRealFile = captureConsole(() =>
+      scanFindingsLedger(ledgerPath, { exists: () => false }),
+    );
+    assert.strictEqual(stubAbsentOverRealFile.code, 0);
+
+    // Non-ENOENT error (ENOTDIR under a file parent) with real lstatSync still reports error 1 even when read is stubbed
+    rmSync(adlc, { recursive: true, force: true });
+    writeFileSync(adlc, 'file-not-dir', 'utf8');
+    const enotdirGuard = captureConsole(() =>
+      guardFindingsLedgerAppendOnly('main', { run: baseRun, exists: () => true, read: () => Buffer.alloc(0) }),
+    );
+    assert.strictEqual(enotdirGuard.code, 1);
   } finally {
     process.chdir(prev);
     rmSync(dir, { recursive: true, force: true });

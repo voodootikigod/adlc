@@ -12,6 +12,7 @@ import {
   recordCrossModelReview,
   carryForwardCrossModelReview,
   hasCrossModelApproveForRevision,
+  evaluateCrossModelRevision,
 } from '../lib/cross-model.mjs';
 
 const KEY = 'carry-forward-truncation-test-key';
@@ -87,6 +88,50 @@ test('assertNoTruncation and hasCrossModelApproveForRevision fail closed when ca
     assert.equal(gate(manifest), true);
     assert.equal(gate([...manifest, signedEntry({ seq: 90, revision: rev(BASE1), provider: 'google' })]), false, 'a signed ancestor entry absent from the PR manifest');
     assert.equal(gate([...manifest, revoke]), false, 'a signed same-digest needs-attention absent from the PR manifest');
+
+    // A separate ticket T2's approval by the same author in observedEntries does NOT accuse T1 of truncation,
+    // while a truncated needs-attention revocation from T2 on the same change-set still fails closed.
+    const t2Approve = signedEntry({ seq: 95, ticket: 'T2', revision: rev(BASE2), provider: 'google' });
+    assert.equal(gate([...manifest, t2Approve]), true, 'same-author approval from unrelated ticket T2 does not falsely trigger truncation on T1');
+    assert.deepEqual(
+      evaluateCrossModelRevision({ prEntries: manifest, observedEntries: [...manifest, t2Approve], revision: rev(BASE2), authorProvider: 'anthropic', key: KEY }),
+      { satisfied: true, truncationDetected: false },
+    );
+    assert.deepEqual(
+      evaluateCrossModelRevision({ prEntries: manifest, observedEntries: [...manifest, signedEntry({ seq: 96, ticket: 'T2', revision: rev(BASE2), verdict: 'needs-attention' })], revision: rev(BASE2), authorProvider: 'anthropic', key: KEY }),
+      { satisfied: false, truncationDetected: true },
+    );
+    assert.deepEqual(
+      evaluateCrossModelRevision({ prEntries: manifest, observedEntries: [...manifest], revision: rev(BASE2), authorProvider: 'anthropic', key: KEY, ticket: 'T1' }),
+      { satisfied: true, truncationDetected: false },
+    );
+    assert.deepEqual(
+      evaluateCrossModelRevision({ prEntries: manifest, observedEntries: [...manifest, signedEntry({ seq: 97, ticket: 'T1', revision: rev(BASE1), provider: 'google' })], revision: rev(BASE2), authorProvider: 'anthropic', key: KEY, ticket: 'T1' }),
+      { satisfied: false, truncationDetected: true },
+    );
+    assert.deepEqual(
+      evaluateCrossModelRevision({ prEntries: [], observedEntries: [t2Approve], revision: rev(BASE2), authorProvider: 'anthropic', key: KEY }),
+      { satisfied: false, truncationDetected: true },
+    );
+    assert.deepEqual(
+      evaluateCrossModelRevision({ prEntries: [signedEntry({ seq: 99, ticket: 'T1', revision: rev(BASE1) })], observedEntries: [], revision: rev(BASE2), authorProvider: 'anthropic', key: KEY }),
+      { satisfied: false, truncationDetected: false },
+    );
+
+    // Unticketed (legacy/cutover) signed approvals remain valid when ticket is omitted, while unticketed truncation still fails closed
+    const unticketedData = { revision: rev(BASE2), provider: 'openai', authorProvider: 'anthropic', verdict: 'approve' };
+    const unticketedApprove = { seq: 101, gate: 'cross-model-review', ts: new Date().toISOString(), data: unticketedData, files: {}, prev: null };
+    unticketedApprove.sig = signEntry(KEY, unticketedApprove);
+    const unticketedCarry = { seq: 102, gate: 'cross-model-review', ts: new Date().toISOString(), data: { ...unticketedData, revision: rev(BASE3), carriedFrom: rev(BASE2) }, files: {}, prev: null };
+    unticketedCarry.sig = signEntry(KEY, unticketedCarry);
+    assert.deepEqual(
+      evaluateCrossModelRevision({ prEntries: [unticketedApprove], observedEntries: [unticketedApprove], revision: rev(BASE2), authorProvider: 'anthropic', key: KEY }),
+      { satisfied: true, truncationDetected: false },
+    );
+    assert.deepEqual(
+      evaluateCrossModelRevision({ prEntries: [unticketedCarry], observedEntries: [unticketedApprove, unticketedCarry], revision: rev(BASE3), authorProvider: 'anthropic', key: KEY }),
+      { satisfied: false, truncationDetected: true },
+    );
   });
 });
 
