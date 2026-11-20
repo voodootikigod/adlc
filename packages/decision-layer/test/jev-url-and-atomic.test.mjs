@@ -54,7 +54,7 @@ describe('T-P10: decision-layer Jev host allowlist, pack realpath containment, a
       () => appendRecord(badRoot, { schemaVersion: 1 }),
       (err) => {
         assert.equal(err.name, 'RecordError');
-        assert.match(err.message, /\.adlc\/decisions\/runs\.jsonl/);
+        assert.match(err.message, /to \.adlc\/decisions\/runs\.jsonl:/);
         assert.ok(!err.message.includes(badRoot), `RecordError must redact mainRoot, got: ${err.message}`);
         return true;
       },

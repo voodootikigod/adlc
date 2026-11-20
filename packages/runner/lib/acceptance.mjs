@@ -4,7 +4,7 @@ import { appendManifestEntry } from '@adlc/gate-manifest';
 // below is a chronology claim, and only this chain can carry one. See
 // own-chain.mjs.
 import { readOwnManifestChain } from '@adlc/gate-manifest/lib/own-chain.mjs';
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, openSync, readFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import {
   historicalTranscriptIntegrityErrors,
@@ -39,11 +39,14 @@ function validateInWorktreeEvidencePath(cwd, label, path) {
 }
 
 function readRegularNoFollow(filePath, label, rawPath) {
-  const lst = lstatSync(filePath);
-  if (lst.isSymbolicLink()) return `${label} must not be a symlink: ${rawPath}`;
-  if (!lst.isFile()) return `${label} is not a file: ${rawPath}`;
   const flags = constants.O_NOFOLLOW ? constants.O_RDONLY | constants.O_NOFOLLOW : constants.O_RDONLY;
-  const fd = openSync(filePath, flags);
+  let fd;
+  try {
+    fd = openSync(filePath, flags);
+  } catch (err) {
+    if (err.code === 'ELOOP') return `${label} must not be a symlink: ${rawPath}`;
+    throw err;
+  }
   try {
     const st = fstatSync(fd);
     if (!st.isFile()) return `${label} is not a file: ${rawPath}`;
