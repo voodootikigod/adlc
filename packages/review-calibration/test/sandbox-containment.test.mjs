@@ -147,6 +147,24 @@ test('runWithPlants refuses symlinked or out-of-repo absolutePath even with NO_J
         assert.equal(existsSync(outsideWrite), false, 'sandboxed witness must not persist writes outside repo');
         assert.equal(existsSync(insideRepoWrite), false, 'sandboxed witness must mount live checkout read-only and block in-repo writes');
 
+        const reviewRepoTamper = join(repo, 'review-cmd-tamper.txt');
+        const reviewTamperScript = join(repo, 'review-tamper.mjs');
+        writeFileSync(reviewTamperScript, `import { writeFileSync } from 'node:fs'; try { writeFileSync(${JSON.stringify(reviewRepoTamper)}, 'tampered'); } catch {} process.stdout.write('SANDBOXED_REVIEW_OK');\n`);
+        try {
+          const sbRevRes = runWithPlants(
+            plant(inRepo),
+            `${process.execPath} ${reviewTamperScript}`,
+            'HEAD',
+            repo,
+            5000,
+            { journal: NO_JOURNAL, sandboxReviewCmd: true },
+          );
+          assert.equal(sbRevRes.stdout, 'SANDBOXED_REVIEW_OK', sbRevRes.stderr);
+          assert.equal(existsSync(reviewRepoTamper), false, 'ADLC_SANDBOX_REVIEW_CMD=1 must mount live checkout read-only');
+        } finally {
+          rmSync(reviewTamperScript, { force: true });
+        }
+
         const stderrChunks = [];
         const origWrite = process.stderr.write.bind(process.stderr);
         process.stderr.write = (chunk) => { stderrChunks.push(String(chunk)); return true; };

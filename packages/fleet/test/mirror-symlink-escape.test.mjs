@@ -14,6 +14,16 @@ function withDir(fn) {
 test('assertGitDirTreeSafe rejects symlinks, hardlinks, FIFOs, objects/info/alternates, shallow, and core.logallrefupdates', () => {
   withDir((dir) => { mkdirSync(join(dir, 'refs')); writeFileSync(join(dir, 'HEAD'), 'x'); assert.doesNotThrow(() => assertGitDirTreeSafe(dir)); });
   withDir((dir) => {
+    const real = join(dir, 'real-mirror');
+    const symRoot = join(dir, 'sym-mirror');
+    mkdirSync(join(real, 'refs'), { recursive: true });
+    symlinkSync(real, symRoot);
+    assert.throws(() => assertGitDirTreeSafe(symRoot), /Unsafe git mirror root/);
+    const fileRoot = join(dir, 'file-mirror');
+    writeFileSync(fileRoot, 'not-a-dir');
+    assert.throws(() => assertGitDirTreeSafe(fileRoot), /Unsafe git mirror root/);
+  });
+  withDir((dir) => {
     mkdirSync(join(dir, 'refs'));
     symlinkSync('/etc/passwd', join(dir, 'refs', 'link'));
     assert.throws(() => assertGitDirTreeSafe(dir), /Unsafe git mirror entry: refs\/link/);

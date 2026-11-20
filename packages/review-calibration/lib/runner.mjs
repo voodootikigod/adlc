@@ -4,8 +4,9 @@
 // killed while the review runs cannot restore anything itself; the journal's
 // in-flight record is what lets the next run do it (see inflight.mjs).
 
-import { readFileSync } from 'node:fs';
-import { relative } from 'node:path';
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { tokenizeCommand, sanitizeCandidateEnv, detectSandbox, spawnSandboxed } from '@adlc/core';
 import { writeFileAtomic, NO_JOURNAL, escapesRepoOrSymlink } from './inflight.mjs';
@@ -109,7 +110,18 @@ export function runWithPlants(plants, reviewCmd, baseRef, cwd, timeoutMs, {
       );
     }
     if (sandboxType) {
-      const r = spawnSandboxed(sandboxType, cwd, argv, { cwd, timeout: timeoutMs, env });
+      const reviewTmp = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-rc-review-')));
+      let r;
+      try {
+        r = spawnSandboxed(sandboxType, reviewTmp, argv, {
+          workDir: cwd,
+          cwd,
+          timeout: timeoutMs,
+          env: { ...env, TMPDIR: reviewTmp, TMP: reviewTmp, TEMP: reviewTmp },
+        });
+      } finally {
+        rmSync(reviewTmp, { recursive: true, force: true });
+      }
       result = { stdout: r.stdout, stderr: r.stderr, status: r.exitCode, signal: r.timedOut ? 'SIGTERM' : null };
     } else {
       if (sandboxReviewCmd && unsafeNoSandbox) {

@@ -1,10 +1,7 @@
 # ADLC v1.13.0 Wave 1A (Foundational Security & Containment) Executable Specification
 
 - **Master Roadmap:** [`.adlc/specs/enhancement-resolution-plan.md`](./enhancement-resolution-plan.md) (`Wave 1A` foundational 6-ticket slice: `T-P01`, `T-P02`, `T-P05`, `T-P08`, `T-P09`, `T-P03`; Wave 1B `T-P06`, `T-P07`, `T-P10`, `T-P04`, `T-P11a`, `T-P11b`, `T-P12` follows immediately on top)
-- **Repository Root:** `/home/voodootikigod/Projects/voodootikigod/adlc/.worktrees/adlc-enhancement-plan`
-- **Base Branch (`base` field in `plan.json`):** `docs/adlc-enhancement-plan`
-- **Gate Commands (`gate` field in `plan.json`):** `{"test": "npm test"}`
-- **Converter Directive:** Every file path, line number, function signature, return shape, and test case below has been verified directly against `/home/voodootikigod/Projects/voodootikigod/adlc/.worktrees/adlc-enhancement-plan`. Output STRICT JSON with `"base": "docs/adlc-enhancement-plan"`, `"gate": {"test": "npm test"}`, and the exact 6 tickets (`T-P01`, `T-P02`, `T-P03`, `T-P05`, `T-P08`, `T-P09`) preserving every `scope`, `rails`, `edges`, `tier`, `pool_hint: "auto"`, and numbered `body` verbatim without exploring repository files.
+- **Target Gate Suite:** `npm run preflight` (`npm test` + `rail-freeze` + `mutation-gate` + ledger & comment checks)
 
 ## 1. Frozen Rails & Single Cross-Ticket Edge Contract
 

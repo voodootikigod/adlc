@@ -97,6 +97,9 @@ export function assertGitDirTreeSafe(mirrorPath, {
   maxEntries = DEFAULT_MAX_MIRROR_ENTRIES,
   maxBytes = DEFAULT_MAX_MIRROR_BYTES,
 } = {}) {
+  if (!lstatSync(mirrorPath).isDirectory()) {
+    throw new Error(`Unsafe git mirror root: ${mirrorPath}`);
+  }
   let entryCount = 0;
   let totalBytes = 0;
   const stack = [{ dir: mirrorPath, rel: '', depth: 0 }];
