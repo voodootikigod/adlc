@@ -4,7 +4,7 @@ import { appendManifestEntry } from '@adlc/gate-manifest';
 // below is a chronology claim, and only this chain can carry one. See
 // own-chain.mjs.
 import { readOwnManifestChain } from '@adlc/gate-manifest/lib/own-chain.mjs';
-import { lstatSync, readFileSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import {
   historicalTranscriptIntegrityErrors,
@@ -38,6 +38,20 @@ function validateInWorktreeEvidencePath(cwd, label, path) {
   return null;
 }
 
+function readRegularNoFollow(filePath, label, rawPath) {
+  const lst = lstatSync(filePath);
+  if (lst.isSymbolicLink()) return `${label} must not be a symlink: ${rawPath}`;
+  if (!lst.isFile()) return `${label} is not a file: ${rawPath}`;
+  const fd = openSync(filePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) return `${label} is not a file: ${rawPath}`;
+    return readFileSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 export function recordAcceptancePacket({
   key,
   dir = '.adlc',
@@ -61,10 +75,9 @@ export function recordAcceptancePacket({
     if (error) errors.push(error);
     const artifactPath = resolve(cwd, artifact);
     try {
-      const stat = lstatSync(artifactPath);
-      if (stat.isSymbolicLink()) errors.push(`artifact must not be a symlink: ${artifact}`);
-      else if (!stat.isFile()) errors.push(`artifact is not a file: ${artifact}`);
-      else artifactHashes.push({ path: artifactPath, hash: sha256(readFileSync(artifactPath)) });
+      const content = readRegularNoFollow(artifactPath, 'artifact', artifact);
+      if (typeof content === 'string') errors.push(content);
+      else artifactHashes.push({ path: artifactPath, hash: sha256(content) });
     } catch (err) {
       errors.push(`artifact cannot be read: ${artifact}: ${err.message}`);
     }
@@ -75,25 +88,22 @@ export function recordAcceptancePacket({
     if (pathError) errors.push(pathError);
     try {
       packetPath = resolve(cwd, packet);
-      const stat = lstatSync(packetPath);
-      if (stat.isSymbolicLink()) {
-        errors.push(`packet must not be a symlink: ${packet}`);
-      } else if (!stat.isFile()) {
-        errors.push(`packet is not a file: ${packet}`);
+      const content = readRegularNoFollow(packetPath, 'packet', packet);
+      if (typeof content === 'string') {
+        errors.push(content);
       } else {
-        const content = readFileSync(packetPath);
         const text = content.toString('utf8').trim();
+        const isJsonExt = packet.toLowerCase().endsWith('.json');
         if (text.length === 0) {
           errors.push(`packet is empty: ${packet}`);
-        } else if (packet.endsWith('.json') || text.startsWith('{')) {
+        } else if (isJsonExt || text.startsWith('{') || text.startsWith('[')) {
           try {
             const parsed = JSON.parse(text);
             if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || Object.keys(parsed).length === 0) {
               errors.push(`packet JSON must be a non-empty object: ${packet}`);
             }
           } catch {
-            // Non-JSON markdown/text packets are allowed unless explicitly .json
-            if (packet.endsWith('.json')) errors.push(`packet is not valid JSON: ${packet}`);
+            if (isJsonExt) errors.push(`packet is not valid JSON: ${packet}`);
           }
         }
         packetHash = sha256(content);
