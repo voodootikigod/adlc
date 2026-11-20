@@ -143,7 +143,7 @@ test('--providers overrides --n for --prompt-only prompt count (fan width = numb
     '--n', '5', // should be ignored/overridden by --providers
     '--providers', 'anthropic,openai',
     '--prompt-only',
-  ]);
+  ], { cwd: dir });
   assert.equal(code, 0);
   const promptCount = (stdout.match(/--- prompt \d+ of 2 ---/g) ?? []).length;
   assert.equal(promptCount, 2, 'fan width should be 2 (number of providers), not --n=5');
@@ -158,7 +158,7 @@ test('without --provider/--providers, --prompt-only prompt count still follows -
     '--files', f,
     '--n', '4',
     '--prompt-only',
-  ]);
+  ], { cwd: dir });
   assert.equal(code, 0);
   const promptCount = (stdout.match(/--- prompt \d+ of 4 ---/g) ?? []).length;
   assert.equal(promptCount, 4);
@@ -173,7 +173,7 @@ test('--providers with no API keys configured fails closed with a clear operatio
     '--files', f,
     '--allow-dirty',
     '--providers', 'anthropic,openai',
-  ]);
+  ], { cwd: dir });
   assert.equal(code, 1);
   assert.match(stderr, /not available \(missing API key\)/);
   assert.match(stderr, /anthropic/);
@@ -189,7 +189,7 @@ test('--provider naming an unavailable provider fails closed with a provider-spe
     '--files', f,
     '--allow-dirty',
     '--provider', 'anthropic',
-  ]);
+  ], { cwd: dir });
   assert.equal(code, 1);
   assert.match(stderr, /--provider anthropic is not available/);
 });
@@ -294,7 +294,7 @@ test('--require-rails succeeds when --rails is provided (#603)', (t) => {
     '--require-rails',
     '--rails', 'npm test',
     '--prompt-only',
-  ]);
+  ], { cwd: dir });
   assert.equal(code, 0);
   assert.match(stdout, /<test output will appear here>/);
 });

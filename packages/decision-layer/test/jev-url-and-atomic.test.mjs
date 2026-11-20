@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ALLOWED_API_HOSTS, assertSafeApiUrl } from '../lib/adapters/jev.mjs';
 import { loadPack } from '../lib/pack.mjs';
@@ -58,5 +58,19 @@ describe('T-P10: decision-layer Jev host allowlist, pack realpath containment, a
         return true;
       },
     );
+
+    // Reclaim a crash-stale lock left by a dead PID on the same host
+    const staleRoot = mkdtempSync(join(tmpdir(), 'adlc-dl-rec-stale-'));
+    t.after(() => rmSync(staleRoot, { recursive: true, force: true }));
+    const staleLock = join(staleRoot, '.adlc', 'decisions', 'runs.jsonl.lock');
+    mkdirSync(staleLock, { recursive: true });
+    writeFileSync(join(staleLock, 'owner.json'), JSON.stringify({
+      pid: 99999999,
+      hostname: hostname(),
+      createdAt: Date.now() - 60_000,
+    }));
+    appendRecord(staleRoot, { schemaVersion: 1, recovered: true });
+    const recovered = JSON.parse(readFileSync(recordPath(staleRoot), 'utf8').trim());
+    assert.equal(recovered.recovered, true);
   });
 });

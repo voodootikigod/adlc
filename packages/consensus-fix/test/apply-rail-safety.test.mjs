@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,5 +47,34 @@ describe('T-P10: consensus-fix repo containment and active-ticket rail enforceme
     );
     assert.equal(trustRootRes.status, 1);
     assert.match(trustRootRes.stderr, /protected rail/);
+  });
+
+  it('rejects in-repo symlink pointing outside repo root and fails closed on malformed ticket store', (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'adlc-cfix-sym-'));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const outside = mkdtempSync(join(tmpdir(), 'adlc-cfix-ext-'));
+    t.after(() => rmSync(outside, { recursive: true, force: true }));
+    const target = join(outside, 'secret.mjs');
+    writeFileSync(target, 'export const s = 1;\n');
+    symlinkSync(target, join(dir, 'escape.mjs'));
+
+    const symRes = spawnSync(
+      process.execPath,
+      [BIN, '--test-cmd', 'node -e 0', '--files', 'escape.mjs', '--prompt-only'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    assert.equal(symRes.status, 1);
+    assert.match(symRes.stderr, /escapes repository root/);
+
+    mkdirSync(join(dir, '.adlc'), { recursive: true });
+    writeFileSync(join(dir, 'ok.mjs'), 'export const ok = 1;\n');
+    writeFileSync(join(dir, '.adlc', 'tickets.json'), '{ malformed json');
+    const badStoreRes = spawnSync(
+      process.execPath,
+      [BIN, '--test-cmd', 'node -e 0', '--files', 'ok.mjs', '--prompt-only'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    assert.equal(badStoreRes.status, 1);
+    assert.match(badStoreRes.stderr, /ticket store load failed/);
   });
 });

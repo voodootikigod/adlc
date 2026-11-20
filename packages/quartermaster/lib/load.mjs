@@ -8,7 +8,7 @@
 // channel selection nobody authorized.
 
 import { createHash } from 'node:crypto';
-import { closeSync, constants, existsSync, fstatSync, openSync, readFileSync, realpathSync } from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, openSync, readSync, realpathSync } from 'node:fs';
 import { homedir as osHomedir } from 'node:os';
 import { resolveRegistryPath, findIgnoredInRepoRegistries } from './registry-path.mjs';
 import { validateRegistry } from './registry.mjs';
@@ -26,7 +26,20 @@ export function readBoundedRegularRegistryFile(path, maxBytes = MAX_REGISTRY_BYT
     if (stat.size > maxBytes) {
       throw new Error(`registry exceeds max size of ${maxBytes} bytes (${stat.size} bytes)`);
     }
-    return readFileSync(fd, 'utf8');
+    const chunks = [];
+    let total = 0;
+    const chunkSize = Math.min(65536, maxBytes + 1);
+    const buf = Buffer.allocUnsafe(chunkSize);
+    for (;;) {
+      const n = readSync(fd, buf, 0, Math.min(chunkSize, maxBytes - total + 1), null);
+      if (n === 0) break;
+      total += n;
+      if (total > maxBytes) {
+        throw new Error(`registry exceeds max size of ${maxBytes} bytes`);
+      }
+      chunks.push(Buffer.from(buf.subarray(0, n)));
+    }
+    return Buffer.concat(chunks, total).toString('utf8');
   } finally {
     closeSync(fd);
   }

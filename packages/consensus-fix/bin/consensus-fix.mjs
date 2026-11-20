@@ -24,8 +24,8 @@
  *              exclusive with --provider.
  */
 
-import { existsSync } from 'node:fs';
-import { relative, resolve } from 'node:path';
+import { existsSync, realpathSync } from 'node:fs';
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import {
   parseArgs,
   pass,
@@ -79,13 +79,32 @@ if (values['require-rails'] && !railsCmd) {
 const filePaths = values['files'].split(',').map((f) => f.trim()).filter(Boolean);
 if (filePaths.length === 0) opError('--files must list at least one file path');
 
+function resolveRealPathBestEffort(target) {
+  let cur = resolve(target);
+  const tail = [];
+  for (;;) {
+    try {
+      return tail.length === 0 ? realpathSync(cur) : resolve(realpathSync(cur), ...tail);
+    } catch {
+      const parent = dirname(cur);
+      if (parent === cur) return resolve(target);
+      tail.unshift(cur.slice(parent.length + (parent.endsWith(sep) ? 0 : 1)));
+      cur = parent;
+    }
+  }
+}
+
 function assertFilesContainedAndUnrailed(paths, repoRoot = process.cwd()) {
   const rootAbs = resolve(repoRoot);
+  const realRoot = resolveRealPathBestEffort(rootAbs);
   const railGlobs = [...TICKET_TRUST_ROOT_RAILS];
   const ticketsPath = resolve(rootAbs, '.adlc', 'tickets.json');
   const ticketsDir = resolve(rootAbs, '.adlc', 'tickets');
   if (existsSync(ticketsPath) || existsSync(ticketsDir)) {
     const loaded = loadTickets(ticketsPath);
+    if (Array.isArray(loaded?.errors) && loaded.errors.length > 0) {
+      opError(`cannot verify active ticket rails (ticket store load failed): ${loaded.errors.join('; ')}`);
+    }
     if (Array.isArray(loaded?.tickets)) {
       for (const ticket of activeTickets(loaded.tickets)) {
         for (const rail of Array.isArray(ticket?.rails) ? ticket.rails : []) {
@@ -95,21 +114,25 @@ function assertFilesContainedAndUnrailed(paths, repoRoot = process.cwd()) {
     }
   }
   for (const file of paths) {
+    const absTarget = resolve(rootAbs, file);
     const resolved = resolveRailPath(file, rootAbs);
-    const rel = relative(rootAbs, resolve(rootAbs, file)).replaceAll('\\', '/');
-    if (rel === '' || rel === '..' || rel.startsWith('../') || resolved === null) {
+    const rel = relative(rootAbs, absTarget).replaceAll('\\', '/');
+    const realTarget = resolveRealPathBestEffort(absTarget);
+    const realRel = relative(realRoot, realTarget).replaceAll('\\', '/');
+    if (
+      rel === '' || rel === '..' || rel.startsWith('../') || isAbsolute(rel) ||
+      realRel === '' || realRel === '..' || realRel.startsWith('../') || isAbsolute(realRel) ||
+      resolved === null
+    ) {
       opError(`--files path escapes repository root: ${file}`);
     }
-    const candidate = resolved;
     for (const rail of railGlobs) {
-      if (globMatch(rail, candidate)) {
+      if (globMatch(rail, resolved) || globMatch(rail, realRel)) {
         opError(`--files path matches protected rail (${rail}): ${file}`);
       }
     }
   }
 }
-
-assertFilesContainedAndUnrailed(filePaths);
 
 const n = parseInt(values['n'], 10);
 if (isNaN(n) || n < 1) opError(`--n must be a positive integer, got: ${values['n']}`);
@@ -149,6 +172,8 @@ if (providersRaw) {
 // Fan width: one candidate per named provider when --providers is supplied,
 // otherwise the usual --n resamples of the single auto-detected provider.
 const fanWidth = providerNames ? providerNames.length : n;
+
+assertFilesContainedAndUnrailed(filePaths);
 
 // --prompt-only: build and print prompts without running LLM.
 if (values['prompt-only']) {
