@@ -27,19 +27,16 @@ import { segmentDirPath } from './forest.mjs';
 const MARKER = Object.freeze({ format: 'adlc-manifest-segments', version: 1 });
 const AUTH_MODES = Object.freeze(['keyed', 'keyless']);
 
-// Forest mode is reachable before the CI gate that guards it exists:
-// packages/rails-guard/lib/ci/manifest.mjs reads only .adlc/manifest.jsonl, so
-// committed segment files get none of the append-only enforcement the root
-// gets. That is not a regression — forest mode never had the coverage — but an
-// operator who is never shown the tradeoff cannot weigh it, so activation
-// discloses it. `code` is the contract that callers and tests key on; `message`
-// is human text and free to be reworded. Removed by the forest CI gate
-// (T-MANIFEST-FOREST slice 6), which is what closes the gap.
+// Forest mode is validated in CI by packages/rails-guard/lib/ci/manifest.mjs,
+// which verifies committed .adlc/manifest.d/*.jsonl segment chains and anchors
+// alongside .adlc/manifest.jsonl. Uncommitted or .gitignore-masked local
+// segments remain outside CI visibility, so activation discloses the boundary.
+// `code` is the contract that callers and tests key on; `message` is human text.
 export const CI_COVERAGE_WARNING = Object.freeze({
   code: 'ci-cannot-guard-segments',
-  message: 'rails-guard does not yet validate .adlc/manifest.d/ segment files, so rewriting or deleting committed '
-    + 'segment evidence in a pull request is not currently detected by CI. The root manifest remains guarded. '
-    + 'This closes when the forest CI gate ships.',
+  message: 'rails-guard (packages/rails-guard/lib/ci/manifest.mjs) validates committed .adlc/manifest.d/*.jsonl '
+    + 'segment chains and anchors alongside .adlc/manifest.jsonl, while uncommitted or .gitignore-masked local '
+    + 'segments remain outside CI visibility.',
 });
 
 // The honest answer when a BOUNDED read cannot decide whether a repository is
@@ -52,8 +49,10 @@ export const SEGMENTATION_UNDETERMINED_WARNING = Object.freeze({
   code: 'segmentation-undetermined',
   message: 'could not determine within a bounded read whether this repository uses segmented (forest) evidence '
     + 'storage, because the root manifest\'s final entry could not be read within the probe window. If it IS '
-    + 'segmented, note that rails-guard does not yet validate .adlc/manifest.d/ segment files. Run this command '
-    + 'with a signing key configured for a definite answer.',
+    + 'segmented, note that rails-guard (packages/rails-guard/lib/ci/manifest.mjs) validates committed '
+    + '.adlc/manifest.d/*.jsonl segment chains and anchors alongside .adlc/manifest.jsonl, while uncommitted or '
+    + '.gitignore-masked local segments remain outside CI visibility. Run this command with a signing key '
+    + 'configured for a definite answer.',
 });
 
 // The .gitignore contract forest mode needs is TWO-SIDED (adversarial-review

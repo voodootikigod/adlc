@@ -59,10 +59,16 @@ function requireNonEmptyString(value, field) {
 // class as lying about --author-provider outright, which the gate concedes it
 // cannot stop. The gate's value is the auditable, revision-bound record, not
 // unforgeable identity.
-function normalizeProvider(value) {
-  return typeof value === 'string'
-    ? value.normalize('NFKC').replace(/\s+/g, '').toLowerCase()
-    : '';
+export function normalizeProvider(value) {
+  if (typeof value !== 'string') return '';
+  const folded = value.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+  if (folded === 'claude' || folded === 'anthropic' || /^claude[-.]/.test(folded)) return 'anthropic';
+  if (folded === 'codex' || folded === 'openai' || /^(?:gpt|o1|o3|o4)(?:[-.]|$)/.test(folded)) return 'openai';
+  if (
+    folded === 'gemini' || folded === 'agy' || folded === 'antigravity' || folded === 'google' ||
+    /^gemini[-.]/.test(folded)
+  ) return 'google';
+  return folded;
 }
 
 /**
@@ -156,7 +162,7 @@ function latestEntryForTicket(entries, ticket) {
  * SIGNED entry carrying it forward — laundering a forged claim into a real attestation through
  * whoever holds the signing key.
  */
-export function carryForwardCrossModelReview({ ticket, fromRevision, revision, dir, key } = {}) {
+export function carryForwardCrossModelReview({ ticket, fromRevision, revision, dir, key, observedEntries } = {}) {
   key = validateKeyParam(key);
   requireNonEmptyString(ticket, 'ticket');
   requireNonEmptyString(fromRevision, 'fromRevision');
@@ -273,6 +279,25 @@ export function carryForwardCrossModelReview({ ticket, fromRevision, revision, d
     );
   }
 
+  // Truncation anchor (opt-in): the attestation store lives OUTSIDE the PR-controlled tree, so
+  // it remembers entries (a revocation, or a carried-from ancestor) the PR branch may have
+  // dropped. Fail closed if any are missing here, or if the store holds a needs-attention for
+  // this ticket against the very same change-set digest (under ANY base).
+  if (observedEntries !== undefined) {
+    const truncationCheck = assertNoTruncation({ prEntries: entries, observedEntries, revision: fromRevision, key, ticket });
+    const digest = changeSetDigest(revision);
+    const observedRevocation = observedEntries.some(
+      (entry) =>
+        verifyEntrySig(key, entry) &&
+        entry?.ticket === ticket &&
+        entry?.data?.verdict === 'needs-attention' &&
+        changeSetDigest(entry?.data?.revision) === digest
+    );
+    if (!truncationCheck.ok || observedRevocation) {
+      throw new Error('cannot carry forward: prior or same-digest attestation was truncated or revoked in attestation store');
+    }
+  }
+
   // Consecutive carries only: a fresh review resets the chain, because a human (or a distinct
   // model) looked at the change against that base.
   const depth = (Number(prior.data?.carryDepth) || 0) + 1;
@@ -342,12 +367,12 @@ function candidateReview(entry, { ticket, revision, runAuthor, key }) {
   if (data.verdict !== 'approve') return null;
   const provider = normalizeProvider(data.provider);
   const entryAuthor = normalizeProvider(data.authorProvider);
-  if (provider === '' || entryAuthor === '' || runAuthor === '') return null;
+  if (provider === '' || entryAuthor === '') return null;
   // Write-side belt-and-suspenders: the attestation must not be same-provider.
   if (provider === entryAuthor) return null;
   // Author anchored to the run: the reviewer must differ from the real
   // (run-declared) author, and the record must be for THIS author. All compared
-  // normalized so a whitespace/case variant cannot fake distinctness.
+  // normalized so a whitespace/case/family variant cannot fake distinctness.
   if (provider === runAuthor) return null;
   if (entryAuthor !== runAuthor) return null;
   return { provider };
@@ -503,24 +528,70 @@ export function hasCrossModelApprove({ dir, ticket, revision, authorProvider, ke
  * not be mistaken for a dropped entry in a different author's manifest, which never
  * held it and was never meant to.
  */
-export function hasCrossModelApproveForRevision({ dir, revision, authorProvider, key, observedEntries } = {}) {
+export function evaluateCrossModelRevision({ prEntries, observedEntries, revision, authorProvider, key, ticket } = {}) {
+  const runAuthor = normalizeProvider(authorProvider);
+  const authorScopedObserved = observedEntries !== undefined
+    ? scopeObservedEntriesToAuthor(observedEntries, authorProvider)
+    : undefined;
+  if (ticket !== undefined) {
+    if (authorScopedObserved !== undefined) {
+      if (!assertNoTruncation({ prEntries, observedEntries: authorScopedObserved, revision, key, ticket }).ok) {
+        return { satisfied: false, truncationDetected: true };
+      }
+    }
+    return {
+      satisfied: crossModelSatisfied(prEntries, { ticket, revision, runAuthor, key }),
+      truncationDetected: false,
+    };
+  }
+  if (authorScopedObserved !== undefined) {
+    const observedRevocations = authorScopedObserved.filter((e) => e?.data?.verdict === 'needs-attention');
+    if (!assertNoTruncation({ prEntries, observedEntries: observedRevocations, revision, key }).ok) {
+      return { satisfied: false, truncationDetected: true };
+    }
+  }
+  const overallSatisfied = crossModelSatisfied(prEntries, { ticket: undefined, revision, runAuthor, key });
+  const candidateTickets = new Set();
+  let hasTicketless = false;
+  for (const entry of prEntries) {
+    if (entry?.ticket) candidateTickets.add(entry.ticket);
+    else hasTicketless = true;
+  }
+  let sawTicketTruncation = false;
+  if (hasTicketless) {
+    const prTicketless = prEntries.filter((e) => !e?.ticket);
+    const obsTicketless = authorScopedObserved?.filter((e) => !e?.ticket);
+    if (obsTicketless !== undefined && !assertNoTruncation({ prEntries: prTicketless, observedEntries: obsTicketless, revision, key }).ok) {
+      sawTicketTruncation = true;
+    } else if (overallSatisfied && crossModelSatisfied(prTicketless, { ticket: undefined, revision, runAuthor, key })) {
+      return { satisfied: true, truncationDetected: false };
+    }
+  }
+  for (const t of candidateTickets) {
+    if (authorScopedObserved !== undefined) {
+      if (!assertNoTruncation({ prEntries, observedEntries: authorScopedObserved, revision, key, ticket: t }).ok) {
+        sawTicketTruncation = true;
+        continue;
+      }
+    }
+    if (overallSatisfied && crossModelSatisfied(prEntries, { ticket: t, revision, runAuthor, key })) {
+      return { satisfied: true, truncationDetected: false };
+    }
+  }
+  if (authorScopedObserved !== undefined && candidateTickets.size === 0 && !hasTicketless) {
+    if (!assertNoTruncation({ prEntries, observedEntries: authorScopedObserved, revision, key }).ok) {
+      return { satisfied: false, truncationDetected: true };
+    }
+  }
+  return { satisfied: false, truncationDetected: sawTicketTruncation };
+}
+
+export function hasCrossModelApproveForRevision({ dir, revision, authorProvider, key, observedEntries, ticket } = {}) {
   key = validateKeyParam(key);
-  // No key → cannot verify a signature → fail closed (an unverifiable attestation is a
-  // forgeable one; the CI gate must not trust the PR-controlled manifest without the key).
-  // Only the key is fast-checked here: a missing/empty `revision` or `authorProvider` is
-  // already fail-closed per-entry by candidateReview (an undefined revision matches no
-  // entry's `data.revision`; an empty runAuthor is rejected), so guarding them here too
-  // would be redundant and unverifiable — candidateReview is the single enforcement point.
   if (!key) return false;
   if (!manifestChainTrustworthy(dir, key)) return false;
-  // See hasCrossModelApprove above: walks the whole forest.
   const { entries } = readManifestForest(dir);
-  if (observedEntries !== undefined) {
-    const authorScopedObserved = scopeObservedEntriesToAuthor(observedEntries, authorProvider);
-    const truncationCheck = assertNoTruncation({ prEntries: entries, observedEntries: authorScopedObserved, revision, key });
-    if (!truncationCheck.ok) return false;
-  }
-  return crossModelSatisfied(entries, { ticket: undefined, revision, runAuthor: normalizeProvider(authorProvider), key });
+  return evaluateCrossModelRevision({ prEntries: entries, observedEntries, revision, authorProvider, key, ticket }).satisfied;
 }
 
 /**

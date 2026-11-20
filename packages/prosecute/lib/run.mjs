@@ -44,19 +44,29 @@ function isInsideCwd(cwd, absolute) {
   return rel !== '' && !rel.startsWith('../') && rel !== '..';
 }
 
-function isEvidencePath(cwd, absolute) {
+function isEvidencePath(cwd, absolute, dir) {
   const rel = relative(cwd, absolute).replaceAll('\\', '/');
-  return rel.startsWith('.adlc/') || rel.startsWith('.omo/evidence/');
+  if (rel.startsWith('.adlc/') || rel.startsWith('.omo/evidence/')) return true;
+  if (dir === undefined) return false;
+  const ledger = relative(cwd, resolve(cwd, dir || '.adlc')).replaceAll('\\', '/');
+  return ledger !== '' && ledger !== '..' && !ledger.startsWith('../') && rel.startsWith(`${ledger}/`);
 }
 
+// An in-tree path that is NOT evidence (e.g. a source file named via --input or a
+// review_packet field) must never be added to ignorePaths: ignoring it would exclude
+// real source from the change-set identity, so it could be edited without moving the
+// reviewed revision.
 export function revisionIgnorePaths(cwd, dir, input, inputPath) {
-  return [
-    ...manifestArtifactPaths(cwd, dir),
-    inputPath ? resolve(cwd, inputPath) : null,
-    input?.provenance?.transcript ? resolve(cwd, input.provenance.transcript) : null,
-    input?.review_packet?.prompt ? resolve(cwd, input.review_packet.prompt) : null,
-    input?.review_packet?.inputs ? resolve(cwd, input.review_packet.inputs) : null,
-  ].filter(Boolean);
+  const evidence = [
+    inputPath,
+    input?.provenance?.transcript,
+    input?.review_packet?.prompt,
+    input?.review_packet?.inputs,
+  ]
+    .filter(Boolean)
+    .map((path) => resolve(cwd, path))
+    .filter((resolved) => !isInsideCwd(cwd, resolved) || isEvidencePath(cwd, resolved, dir));
+  return [...manifestArtifactPaths(cwd, dir), ...evidence];
 }
 
 /**
@@ -94,12 +104,12 @@ function transcriptReferencesTicket(text, ticket) {
     });
 }
 
-function transcriptProof(transcript, cwd, { ticket, revision }) {
+function transcriptProof(transcript, cwd, { ticket, revision, dir }) {
   try {
     const absolute = resolve(cwd, transcript);
     const stat = statSync(absolute);
     if (!stat.isFile()) return `provenance.transcript is not a file: ${transcript}`;
-    if (isInsideCwd(cwd, absolute) && !isEvidencePath(cwd, absolute)) {
+    if (isInsideCwd(cwd, absolute) && !isEvidencePath(cwd, absolute, dir)) {
       return `provenance.transcript inside the worktree must live under .adlc/ or .omo/evidence/: ${transcript}`;
     }
     if (stat.size < 64) return `provenance.transcript is too small to serve as review evidence: ${transcript}`;
@@ -117,12 +127,12 @@ function transcriptProof(transcript, cwd, { ticket, revision }) {
   }
 }
 
-function artifactProof(path, expectedHash, cwd, label) {
+function artifactProof(path, expectedHash, cwd, label, dir) {
   try {
     const absolute = resolve(cwd, path);
     const stat = statSync(absolute);
     if (!stat.isFile()) return `${label} is not a file: ${path}`;
-    if (isInsideCwd(cwd, absolute) && !isEvidencePath(cwd, absolute)) {
+    if (isInsideCwd(cwd, absolute) && !isEvidencePath(cwd, absolute, dir)) {
       return `${label} inside the worktree must live under .adlc/ or .omo/evidence/: ${path}`;
     }
     const content = readFileSync(absolute);
@@ -136,10 +146,10 @@ function artifactProof(path, expectedHash, cwd, label) {
   }
 }
 
-function reviewPacketProof(packet, cwd, revision) {
+function reviewPacketProof(packet, cwd, revision, dir) {
   const errors = [];
-  const prompt = artifactProof(packet.prompt, packet.prompt_hash, cwd, 'review_packet.prompt');
-  const inputs = artifactProof(packet.inputs, packet.inputs_hash, cwd, 'review_packet.inputs');
+  const prompt = artifactProof(packet.prompt, packet.prompt_hash, cwd, 'review_packet.prompt', dir);
+  const inputs = artifactProof(packet.inputs, packet.inputs_hash, cwd, 'review_packet.inputs', dir);
   if (typeof prompt === 'string') errors.push(prompt);
   if (typeof inputs === 'string') errors.push(inputs);
   if (packet.clean_worktree !== revision) {
@@ -426,11 +436,12 @@ export function runProsecution(input, {
     transcript = transcriptProof(input.provenance.transcript, cwd, {
       ticket: ticket ?? '',
       revision: resolvedRevision ?? '',
+      dir,
     });
     if (typeof transcript === 'string') errors.push(transcript);
   }
   if (input?.review_packet && resolvedRevision) {
-    reviewPacket = reviewPacketProof(input.review_packet, cwd, resolvedRevision);
+    reviewPacket = reviewPacketProof(input.review_packet, cwd, resolvedRevision, dir);
     if (Array.isArray(reviewPacket)) errors.push(...reviewPacket);
   }
   if (errors.length > 0) {

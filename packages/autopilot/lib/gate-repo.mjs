@@ -59,7 +59,7 @@ function hooksExecutables(gitDir) {
 
 /** The complete git-state snapshot of one clone. */
 /** Host git inside a clone the gate has run in carries these, whatever that clone's config says. */
-export const HOST_SAFE_GIT = Object.freeze(['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.sshCommand=/bin/false']);
+export const HOST_SAFE_GIT = Object.freeze(['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.sshCommand=/bin/false', '-c', 'core.logallrefupdates=false']);
 const hostGit = (ctx, cwd, args) => ctx.git.localOut(cwd, [...HOST_SAFE_GIT, ...args]);
 const hostGitRaw = (ctx, cwd, args) => ctx.git.local(cwd, [...HOST_SAFE_GIT, ...args]);
 
@@ -70,6 +70,24 @@ const hostGitRaw = (ctx, cwd, args) => ctx.git.local(cwd, [...HOST_SAFE_GIT, ...
  * as the host user inside the very commands that snapshot it (codex r5 B3).
  * Returns null when unchanged, else the mismatch reason.
  */
+function readInfoExclude(gitDir) {
+  const infoDir = join(gitDir, 'info');
+  try {
+    if (lstatSync(infoDir).isSymbolicLink()) return false;
+  } catch {
+    return null;
+  }
+  const exclude = join(infoDir, 'exclude');
+  let st;
+  try {
+    st = lstatSync(exclude);
+  } catch {
+    return null;
+  }
+  if (!st.isFile()) return false;
+  return readFileSync(exclude, 'utf8');
+}
+
 export function gitMetadataUnchanged(before, cwd) {
   let st;
   try { st = lstatSync(join(cwd, '.git')); } catch { return 'gitdir-replaced'; }
@@ -78,6 +96,7 @@ export function gitMetadataUnchanged(before, cwd) {
   try { config = readFileSync(join(before.gitDir, 'config'), 'utf8'); } catch { config = null; }
   if (config !== before.configFile) return 'config-changed';
   if (JSON.stringify(hooksExecutables(before.gitDir)) !== JSON.stringify(before.hooksExecutables)) return 'hooks-added';
+  if (readInfoExclude(before.gitDir) === false) return 'exclude-symlink';
   return null;
 }
 
@@ -85,8 +104,20 @@ export async function snapshotGateRepo({ ctx, cwd, baseOid }) {
   const gitDir = join(cwd, (await hostGit(ctx, cwd, ['rev-parse', '--git-dir'])));
   let configFile = null;
   try { configFile = readFileSync(join(gitDir, 'config'), 'utf8'); } catch { configFile = null; }
+  const infoExclude = readInfoExclude(gitDir);
+  if (infoExclude === false) {
+    return {
+      gitDir, configFile,
+      head: null,
+      baseRef: null,
+      forEachRef: '',
+      configList: '',
+      hooksExecutables: hooksExecutables(gitDir),
+      infoExclude,
+      statusPorcelain: '',
+    };
+  }
   const baseRefRead = await hostGitRaw(ctx, cwd, ['rev-parse', '--verify', '--quiet', trackingRef(baseOid)]);
-  const exclude = join(gitDir, 'info', 'exclude');
   return {
     gitDir, configFile,
     head: await hostGit(ctx, cwd, ['rev-parse', 'HEAD']),
@@ -94,7 +125,7 @@ export async function snapshotGateRepo({ ctx, cwd, baseOid }) {
     forEachRef: await hostGit(ctx, cwd, ['for-each-ref']),
     configList: await hostGit(ctx, cwd, ['config', '--list', '--local']),
     hooksExecutables: hooksExecutables(gitDir),
-    infoExclude: existsSync(exclude) ? readFileSync(exclude, 'utf8') : null,
+    infoExclude,
     // node_modules is the orchestrator's read-only bind, not the gate's doing.
     statusPorcelain: await hostGit(ctx, cwd, ['status', '--porcelain', '--untracked-files=all', '--', '.', ':(exclude)node_modules']),
   };
@@ -108,6 +139,9 @@ const CHECKS = Object.freeze([
 /** @returns {{ same: boolean, reason: string|null }} the FIRST differing field's reason. */
 export function compareSnapshots(before, after) {
   if (active('gates.skipSnapshotCheck')) return { same: true, reason: null };
+  if (before.infoExclude === false || after.infoExclude === false) {
+    return { same: false, reason: 'exclude-symlink' };
+  }
   for (const [field, reason] of CHECKS) {
     if (JSON.stringify(before[field]) !== JSON.stringify(after[field])) return { same: false, reason };
   }
@@ -116,6 +150,7 @@ export function compareSnapshots(before, after) {
 
 /** The pre-spawn sanity of a fresh clone; returns a reason or null. */
 export function cloneSanity(snap, { attestedHead, baseOid }) {
+  if (snap.infoExclude === false) return 'exclude-symlink';
   if (snap.head !== attestedHead) return 'head-moved';
   if (snap.baseRef !== baseOid) return 'base-ref-moved';
   if (snap.hooksExecutables.length) return 'hooks-added';

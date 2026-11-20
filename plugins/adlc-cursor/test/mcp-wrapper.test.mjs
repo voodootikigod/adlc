@@ -517,7 +517,7 @@ test("bundled Roots proxy forwards real adlc_gate and adlc_prosecute calls in th
   );
   copyFileSync(
     join(REPO_ROOT, "docs", "examples", "p5-passes.json"),
-    join(root, "passes.json"),
+    join(root, ".omo", "evidence", "passes.json"),
   );
   commitFixture(root);
 
@@ -599,7 +599,7 @@ test("bundled Roots proxy forwards real adlc_gate and adlc_prosecute calls in th
       params: {
         name: "adlc_prosecute",
         arguments: {
-          input: "passes.json",
+          input: ".omo/evidence/passes.json",
           ticket: "T1",
           revision: "docs-example-revision",
         },

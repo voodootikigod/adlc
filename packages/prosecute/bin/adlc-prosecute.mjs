@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { parseArgs, printJson, opError, recordFinding, git, repoRoot, changedFiles, splitNulPaths, untrackedNonIgnoredPaths } from '@adlc/core';
 import { readManifestForest } from '@adlc/gate-manifest/lib/forest.mjs';
@@ -7,10 +7,38 @@ import { detectTicketStore, GitTreeTicketStore } from '@adlc/tickets';
 import { runProsecution, resolveProsecutionRevision, revisionIgnorePaths } from '../lib/run.mjs';
 import { classifyTrustRootTier } from '../lib/tier.mjs';
 import { usageWarnings } from '../lib/schema.mjs';
-import { recordCrossModelReview, carryForwardCrossModelReview, hasCrossModelApproveForRevision, manifestChainTrustworthy, manifestChainBreakReason, CROSS_MODEL_GATE, scopeObservedEntriesToAuthor } from '../lib/cross-model.mjs';
-import { readObservedAttestations, assertNoTruncation, mirrorObservedAttestations } from '../lib/attestation-store.mjs';
+import { recordCrossModelReview, carryForwardCrossModelReview, hasCrossModelApproveForRevision, evaluateCrossModelRevision, manifestChainTrustworthy, manifestChainBreakReason, CROSS_MODEL_GATE } from '../lib/cross-model.mjs';
+import { readObservedAttestations, mirrorObservedAttestations } from '../lib/attestation-store.mjs';
 import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 import { loadManifestKeyFromEnvLocal } from '../lib/load-env-local.mjs';
+
+// An --input / provenance.transcript path is excluded from the change-set identity, so an
+// in-tree path outside the evidence directories would let real source change without moving
+// the reviewed revision. Symlinks are refused outright (their target is not what was named).
+function assertSafeEvidencePath(rawPath, cwd, dir) {
+  if (typeof rawPath !== 'string' || rawPath === '') return;
+  const abs = resolve(cwd, rawPath);
+  try {
+    if (lstatSync(abs).isSymbolicLink()) opError(`evidence path must not be a symlink: ${rawPath}`);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  const realCwd = realpathSync(cwd);
+  const realAbs = existsSync(abs) ? realpathSync(abs) : resolve(realCwd, relative(cwd, abs));
+  const rel = relative(realCwd, realAbs).replaceAll('\\', '/');
+  if (rel === '' || rel === '..' || rel.startsWith('../') || isAbsolute(rel)) return;
+  const ledger = relative(cwd, resolve(cwd, dir || '.adlc')).replaceAll('\\', '/');
+  const inLedger = ledger !== '' && ledger !== '..' && !ledger.startsWith('../') && rel.startsWith(`${ledger}/`);
+  if (rel.startsWith('.adlc/') || rel.startsWith('.omo/evidence/') || inLedger) return;
+  opError(`in-repository evidence path must live under .adlc/ or .omo/evidence/: ${rawPath}`);
+}
+
+function assertSafeInputArtifacts(input, inputPath, cwd, dir) {
+  assertSafeEvidencePath(inputPath, cwd, dir);
+  assertSafeEvidencePath(input?.provenance?.transcript, cwd, dir);
+  assertSafeEvidencePath(input?.review_packet?.prompt, cwd, dir);
+  assertSafeEvidencePath(input?.review_packet?.inputs, cwd, dir);
+}
 
 // FAIL-CLOSED distinction: a genuinely ABSENT ticket table contributes no rails
 // (fine — nothing to check). But a table that EXISTS and is unreadable/malformed
@@ -791,11 +819,13 @@ if (positionals[0] === 'record-cross-model') {
   }
   let input;
   if (values.input) {
+    assertSafeEvidencePath(values.input, process.cwd(), values.dir);
     try {
       input = JSON.parse(readFileSync(values.input, 'utf8'));
     } catch (err) {
       opError(`could not read --input: ${err.message}`);
     }
+    assertSafeInputArtifacts(input, values.input, process.cwd(), values.dir);
   }
   const revision = resolveProsecutionRevision({
     dir: values.dir,
@@ -839,6 +869,9 @@ if (positionals[0] === 'record-cross-model') {
         revision,
         dir: values.dir,
         key: getKey(),
+        observedEntries: values['attestation-store']
+          ? readObservedAttestations(values['attestation-store'], { key: getKey() })
+          : undefined,
       });
     } catch (err) {
       opError(err.message); // fail closed: an unmoved/mismatched/uncapped/missing-prior carry is an operational error, never recorded
@@ -970,18 +1003,20 @@ if (positionals[0] === 'tier-check') {
   console.error('tier-check: TRUST-ROOT tier — a distinct-provider cross-model approve is REQUIRED. Reasons:');
   for (const reason of tier.reasons) console.error(`  - ${reason}`);
 
-  const authorProvider = values['author-provider'] ?? process.env.ADLC_AUTHOR_PROVIDER;
+  const authorProvider = values['author-provider'] || process.env.ADLC_AUTHOR_PROVIDER;
   if (!authorProvider) {
     opError('tier-check: trust-root tier but no --author-provider / ADLC_AUTHOR_PROVIDER — distinctness cannot be proven; failing closed');
   }
   const tierInputPath = values.input;
   let tierInput;
   if (tierInputPath !== undefined) {
+    assertSafeEvidencePath(tierInputPath, process.cwd(), values.dir);
     try {
       tierInput = JSON.parse(readFileSync(tierInputPath, 'utf8'));
     } catch (err) {
       opError(`could not read --input: ${err.message}`);
     }
+    assertSafeInputArtifacts(tierInput, tierInputPath, process.cwd(), values.dir);
   }
   const revision = resolveProsecutionRevision({
     dir: values.dir,
@@ -1023,34 +1058,12 @@ if (positionals[0] === 'tier-check') {
     }
   }
 
-  const satisfied = hasCrossModelApproveForRevision({ dir: values.dir, revision, authorProvider, key, observedEntries });
-  // #364 — WHY it failed, not just THAT it failed. hasCrossModelApproveForRevision checks the
-  // chain before examining any entry, so "the chain does not verify" and "no entry matches this
-  // revision" arrive here as the same `false`. Reporting both as a missing attestation sends the
-  // operator to run a distinct-provider adversarial review and record one — work that cannot
-  // clear a broken chain (record-cross-model refuses to append onto it). The review is the
-  // wasted cost. `satisfied` still decides the exit code; this only attributes the cause.
-  //
-  // Short-circuit on `satisfied`: hasCrossModelApproveForRevision returns true ONLY after its
-  // own manifestChainTrustworthy check passed, so satisfied ⇒ the chain verified. Re-deriving
-  // it would re-read and re-verify the whole ledger on the PASS path for an answer already
-  // known (cross-model review finding, MEDIUM). The || keeps the failing path exact.
+  const satisfied = hasCrossModelApproveForRevision({ dir: values.dir, revision, authorProvider, key, observedEntries, ticket: values.ticket });
   const chainTrustworthy = satisfied || manifestChainTrustworthy(values.dir, key);
-  // Same short-circuit logic for the THIRD cause (#355): only worth re-deriving on the
-  // failing path, and only meaningful when a store was actually supplied.
   let truncationDetected = false;
   if (!satisfied && chainTrustworthy && observedEntries !== undefined) {
-    // Forest-aware for the same reason as mirror-attestations above: this
-    // must see the SAME entries hasCrossModelApproveForRevision evaluated
-    // (forest-wide since slice 2), or a segmented repo's truncation
-    // attribution silently degrades to "root-only", the exact regression
-    // this diagnostic branch exists to distinguish from a real gap.
     const { entries: prEntries } = readManifestForest(values.dir);
-    // Same author-scoping hasCrossModelApproveForRevision applies internally (round-4
-    // finding): recomputing this with UNSCOPED observedEntries would misreport a
-    // cross-author revision collision as truncation instead of a missing attestation.
-    const authorScopedObserved = scopeObservedEntriesToAuthor(observedEntries, authorProvider);
-    truncationDetected = !assertNoTruncation({ prEntries, observedEntries: authorScopedObserved, revision, key }).ok;
+    truncationDetected = evaluateCrossModelRevision({ prEntries, observedEntries, revision, authorProvider, key, ticket: values.ticket }).truncationDetected;
   }
   if (values.json) {
     printJson({ trustRootTier: true, reasons: tier.reasons, crossModelRequired: true, satisfied, revision, keyAvailable: true, chainTrustworthy, truncationDetected, skippedOwnRails });
@@ -1136,11 +1149,13 @@ if (!values.input) opError('usage: adlc-prosecute --input <passes.json> --ticket
 if (!values.ticket) opError('usage: adlc-prosecute --input <passes.json> --ticket id');
 
 let input;
+assertSafeEvidencePath(values.input, process.cwd(), values.dir);
 try {
   input = JSON.parse(readFileSync(values.input, 'utf8'));
 } catch (err) {
   opError(`could not read input: ${err.message}`);
 }
+assertSafeInputArtifacts(input, values.input, process.cwd(), values.dir);
 
 // §8a non-fatal diagnostics. Printed to STDERR so they never corrupt --json's
 // stdout contract, and printed BEFORE the run so an operator sees the
