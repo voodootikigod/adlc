@@ -626,7 +626,7 @@ test('SafeSandbox HOST model-plane profile isolates PID/IPC/UTS namespaces on Li
 
   const sentinel = `CANARY_MANIFEST_SECRET_${process.pid}_${Date.now()}`;
   const probeScript = `
-    import { readdirSync, readFileSync } from 'node:fs';
+    const { readdirSync, readFileSync } = require('node:fs');
     let found = false;
     for (const entry of readdirSync('/proc')) {
       if (!/^\\d+$/.test(entry)) continue;
@@ -638,7 +638,7 @@ test('SafeSandbox HOST model-plane profile isolates PID/IPC/UTS namespaces on Li
     console.log(found ? 'LEAKED' : 'CLEAN');
   `;
   const parentWrapper = `
-    import { spawnSync } from 'node:child_process';
+    const { spawnSync } = require('node:child_process');
     const argv = JSON.parse(process.argv[1]);
     const cleanEnv = { PATH: process.env.PATH, HOME: process.env.HOME };
     const res = spawnSync(argv[0], argv.slice(1), { env: cleanEnv, encoding: 'utf8' });
