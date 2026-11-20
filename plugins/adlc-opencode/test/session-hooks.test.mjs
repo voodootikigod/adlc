@@ -170,7 +170,7 @@ test('auditAdversarialReview: risk-tier path changed but adlc unreachable → st
   assert.equal(r.needed, true);
 });
 
-test('auditAdversarialReview: adversarial-review already recorded (untargeted) → not needed', (t) => {
+test('auditAdversarialReview: unscoped adversarial-review (no ticket and no files) → still needed (T-P10)', (t) => {
   const root = initAdlc(mkroot(t));
   writeFileSync(join(root, '.adlc', 'manifest.jsonl'), '{"seq":1,"gate":"adversarial-review"}\n');
   const spawnImpl = stub({
@@ -178,7 +178,7 @@ test('auditAdversarialReview: adversarial-review already recorded (untargeted) �
     'adlc gate-manifest show': { status: 0, stdout: JSON.stringify({ entries: [{ seq: 1, gate: 'adversarial-review' }] }) },
   });
   const r = auditAdversarialReview(root, { spawnImpl, env: {} });
-  assert.equal(r.needed, false);
+  assert.equal(r.needed, true);
 });
 
 test('auditAdversarialReview: recorded for the active ticket (ADLC_TICKET) → not needed', (t) => {
@@ -206,13 +206,13 @@ test('auditAdversarialReview: recorded for a DIFFERENT ticket than active → st
 test('auditAdversarialReview: conflicting ADLC_TICKET vs current-ticket.json degrades to unscoped (advisory, does not fail closed)', (t) => {
   const root = initAdlc(mkroot(t));
   writeFileSync(join(root, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T9' }));
-  writeFileSync(join(root, '.adlc', 'manifest.jsonl'), '{"seq":1,"gate":"adversarial-review"}\n');
+  writeFileSync(join(root, '.adlc', 'manifest.jsonl'), '{"seq":1,"gate":"adversarial-review","ticket":"T9"}\n');
   const spawnImpl = stub({
     'git status': { status: 0, stdout: '?? src/auth/login.mjs\n' },
-    'adlc gate-manifest show': { status: 0, stdout: JSON.stringify({ entries: [{ seq: 1, gate: 'adversarial-review' }] }) },
+    'adlc gate-manifest show': { status: 0, stdout: JSON.stringify({ entries: [{ seq: 1, gate: 'adversarial-review', ticket: 'T9' }] }) },
   });
   // ADLC_TICKET ('T1') conflicts with current-ticket.json ('T9') — must not throw
-  // or fail closed; degrades to "no active ticket", so the untargeted record above still satisfies it.
+  // or fail closed; degrades to "no active ticket", so the scoped ticket record above still satisfies it.
   const r = auditAdversarialReview(root, { spawnImpl, env: { ADLC_TICKET: 'T1' } });
   assert.equal(r.needed, false);
 });
