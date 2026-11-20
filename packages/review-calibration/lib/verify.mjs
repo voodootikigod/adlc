@@ -5,9 +5,16 @@
 // file; nothing here runs a command authored by the reviewer under test.
 
 import { readFileSync } from 'node:fs';
+import { relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { checkSyntax, syntaxLanguage, tail, sanitizeCandidateEnv, detectSandbox, spawnSandboxed } from '@adlc/core';
-import { writeFileAtomic, NO_JOURNAL } from './inflight.mjs';
+import { writeFileAtomic, NO_JOURNAL, escapesRepoOrSymlink } from './inflight.mjs';
+
+function assertSafePlantPath(cwd, absolutePath) {
+  if (escapesRepoOrSymlink(cwd, relative(cwd, absolutePath))) {
+    throw new Error(`Refusing to plant outside repository or through symlink: ${absolutePath}`);
+  }
+}
 
 // Enough of a failing witness's output to show its failure line, small enough
 // to print once per excluded plant.
@@ -116,6 +123,7 @@ function mutatedSource(plant, original) {
  */
 function checkPlantSyntax(plant, cwd, { journal = NO_JOURNAL, syntaxFn = checkSyntax } = {}) {
   if (syntaxLanguage(plant.absolutePath) === null) return 'unknown';
+  assertSafePlantPath(cwd, plant.absolutePath);
   let original;
   try {
     original = readFileSync(plant.absolutePath, 'utf8');
@@ -126,10 +134,11 @@ function checkPlantSyntax(plant, cwd, { journal = NO_JOURNAL, syntaxFn = checkSy
   if (mutated === null) return 'unknown';
   journal.begin([{ absolutePath: plant.absolutePath, original, mutated }]);
   try {
+    assertSafePlantPath(cwd, plant.absolutePath);
     writeFileAtomic(plant.absolutePath, mutated);
     return syntaxFn(plant.absolutePath, cwd);
   } finally {
-    if (restoreOriginal(plant.absolutePath, original)) journal.end();
+    if (restoreOriginal(cwd, plant.absolutePath, original)) journal.end();
   }
 }
 
@@ -160,6 +169,7 @@ function nonDiscriminatingReason(onOriginal, onMutant) {
  * @returns {{discriminates:boolean, reason:string}}
  */
 export function verifyWitness(plant, cwd, runFn = defaultRun, { journal = NO_JOURNAL } = {}) {
+  assertSafePlantPath(cwd, plant.absolutePath);
   if (!plant.witness) return { discriminates: false, reason: 'no witness' };
   let original;
   try {
@@ -176,21 +186,24 @@ export function verifyWitness(plant, cwd, runFn = defaultRun, { journal = NO_JOU
     const { onMutant, onOriginal } = runBothSides(plant, cwd, runFn, { original, mutated });
     return judgeWitnessRuns(onOriginal, onMutant);
   } finally {
-    if (restoreOriginal(plant.absolutePath, original)) journal.end();
+    if (restoreOriginal(cwd, plant.absolutePath, original)) journal.end();
   }
 }
 
 /** Run the witness on the mutant, then on the restored original. */
 function runBothSides(plant, cwd, runFn, { original, mutated }) {
+  assertSafePlantPath(cwd, plant.absolutePath);
   writeFileAtomic(plant.absolutePath, mutated);
   const onMutant = runWitness(plant.witness, cwd, runFn);
+  assertSafePlantPath(cwd, plant.absolutePath);
   writeFileAtomic(plant.absolutePath, original);
   const onOriginal = runWitness(plant.witness, cwd, runFn);
   return { onMutant, onOriginal };
 }
 
-function restoreOriginal(absolutePath, original) {
+function restoreOriginal(cwd, absolutePath, original) {
   try {
+    assertSafePlantPath(cwd, absolutePath);
     writeFileAtomic(absolutePath, original);
     return true;
   } catch {

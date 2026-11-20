@@ -224,6 +224,7 @@ export function selectPlants(codeFiles, cwd, maxPlants, generateMutants) {
   const byOperator = new Map();
 
   for (const file of codeFiles) {
+    if (escapesRepoOrSymlink(cwd, file)) continue;
     const absolutePath = resolve(cwd, file);
     const content = readFileSafe(absolutePath);
     if (content === null) continue;

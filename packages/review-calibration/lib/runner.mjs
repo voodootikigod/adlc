@@ -79,7 +79,12 @@ export function runWithPlants(plants, reviewCmd, baseRef, cwd, timeoutMs, {
   journal.begin(planted);
 
   try {
-    for (const { absolutePath, mutated } of planted) writeFileAtomic(absolutePath, mutated);
+    for (const { absolutePath, mutated } of planted) {
+      if (escapesRepoOrSymlink(cwd, relative(cwd, absolutePath))) {
+        throw new Error(`Refusing to plant outside repository or through symlink: ${absolutePath}`);
+      }
+      writeFileAtomic(absolutePath, mutated);
+    }
 
     // Tokenize the trusted template, THEN substitute the base ref as a
     // discrete argv element. Run with shell:false so the ref is never re-parsed
@@ -128,7 +133,7 @@ export function runWithPlants(plants, reviewCmd, baseRef, cwd, timeoutMs, {
       timedOut,
     };
   } finally {
-    restoreAll(originals, journal);
+    restoreAll(cwd, originals, journal);
   }
 }
 
@@ -136,10 +141,14 @@ export function runWithPlants(plants, reviewCmd, baseRef, cwd, timeoutMs, {
  * Restore every original. The record is cleared only when all of them were
  * written back; otherwise it stays for the next run to finish the job.
  */
-function restoreAll(originals, journal) {
+function restoreAll(cwd, originals, journal) {
   let restored = true;
   for (const [absPath, originalContent] of originals) {
     try {
+      if (escapesRepoOrSymlink(cwd, relative(cwd, absPath))) {
+        restored = false;
+        continue;
+      }
       writeFileAtomic(absPath, originalContent);
     } catch {
       restored = false; // don't mask the original error; the record remains

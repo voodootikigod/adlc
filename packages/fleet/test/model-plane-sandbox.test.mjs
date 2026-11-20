@@ -31,7 +31,7 @@ import { tmp } from '@adlc/core/test-kit';
 import {
   Sandbox, SANDBOX_MODES, NETWORK, READ_POLICY, detectBackend, resolveSandboxMode,
 } from '../lib/sandbox.mjs';
-import { modelPlaneFilesystem, homeStateOf } from '../lib/model-plane.mjs';
+import { modelPlaneFilesystem, homeStateOf, allocateModelPlaneTmpDir, isSharedTmpRoot } from '../lib/model-plane.mjs';
 import { modelPlaneEnv } from '../lib/env-scrub.mjs';
 import * as claudeCode from '../lib/adapters/claude-code.mjs';
 import { adapterCatalog, ADAPTERS, getAdapter } from '../lib/adapters/index.mjs';
@@ -338,15 +338,69 @@ test('canWrite agrees with the profile about the device tree (review finding 2)'
   assert.equal(repo.canWrite('/dev/null'), false);
 });
 
-test('the temp dir is granted even when TMPDIR is unset (review finding 1)', () => {
-  // TMPDIR is usually UNSET on Linux. Passing it straight through left /tmp with
-  // no write grant while `--ro-bind / /` had already made it read-only — so every
-  // harness that allocates a temp file would fail, on exactly the platform
-  // bubblewrap serves. The deps layer resolves it through os.tmpdir(); this pins
-  // the policy layer's half: a resolved temp dir is always granted.
-  const resolved = realpathSync(tmpdir());
-  const { writablePaths } = modelPlaneFilesystem({ adapters: [], home: '/nonexistent-home', tmpDir: resolved });
-  assert.ok(writablePaths.includes(resolved), 'the temp dir must be writable on the model plane');
+test('a per-dispatch private temp dir is granted even when TMPDIR is unset, while shared /tmp roots are refused and sibling temp paths stay protected', { skip: false }, async (t) => {
+  const sharedResolved = realpathSync(tmpdir());
+  assert.equal(isSharedTmpRoot(null), false);
+  assert.equal(isSharedTmpRoot(''), false);
+  assert.equal(isSharedTmpRoot('/private/var/tmp', '/custom/os-tmp'), true);
+  assert.equal(isSharedTmpRoot('/custom/os-tmp', '/custom/os-tmp'), true);
+  assert.equal(isSharedTmpRoot(sharedResolved), true);
+  const linkHolder = scratch(t, 'mp-tmplink-');
+  const symlinkToShared = join(linkHolder, 'link-to-tmp');
+  const { symlinkSync: mkSym } = await import('node:fs');
+  mkSym('/tmp', symlinkToShared);
+  assert.equal(isSharedTmpRoot(symlinkToShared, '/custom/os-tmp'), true);
+  assert.throws(
+    () => modelPlaneFilesystem({ adapters: [], home: '/nonexistent-home', tmpDir: sharedResolved }),
+    /refuses shared temporary directory/,
+  );
+  assert.throws(
+    () => modelPlaneFilesystem({ adapters: [], home: '/nonexistent-home', tmpDir: '/tmp' }),
+    /refuses shared temporary directory/,
+  );
+
+  const customBase = scratch(t, 'mp-custom-tmpbase-');
+  const allocCustom = allocateModelPlaneTmpDir(customBase);
+  try {
+    assert.ok(allocCustom.tmpDir.startsWith(customBase), 'preferredBase directory is honored when valid');
+  } finally {
+    allocCustom.cleanup();
+  }
+  const alloc = allocateModelPlaneTmpDir(undefined);
+  try {
+    assert.equal(isSharedTmpRoot(alloc.tmpDir), false);
+    assert.deepEqual(alloc.env, { TMPDIR: alloc.tmpDir, TMP: alloc.tmpDir, TEMP: alloc.tmpDir });
+    const { writablePaths } = modelPlaneFilesystem({ adapters: [], home: '/nonexistent-home', tmpDir: alloc.tmpDir });
+    assert.ok(writablePaths.includes(alloc.tmpDir), 'the private dispatch temp dir must be writable on the model plane');
+    assert.ok(!writablePaths.includes(sharedResolved), 'shared OS temp root must never be granted');
+
+    if (backend) {
+      const root = scratch(t, 'mp-priv-tmp-');
+      const worktree = join(root, 'wt');
+      const siblingTmp = join(root, 'shared-sibling.txt');
+      mkdirSync(worktree, { recursive: true });
+      writeFileSync(siblingTmp, 'intact');
+
+      const ok = await runContained({
+        worktree,
+        writablePaths: [alloc.tmpDir],
+        script: `printf ok > ${JSON.stringify(join(alloc.tmpDir, 'probe.txt'))}`,
+      });
+      assert.equal(ok.status, 0, ok.stderr);
+      assert.equal(readFileSync(join(alloc.tmpDir, 'probe.txt'), 'utf8'), 'ok');
+
+      const denied = await runContained({
+        worktree,
+        writablePaths: [alloc.tmpDir],
+        script: `printf pwned > ${JSON.stringify(siblingTmp)}`,
+      });
+      assert.notEqual(denied.status, 0, 'writes to sibling paths in /tmp must be denied');
+      assert.equal(readFileSync(siblingTmp, 'utf8'), 'intact');
+    }
+  } finally {
+    alloc.cleanup();
+  }
+  assert.equal(existsSync(alloc.tmpDir), false, 'cleanup removes the private dispatch temp dir');
 });
 
 test('a missing declared state file is reported ONCE per run, not once per dispatch (review finding 3)', (t) => {
@@ -431,6 +485,16 @@ test('EVERY rung of an escalation ladder contributes its state dirs to the grant
     const argv = rec.map((c) => [c.cmd, ...(c.args ?? [])].join(' ')).join('\n');
     assert.match(argv, new RegExp(`--bind ${opencodeState} ${opencodeState}`),
       'the LATER rung\'s harness state must be granted at strike 1, or the first escalation fails');
+    assert.doesNotMatch(argv, /--bind \/tmp \/tmp\b/,
+      'dispatch must never bind host /tmp read-write');
+    assert.match(argv, /--bind [^\s]*adlc-fleet-mp-tmp-[^\s]+/,
+      'dispatch binds only a private per-dispatch temporary directory');
+    assert.equal(rec[0]?.cmd, 'bwrap');
+    const workerEnv = rec[0]?.env ?? {};
+    assert.match(workerEnv.TMPDIR ?? '', /adlc-fleet-mp-tmp-/);
+    assert.equal(workerEnv.TMP, workerEnv.TMPDIR);
+    assert.equal(workerEnv.TEMP, workerEnv.TMPDIR);
+    assert.equal(existsSync(workerEnv.TMPDIR), false, 'private per-dispatch temp dir is removed on dispatch exit');
   });
 });
 

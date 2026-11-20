@@ -11,7 +11,7 @@ import { defaultGit } from './worktrees.mjs';
 import * as worktrees from './worktrees.mjs';
 import { NETWORK, READ_POLICY } from './sandbox.mjs';
 import { SafeSandbox } from './safe-sandbox.mjs';
-import { modelPlaneFilesystem } from './model-plane.mjs';
+import { modelPlaneFilesystem, allocateModelPlaneTmpDir } from './model-plane.mjs';
 import { repoCommandEnv, modelPlaneEnv } from './env-scrub.mjs';
 import { runGatePipeline } from './gate-pipeline.mjs';
 import { runGates, checkFlail, MAX_OUTPUT_BYTES } from './gates.mjs';
@@ -419,17 +419,20 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
   // run in the same process still warns, and so tests stay independent of each other.
   const warnedMissingState = new Set();
   const modelSandboxFor = (worktree, adapters) => {
-    const { writablePaths, missingStateFiles } = modelPlaneFilesystem({
-      adapters,
-      home: io.env.HOME,
-      // NOT `io.env.TMPDIR` alone: that variable is usually UNSET on Linux, and an
-      // unset temp dir means /tmp gets no write grant while `--ro-bind / /` has
-      // already made it read-only — every harness that allocates a temp file would
-      // then fail on exactly the platform bubblewrap serves. os.tmpdir() honours
-      // TMPDIR when set and falls back to the platform default when it is not.
-      tmpDir: io.env.TMPDIR || tmpdir(),
-      extraWritable: config.modelPlaneWritable ?? [],
-    });
+    const allocatedTmp = allocateModelPlaneTmpDir(io.env?.TMPDIR);
+    let writablePaths;
+    let missingStateFiles;
+    try {
+      ({ writablePaths, missingStateFiles } = modelPlaneFilesystem({
+        adapters,
+        home: io.env.HOME,
+        tmpDir: allocatedTmp.tmpDir,
+        extraWritable: config.modelPlaneWritable ?? [],
+      }));
+    } catch (err) {
+      allocatedTmp.cleanup();
+      throw err;
+    }
     // Warn ONCE per run, not once per dispatch. A fleet runs many tickets and
     // retries strikes, so a per-dispatch warning about a state file this host
     // simply does not have would repeat dozens of times and train the operator to
@@ -446,7 +449,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
         'write it, re-run with --model-plane-writable <path>.'
       );
     }
-    return new SafeSandbox({
+    const sandbox = new SafeSandbox({
       mode: sandboxSpec.mode,
       backend: sandboxSpec.backend,
       worktree,
@@ -460,6 +463,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       readPolicy: READ_POLICY.HOST,
       exec: async (argv, opts) => io.spawnWorker(argv[0], argv.slice(1), opts),
     });
+    return { sandbox, tmpEnv: allocatedTmp.env, cleanup: allocatedTmp.cleanup };
   };
 
   return {
@@ -595,7 +599,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       // fleet-ext items 11/13/14: in BOUNDED mode the profile is the bounded
       // model plane with a synthetic HOME (and, under allowlist egress, no
       // network namespace but a bridge to the host-side CONNECT proxy).
-      let modelSandbox; let egress = null; let boundedCleanup = null;
+      let modelSandbox; let egress = null; let dispatchCleanup = null; let dispatchTmpEnv = null;
       if (boundedMode) {
         let built;
         try {
@@ -606,10 +610,13 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
         } catch (e) {
           return { exitCode: 1, output: e.message, timedOut: false, usageStatus: 'unreported', policyMismatch: e.code === 'sandbox-policy-mismatch' };
         }
-        modelSandbox = built.sandbox; egress = built.egress; boundedCleanup = built.cleanup;
+        modelSandbox = built.sandbox; egress = built.egress; dispatchCleanup = built.cleanup;
         lastPolicy = { ...built.description, gitSource: mirrorMode ? 'mirror' : 'shared', mirror: mirrorMode ? config.modelPlaneGitMirror : null };
       } else {
-        modelSandbox = modelSandboxFor(worktree, ladderAdaptersFor(ticket, adapter));
+        const hostBuilt = modelSandboxFor(worktree, ladderAdaptersFor(ticket, adapter));
+        modelSandbox = hostBuilt.sandbox;
+        dispatchTmpEnv = hostBuilt.tmpEnv;
+        dispatchCleanup = hostBuilt.cleanup;
       }
       let res;
       // The strike's budget: the configured per-dispatch timeout, or LESS when the wall
@@ -619,7 +626,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       const deadlineTruncated = config.deadline != null && timeoutMs < (config.timeoutMinutes ?? 30) * 60000;
       try {
         res = await adapter.dispatch({
-          worktree, prompt, timeoutMs, env: { ...env, ...(egress?.env ?? {}) },
+          worktree, prompt, timeoutMs, env: { ...env, ...(dispatchTmpEnv ?? {}), ...(egress?.env ?? {}) },
           // `killGroup`: the worker is a process TREE; on timeout the whole group
           // is signalled (SIGTERM, then SIGKILL), not just the sandbox leader.
           // The executable mapping is applied BEFORE the bridge prefix, so the bridge
@@ -636,9 +643,9 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
           useStdin: config.adapterStdin === true, // pi RPC/stdin prompt transport (A3)
         });
       } finally {
-        // The proxy, its socket and the staged credential copy live exactly as
-        // long as the dispatch they served — on every exit path.
-        if (boundedCleanup) await boundedCleanup();
+        // The proxy, its socket, the private dispatch temp dir, and any staged
+        // credential copy live exactly as long as the dispatch they served — on every exit path.
+        if (dispatchCleanup) await dispatchCleanup();
       }
       // Persist the transcript BEFORE anything can return early, so the flail
       // consultation between strikes has something to analyze. Without this the

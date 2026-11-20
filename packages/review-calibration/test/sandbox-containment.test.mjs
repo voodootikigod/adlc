@@ -4,10 +4,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { sanitizeCandidateEnv, detectSandbox } from '@adlc/core';
-import { loadPlantsFile } from '../lib/targets.mjs';
+import { sanitizeCandidateEnv, detectSandbox, mutate } from '@adlc/core';
+import { loadPlantsFile, selectPlants } from '../lib/targets.mjs';
 import { runWithPlants } from '../lib/runner.mjs';
-import { runWitness, defaultRun } from '../lib/verify.mjs';
+import { runWitness, defaultRun, verifyWitness, filterEquivalentMutants } from '../lib/verify.mjs';
 import { writeRecord, NO_JOURNAL } from '../lib/inflight.mjs';
 import { BIN, BOUNDARY_PLANT, MATH_SOURCE } from './cli-fixtures.mjs';
 
@@ -227,5 +227,76 @@ test('review-calibration CLI fails closed when no OS sandbox is on PATH and requ
     ], { cwd: repo, env: envNoSandbox, encoding: 'utf8' });
     assert.equal(allowed.status, 0, allowed.stderr);
     assert.match(allowed.stderr, /WARNING: Running witness command WITHOUT OS sandbox/);
+  });
+});
+
+test('selectPlants, filterEquivalentMutants, verifyWitness, and automatic CLI selection skip or reject tracked symlinks without touching outside files', () => {
+  withTmp((root) => {
+    const repo = join(root, 'repo');
+    mkdirSync(join(repo, 'src'), { recursive: true });
+    const outside = join(root, 'outside-target.mjs');
+    const outsideSource = 'export function secretCheck(x) {\n  return x > 0;\n}\n';
+    writeFileSync(outside, outsideSource);
+    writeFileSync(join(repo, 'src', 'math.mjs'), MATH_SOURCE);
+    symlinkSync(outside, join(repo, 'src', 'linked.mjs'));
+
+    const selected = selectPlants(['src/linked.mjs', '../outside-target.mjs', 'src/math.mjs'], repo, 10, mutate.generateMutants);
+    assert.ok(selected.length > 0, 'real in-repo file produces plants');
+    assert.ok(selected.every((p) => p.file === 'src/math.mjs'), 'tracked symlinks and escaping paths are never selected');
+
+    const badPlant = {
+      file: 'src/linked.mjs',
+      absolutePath: join(repo, 'src', 'linked.mjs'),
+      line: 2,
+      original: '  return x > 0;',
+      mutated: '  return x >= 0;',
+      witness: { cmd: process.execPath, args: ['-e', 'process.exit(0)'] },
+    };
+    assert.throws(
+      () => filterEquivalentMutants([badPlant], repo),
+      /Refusing to plant outside repository or through symlink/,
+    );
+    assert.throws(
+      () => verifyWitness(badPlant, repo, () => ({ status: 0, timedOut: false })),
+      /Refusing to plant outside repository or through symlink/,
+    );
+    assert.equal(readFileSync(outside, 'utf8'), outsideSource, 'outside target file was never modified');
+
+    // If a review command replaces the planted file with a symlink mid-run, restoreAll refuses to write through it and keeps the journal open
+    const midRunTarget = join(repo, 'src', 'swap.mjs');
+    writeFileSync(midRunTarget, 'const z = 1;\n');
+    const swapper = join(root, 'swapper.mjs');
+    writeFileSync(swapper, `import { rmSync, symlinkSync } from 'node:fs'; rmSync(${JSON.stringify(midRunTarget)}); symlinkSync(${JSON.stringify(outside)}, ${JSON.stringify(midRunTarget)});\n`);
+    let journalEnded = false;
+    runWithPlants(
+      [{ absolutePath: midRunTarget, line: 1, original: 'const z = 1;', mutated: 'const z = 2;' }],
+      `${process.execPath} ${swapper}`,
+      'HEAD',
+      repo,
+      5000,
+      { journal: { begin() {}, end() { journalEnded = true; } } },
+    );
+    assert.equal(journalEnded, false, 'journal must remain open when restore refuses a mid-run symlink swap');
+    assert.equal(readFileSync(outside, 'utf8'), outsideSource, 'restoreAll never writes through a mid-run symlink');
+    rmSync(midRunTarget, { force: true });
+
+    // End-to-end automatic commit selection with a tracked symlink in the commit
+    const gitBin = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+    const g = (...a) => execFileSync(gitBin, a, { cwd: repo, encoding: 'utf8' });
+    g('init', '-q', '-b', 'main', '--template=');
+    g('config', 'user.email', 't@t');
+    g('config', 'user.name', 't');
+    g('config', 'commit.gpgsign', 'false');
+    writeFileSync(join(repo, 'README.md'), 'base\n');
+    g('add', 'README.md');
+    g('commit', '-qm', 'base');
+    g('add', 'src/math.mjs', 'src/linked.mjs');
+    g('commit', '-qm', 'feat with tracked symlink');
+
+    const autoRes = spawnSync(process.execPath, [
+      BIN, '--commit', 'HEAD', '--review-cmd', `${process.execPath} -e "0"`, '--min-plants', '1', '--min-recall', '0', '--scorer', 'string', '--unsafe-no-sandbox',
+    ], { cwd: repo, encoding: 'utf8' });
+    assert.equal(autoRes.status, 0, autoRes.stderr);
+    assert.equal(readFileSync(outside, 'utf8'), outsideSource, 'automatic calibration run left outside symlink target untouched');
   });
 });
