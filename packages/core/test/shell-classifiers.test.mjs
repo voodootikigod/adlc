@@ -12,6 +12,7 @@ import {
   shellIsPositivelyReadOnly,
 } from '../lib/shell.mjs';
 import * as copilotShell from '../../../plugins/adlc-copilot/hooks/generated-shell.mjs';
+import * as codexShell from '../../../plugins/adlc-codex/hooks/generated-shell.mjs';
 
 test('shellHasOpaqueMutation flags subshells, dot-source, and inline interpreters while allowing ./script.sh', () => {
   // Subshells
@@ -161,17 +162,27 @@ test('shellIsPositivelyReadOnly rejects GIT_EXTERNAL_DIFF and mutating/creating 
   assert.equal(shellIsPositivelyReadOnly('git branch --merged main'), true);
   assert.equal(shellIsPositivelyReadOnly('git branch --no-merged main'), true);
 
-  // node --check and test-target-only node --test allowed; arbitrary scripts and loader/eval flags rejected
-  assert.equal(shellIsPositivelyReadOnly('node --test'), true);
-  assert.equal(shellIsPositivelyReadOnly('node --test test/a.test.mjs'), true);
-  assert.equal(shellIsPositivelyReadOnly('node --test --test-name-pattern foo packages/runner/test/runner.test.mjs'), true);
-  assert.equal(shellIsPositivelyReadOnly('node --test --test-only test/a.test.mjs'), true);
-  assert.equal(shellIsPositivelyReadOnly('node --test attacker.mjs'), false);
-  assert.equal(shellIsPositivelyReadOnly('node --test src/script.mjs'), false);
-  assert.equal(shellIsPositivelyReadOnly('node --test --import ./evil.mjs test/a.test.mjs'), false);
-  assert.equal(shellIsPositivelyReadOnly('node --test -r ./evil.cjs test/a.test.mjs'), false);
-  assert.equal(shellIsPositivelyReadOnly('node --test -e "process.exit(0)"'), false);
-  assert.equal(shellIsPositivelyReadOnly('node --check index.mjs'), true);
+  // node --check and test-target-only node --test allowed; arbitrary scripts and loader/eval flags rejected across core and generated copies
+  for (const checkFn of [
+    shellIsPositivelyReadOnly,
+    codexShell.shellIsPositivelyReadOnly,
+    copilotShell.shellIsPositivelyReadOnly,
+  ]) {
+    assert.equal(checkFn('node --test'), true);
+    assert.equal(checkFn('node --test test/a.test.mjs'), true);
+    assert.equal(checkFn('node --test --test-name-pattern foo packages/runner/test/runner.test.mjs'), true);
+    assert.equal(checkFn('node --test --test-name-pattern foo attacker.mjs'), false);
+    assert.equal(checkFn('node --test --test-only test/a.test.mjs'), true);
+    assert.equal(checkFn('node --test attacker.mjs'), false);
+    assert.equal(checkFn('node --test test/a.test.mjs attacker.mjs'), false);
+    assert.equal(checkFn('node --test src/script.mjs'), false);
+    assert.equal(checkFn('node --test --import ./evil.mjs test/a.test.mjs'), false);
+    assert.equal(checkFn('node --test test/a.test.mjs -r ./evil.cjs'), false);
+    assert.equal(checkFn('node --test -e "process.exit(0)"'), false);
+    assert.equal(checkFn('node attacker.mjs'), false);
+    assert.equal(checkFn('python3 --test'), false);
+    assert.equal(checkFn('node --check index.mjs'), true);
+  }
 });
 
 test('active Codex rail hook rejects mixed visible + dynamic .adlc/tickets inline interpreter writes', () => {
