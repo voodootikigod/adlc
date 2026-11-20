@@ -33,17 +33,19 @@ describe('T-P10: runner P6 packet hardening and CLI subcommands', () => {
     assert.equal(symlinkRes.ok, false);
     assert.ok(symlinkRes.errors.some((e) => /symlink/i.test(e)), `expected symlink error, got: ${symlinkRes.errors.join('; ')}`);
 
-    const emptyObjPacket = join(dir, '.adlc', 'evidence', 'empty.json');
-    writeFileSync(emptyObjPacket, '{}');
-    const emptyRes = recordAcceptancePacket({
-      cwd: dir,
-      dir: '.adlc',
-      ticket: 'T1',
-      packet: '.adlc/evidence/empty.json',
-      revision: 'rev-1',
-    });
-    assert.equal(emptyRes.ok, false);
-    assert.ok(emptyRes.errors.some((e) => /empty/i.test(e)), `expected empty JSON error, got: ${emptyRes.errors.join('; ')}`);
+    for (const badJson of ['{}', '[]', 'null', '"scalar"']) {
+      const badPacket = join(dir, '.adlc', 'evidence', 'bad.json');
+      writeFileSync(badPacket, badJson);
+      const badRes = recordAcceptancePacket({
+        cwd: dir,
+        dir: '.adlc',
+        ticket: 'T1',
+        packet: '.adlc/evidence/bad.json',
+        revision: 'rev-1',
+      });
+      assert.equal(badRes.ok, false);
+      assert.ok(badRes.errors.some((e) => /non-empty object/i.test(e)), `expected non-empty object error for ${badJson}, got: ${badRes.errors.join('; ')}`);
+    }
   });
 
   it('supports --version, record --help, and upgrade --help', () => {

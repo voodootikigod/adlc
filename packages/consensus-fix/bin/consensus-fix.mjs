@@ -320,7 +320,10 @@ const {
 let applied = false;
 if (values['apply'] && selectionResult && !allDivergent) {
   const { winner } = selectionResult;
-  assertFilesContainedAndUnrailed(Object.keys(winner.changes ?? {}));
+  const winnerFiles = Array.isArray(winner.changes)
+    ? winner.changes.map((c) => c?.file).filter(Boolean)
+    : Object.keys(winner.changes ?? {});
+  assertFilesContainedAndUnrailed(winnerFiles);
   try {
     applyWinner(winner.changes, outerSnapshot);
     applied = true;

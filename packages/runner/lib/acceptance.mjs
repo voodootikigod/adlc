@@ -88,8 +88,8 @@ export function recordAcceptancePacket({
         } else if (packet.endsWith('.json') || text.startsWith('{')) {
           try {
             const parsed = JSON.parse(text);
-            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.keys(parsed).length === 0) {
-              errors.push(`packet JSON object is empty: ${packet}`);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || Object.keys(parsed).length === 0) {
+              errors.push(`packet JSON must be a non-empty object: ${packet}`);
             }
           } catch {
             // Non-JSON markdown/text packets are allowed unless explicitly .json
