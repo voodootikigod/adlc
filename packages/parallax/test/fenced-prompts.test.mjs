@@ -126,5 +126,27 @@ describe('T-P12: --record-verdict exits 2 on failing/blocked verdicts across par
       { cwd: dir, input: 'clarify: missing rollback plan', encoding: 'utf8' },
     );
     assert.equal(clarifyRes.status, 2, clarifyRes.stderr);
+
+    // Exercise the last FAILING_VERDICT_VALUES entry ('rejected') across all three CLIs
+    const rejParallax = spawnSync(
+      process.execPath,
+      [PARALLAX_BIN, '--request', 'Build feature X', '--prompt-only', '--record-verdict', '-', '--ticket', 'T1'],
+      { cwd: dir, input: JSON.stringify({ verdict: 'rejected' }), encoding: 'utf8' },
+    );
+    assert.equal(rejParallax.status, 2, rejParallax.stderr);
+
+    const rejColdstart = spawnSync(
+      process.execPath,
+      [COLDSTART_BIN, 'T1', '--tickets', '.adlc/tickets.json', '--prompt-only', '--record-verdict', '-'],
+      { cwd: dir, input: JSON.stringify({ verdict: 'rejected' }), encoding: 'utf8' },
+    );
+    assert.equal(rejColdstart.status, 2, rejColdstart.stderr);
+
+    const rejPremortem = spawnSync(
+      process.execPath,
+      [PREMORTEM_BIN, 'spec.md', '--prompt-only', '--record-verdict', '-', '--ticket', 'T1'],
+      { cwd: dir, input: JSON.stringify({ verdict: 'rejected' }), encoding: 'utf8' },
+    );
+    assert.equal(rejPremortem.status, 2, rejPremortem.stderr);
   });
 });
