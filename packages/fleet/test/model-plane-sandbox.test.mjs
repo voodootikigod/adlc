@@ -31,7 +31,8 @@ import { tmp } from '@adlc/core/test-kit';
 import {
   Sandbox, SANDBOX_MODES, NETWORK, READ_POLICY, detectBackend, resolveSandboxMode,
 } from '../lib/sandbox.mjs';
-import { modelPlaneFilesystem, homeStateOf } from '../lib/model-plane.mjs';
+import { SafeSandbox } from '../lib/safe-sandbox.mjs';
+import { modelPlaneFilesystem, homeStateOf, allocateModelPlaneTmpDir, isSharedTmpRoot } from '../lib/model-plane.mjs';
 import { modelPlaneEnv } from '../lib/env-scrub.mjs';
 import * as claudeCode from '../lib/adapters/claude-code.mjs';
 import { adapterCatalog, ADAPTERS, getAdapter } from '../lib/adapters/index.mjs';
@@ -338,15 +339,69 @@ test('canWrite agrees with the profile about the device tree (review finding 2)'
   assert.equal(repo.canWrite('/dev/null'), false);
 });
 
-test('the temp dir is granted even when TMPDIR is unset (review finding 1)', () => {
-  // TMPDIR is usually UNSET on Linux. Passing it straight through left /tmp with
-  // no write grant while `--ro-bind / /` had already made it read-only — so every
-  // harness that allocates a temp file would fail, on exactly the platform
-  // bubblewrap serves. The deps layer resolves it through os.tmpdir(); this pins
-  // the policy layer's half: a resolved temp dir is always granted.
-  const resolved = realpathSync(tmpdir());
-  const { writablePaths } = modelPlaneFilesystem({ adapters: [], home: '/nonexistent-home', tmpDir: resolved });
-  assert.ok(writablePaths.includes(resolved), 'the temp dir must be writable on the model plane');
+test('a per-dispatch private temp dir is granted even when TMPDIR is unset, while shared /tmp roots are refused and sibling temp paths stay protected', { skip: false }, async (t) => {
+  const sharedResolved = realpathSync(tmpdir());
+  assert.equal(isSharedTmpRoot(null), false);
+  assert.equal(isSharedTmpRoot(''), false);
+  assert.equal(isSharedTmpRoot('/private/var/tmp', '/custom/os-tmp'), true);
+  assert.equal(isSharedTmpRoot('/custom/os-tmp', '/custom/os-tmp'), true);
+  assert.equal(isSharedTmpRoot(sharedResolved), true);
+  const linkHolder = scratch(t, 'mp-tmplink-');
+  const symlinkToShared = join(linkHolder, 'link-to-tmp');
+  const { symlinkSync: mkSym } = await import('node:fs');
+  mkSym('/tmp', symlinkToShared);
+  assert.equal(isSharedTmpRoot(symlinkToShared, '/custom/os-tmp'), true);
+  assert.throws(
+    () => modelPlaneFilesystem({ adapters: [], home: '/nonexistent-home', tmpDir: sharedResolved }),
+    /refuses shared temporary directory/,
+  );
+  assert.throws(
+    () => modelPlaneFilesystem({ adapters: [], home: '/nonexistent-home', tmpDir: '/tmp' }),
+    /refuses shared temporary directory/,
+  );
+
+  const customBase = scratch(t, 'mp-custom-tmpbase-');
+  const allocCustom = allocateModelPlaneTmpDir(customBase);
+  try {
+    assert.ok(allocCustom.tmpDir.startsWith(customBase), 'preferredBase directory is honored when valid');
+  } finally {
+    allocCustom.cleanup();
+  }
+  const alloc = allocateModelPlaneTmpDir(undefined);
+  try {
+    assert.equal(isSharedTmpRoot(alloc.tmpDir), false);
+    assert.deepEqual(alloc.env, { TMPDIR: alloc.tmpDir, TMP: alloc.tmpDir, TEMP: alloc.tmpDir });
+    const { writablePaths } = modelPlaneFilesystem({ adapters: [], home: '/nonexistent-home', tmpDir: alloc.tmpDir });
+    assert.ok(writablePaths.includes(alloc.tmpDir), 'the private dispatch temp dir must be writable on the model plane');
+    assert.ok(!writablePaths.includes(sharedResolved), 'shared OS temp root must never be granted');
+
+    if (backend) {
+      const root = scratch(t, 'mp-priv-tmp-');
+      const worktree = join(root, 'wt');
+      const siblingTmp = join(root, 'shared-sibling.txt');
+      mkdirSync(worktree, { recursive: true });
+      writeFileSync(siblingTmp, 'intact');
+
+      const ok = await runContained({
+        worktree,
+        writablePaths: [alloc.tmpDir],
+        script: `printf ok > ${JSON.stringify(join(alloc.tmpDir, 'probe.txt'))}`,
+      });
+      assert.equal(ok.status, 0, ok.stderr);
+      assert.equal(readFileSync(join(alloc.tmpDir, 'probe.txt'), 'utf8'), 'ok');
+
+      const denied = await runContained({
+        worktree,
+        writablePaths: [alloc.tmpDir],
+        script: `printf pwned > ${JSON.stringify(siblingTmp)}`,
+      });
+      assert.notEqual(denied.status, 0, 'writes to sibling paths in /tmp must be denied');
+      assert.equal(readFileSync(siblingTmp, 'utf8'), 'intact');
+    }
+  } finally {
+    alloc.cleanup();
+  }
+  assert.equal(existsSync(alloc.tmpDir), false, 'cleanup removes the private dispatch temp dir');
 });
 
 test('a missing declared state file is reported ONCE per run, not once per dispatch (review finding 3)', (t) => {
@@ -431,6 +486,16 @@ test('EVERY rung of an escalation ladder contributes its state dirs to the grant
     const argv = rec.map((c) => [c.cmd, ...(c.args ?? [])].join(' ')).join('\n');
     assert.match(argv, new RegExp(`--bind ${opencodeState} ${opencodeState}`),
       'the LATER rung\'s harness state must be granted at strike 1, or the first escalation fails');
+    assert.doesNotMatch(argv, /--bind \/tmp \/tmp\b/,
+      'dispatch must never bind host /tmp read-write');
+    assert.match(argv, /--bind [^\s]*adlc-fleet-mp-tmp-[^\s]+/,
+      'dispatch binds only a private per-dispatch temporary directory');
+    assert.equal(rec[0]?.cmd, 'bwrap');
+    const workerEnv = rec[0]?.env ?? {};
+    assert.match(workerEnv.TMPDIR ?? '', /adlc-fleet-mp-tmp-/);
+    assert.equal(workerEnv.TMP, workerEnv.TMPDIR);
+    assert.equal(workerEnv.TEMP, workerEnv.TMPDIR);
+    assert.equal(existsSync(workerEnv.TMPDIR), false, 'private per-dispatch temp dir is removed on dispatch exit');
   });
 });
 
@@ -455,11 +520,11 @@ const DECLARED_HOME_STATE = {
     files: ['.gemini/oauth_creds.json', '.gemini/google_accounts.json'],
   },
   agy: {
-    dirs: ['.antigravity', '.gemini/tmp', '.gemini/sessions', '.cache/gemini'],
+    dirs: ['.antigravity/logs', '.antigravity/sessions', '.antigravity/tmp', '.gemini/tmp', '.gemini/sessions', '.cache/gemini'],
     files: ['.gemini/oauth_creds.json', '.gemini/google_accounts.json'],
   },
   jetski: {
-    dirs: ['.jetski', '.gemini/tmp', '.gemini/sessions', '.cache/gemini'],
+    dirs: ['.jetski/logs', '.jetski/sessions', '.jetski/tmp', '.gemini/tmp', '.gemini/sessions', '.cache/gemini'],
     files: ['.gemini/oauth_creds.json', '.gemini/google_accounts.json'],
   },
   opencode: {
@@ -526,4 +591,77 @@ test('canWrite: a read-only entry under HOME or the private tmp (an attested fil
   assert.equal(s.canWrite(`${home}/pinned.json`), false, 'a read-only leaf under HOME is not');
   assert.equal(s.canWrite(`${PRIVATE_TMP}/ro-tool`), false, 'a read-only leaf under the private tmp is not');
   assert.equal(s.canWrite(`${PRIVATE_TMP}/x`), true, 'the private tmp otherwise is');
+});
+
+test('SafeSandbox HOST model-plane profile isolates PID/IPC/UTS namespaces on Linux so /proc/*/environ never leaks parent ADLC_MANIFEST_KEY', { skip: backend?.name === 'bubblewrap' ? false : 'requires Linux bubblewrap' }, async (t) => {
+  const root = scratch(t, 'mp-proc-pid-');
+  const worktree = join(root, 'wt');
+  mkdirSync(worktree, { recursive: true });
+
+  const hostSandbox = new SafeSandbox({
+    mode: SANDBOX_MODES.SANDBOX,
+    backend: { name: 'bubblewrap', platform: 'linux' },
+    worktree,
+    syntheticHome: null,
+    writablePaths: [],
+    network: NETWORK.ALLOW,
+    readPolicy: READ_POLICY.HOST,
+  });
+  const allowArgv = hostSandbox.wrap(['/bin/true']);
+  assert.ok(allowArgv.includes('--unshare-pid'));
+  assert.ok(allowArgv.includes('--unshare-ipc'));
+  assert.ok(allowArgv.includes('--unshare-uts'));
+  assert.ok(!allowArgv.includes('--unshare-net'));
+
+  const denyNetHost = new SafeSandbox({
+    mode: SANDBOX_MODES.SANDBOX,
+    backend: { name: 'bubblewrap', platform: 'linux' },
+    worktree,
+    syntheticHome: null,
+    writablePaths: [],
+    network: NETWORK.DENY,
+    readPolicy: READ_POLICY.HOST,
+  });
+  assert.ok(denyNetHost.wrap(['/bin/true']).includes('--unshare-net'));
+
+  const sentinel = `CANARY_MANIFEST_SECRET_${process.pid}_${Date.now()}`;
+  const probeScript = `
+    const { readdirSync, readFileSync } = require('node:fs');
+    let found = false;
+    for (const entry of readdirSync('/proc')) {
+      if (!/^\\d+$/.test(entry)) continue;
+      try {
+        const raw = readFileSync('/proc/' + entry + '/environ', 'utf8');
+        if (raw.includes(${JSON.stringify(sentinel)})) found = true;
+      } catch {}
+    }
+    console.log(found ? 'LEAKED' : 'CLEAN');
+  `;
+  const parentWrapper = `
+    const { spawnSync } = require('node:child_process');
+    const argv = JSON.parse(process.argv[1]);
+    const cleanEnv = { PATH: process.env.PATH, HOME: process.env.HOME };
+    const res = spawnSync(argv[0], argv.slice(1), { env: cleanEnv, encoding: 'utf8' });
+    process.stdout.write(res.stdout || '');
+    process.stderr.write(res.stderr || '');
+    process.exit(res.status ?? 1);
+  `;
+  const { spawnSync } = await import('node:child_process');
+  const wrappedProbe = hostSandbox.wrap([process.execPath, '-e', probeScript]);
+  const contained = spawnSync(
+    process.execPath,
+    ['-e', parentWrapper, JSON.stringify(wrappedProbe)],
+    { cwd: worktree, env: { ...process.env, ADLC_MANIFEST_KEY: sentinel }, encoding: 'utf8' },
+  );
+  assert.equal(contained.status, 0, contained.stderr);
+  assert.equal(contained.stdout.trim(), 'CLEAN', 'sandboxed worker must not see parent ADLC_MANIFEST_KEY via /proc/*/environ');
+
+  // Control: without --unshare-pid, scanning /proc/*/environ from a child DOES recover the parent's secret
+  const unwrapped = spawnSync(
+    process.execPath,
+    ['-e', parentWrapper, JSON.stringify([process.execPath, '-e', probeScript])],
+    { cwd: worktree, env: { ...process.env, ADLC_MANIFEST_KEY: sentinel }, encoding: 'utf8' },
+  );
+  assert.equal(unwrapped.status, 0, unwrapped.stderr);
+  assert.equal(unwrapped.stdout.trim(), 'LEAKED', 'control proves /proc/*/environ leaks parent secret without --unshare-pid');
 });

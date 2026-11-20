@@ -8,10 +8,19 @@
 // `SafeSandbox` preserves every `Sandbox` method and containment predicate verbatim while
 // escaping all Seatbelt subpath literals via `@adlc/core`'s `escapeSeatbeltPath`.
 
-import { escapeSeatbeltPath } from '@adlc/core';
+import { escapeSeatbeltPath, resolveSandboxBinary } from '@adlc/core';
 import { Sandbox, SANDBOX_MODES, NETWORK, READ_POLICY } from './sandbox.mjs';
 
 const DEVICE_WRITE_ROOTS = Object.freeze(['/dev']);
+
+export function resolveFleetSandboxLauncher(backend, { pathEnv = process.env.PATH, fsOps } = {}) {
+  if (typeof backend?.launcherPath === 'string' && backend.launcherPath !== '') {
+    return backend.launcherPath;
+  }
+  if (backend?.name === 'bubblewrap') return resolveSandboxBinary('bwrap', { pathEnv, fsOps });
+  if (backend?.name === 'seatbelt') return resolveSandboxBinary('sandbox-exec', { pathEnv, fsOps });
+  return null;
+}
 
 /**
  * Assemble a Seatbelt SBPL profile with every subpath escaped via `escapeSeatbeltPath`
@@ -57,6 +66,13 @@ export function buildSafeSeatbeltProfile({
 }
 
 export class SafeSandbox extends Sandbox {
+  constructor(opts = {}) {
+    super(opts);
+    this.launcherPath = opts.launcherPath ?? opts.backend?.launcherPath ?? null;
+    this._pathEnv = opts.pathEnv;
+    this._fsOps = opts.fsOps;
+  }
+
   wrap(innerArgv) {
     if (
       !Array.isArray(innerArgv) ||
@@ -77,8 +93,65 @@ export class SafeSandbox extends Sandbox {
         network: this.network,
         readPolicy: this.readPolicy,
       });
-      return ['sandbox-exec', '-p', profile, ...innerArgv];
+      return [this.launcherPath ?? 'sandbox-exec', '-p', profile, ...innerArgv];
     }
-    return super.wrap(innerArgv);
+    if (this.backend?.name === 'bubblewrap') {
+      const writeRoots = [this.worktree, this.syntheticHome, ...(this.writablePaths ?? [])].filter(Boolean);
+      const roPaths = this.readPolicy === READ_POLICY.BOUNDED ? (this.readOnlyPaths ?? []) : [];
+      for (const p of [...writeRoots, ...roPaths]) {
+        if (!(typeof p === 'string' && p.startsWith('/') && !p.includes('\0'))) throw new TypeError('Invalid sandbox mount path');
+      }
+      const writeBinds = writeRoots.flatMap((rw) => ['--bind', rw, rw]);
+      if (this.readPolicy === READ_POLICY.HOST) {
+        return [
+          this.launcherPath ?? 'bwrap',
+          ...(this.network === NETWORK.DENY ? ['--unshare-net'] : []),
+          '--unshare-pid', '--unshare-ipc', '--unshare-uts',
+          '--die-with-parent', '--chdir', this.worktree,
+          '--ro-bind', '/', '/', '--dev-bind', '/dev', '/dev', '--proc', '/proc',
+          ...writeBinds,
+          '--', ...innerArgv,
+        ];
+      }
+      const roBinds = roPaths.flatMap((ro) => ['--ro-bind', ro, ro]);
+      return [
+        this.launcherPath ?? 'bwrap',
+        ...(this.network === NETWORK.DENY ? ['--unshare-net'] : []),
+        '--unshare-pid', '--unshare-ipc', '--unshare-uts',
+        '--die-with-parent', '--chdir', this.worktree,
+        '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp',
+        ...writeBinds, ...roBinds,
+        '--setenv', 'HOME', this.syntheticHome ?? this.worktree,
+        '--', ...innerArgv,
+      ];
+    }
+    const wrapped = super.wrap(innerArgv);
+    if (this.launcherPath) {
+      const [, ...rest] = wrapped;
+      return [this.launcherPath, ...rest];
+    }
+    return wrapped;
+  }
+
+  async run(innerArgv, opts = {}) {
+    if (this.mode === SANDBOX_MODES.SANDBOX && !this._exec) {
+      const launcher = this.launcherPath ?? resolveFleetSandboxLauncher(this.backend, {
+        pathEnv: this._pathEnv ?? opts.env?.PATH ?? process.env.PATH,
+        fsOps: this._fsOps,
+      });
+      if (!launcher) {
+        throw new Error(`No trusted root-owned sandbox binary found for ${this.backend?.name ?? 'unknown'}`);
+      }
+      if (!this.launcherPath) {
+        const prev = this.launcherPath;
+        this.launcherPath = launcher;
+        try {
+          return await super.run(innerArgv, opts);
+        } finally {
+          this.launcherPath = prev;
+        }
+      }
+    }
+    return await super.run(innerArgv, opts);
   }
 }

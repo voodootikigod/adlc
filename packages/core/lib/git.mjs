@@ -145,8 +145,8 @@ export function changedFiles(base = 'HEAD', cwd = process.cwd()) {
   // unstaged one; a Set de-duplicates the overlap. Both invocations go through the
   // same buffer-safe split, so the #249 fidelity guarantee applies to each half.
   const raw = (args) => git(args, { cwd, encoding: 'buffer' });
-  const worktree = splitNulPaths(raw(['diff', '--name-only', '-z', base, '--']));
-  const staged = splitNulPaths(raw(['diff', '--cached', '--name-only', '-z', base, '--']));
+  const worktree = splitNulPaths(raw(['diff', '--name-only', '--no-renames', '-z', base, '--']));
+  const staged = splitNulPaths(raw(['diff', '--cached', '--name-only', '--no-renames', '-z', base, '--']));
   return [...new Set([...worktree, ...staged])];
 }
 export function isDirty(cwd = process.cwd()) {

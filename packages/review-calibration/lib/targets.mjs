@@ -3,7 +3,10 @@
 // Files changed by the target commit, filtered to non-test/non-meta code only.
 
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
+import { escapesRepoOrSymlink } from './inflight.mjs';
+
+const WITNESS_BINARIES = ['node', 'npm', 'npx'];
 
 /**
  * Combined anchored test path regex: matches test directory segments or test filename conventions,
@@ -146,6 +149,9 @@ export function loadPlantsFile(plantsPath, cwd) {
     if (typeof p.mutated !== 'string' || p.mutated === p.original) {
       errors.push(`${where}: "mutated" must be a string different from "original"`); continue;
     }
+    if (escapesRepoOrSymlink(cwd, p.file)) {
+      errors.push(`${where}: ${p.file} escapes repository or is a symlink`); continue;
+    }
     const absolutePath = resolve(cwd, p.file);
     const content = readFileSafe(absolutePath);
     if (content === null) { errors.push(`${where}: cannot read ${p.file}`); continue; }
@@ -157,6 +163,12 @@ export function loadPlantsFile(plantsPath, cwd) {
     }
     if (p.witness !== undefined && (typeof p.witness !== 'object' || typeof p.witness.cmd !== 'string')) {
       errors.push(`${where}: "witness" must be an object with a string "cmd"`); continue;
+    }
+    if (p.witness !== undefined) {
+      const cmd = p.witness.cmd;
+      if (!WITNESS_BINARIES.includes(basename(cmd)) || cmd.split(/[\\/]/).includes('..')) {
+        errors.push(`${where}: witness.cmd must be node, npm, or npx`); continue;
+      }
     }
     plants.push({
       file: p.file,
@@ -212,6 +224,7 @@ export function selectPlants(codeFiles, cwd, maxPlants, generateMutants) {
   const byOperator = new Map();
 
   for (const file of codeFiles) {
+    if (escapesRepoOrSymlink(cwd, file)) continue;
     const absolutePath = resolve(cwd, file);
     const content = readFileSafe(absolutePath);
     if (content === null) continue;

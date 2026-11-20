@@ -4,10 +4,18 @@
 // bug (not an equivalent mutant). Witnesses come from the operator's plants
 // file; nothing here runs a command authored by the reviewer under test.
 
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { checkSyntax, syntaxLanguage, tail } from '@adlc/core';
-import { writeFileAtomic, NO_JOURNAL } from './inflight.mjs';
+import { checkSyntax, syntaxLanguage, tail, sanitizeCandidateEnv, detectSandbox, spawnSandboxed } from '@adlc/core';
+import { writeFileAtomic, NO_JOURNAL, escapesRepoOrSymlink } from './inflight.mjs';
+
+function assertSafePlantPath(cwd, absolutePath) {
+  if (escapesRepoOrSymlink(cwd, relative(cwd, absolutePath))) {
+    throw new Error(`Refusing to plant outside repository or through symlink: ${absolutePath}`);
+  }
+}
 
 // Enough of a failing witness's output to show its failure line, small enough
 // to print once per excluded plant.
@@ -32,8 +40,45 @@ export function runWitness(witnessSpec, cwd, runFn = defaultRun) {
  * exit status either, so it is told apart from a timeout by spawnSync's error
  * code rather than by a null status.
  */
-function defaultRun(cmd, args, cwd) {
-  const r = spawnSync(cmd, args, { cwd, timeout: 60_000, encoding: 'utf8', stdio: 'pipe', shell: false });
+export function defaultRun(cmd, args, cwd, { detect = detectSandbox, unsafeNoSandbox = false } = {}) {
+  const env = sanitizeCandidateEnv(process.env);
+  if (!unsafeNoSandbox) {
+    const sandboxType = detect();
+    if (!sandboxType) {
+      throw new Error(
+        'No OS sandbox binary found (bwrap on Linux, sandbox-exec on macOS). ' +
+        'Pass --unsafe-no-sandbox to run witness commands without sandboxing ' +
+        '(ONLY safe inside a disposable VM or container).'
+      );
+    }
+    const witnessTmp = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-rc-witness-')));
+    let r;
+    try {
+      r = spawnSandboxed(sandboxType, witnessTmp, [cmd, ...args], {
+        workDir: cwd,
+        cwd,
+        timeout: 60_000,
+        env: { ...env, TMPDIR: witnessTmp, TMP: witnessTmp, TEMP: witnessTmp },
+      });
+    } finally {
+      rmSync(witnessTmp, { recursive: true, force: true });
+    }
+    const stderr = r.stderr ?? '';
+    const output = tail(`${r.stdout ?? ''}${stderr}`.trim(), OUTPUT_TAIL);
+    if (!r.timedOut && r.exitCode !== 0) {
+      if (/(?:bwrap:\s*execvp|sandbox-exec:)[^\n]*No such file or directory/i.test(stderr)) {
+        return { status: null, timedOut: false, output, spawnError: `ENOENT: ${stderr.trim()}` };
+      }
+      if (/(?:bwrap:\s*execvp|sandbox-exec:)[^\n]*Permission denied/i.test(stderr)) {
+        return { status: null, timedOut: false, output, spawnError: `EACCES: ${stderr.trim()}` };
+      }
+    }
+    return { status: r.exitCode, timedOut: r.timedOut, output, spawnError: null };
+  }
+  process.stderr.write(
+    'WARNING: Running witness command WITHOUT OS sandbox protection (--unsafe-no-sandbox).\n'
+  );
+  const r = spawnSync(cmd, args, { cwd, timeout: 60_000, encoding: 'utf8', stdio: 'pipe', shell: false, env });
   const timedOut = r.error?.code === 'ETIMEDOUT' || (!r.error && r.signal === 'SIGTERM');
   const spawnError = r.error && !timedOut ? `${r.error.code ?? 'error'}: ${r.error.message}` : null;
   const output = tail(`${r.stdout ?? ''}${r.stderr ?? ''}`.trim(), OUTPUT_TAIL);
@@ -90,6 +135,7 @@ function mutatedSource(plant, original) {
  */
 function checkPlantSyntax(plant, cwd, { journal = NO_JOURNAL, syntaxFn = checkSyntax } = {}) {
   if (syntaxLanguage(plant.absolutePath) === null) return 'unknown';
+  assertSafePlantPath(cwd, plant.absolutePath);
   let original;
   try {
     original = readFileSync(plant.absolutePath, 'utf8');
@@ -100,10 +146,11 @@ function checkPlantSyntax(plant, cwd, { journal = NO_JOURNAL, syntaxFn = checkSy
   if (mutated === null) return 'unknown';
   journal.begin([{ absolutePath: plant.absolutePath, original, mutated }]);
   try {
+    assertSafePlantPath(cwd, plant.absolutePath);
     writeFileAtomic(plant.absolutePath, mutated);
     return syntaxFn(plant.absolutePath, cwd);
   } finally {
-    if (restoreOriginal(plant.absolutePath, original)) journal.end();
+    if (restoreOriginal(cwd, plant.absolutePath, original)) journal.end();
   }
 }
 
@@ -134,6 +181,7 @@ function nonDiscriminatingReason(onOriginal, onMutant) {
  * @returns {{discriminates:boolean, reason:string}}
  */
 export function verifyWitness(plant, cwd, runFn = defaultRun, { journal = NO_JOURNAL } = {}) {
+  assertSafePlantPath(cwd, plant.absolutePath);
   if (!plant.witness) return { discriminates: false, reason: 'no witness' };
   let original;
   try {
@@ -150,21 +198,24 @@ export function verifyWitness(plant, cwd, runFn = defaultRun, { journal = NO_JOU
     const { onMutant, onOriginal } = runBothSides(plant, cwd, runFn, { original, mutated });
     return judgeWitnessRuns(onOriginal, onMutant);
   } finally {
-    if (restoreOriginal(plant.absolutePath, original)) journal.end();
+    if (restoreOriginal(cwd, plant.absolutePath, original)) journal.end();
   }
 }
 
 /** Run the witness on the mutant, then on the restored original. */
 function runBothSides(plant, cwd, runFn, { original, mutated }) {
+  assertSafePlantPath(cwd, plant.absolutePath);
   writeFileAtomic(plant.absolutePath, mutated);
   const onMutant = runWitness(plant.witness, cwd, runFn);
+  assertSafePlantPath(cwd, plant.absolutePath);
   writeFileAtomic(plant.absolutePath, original);
   const onOriginal = runWitness(plant.witness, cwd, runFn);
   return { onMutant, onOriginal };
 }
 
-function restoreOriginal(absolutePath, original) {
+function restoreOriginal(cwd, absolutePath, original) {
   try {
+    assertSafePlantPath(cwd, absolutePath);
     writeFileAtomic(absolutePath, original);
     return true;
   } catch {

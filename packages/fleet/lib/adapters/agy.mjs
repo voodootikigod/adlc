@@ -10,7 +10,7 @@ export const pool = 'default';
  * both rather than inheriting one.
  */
 export const homeState = Object.freeze({
-  dirs: Object.freeze(['.antigravity', '.gemini/tmp', '.gemini/sessions', '.cache/gemini']),
+  dirs: Object.freeze(['.antigravity/logs', '.antigravity/sessions', '.antigravity/tmp', '.gemini/tmp', '.gemini/sessions', '.cache/gemini']),
   files: Object.freeze(['.gemini/oauth_creds.json', '.gemini/google_accounts.json']),
 });
 export const aliases = Object.freeze(['default']);

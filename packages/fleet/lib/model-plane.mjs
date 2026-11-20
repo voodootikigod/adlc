@@ -30,8 +30,49 @@
 // module that knows how to launch a harness is the module that knows where that
 // harness keeps its state.
 
-import { isAbsolute, join } from 'node:path';
-import { existsSync, mkdirSync } from 'node:fs';
+import { isAbsolute, join, resolve } from 'node:path';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+
+const SHARED_TMP_RE = /^\/(?:private\/)?(?:var\/)?tmp$/;
+
+function safeReal(p) {
+  try { return realpathSync(p); } catch { return resolve(p); }
+}
+
+/**
+ * True when `candidate` names a shared OS/user temporary root rather than an
+ * isolated per-dispatch subdirectory. Granting a shared temp root read-write
+ * exposes sibling temporary credentials, sockets, and concurrent run state.
+ */
+export function isSharedTmpRoot(candidate, osTmp = tmpdir()) {
+  if (typeof candidate !== 'string') return false;
+  const canonical = safeReal(candidate);
+  return (
+    SHARED_TMP_RE.test(resolve(candidate)) ||
+    SHARED_TMP_RE.test(canonical) ||
+    canonical === safeReal(osTmp)
+  );
+}
+
+/**
+ * Allocate a private 0700 per-dispatch temporary directory, returning its
+ * canonical path, TMPDIR/TMP/TEMP environment overrides, and idempotent cleanup.
+ */
+export function allocateModelPlaneTmpDir(preferredBase) {
+  let base = tmpdir();
+  try {
+    if (statSync(preferredBase).isDirectory()) base = preferredBase;
+  } catch { /* fall back to os.tmpdir() */ }
+  const dir = safeReal(mkdtempSync(join(safeReal(base), 'adlc-fleet-mp-tmp-')));
+  return {
+    tmpDir: dir,
+    env: { TMPDIR: dir, TMP: dir, TEMP: dir },
+    cleanup: () => {
+      try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+    },
+  };
+}
 
 /** An adapter that declares nothing gets nothing — the fail-closed direction. */
 export const EMPTY_HOME_STATE = Object.freeze({ dirs: Object.freeze([]), files: Object.freeze([]) });
@@ -81,7 +122,14 @@ export function modelPlaneFilesystem({
     for (const f of state.files) add(files, absolutize(home, f));
   }
   for (const p of extraWritable) add(dirs, absolutize(home, p));
-  if (tmpDir) dirs.add(tmpDir);
+  if (tmpDir) {
+    if (isSharedTmpRoot(tmpDir)) {
+      throw new Error(
+        `modelPlaneFilesystem refuses shared temporary directory ${tmpDir}; allocate a per-dispatch private subdirectory instead`
+      );
+    }
+    dirs.add(tmpDir);
+  }
 
   const missingFiles = [...files].filter((f) => !exists(f));
   for (const d of dirs) if (!exists(d)) mkdirp(d);

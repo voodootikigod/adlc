@@ -2182,6 +2182,48 @@ var WORKDIR_CONTAINERS = Object.freeze([
   "arguments"
 ]);
 
+// packages/core/lib/sandbox-runner.mjs
+var SENSITIVE_HOME_DIRS = Object.freeze([
+  ".ssh",
+  ".aws",
+  ".gnupg",
+  ".config/gh",
+  ".config/gcloud",
+  ".config/adlc",
+  ".config/opencode",
+  ".config/github-copilot",
+  ".config/pi",
+  ".local/share/cursor-agent",
+  ".azure",
+  ".kube",
+  ".docker",
+  ".claude",
+  ".codex",
+  ".gemini",
+  ".cursor",
+  ".copilot",
+  ".pi"
+]);
+var SENSITIVE_HOME_FILES = Object.freeze([
+  ".netrc",
+  ".npmrc",
+  ".git-credentials",
+  ".claude.json",
+  ".claude.json.backup"
+]);
+var USER_EPHEMERAL_ROOTS = Object.freeze([
+  "/home",
+  "/Users",
+  "/root",
+  "/tmp",
+  "/var/tmp",
+  "/srv",
+  "/opt",
+  "/var",
+  "/run",
+  "/mnt"
+]);
+
 // plugins/adlc-cursor/generated-active-ticket.mjs
 import { lstatSync as lstatSync7, openSync as openSync4, fstatSync, readSync as readSync2, closeSync as closeSync4, constants as fsConstants2 } from "node:fs";
 import { dirname as dirname9, join as join10 } from "node:path";

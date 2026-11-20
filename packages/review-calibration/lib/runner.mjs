@@ -4,10 +4,12 @@
 // killed while the review runs cannot restore anything itself; the journal's
 // in-flight record is what lets the next run do it (see inflight.mjs).
 
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { tokenizeCommand } from '@adlc/core';
-import { writeFileAtomic, NO_JOURNAL } from './inflight.mjs';
+import { tokenizeCommand, sanitizeCandidateEnv, detectSandbox, spawnSandboxed } from '@adlc/core';
+import { writeFileAtomic, NO_JOURNAL, escapesRepoOrSymlink } from './inflight.mjs';
 
 export { tokenizeCommand };
 
@@ -43,9 +45,23 @@ export function substituteToken(tokens, placeholder, value) {
  *   before any file is written; begin throwing aborts before planting
  * @returns {{ stdout: string, stderr: string, exitCode: number | null, timedOut: boolean }}
  */
-export function runWithPlants(plants, reviewCmd, baseRef, cwd, timeoutMs, { journal = NO_JOURNAL } = {}) {
+export function runWithPlants(plants, reviewCmd, baseRef, cwd, timeoutMs, {
+  journal = NO_JOURNAL,
+  detect = detectSandbox,
+  sandboxReviewCmd = process.env.ADLC_SANDBOX_REVIEW_CMD === '1',
+  unsafeNoSandbox = false,
+} = {}) {
   // Group plants by absolutePath.
   const byFile = groupByFile(plants);
+
+  // Refuse any target outside the repository or reached through a symlink
+  // before anything is read or journaled (NO_JOURNAL callers included).
+  for (const [absPath] of byFile) {
+    const rel = relative(cwd, absPath);
+    if (escapesRepoOrSymlink(cwd, rel)) {
+      throw new Error(`Refusing to plant outside repository or through symlink: ${absPath}`);
+    }
+  }
 
   // Save originals keyed by absolutePath.
   const originals = new Map();
@@ -64,7 +80,12 @@ export function runWithPlants(plants, reviewCmd, baseRef, cwd, timeoutMs, { jour
   journal.begin(planted);
 
   try {
-    for (const { absolutePath, mutated } of planted) writeFileAtomic(absolutePath, mutated);
+    for (const { absolutePath, mutated } of planted) {
+      if (escapesRepoOrSymlink(cwd, relative(cwd, absolutePath))) {
+        throw new Error(`Refusing to plant outside repository or through symlink: ${absolutePath}`);
+      }
+      writeFileAtomic(absolutePath, mutated);
+    }
 
     // Tokenize the trusted template, THEN substitute the base ref as a
     // discrete argv element. Run with shell:false so the ref is never re-parsed
@@ -75,14 +96,46 @@ export function runWithPlants(plants, reviewCmd, baseRef, cwd, timeoutMs, { jour
       return { stdout: '', stderr: 'empty review command', exitCode: 1, timedOut: false };
     }
 
-    // Run the review command.
-    const result = spawnSync(argv[0], argv.slice(1), {
-      shell: false,
-      cwd,
-      timeout: timeoutMs,
-      encoding: 'utf8',
-      stdio: 'pipe',
-    });
+    // Run the review command. The child env is always scrubbed. The OS sandbox
+    // is opt-in (ADLC_SANDBOX_REVIEW_CMD=1): live reviewers need outbound HTTPS,
+    // and a sandbox wrapper would become the child's parent (process.ppid).
+    const env = sanitizeCandidateEnv(process.env);
+    let result;
+    const sandboxType = sandboxReviewCmd ? detect() : null;
+    if (sandboxReviewCmd && !sandboxType && !unsafeNoSandbox) {
+      throw new Error(
+        'ADLC_SANDBOX_REVIEW_CMD=1 requested OS sandboxing for --review-cmd, ' +
+        'but no usable OS sandbox backend (bwrap on Linux, sandbox-exec on macOS) is available. ' +
+        'Pass --unsafe-no-sandbox only inside a disposable VM or container.'
+      );
+    }
+    if (sandboxType) {
+      const reviewTmp = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-rc-review-')));
+      let r;
+      try {
+        r = spawnSandboxed(sandboxType, reviewTmp, argv, {
+          workDir: cwd,
+          cwd,
+          timeout: timeoutMs,
+          env: { ...env, TMPDIR: reviewTmp, TMP: reviewTmp, TEMP: reviewTmp },
+        });
+      } finally {
+        rmSync(reviewTmp, { recursive: true, force: true });
+      }
+      result = { stdout: r.stdout, stderr: r.stderr, status: r.exitCode, signal: r.timedOut ? 'SIGTERM' : null };
+    } else {
+      if (sandboxReviewCmd && unsafeNoSandbox) {
+        process.stderr.write('WARNING: ADLC_SANDBOX_REVIEW_CMD=1 bypassed via --unsafe-no-sandbox.\n');
+      }
+      result = spawnSync(argv[0], argv.slice(1), {
+        shell: false,
+        cwd,
+        timeout: timeoutMs,
+        encoding: 'utf8',
+        stdio: 'pipe',
+        env,
+      });
+    }
 
     const timedOut = result.signal === 'SIGTERM' || result.status === null;
     return {
@@ -92,7 +145,7 @@ export function runWithPlants(plants, reviewCmd, baseRef, cwd, timeoutMs, { jour
       timedOut,
     };
   } finally {
-    restoreAll(originals, journal);
+    restoreAll(cwd, originals, journal);
   }
 }
 
@@ -100,10 +153,14 @@ export function runWithPlants(plants, reviewCmd, baseRef, cwd, timeoutMs, { jour
  * Restore every original. The record is cleared only when all of them were
  * written back; otherwise it stays for the next run to finish the job.
  */
-function restoreAll(originals, journal) {
+function restoreAll(cwd, originals, journal) {
   let restored = true;
   for (const [absPath, originalContent] of originals) {
     try {
+      if (escapesRepoOrSymlink(cwd, relative(cwd, absPath))) {
+        restored = false;
+        continue;
+      }
       writeFileAtomic(absPath, originalContent);
     } catch {
       restored = false; // don't mask the original error; the record remains

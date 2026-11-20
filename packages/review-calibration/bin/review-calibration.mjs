@@ -26,7 +26,7 @@ import {
   makeLlmJudge, referenceJudge, JUDGE_SYSTEM, buildJudgePrompt, checkProviderIndependence,
   resolveEffectiveProvider,
 } from '../lib/judge.mjs';
-import { filterEquivalentMutants } from '../lib/verify.mjs';
+import { defaultRun, filterEquivalentMutants } from '../lib/verify.mjs';
 import { echoControl, formatRecall, judgeBoundFailure, oracleReviewer } from '../lib/controls.mjs';
 import {
   createJournal, recoverInflight, recordPathFor, writeFileAtomic,
@@ -52,6 +52,7 @@ const { values } = parseArgs({
     'plants-file':  { type: 'string' },
     tier:           { type: 'string', default: 'cheap' },
     'review-provider': { type: 'string' },
+    'unsafe-no-sandbox': { type: 'boolean', default: false },
     strict:         { type: 'boolean', default: false },
     json:           { type: 'boolean', default: false },
     'prompt-only':  { type: 'boolean', default: false },
@@ -102,6 +103,9 @@ Options:
   --strict              Gate-fail (exit 2) instead of warning when
                         --review-provider matches the judge's resolved
                         provider. Requires --review-provider.
+  --unsafe-no-sandbox   Run witness commands without an OS sandbox when bwrap /
+                        sandbox-exec is unavailable (ONLY safe inside a
+                        disposable VM or container).
   --json                Machine-readable JSON output
   --prompt-only         Print a representative judge prompt and exit 0 (no
                         API key or git repo needed)
@@ -298,7 +302,17 @@ if (values['plants-file']) {
 
 // ── equivalent-mutant filter (plants WITH a witness must discriminate) ────────
 
-const { valid: validPlants, equivalent, discarded } = filterEquivalentMutants(plants, cwd, undefined, { journal });
+const witnessRunFn = values['unsafe-no-sandbox']
+  ? (cmd, args, dir) => defaultRun(cmd, args, dir, { unsafeNoSandbox: true })
+  : undefined;
+let validPlants;
+let equivalent;
+let discarded;
+try {
+  ({ valid: validPlants, equivalent, discarded } = filterEquivalentMutants(plants, cwd, witnessRunFn, { journal }));
+} catch (err) {
+  opError(err.message);
+}
 const exclusionLines = [...discarded, ...equivalent].map((p) => `${p.file}:${p.line} — ${p.reason}`);
 if (validPlants.length === 0) {
   opError(
@@ -363,7 +377,10 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, handleSignal)
 let runResult;
 try {
   const reviewTimeoutMs = reviewTimeout * TIMEOUT_UNIT_MS;
-  runResult = runWithPlants(validPlants, reviewCmd, commitRef, cwd, reviewTimeoutMs, { journal });
+  runResult = runWithPlants(validPlants, reviewCmd, commitRef, cwd, reviewTimeoutMs, {
+    journal,
+    unsafeNoSandbox: values['unsafe-no-sandbox'],
+  });
 } catch (err) {
   plantedFiles = null;
   opError(`planting or review command failed: ${err.message}`);

@@ -11,7 +11,7 @@ import { defaultGit } from './worktrees.mjs';
 import * as worktrees from './worktrees.mjs';
 import { NETWORK, READ_POLICY } from './sandbox.mjs';
 import { SafeSandbox } from './safe-sandbox.mjs';
-import { modelPlaneFilesystem } from './model-plane.mjs';
+import { modelPlaneFilesystem, allocateModelPlaneTmpDir } from './model-plane.mjs';
 import { repoCommandEnv, modelPlaneEnv } from './env-scrub.mjs';
 import { runGatePipeline } from './gate-pipeline.mjs';
 import { runGates, checkFlail, MAX_OUTPUT_BYTES } from './gates.mjs';
@@ -28,12 +28,32 @@ import { BASE_MANIFEST } from './protected-paths.mjs';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { readFileSync, existsSync, writeFileSync, mkdirSync, appendFileSync, cpSync, rmSync, lstatSync } from 'node:fs';
 import { join, dirname, isAbsolute } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { spawnAsync } from './spawn-async.mjs';
 import { completeTicketOnIntegration, revertCompletionCommit, assertOnBranch } from './complete.mjs';
 import { resolveKeyFromEnv } from '@adlc/tickets/lib/key-contract.mjs';
+import { redactSecrets, resolveSandboxBinary, isUnderOrEqual, realpathSafe } from '@adlc/core';
 import { assertWorktreeLink, assertMirrorConfigPristine, HOST_SAFE_GIT_FLAGS, gitCommonDir } from './git-mirror.mjs';
 import { buildBoundedModelSandbox, bridgeArgv, mirrorCreateWorktree, mirrorFetchBack, mirrorCleanup, policyFromConfig } from './extensions.mjs';
+
+export function defaultBoundedReadOnlyPaths({
+  exists = existsSync,
+  realpath = realpathSafe,
+  execPath = process.execPath,
+  homeDir = homedir(),
+  extra = [],
+} = {}) {
+  const realExec = execPath ? realpath(execPath) : '';
+  const realPrefix = realExec ? realpath(dirname(dirname(realExec))) : '';
+  const realHome = homeDir ? realpath(homeDir) : '';
+  const allowPrefix =
+    realPrefix !== '' &&
+    realPrefix !== '/' &&
+    !(realHome !== '' && isUnderOrEqual(realHome, realPrefix));
+  const roots = ['/usr', '/bin', '/sbin', '/lib', '/lib64', '/etc', allowPrefix ? realPrefix : '', ...extra]
+    .filter((p) => Boolean(p) && exists(p));
+  return [...new Set(roots)];
+}
 
 // Ignore fleet working state WITHOUT committing to the base checkout
 // (adversarial-review L2). `.git/info/exclude` is a local, per-repo, UNcommitted
@@ -143,7 +163,22 @@ export function defaultIo() {
     },
     // Async (non-blocking) worker/gate/review execution so the concurrent
     // scheduler is not serialized by a blocking spawn (#164).
-    spawnWorker: (cmd, args, opts) => spawnAsync(cmd, args, { encoding: 'utf8', ...opts }),
+    spawnWorker: (cmd, args, opts) => {
+      if (cmd === 'bwrap' || cmd === 'sandbox-exec') {
+        const trusted = resolveSandboxBinary(cmd, { pathEnv: opts?.env?.PATH ?? io.env?.PATH ?? process.env.PATH });
+        if (!trusted) {
+          return Promise.resolve({
+            status: null,
+            stdout: '',
+            stderr: `no trusted root-owned sandbox binary resolved for ${cmd}`,
+            timedOut: false,
+            error: new Error(`no trusted root-owned sandbox binary resolved for ${cmd}`),
+          });
+        }
+        return spawnAsync(trusted, args, { encoding: 'utf8', ...opts });
+      }
+      return spawnAsync(cmd, args, { encoding: 'utf8', ...opts });
+    },
     readFile: (p) => readFileSync(p, 'utf8'),
     exists: (p) => existsSync(p),
     // fleet-ext item 13: the bounded read invariant admits a pinned FILE under the
@@ -332,6 +367,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
     backend: sandboxSpec.backend,
     worktree,
     syntheticHome: join(worktree, '.fleet-home'),
+    readOnlyPaths: defaultBoundedReadOnlyPaths(),
     exec: async (argv, opts) => {
       // The synthetic HOME is a bind SOURCE for bwrap — it must exist before the
       // wrapped command runs, or bwrap aborts (adversarial-review L4).
@@ -383,17 +419,20 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
   // run in the same process still warns, and so tests stay independent of each other.
   const warnedMissingState = new Set();
   const modelSandboxFor = (worktree, adapters) => {
-    const { writablePaths, missingStateFiles } = modelPlaneFilesystem({
-      adapters,
-      home: io.env.HOME,
-      // NOT `io.env.TMPDIR` alone: that variable is usually UNSET on Linux, and an
-      // unset temp dir means /tmp gets no write grant while `--ro-bind / /` has
-      // already made it read-only — every harness that allocates a temp file would
-      // then fail on exactly the platform bubblewrap serves. os.tmpdir() honours
-      // TMPDIR when set and falls back to the platform default when it is not.
-      tmpDir: io.env.TMPDIR || tmpdir(),
-      extraWritable: config.modelPlaneWritable ?? [],
-    });
+    const allocatedTmp = allocateModelPlaneTmpDir(io.env?.TMPDIR);
+    let writablePaths;
+    let missingStateFiles;
+    try {
+      ({ writablePaths, missingStateFiles } = modelPlaneFilesystem({
+        adapters,
+        home: io.env.HOME,
+        tmpDir: allocatedTmp.tmpDir,
+        extraWritable: config.modelPlaneWritable ?? [],
+      }));
+    } catch (err) {
+      allocatedTmp.cleanup();
+      throw err;
+    }
     // Warn ONCE per run, not once per dispatch. A fleet runs many tickets and
     // retries strikes, so a per-dispatch warning about a state file this host
     // simply does not have would repeat dozens of times and train the operator to
@@ -410,7 +449,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
         'write it, re-run with --model-plane-writable <path>.'
       );
     }
-    return new SafeSandbox({
+    const sandbox = new SafeSandbox({
       mode: sandboxSpec.mode,
       backend: sandboxSpec.backend,
       worktree,
@@ -424,6 +463,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       readPolicy: READ_POLICY.HOST,
       exec: async (argv, opts) => io.spawnWorker(argv[0], argv.slice(1), opts),
     });
+    return { sandbox, tmpEnv: allocatedTmp.env, cleanup: allocatedTmp.cleanup };
   };
 
   return {
@@ -452,7 +492,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       const wt = mirrorMode
         ? mirrorCreateWorktree({ repo, ticketId: ticket.id, integrationBranch, mirror: config.modelPlaneGitMirror, repoGit, gitAt: io.git })
         : worktrees.createWorktree(repo, ticket.id, { integrationBranch, git: repoGit });
-      if (mirrorMode) cutTips.set(ticket.id, wt.cutTip);
+      cutTips.set(ticket.id, mirrorMode ? wt.cutTip : io.git(wt.path)(...HOST_SAFE_GIT_FLAGS, 'rev-parse', 'HEAD').trim());
       // Initialize the worktree THROUGH the sandbox (§6.3, M1) — repo-config init
       // (npm install) runs arbitrary lifecycle code and must be contained.
       // fleet-ext item 15: with --worker-deps the caller-built tree is COPIED in
@@ -513,6 +553,11 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       const prompt = (strike > 1 || deadEnds.length > 0)
         ? fixPrompt(ticket, config.gate, deadEnds, { addendum: charterAddendum })
         : builderPrompt(ticket, config.gate, { addendum: charterAddendum });
+      if (strike >= 2 && io.exists(worktree)) {
+        assertWorktreeLink({ path: worktree, gitDirRoot: mirrorMode ? config.modelPlaneGitMirror : gitCommonDir(repo, io.git) });
+        if (mirrorMode) assertMirrorConfigPristine({ mirror: config.modelPlaneGitMirror, gitAt: io.git });
+        worktrees.resetWorktree(worktree, (...args) => io.git(worktree)(...HOST_SAFE_GIT_FLAGS, ...args), cutTips.get(ticket.id) ?? null);
+      }
       // fleet-ext item 15: the dependency tree is a plain host-side copy made
       // before EVERY strike, so a retry never inherits a worker-written
       // node_modules and npm never runs against worker-controlled input.
@@ -554,7 +599,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       // fleet-ext items 11/13/14: in BOUNDED mode the profile is the bounded
       // model plane with a synthetic HOME (and, under allowlist egress, no
       // network namespace but a bridge to the host-side CONNECT proxy).
-      let modelSandbox; let egress = null; let boundedCleanup = null;
+      let modelSandbox; let egress = null; let dispatchCleanup = null; let dispatchTmpEnv = null;
       if (boundedMode) {
         let built;
         try {
@@ -565,10 +610,13 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
         } catch (e) {
           return { exitCode: 1, output: e.message, timedOut: false, usageStatus: 'unreported', policyMismatch: e.code === 'sandbox-policy-mismatch' };
         }
-        modelSandbox = built.sandbox; egress = built.egress; boundedCleanup = built.cleanup;
+        modelSandbox = built.sandbox; egress = built.egress; dispatchCleanup = built.cleanup;
         lastPolicy = { ...built.description, gitSource: mirrorMode ? 'mirror' : 'shared', mirror: mirrorMode ? config.modelPlaneGitMirror : null };
       } else {
-        modelSandbox = modelSandboxFor(worktree, ladderAdaptersFor(ticket, adapter));
+        const hostBuilt = modelSandboxFor(worktree, ladderAdaptersFor(ticket, adapter));
+        modelSandbox = hostBuilt.sandbox;
+        dispatchTmpEnv = hostBuilt.tmpEnv;
+        dispatchCleanup = hostBuilt.cleanup;
       }
       let res;
       // The strike's budget: the configured per-dispatch timeout, or LESS when the wall
@@ -578,7 +626,7 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       const deadlineTruncated = config.deadline != null && timeoutMs < (config.timeoutMinutes ?? 30) * 60000;
       try {
         res = await adapter.dispatch({
-          worktree, prompt, timeoutMs, env: { ...env, ...(egress?.env ?? {}) },
+          worktree, prompt, timeoutMs, env: { ...env, ...(dispatchTmpEnv ?? {}), ...(egress?.env ?? {}) },
           // `killGroup`: the worker is a process TREE; on timeout the whole group
           // is signalled (SIGTERM, then SIGKILL), not just the sandbox leader.
           // The executable mapping is applied BEFORE the bridge prefix, so the bridge
@@ -595,9 +643,9 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
           useStdin: config.adapterStdin === true, // pi RPC/stdin prompt transport (A3)
         });
       } finally {
-        // The proxy, its socket and the staged credential copy live exactly as
-        // long as the dispatch they served — on every exit path.
-        if (boundedCleanup) await boundedCleanup();
+        // The proxy, its socket, the private dispatch temp dir, and any staged
+        // credential copy live exactly as long as the dispatch they served — on every exit path.
+        if (dispatchCleanup) await dispatchCleanup();
       }
       // Persist the transcript BEFORE anything can return early, so the flail
       // consultation between strikes has something to analyze. Without this the
@@ -634,15 +682,15 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
           if (existsSync(worktree)) assertWorktreeLink({ path: worktree, gitDirRoot: mirrorMode ? config.modelPlaneGitMirror : gitCommonDir(repo, io.git) });
           if (mirrorMode) assertMirrorConfigPristine({ mirror: config.modelPlaneGitMirror, gitAt: io.git });
           const hostGit = io.git(worktree);
-          worktrees.commitWorker(worktree, ticket.id, (...args) => hostGit(...HOST_SAFE_GIT_FLAGS, ...args));
+          worktrees.commitWorker(worktree, ticket.id, (...args) => hostGit(...HOST_SAFE_GIT_FLAGS, ...args), { cutTip: cutTips.get(ticket.id) ?? null });
           // fleet-ext item 12: bring the worker branch back from the mirror by
           // compare-and-swap and refresh the gate worktree. A failure here is
           // terminal for the run — the scheduler maps it to `mirror-fetch-failed`.
           if (mirrorMode) {
             const fb = mirrorFetchBack({ repo, mirror: config.modelPlaneGitMirror, workerBranch: branch, cutTip: cutTips.get(ticket.id), gatePath: gateWorktree, gitAt: io.git });
             if (!fb.ok) {
-              write(`mirror fetch-back failed: ${fb.detail ?? fb.reason}\n`);
-              return { ...res, exitCode: 1, output: `${res.output}\nmirror fetch-back failed (${fb.step ?? '?'}): ${fb.detail ?? fb.reason}`, timedOut: false, mirrorFetchFailed: true };
+              write(`mirror fetch-back failed: ${redactSecrets(fb.detail ?? fb.reason)}\n`);
+              return { ...res, exitCode: 1, output: `${res.output}\nmirror fetch-back failed (${fb.step ?? '?'}): ${redactSecrets(fb.detail ?? fb.reason)}`, timedOut: false, mirrorFetchFailed: true };
             }
             cutTips.set(ticket.id, fb.sha);
           }
@@ -651,8 +699,8 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
           // This IS the failure the scheduler will act on, so it belongs in the
           // transcript the flail check analyzes — otherwise a commit failure
           // repeating across strikes can never reach the repeated-error signal.
-          const output = `${res.output}\ncommit failed: ${e.message}`;
-          write(`commit failed: ${e.message}\n`);
+          const output = `${res.output}\ncommit failed: ${redactSecrets(e.message)}`;
+          write(`commit failed: ${redactSecrets(e.message)}\n`);
           // SPREAD `res`, do not rebuild it: the model call already happened and
           // its usage was already parsed. Returning a fresh three-field object
           // dropped usage/usageStatus/usageRaw, so a worker that succeeded but

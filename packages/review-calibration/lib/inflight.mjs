@@ -15,8 +15,8 @@
 // content. Anything else means the file moved on after the crash, and the
 // record — the only remaining copy of the original — is kept for a human.
 
-import { readFileSync, existsSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { readFileSync, existsSync, lstatSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   probeOwner,
   ownerStateFor,
@@ -86,7 +86,48 @@ function readCurrent(target) {
 }
 
 export function writeRecord(recordPath, { pid = process.pid, files }) {
+  if (hasSymlinkAlongPath(dirname(recordPath), recordPath)) {
+    throw new Error(`Refusing to write record through symlink: ${recordPath}`);
+  }
   writeFileAtomic(recordPath, JSON.stringify({ version: RECORD_VERSION, pid, files }));
+}
+
+/**
+ * True when any existing path segment from `rootDir` down to `targetAbs` is a
+ * symlink (the root itself is trusted), or when `targetAbs` is outside
+ * `rootDir`. A missing segment ends the walk: nothing below it can be a link.
+ */
+export function hasSymlinkAlongPath(rootDir, targetAbs) {
+  const root = resolve(rootDir);
+  const rel = relative(root, resolve(targetAbs));
+  if (rel === '') return false;
+  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return true;
+  let seg = root;
+  for (const part of rel.split(sep)) {
+    seg = join(seg, part);
+    let st;
+    try {
+      st = lstatSync(seg);
+    } catch (err) {
+      if (err?.code === 'ENOENT' || err?.code === 'ENOTDIR') return false;
+      return true;
+    }
+    if (st.isSymbolicLink()) return true;
+  }
+  return false;
+}
+
+/**
+ * Should `relFile` (relative to `cwd`) be refused as a plant target? Escaping
+ * the repository or traversing a symlink is refused; a missing in-repo file is
+ * not (callers report it as unreadable).
+ */
+export function escapesRepoOrSymlink(cwd, relFile) {
+  if (!isContainedRelPath(relFile)) return true;
+  const abs = resolve(cwd, relFile);
+  if (hasSymlinkAlongPath(cwd, abs)) return true;
+  if (!existsSync(abs)) return false;
+  return resolveTarget(cwd, relFile) === null;
 }
 
 export function readRecord(recordPath) {

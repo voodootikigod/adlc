@@ -15,6 +15,7 @@ import {
   seatbeltWrap,
   SANDBOX_PROFILES,
   sanitizeCandidateEnv,
+  resolveSandboxBinary,
   spawnSandboxed,
   spawnCandidateCmd,
   collectMaskedEnvFiles,
@@ -167,8 +168,8 @@ test('sanitizeCandidateEnv strips ADLC_*, API keys, tokens, secrets, passwords, 
     HOME: '/home/dev',
     LANG: 'en_US.UTF-8',
     TMPDIR: '/tmp',
-    NODE_OPTIONS: '--no-warnings',
   });
+  assert.equal('NODE_OPTIONS' in scrubbed, false);
   assert.equal('UNDEFINED_VAR' in scrubbed, false);
   // Original object must not be mutated
   assert.equal(raw.ADLC_MANIFEST_KEY, 'top-secret-manifest-key');
@@ -198,16 +199,57 @@ test('spawnSandboxed scrubs ambient secrets by default and honors an explicit en
     assert.equal(capturedOpts.env.ANTHROPIC_API_KEY, undefined);
     assert.equal(capturedOpts.env.GF_TEST_BENIGN_VAR, 'keep-me');
 
-    // Explicit env override is preserved
+    // Explicit env override preserves benign keys while stripping dynamic-loader and startup injection vectors
     let explicitCaptured = null;
     spawnSandboxed('bwrap', '/tmp/clone', ['node', '-v'], {
-      env: { CUSTOM_ONLY: 'yes' },
+      env: {
+        CUSTOM_ONLY: 'yes',
+        UNSET_KEY: undefined,
+        LD_PRELOAD: '/tmp/evil.so',
+        LD_LIBRARY_PATH: '/tmp/lib',
+        LD_AUDIT: '/tmp/audit.so',
+        DYLD_INSERT_LIBRARIES: '/tmp/evil.dylib',
+        PYTHONSTARTUP: '/tmp/start.py',
+        BASH_ENV: '/tmp/env.sh',
+        GIT_CONFIG_PARAMETERS: "'core.sshCommand=evil'",
+      },
       spawn: (_bin, _args, opts) => {
         explicitCaptured = opts;
         return { status: 0, stdout: '', stderr: '', signal: null };
       },
     });
     assert.deepEqual(explicitCaptured.env, { CUSTOM_ONLY: 'yes' });
+
+    assert.deepEqual(
+      sanitizeCandidateEnv({
+        PATH: '/usr/bin',
+        LD_PRELOAD: '/tmp/evil.so',
+        LD_AUDIT: '/tmp/audit.so',
+        DYLD_INSERT_LIBRARIES: '/tmp/evil.dylib',
+        PYTHONPATH: '/tmp/py',
+        RUBYOPT: '-r/tmp/evil',
+        PERL5OPT: '-Mevil',
+        BASH_ENV: '/tmp/b.sh',
+        ENV: '/tmp/e.sh',
+        GIT_EXTERNAL_DIFF: 'evil',
+        GIT_EXEC_PATH: '/tmp',
+        GIT_TEMPLATE_DIR: '/tmp',
+        GIT_CONFIG_COUNT: '1',
+      }),
+      { PATH: '/usr/bin' },
+    );
+
+    let candCapturedEnv = null;
+    spawnCandidateCmd(['node', '-v'], '/tmp/clone', {
+      sandboxType: null,
+      unsafeNoSandbox: true,
+      env: { SAFE_KEY: '1', LD_PRELOAD: '/tmp/evil.so', DYLD_INSERT_LIBRARIES: '/tmp/evil.dylib' },
+      spawn: (_cmd, _args, opts) => {
+        candCapturedEnv = opts.env;
+        return { status: 0, stdout: '', stderr: '', signal: null };
+      },
+    });
+    assert.deepEqual(candCapturedEnv, { SAFE_KEY: '1' });
   } finally {
     if (prevManifest === undefined) delete process.env.ADLC_MANIFEST_KEY;
     else process.env.ADLC_MANIFEST_KEY = prevManifest;
@@ -589,7 +631,7 @@ test('makeProvisionFn caches host .env scan across candidate clones within a run
 
     const prov = makeProvisionFn({
       repoRoot: provRepo,
-      sandboxType: 'sandbox-exec',
+      sandboxType: detectSandbox(),
       suite: [],
       maxEnvScanDirs: 2,
     });
@@ -612,7 +654,7 @@ test('makeProvisionFn caches host .env scan across candidate clones within a run
       { diff: '', setup: [['node', '-v'], ['node', '-v']] },
       {
         repoRoot: provRepo,
-        sandboxType: 'sandbox-exec',
+        sandboxType: detectSandbox(),
         maxEnvScanDirs: 10,
         spawnFn: (bin, args, opts) => {
           if (bin === 'git') return { status: 0, stdout: '', stderr: '', signal: null };
@@ -628,6 +670,86 @@ test('makeProvisionFn caches host .env scan across candidate clones within a run
     destroyClone(direct.cloneDir);
   } finally {
     process.chdir(origCwd);
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test('resolveSandboxBinary, detectSandbox, and spawnSandboxed ignore PATH-shadowing fakes and execute root-owned launcher by absolute path', () => {
+  const scratch = mkdtempSync(join(tmpdir(), 'gf-path-shadow-'));
+  try {
+    const fakeBinDir = join(scratch, 'bin');
+    mkdirSync(fakeBinDir, { recursive: true });
+    const fakeMarker = join(scratch, 'shadow-executed');
+    const fakeBwrap = join(fakeBinDir, 'bwrap');
+    writeFileSync(fakeBwrap, `#!/bin/sh\necho pwned > "${fakeMarker}"\nexit 0\n`, { mode: 0o755 });
+
+    // Only untrusted directory on PATH -> rejected; non-sandbox root-owned binaries (sh) rejected too.
+    assert.equal(resolveSandboxBinary('bwrap', { pathEnv: fakeBinDir }), null);
+    assert.equal(resolveSandboxBinary('bwrap', { pathEnv: null }), null);
+    assert.equal(resolveSandboxBinary('sh', {
+      pathEnv: '/trusted/bin',
+      fsOps: {
+        lstatSync: () => ({ uid: 0, mode: 0o100755 }),
+        realpathSync: (p) => p,
+        statSync: (p) => ({ uid: 0, mode: p.endsWith('sh') ? 0o100755 : 0o40755, isFile: () => p.endsWith('sh') }),
+      },
+    }), null);
+    assert.equal(detectSandbox({ pathEnv: fakeBinDir }), null);
+    assert.throws(
+      () => spawnSandboxed('bwrap', scratch, ['node', '-v'], { pathEnv: fakeBinDir }),
+      /No trusted root-owned sandbox binary found/,
+    );
+    assert.equal(
+      resolveSandboxBinary('bwrap', {
+        pathEnv: './relative:/trusted/bin',
+        fsOps: {
+          lstatSync: () => ({ uid: 0, mode: 0o100775 }),
+          realpathSync: (p) => p,
+          statSync: () => ({ uid: 0, mode: 0o100775, isFile: () => true }),
+        },
+      }),
+      null,
+      'group-writable root binary must be rejected',
+    );
+    assert.equal(
+      resolveSandboxBinary('bwrap', {
+        pathEnv: '/trusted/bin',
+        fsOps: {
+          lstatSync: () => ({ uid: 0, mode: 0o100755 }),
+          realpathSync: (p) => p,
+          statSync: (p) => ({ uid: 0, mode: p === '/trusted' ? 0o40777 : 0o100755, isFile: () => p.endsWith('bwrap') }),
+        },
+      }),
+      null,
+      'world-writable ancestor directory must be rejected',
+    );
+    const mockResolved = resolveSandboxBinary('bwrap', {
+      pathEnv: '/trusted/bin',
+      fsOps: {
+        lstatSync: () => ({ uid: 0, mode: 0o100755 }),
+        realpathSync: (p) => p,
+        statSync: (p) => ({ uid: 0, mode: p.endsWith('bwrap') ? 0o100755 : 0o40755, isFile: () => p.endsWith('bwrap') }),
+      },
+    });
+    assert.equal(mockResolved, '/trusted/bin/bwrap');
+
+    let spawnedBin = null;
+    spawnSandboxed('bwrap', scratch, ['node', '-v'], {
+      pathEnv: `${fakeBinDir}:/trusted/bin`,
+      fsOps: {
+        lstatSync: (p) => p.startsWith(fakeBinDir) ? { uid: 1000, mode: 0o100755 } : { uid: 0, mode: 0o100755 },
+        realpathSync: (p) => p,
+        statSync: (p) => p.startsWith(fakeBinDir)
+          ? { uid: 1000, mode: 0o100755, isFile: () => p.endsWith('bwrap') }
+          : { uid: 0, mode: p.endsWith('bwrap') ? 0o100755 : 0o40755, isFile: () => p.endsWith('bwrap') },
+      },
+      spawn: (bin) => {
+        spawnedBin = bin;
+        return { status: 0, stdout: 'ok', stderr: '', signal: null };
+      },
+    });
+    assert.equal(spawnedBin, '/trusted/bin/bwrap', 'spawnSandboxed must execute absolute root-owned binary, skipping PATH fake');
+  } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
 });
