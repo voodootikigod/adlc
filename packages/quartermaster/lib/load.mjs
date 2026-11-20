@@ -16,7 +16,7 @@ import { validateRegistry } from './registry.mjs';
 export const MAX_REGISTRY_BYTES = 1024 * 1024;
 
 export function readBoundedRegularRegistryFile(path, maxBytes = MAX_REGISTRY_BYTES) {
-  const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
+  const flags = constants.O_NOFOLLOW ? constants.O_RDONLY | constants.O_NOFOLLOW : constants.O_RDONLY;
   const fd = openSync(path, flags);
   try {
     const stat = fstatSync(fd);

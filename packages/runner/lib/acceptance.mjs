@@ -42,7 +42,8 @@ function readRegularNoFollow(filePath, label, rawPath) {
   const lst = lstatSync(filePath);
   if (lst.isSymbolicLink()) return `${label} must not be a symlink: ${rawPath}`;
   if (!lst.isFile()) return `${label} is not a file: ${rawPath}`;
-  const fd = openSync(filePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  const flags = constants.O_NOFOLLOW ? constants.O_RDONLY | constants.O_NOFOLLOW : constants.O_RDONLY;
+  const fd = openSync(filePath, flags);
   try {
     const st = fstatSync(fd);
     if (!st.isFile()) return `${label} is not a file: ${rawPath}`;

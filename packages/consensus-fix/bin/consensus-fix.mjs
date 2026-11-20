@@ -84,7 +84,7 @@ function resolveRealPathBestEffort(target) {
   const tail = [];
   for (;;) {
     try {
-      return tail.length === 0 ? realpathSync(cur) : resolve(realpathSync(cur), ...tail);
+      return resolve(realpathSync(cur), ...tail);
     } catch {
       const parent = dirname(cur);
       if (parent === cur) return resolve(target);

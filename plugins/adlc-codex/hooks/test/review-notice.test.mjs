@@ -62,6 +62,8 @@ test('drift: decideAdversarialReviewNotice is identical to packages/core/lib/ris
     { changedPaths: ['src/auth/login.js'], manifestEntries: [{ gate: 'adversarial-review', ticket: 'T1' }], ticketId: 'T1' },
     { changedPaths: ['src/auth/login.js'], manifestEntries: [{ gate: 'adversarial-review', ticket: 'T2' }], ticketId: 'T1' },
     { changedPaths: ['src/auth/login.js'], manifestEntries: [{ gate: 'adversarial-review' }], ticketId: 'T1' },
+    { changedPaths: ['src/auth/login.js'], manifestEntries: [{ gate: 'adversarial-review', ticket: 'T1', data: { verdict: 'needs-attention' } }], ticketId: 'T1' },
+    { changedPaths: ['src/auth/login.js'], manifestEntries: [{ gate: 'adversarial-review', ticket: 'T1', data: { verdict: 'approve' } }], ticketId: 'T1' },
   ];
   for (const s of scenarios) {
     assert.deepEqual(hookDecideNotice(s), coreDecideNotice(s), `decideAdversarialReviewNotice drift for ${JSON.stringify(s)}`);
