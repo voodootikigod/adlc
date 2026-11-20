@@ -263,6 +263,36 @@ function isReadOnlyGitBranch(segment) {
   return everyReadOnly || hasListing;
 }
 
+const NODE_TEST_VALUE_FLAGS = new Set([
+  '--test-reporter',
+  '--test-reporter-destination',
+  '--test-name-pattern',
+  '--test-skip-pattern',
+  '--test-concurrency',
+  '--test-timeout',
+  '--test-shard',
+]);
+
+const NODE_TEST_FORBIDDEN_FLAGS = /^(?:-[epr]|--(?:eval|print|require|import|loader|experimental-loader))(?:=|$)/;
+const SAFE_TEST_TARGET_RE = /(?:^|\/)(?:tests?|specs?|__tests__)(?:\/|$)|\.(?:test|spec)\.[^/]+$/i;
+
+function isReadOnlyNodeTest(segment) {
+  const tokens = shellTokens(segment);
+  if (tokens[0] !== 'node' || tokens[1] !== '--test') return false;
+  const rest = tokens.slice(2);
+  for (let i = 0; i < rest.length; i += 1) {
+    const tok = rest[i];
+    if (NODE_TEST_FORBIDDEN_FLAGS.test(tok)) return false;
+    if (NODE_TEST_VALUE_FLAGS.has(tok)) {
+      i += 1;
+      continue;
+    }
+    if (tok.startsWith('-')) continue;
+    if (!SAFE_TEST_TARGET_RE.test(tok.replace(/\\/g, '/'))) return false;
+  }
+  return true;
+}
+
 /**
  * Positively read-only only if EVERY command segment is individually a known
  * read-only command (empty string counts). Splitting on separators is
@@ -287,7 +317,7 @@ export function shellIsPositivelyReadOnly(text) {
       if (/(?:^|[;&|()\s])GIT_EXTERNAL_DIFF=/.test(segment)) return false;
       if (/^git\s+.*(?:^|[\s"'])--(?:ext-diff|textconv)(?:$|[\s"'])/.test(segment)) return false;
       if (adlcRecordOption.test(segment)) return false;
-      return isReadOnlyGitBranch(segment) || readOnlyPrefix.test(segment);
+      return isReadOnlyGitBranch(segment) || isReadOnlyNodeTest(segment) || readOnlyPrefix.test(segment);
     });
 }
 

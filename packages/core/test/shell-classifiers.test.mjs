@@ -161,9 +161,16 @@ test('shellIsPositivelyReadOnly rejects GIT_EXTERNAL_DIFF and mutating/creating 
   assert.equal(shellIsPositivelyReadOnly('git branch --merged main'), true);
   assert.equal(shellIsPositivelyReadOnly('git branch --no-merged main'), true);
 
-  // node --check allowed; node --test executes user JS and is NOT positively read-only
-  assert.equal(shellIsPositivelyReadOnly('node --test'), false);
-  assert.equal(shellIsPositivelyReadOnly('node --test test/a.test.mjs'), false);
+  // node --check and test-target-only node --test allowed; arbitrary scripts and loader/eval flags rejected
+  assert.equal(shellIsPositivelyReadOnly('node --test'), true);
+  assert.equal(shellIsPositivelyReadOnly('node --test test/a.test.mjs'), true);
+  assert.equal(shellIsPositivelyReadOnly('node --test --test-name-pattern foo packages/runner/test/runner.test.mjs'), true);
+  assert.equal(shellIsPositivelyReadOnly('node --test --test-only test/a.test.mjs'), true);
+  assert.equal(shellIsPositivelyReadOnly('node --test attacker.mjs'), false);
+  assert.equal(shellIsPositivelyReadOnly('node --test src/script.mjs'), false);
+  assert.equal(shellIsPositivelyReadOnly('node --test --import ./evil.mjs test/a.test.mjs'), false);
+  assert.equal(shellIsPositivelyReadOnly('node --test -r ./evil.cjs test/a.test.mjs'), false);
+  assert.equal(shellIsPositivelyReadOnly('node --test -e "process.exit(0)"'), false);
   assert.equal(shellIsPositivelyReadOnly('node --check index.mjs'), true);
 });
 
