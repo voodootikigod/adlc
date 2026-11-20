@@ -143,6 +143,24 @@ if (values['context-cap'] !== undefined) {
 // Print `prompts` (same evidence surface as plain --prompt-only), then
 // capture the operator's answer into the gate-manifest ledger so the audit
 // trail shows the gate was answered *and* what it concluded, and exit 0.
+const FAILING_VERDICT_VALUES = new Set(['fail', 'failed', 'blocked', 'clarify', 'needs-attention', 'ambiguous', 'reject', 'rejected']);
+
+function isFailingRecordedVerdict(verdict) {
+  const raw = typeof verdict === 'string' ? verdict.trim() : '';
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const v = typeof parsed.verdict === 'string' ? parsed.verdict.trim().toLowerCase() : '';
+      const s = typeof parsed.status === 'string' ? parsed.status.trim().toLowerCase() : '';
+      if (FAILING_VERDICT_VALUES.has(v) || FAILING_VERDICT_VALUES.has(s)) return true;
+      if (parsed.pass === false || parsed.passed === false || parsed.gate === false || parsed.blocked === true) return true;
+      return false;
+    }
+  } catch { /* plain text verdict */ }
+  return /^\s*(?:verdict\s*:\s*)?(?:fail|failed|blocked)\b/i.test(raw);
+}
+
 async function recordPromptOnlyVerdict(prompts, extra) {
   for (const [i, p] of prompts.entries()) {
     if (prompts.length > 1) console.log(`--- prompt ${i + 1} of ${prompts.length} ---`);
@@ -153,7 +171,7 @@ async function recordPromptOnlyVerdict(prompts, extra) {
   const entry = recordVerdict({ ticket: values.ticket, verdict, extra, key: getKey() });
   const signed = typeof entry.sig === 'string' ? ' (signed)' : ' (unsigned)';
   console.log(`gate-manifest: recorded seq=${entry.seq} gate=${entry.gate}${signed}`);
-  process.exit(0);
+  process.exit(isFailingRecordedVerdict(verdict) ? 2 : 0);
 }
 
 // --------------------------------------------------------------------------

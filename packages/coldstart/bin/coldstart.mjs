@@ -88,6 +88,25 @@ if (runAll) {
   targets = [ticket];
 }
 
+const FAILING_VERDICT_VALUES = new Set(['fail', 'failed', 'blocked', 'clarify', 'needs-attention', 'ambiguous', 'reject', 'rejected']);
+
+function isFailingRecordedVerdict(verdict) {
+  const raw = typeof verdict === 'string' ? verdict.trim() : '';
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const v = typeof parsed.verdict === 'string' ? parsed.verdict.trim().toLowerCase() : '';
+      const s = typeof parsed.status === 'string' ? parsed.status.trim().toLowerCase() : '';
+      if (FAILING_VERDICT_VALUES.has(v) || FAILING_VERDICT_VALUES.has(s)) return true;
+      if (parsed.pass === false || parsed.passed === false || parsed.gate === false || parsed.blocked === true) return true;
+      if (Array.isArray(parsed.gaps) && parsed.gaps.length > 0) return true;
+      return false;
+    }
+  } catch { /* plain text verdict */ }
+  return /^\s*(?:verdict\s*:\s*)?(?:fail|failed|blocked|clarify)\b/i.test(raw);
+}
+
 // ── --prompt-only: print prompts and exit 0 ──────────────────────────────────
 
 if (promptOnlyMode) {
@@ -126,7 +145,7 @@ if (promptOnlyMode) {
       extra: { ticketIds: targets.map((t) => t.id), tier },
     });
     console.log(`gate-manifest: recorded seq=${entry.seq} gate=${entry.gate}${ticket ? ` ticket=${ticket}` : ''}`);
-    process.exit(0);
+    process.exit(isFailingRecordedVerdict(verdict) ? 2 : 0);
   }
 
   promptOnly(prompts);

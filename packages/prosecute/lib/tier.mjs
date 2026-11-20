@@ -74,6 +74,23 @@ const TRUST_ROOT_FILES = [
   // stay empty); a change to its detector needs the same second model as a
   // change to the gates.
   'scripts/test/tmp-fixture-boundary.test.mjs',
+  // Harness plugin rails-checker modules and hook manifests (T-P06 / S7).
+  'plugins/adlc-cursor/rails-checker.mjs',
+  'plugins/adlc-gemini/rails-checker.mjs',
+  'plugins/adlc-opencode/rails-checker.mjs',
+  'plugins/adlc-cursor/hooks.json',
+  'plugins/adlc-gemini/hooks.json',
+  // Required CI gate scripts and gate declarations (T-P06 / S7).
+  'scripts/mutation-gate.mjs',
+  'scripts/run-tests.mjs',
+  'scripts/preflight-fast.mjs',
+  'scripts/build-hooks.mjs',
+  'scripts/scan-findings-ledger.mjs',
+  'scripts/guard-findings-ledger-append-only.mjs',
+  'packages/lesson-foundry/bin/ledger-guard.mjs',
+  'packages/lesson-foundry/lib/ledger-guard.mjs',
+  'scripts/gate-liveness.mjs',
+  'docs/ci/required-gates.json',
 ];
 
 // 1b. CI control surfaces: the workflows and composite actions that define
@@ -87,14 +104,35 @@ const CI_CONTROL_PREFIXES = [
   '.github/actions/',
 ];
 
-// 2. Enforcement packages: each emits an exit-2 gate. Editing them changes what
-//    "the gate passes" means, so a same-model review of the author's own tests
-//    is exactly the blind spot cross-model review exists to cover.
+// 1c. Policy/lens knowledge surfaces consumed by automated reviewers and gates
+//     (T-P06 / S7). Tiered unconditionally — tampering with lessons or lenses
+//     alters what future reviewers check.
+const POLICY_PREFIXES = [
+  '.adlc/lessons/',
+  '.adlc/lenses/',
+];
+
+// 2. Enforcement packages: each emits an exit-2 gate or provides foundational
+//    enforcement primitives / harness hook enforcement cores. Editing them
+//    changes what "the gate passes" means, so a same-model review of the
+//    author's own tests is exactly the blind spot cross-model review exists to
+//    cover.
 const ENFORCEMENT_PREFIXES = [
   'packages/rails-guard/',
   'packages/prosecute/',
   'packages/gate-manifest/',
   'packages/build-gate/',
+  'packages/core/',
+  'packages/tickets/',
+  'packages/hollow-test/',
+  'packages/hook-engine/',
+  'plugins/adlc-pi/lib/',
+  'plugins/adlc-opencode/lib/',
+  'plugins/adlc-claude-code/hooks/',
+  'plugins/adlc-codex/hooks/',
+  'plugins/adlc-copilot/hooks/',
+  'plugins/adlc-cursor/hooks/',
+  'plugins/adlc-gemini/hooks/',
 ];
 
 // 3. Producers of a gated artifact: they write .adlc/tickets.json, so a bug here
@@ -173,8 +211,12 @@ export function classifyTrustRootTier({ changedFiles = [], tickets = [], ownTick
     const path = toPosix(raw);
 
     if (TRUST_ROOT_FILES.includes(path)) push(`touches trust-root file ${path}`);
+    if (path.endsWith('/package.json')) push(`touches workspace package manifest ${path}`);
     for (const prefix of CI_CONTROL_PREFIXES) {
       if (path.startsWith(prefix)) push(`touches CI control surface ${prefix}`);
+    }
+    for (const prefix of POLICY_PREFIXES) {
+      if (path.startsWith(prefix)) push(`touches policy surface ${prefix}`);
     }
     // Package-prefix surfaces gate on LOGIC/CONTRACT risk; a test-only change
     // touches neither, so it is exempt here (#154/T41). The exact-file check

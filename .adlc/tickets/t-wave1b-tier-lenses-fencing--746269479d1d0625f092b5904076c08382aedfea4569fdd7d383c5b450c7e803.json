@@ -1,0 +1,24 @@
+{
+  "body": "Implements T-P06 and T-P12 from .adlc/specs/enhancement-resolution-plan.md.\n\nAcceptance criteria:\n1. .github/workflows/ticket-store-platform.yml runs npm ci --ignore-scripts instead of bare npm install.\n2. packages/prosecute/lib/tier.mjs classifies all 7 harness plugin enforcement cores, packages/core/, packages/tickets/, packages/hollow-test/, packages/hook-engine/, nested package.json manifests, .adlc/lessons/, .adlc/lenses/, and required CI gate scripts as trust-root tier (verified by packages/prosecute/test/tier-plugin-and-scripts.test.mjs).\n3. packages/prosecute/lib/run.mjs requires correctness and security lenses among final dry lenses for p5-complete, rejects symlinked transcript and review_packet artifacts via lstatSync, and binds p5-complete headSha to git rev-parse HEAD when inside a git repo (verified by packages/prosecute/test/mandatory-lenses.test.mjs).\n4. packages/parallax/lib/prompts.mjs fences request and question interpolations with @adlc/core fence() and UNTRUSTED_DIRECTIVE (verified by packages/parallax/test/fenced-prompts.test.mjs).\n5. packages/spec-lint/lib/llm.mjs and bin/spec-lint.mjs fail closed instead of silently truncating criteria exceeding maxBytes unless --max-bytes is raised (verified by packages/spec-lint/test/truncation-guard.test.mjs).\n6. coldstart, premortem, and parallax --prompt-only --record-verdict record failing/blocked verdicts to the manifest and exit 2 (verified by packages/parallax/test/fenced-prompts.test.mjs).",
+  "edges": [],
+  "id": "t-wave1b-tier-lenses-fencing",
+  "rails": [],
+  "scope": [
+    ".github/workflows/ticket-store-platform.yml",
+    "packages/prosecute/lib/tier.mjs",
+    "packages/prosecute/lib/run.mjs",
+    "packages/prosecute/test/tier.test.mjs",
+    "packages/prosecute/test/tier-plugin-and-scripts.test.mjs",
+    "packages/prosecute/test/mandatory-lenses.test.mjs",
+    "packages/parallax/lib/prompts.mjs",
+    "packages/parallax/bin/parallax.mjs",
+    "packages/parallax/test/fenced-prompts.test.mjs",
+    "packages/coldstart/bin/coldstart.mjs",
+    "packages/premortem/lib/run.mjs",
+    "packages/premortem/bin/premortem.mjs",
+    "packages/spec-lint/lib/llm.mjs",
+    "packages/spec-lint/bin/spec-lint.mjs",
+    "packages/spec-lint/test/truncation-guard.test.mjs"
+  ],
+  "title": "Wave 1B Part 1: tier.mjs expansion, ticket-store-platform --ignore-scripts, prosecute mandatory lenses, parallax fencing, spec-lint truncation guard, and record-verdict exit 2"
+}

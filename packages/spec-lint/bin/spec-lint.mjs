@@ -12,7 +12,7 @@ import { buildVacuousPrompt, detectVacuous } from '../lib/llm.mjs';
 import { recordResult } from '../lib/record.mjs';
 import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 
-const USAGE = 'usage: spec-lint SPEC.MD [--llm] [--tier cheap|mid|frontier] [--json] [--prompt-only]\n' +
+const USAGE = 'usage: spec-lint SPEC.MD [--llm] [--tier cheap|mid|frontier] [--max-bytes N] [--json] [--prompt-only]\n' +
   '                  [--record --ticket ID [--dir .adlc]]';
 
 const { values: flags, positionals } = parseArgs({
@@ -20,6 +20,7 @@ const { values: flags, positionals } = parseArgs({
   options: {
     llm: { type: 'boolean', default: false },
     tier: { type: 'string', default: 'cheap' },
+    'max-bytes': { type: 'string' },
     json: { type: 'boolean', default: false },
     'prompt-only': { type: 'boolean', default: false },
     record: { type: 'boolean', default: false },
@@ -46,6 +47,16 @@ if (!VALID_TIERS.includes(flags.tier)) {
   opError(`--tier must be cheap|mid|frontier, got: ${flags.tier}`);
 }
 
+let maxBytes;
+if (flags['max-bytes'] !== undefined) {
+  const raw = flags['max-bytes'].trim();
+  const parsed = raw === '' ? NaN : Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    opError(`--max-bytes must be a positive integer >= 1, got: ${flags['max-bytes']}`);
+  }
+  maxBytes = parsed;
+}
+
 // Read spec file.
 let text;
 try {
@@ -66,7 +77,12 @@ const verifiedCriteria = verifiedIndices.map(i => classified[i]);
 
 // --prompt-only: print LLM prompt and exit 0.
 if (flags['prompt-only']) {
-  const prompt = buildVacuousPrompt(verifiedCriteria);
+  let prompt;
+  try {
+    prompt = buildVacuousPrompt(verifiedCriteria, { maxBytes });
+  } catch (err) {
+    opError(err.message);
+  }
   promptOnly(prompt);
   // promptOnly exits 0; unreachable.
 }
@@ -75,7 +91,7 @@ if (flags['prompt-only']) {
 if (flags.llm && verifiedCriteria.length > 0) {
   let llmResult;
   try {
-    llmResult = await detectVacuous(verifiedCriteria, flags.tier);
+    llmResult = await detectVacuous(verifiedCriteria, flags.tier, { maxBytes });
   } catch (err) {
     opError(`LLM call failed: ${err.message}. Use --prompt-only to get the prompt.`);
   }

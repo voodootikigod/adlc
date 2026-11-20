@@ -32,6 +32,12 @@ const READING_CAP = 12000;
 /** Cap for one fenced fan answer fed to the route equivalence judge. */
 const ANSWER_CAP = 6000;
 
+/** Cap for a fenced feature request in spec mode. */
+const SPEC_REQUEST_CAP = 64_000;
+
+/** Cap for a fenced routing question in route mode. */
+const QUESTION_CAP = 8_000;
+
 // --context files and ticket bodies and titles are repository-controlled
 // (anyone who can open a PR, or add a ticket, controls them), and fan readings
 // and answers are model output derived from that text. All of it is embedded
@@ -51,6 +57,7 @@ const UNTRUSTED_DIRECTIVE =
 export function buildSpecReaderPrompt(request) {
   return `You are given a feature request. Write the concrete spec you would execute.
 Commit to ONE reading; do NOT ask questions.
+${UNTRUSTED_DIRECTIVE}
 Output JSON with exactly these keys:
 {
   "spec": "full prose spec you would hand to an engineer",
@@ -59,7 +66,7 @@ Output JSON with exactly these keys:
 }
 
 Feature request:
-${request}`;
+${fence('feature-request', String(request ?? ''), SPEC_REQUEST_CAP, { bias: 'head' })}`;
 }
 
 /**
@@ -157,7 +164,7 @@ ${bodyBlock(ticketB)}`;
  */
 export function buildRouteAnswerPrompt(question, contextFiles, { contextCap = DEFAULT_CONTEXT_CAP } = {}) {
   const ctxSection = contextFiles.length > 0
-    ? `\n\n${UNTRUSTED_DIRECTIVE}\n\n` + contextFiles.map((f) => {
+    ? '\n\n' + contextFiles.map((f) => {
       const lineCount = f.content.split('\n').length;
       const truncated = f.content.length > contextCap;
       const note = truncated
@@ -169,9 +176,11 @@ export function buildRouteAnswerPrompt(question, contextFiles, { contextCap = DE
 
   return `You are a technical analyst. Answer the following question as precisely and concisely as possible.
 Base your answer ONLY on the provided context. If the context does not answer it, say so plainly.
-Do NOT hedge or ask clarifying questions — commit to one answer.${ctxSection}
+Do NOT hedge or ask clarifying questions — commit to one answer.
+${UNTRUSTED_DIRECTIVE}${ctxSection}
 
-Question: ${question}`;
+Question:
+${fence('question', String(question ?? ''), QUESTION_CAP, { bias: 'head' })}`;
 }
 
 /**
@@ -203,7 +212,8 @@ If equivalent is true: answer must be non-empty; variants may be empty.
 If equivalent is false: answer must be empty string; variants must list each distinct interpretation.
 Output ONLY the JSON object.
 
-Question: ${question}
+Question:
+${fence('question', String(question ?? ''), QUESTION_CAP, { bias: 'head' })}
 
 ${answerText}`;
 }

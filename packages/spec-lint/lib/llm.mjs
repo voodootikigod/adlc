@@ -4,19 +4,34 @@
 import { complete, extractJson, fence } from '@adlc/core';
 
 // Criterion text is authored by whoever filed the work (#1010).
-const CRITERIA_MAX_CHARS = 8000;
+export const DEFAULT_CRITERIA_MAX_BYTES = 8000;
 
 /**
  * Build the prompt for vacuous-method detection.
  *
+ * Fails closed instead of silently truncating when the serialized criteria
+ * payload exceeds `maxBytes` (default 8000) so trailing criteria are never
+ * dropped without operator acknowledgement (`--max-bytes`).
+ *
  * @param {Array<{line:number, text:string}>} verifiedCriteria
  *   The VERIFIED criteria to inspect (0-based indices used as references).
+ * @param {object} [opts]
+ * @param {number} [opts.maxBytes] - maximum UTF-8 byte length before refusing
  * @returns {string}
  */
-export function buildVacuousPrompt(verifiedCriteria) {
+export function buildVacuousPrompt(verifiedCriteria, { maxBytes = DEFAULT_CRITERIA_MAX_BYTES } = {}) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+    throw new Error(`maxBytes must be a positive integer >= 1, got: ${maxBytes}`);
+  }
   const items = verifiedCriteria
     .map((c, i) => `${i}: ${c.text}`)
     .join('\n');
+  const byteLength = Buffer.byteLength(items, 'utf8');
+  if (byteLength > maxBytes) {
+    throw new Error(
+      `verified criteria payload (${byteLength} bytes) exceeds --max-bytes (${maxBytes}); refusing silent truncation — split the spec or pass a higher --max-bytes`
+    );
+  }
 
   return `You are a spec quality auditor. Below are acceptance criteria that contain a \
 verification marker (a command, test file, or keyword). Some verifications are \
@@ -29,7 +44,7 @@ Identify which indices have vacuous verification methods. Return JSON only:
 If none are vacuous, return { "vacuous": [], "reason": {} }
 
 Criteria:
-${fence('CRITERIA', items, CRITERIA_MAX_CHARS)}`;
+${fence('CRITERIA', items, Math.max(items.length, maxBytes))}`;
 }
 
 /**
@@ -132,7 +147,7 @@ export async function detectVacuous(verifiedCriteria, tier = 'cheap', opts = {})
   const useMock = shouldUseMockResponse({ completeFn, mockEnv, nodeEnv: process.env.NODE_ENV });
   const resolvedCompleteFn = useMock ? async () => mockEnv : (completeFn ?? complete);
 
-  const prompt = buildVacuousPrompt(verifiedCriteria);
+  const prompt = buildVacuousPrompt(verifiedCriteria, { maxBytes: opts.maxBytes });
   const response = await resolvedCompleteFn({
     tier,
     system: 'You are a spec quality auditor. Respond with JSON only.',

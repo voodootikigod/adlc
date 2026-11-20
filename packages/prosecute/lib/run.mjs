@@ -1,4 +1,4 @@
-import { ADLC_DIR, canonicalJson, resolveChangeSetRevision, untrackedNonIgnoredPaths, sha256 } from '@adlc/core';
+import { ADLC_DIR, canonicalJson, git, resolveChangeSetRevision, untrackedNonIgnoredPaths, sha256 } from '@adlc/core';
 // Two readers, deliberately: the finding-lifecycle replay needs a causal order
 // and so reads only this checkout's own chain (own-chain.mjs), while the usage
 // ledger asks a position-free question — "has this call already been recorded
@@ -7,7 +7,7 @@ import { ADLC_DIR, canonicalJson, resolveChangeSetRevision, untrackedNonIgnoredP
 import { readManifestForest } from '@adlc/gate-manifest/lib/forest.mjs';
 import { readOwnManifestChain } from '@adlc/gate-manifest/lib/own-chain.mjs';
 import { appendManifestEntry } from '@adlc/gate-manifest';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { validateInput } from './schema.mjs';
 import { hasCrossModelApprove } from './cross-model.mjs';
@@ -107,7 +107,8 @@ function transcriptReferencesTicket(text, ticket) {
 function transcriptProof(transcript, cwd, { ticket, revision, dir }) {
   try {
     const absolute = resolve(cwd, transcript);
-    const stat = statSync(absolute);
+    const stat = lstatSync(absolute);
+    if (stat.isSymbolicLink()) return `provenance.transcript must not be a symlink: ${transcript}`;
     if (!stat.isFile()) return `provenance.transcript is not a file: ${transcript}`;
     if (isInsideCwd(cwd, absolute) && !isEvidencePath(cwd, absolute, dir)) {
       return `provenance.transcript inside the worktree must live under .adlc/ or .omo/evidence/: ${transcript}`;
@@ -130,7 +131,8 @@ function transcriptProof(transcript, cwd, { ticket, revision, dir }) {
 function artifactProof(path, expectedHash, cwd, label, dir) {
   try {
     const absolute = resolve(cwd, path);
-    const stat = statSync(absolute);
+    const stat = lstatSync(absolute);
+    if (stat.isSymbolicLink()) return `${label} must not be a symlink: ${path}`;
     if (!stat.isFile()) return `${label} is not a file: ${path}`;
     if (isInsideCwd(cwd, absolute) && !isEvidencePath(cwd, absolute, dir)) {
       return `${label} inside the worktree must live under .adlc/ or .omo/evidence/: ${path}`;
@@ -161,6 +163,17 @@ function reviewPacketProof(packet, cwd, revision, dir) {
     inputs,
     cleanWorktree: packet.clean_worktree,
   };
+}
+
+const MANDATORY_DRY_LENSES = ['correctness', 'security'];
+
+function verifiedHeadSha(cwd) {
+  try {
+    const sha = git(['rev-parse', '--verify', 'HEAD'], { cwd }).trim();
+    return /^[0-9a-f]{40,}$/i.test(sha) ? sha : null;
+  } catch {
+    return null;
+  }
 }
 
 function finalDryLenses(passResults) {
@@ -608,7 +621,8 @@ export function runProsecution(input, {
   const deferredList = Array.from(deferredFindings.values());
   const deferredIds = deferredList.map((f) => f.id);
   const dryLenses = finalDryLenses(passResults);
-  if (consecutiveDry >= 2 && openFindings.size === 0 && dryLenses.size >= 3) {
+  const missingMandatory = MANDATORY_DRY_LENSES.filter((lens) => !dryLenses.has(lens));
+  if (consecutiveDry >= 2 && openFindings.size === 0 && dryLenses.size >= 3 && missingMandatory.length === 0) {
     // Trust-root tier: a clean same-model P5 is not sufficient. Require a
     // cross-model adversarial approve from a DISTINCT provider, bound to this
     // revision. Missing -> gate-fail (exit 2), never a silent pass.
@@ -634,10 +648,12 @@ export function runProsecution(input, {
         message: `P5 incomplete: trust-root-tier change requires a cross-model adversarial approve from a distinct provider, recorded at revision ${resolvedRevision}`,
       };
     }
+    const headSha = verifiedHeadSha(cwd);
     writeEvidence('p5-complete', {
       ticket,
       target,
       revision: resolvedRevision,
+      headSha,
       pass: passResults.length,
       consecutiveDry,
       provenance: input.provenance,
@@ -656,6 +672,7 @@ export function runProsecution(input, {
       target,
       ticket,
       revision: resolvedRevision,
+      headSha,
       passes: passResults,
       openFindings: [],
       deferredFindings: deferredList,
@@ -676,8 +693,10 @@ export function runProsecution(input, {
     deferredIds,
     message: openFindings.size > 0
       ? 'P5 incomplete: verified or needs-human findings were seen at this revision'
-      : consecutiveDry >= 2
-        ? 'P5 incomplete: fewer than three distinct dry lenses were recorded'
-        : 'P5 incomplete: convergence budget ended before two consecutive dry passes',
+      : consecutiveDry < 2
+        ? 'P5 incomplete: convergence budget ended before two consecutive dry passes'
+        : dryLenses.size < 3
+          ? 'P5 incomplete: fewer than three distinct dry lenses were recorded'
+          : `P5 incomplete: mandatory dry lens(es) missing: ${missingMandatory.join(', ')}`,
   };
 }
