@@ -9,8 +9,9 @@
 // old stdin-piped form (prompt NOT in argv) for a caller that still wants it.
 // agy/jetski meters per-model quota pools.
 
-import { accessSync, constants, statSync } from 'node:fs';
+import { accessSync, constants, lstatSync, realpathSync, statSync } from 'node:fs';
 import { dirname, join, isAbsolute } from 'node:path';
+import { ancestorDirs } from '@adlc/core';
 import { defaultExec, mapResult, modelArgs } from './_shared.mjs';
 
 export const name = 'gemini';
@@ -46,6 +47,48 @@ export const transports = Object.freeze({
   subscription: Object.freeze({}),
 });
 
+export function isTrustedPosixOwner(st, selfUid) {
+  return selfUid === null || st.uid === 0 || st.uid === selfUid;
+}
+
+export function isSafePosixDir(st, selfUid) {
+  if (!isTrustedPosixOwner(st, selfUid)) return false;
+  if ((st.mode & 0o022) === 0) return true;
+  return st.uid === 0 && (st.mode & 0o1000) !== 0;
+}
+
+export function verifyPosixExecutable(candidate, platform = process.platform, selfUid = process.getuid?.() ?? null) {
+  const stat = statSync(candidate);
+  if (!stat.isFile()) return null;
+  accessSync(candidate, constants.X_OK);
+  if (platform === 'win32') return candidate;
+
+  const link = lstatSync(candidate);
+  if (!isTrustedPosixOwner(link, selfUid)) return null;
+
+  const realCandidate = realpathSync(candidate);
+  const realStat = statSync(realCandidate);
+  if (!isTrustedPosixOwner(realStat, selfUid) || (realStat.mode & 0o022) !== 0) return null;
+
+  const realParent = realpathSync(dirname(candidate));
+  const immediateDirs = new Set([dirname(candidate), dirname(realCandidate), realParent]);
+  for (const d of immediateDirs) {
+    const dStat = statSync(d);
+    if (!isTrustedPosixOwner(dStat, selfUid) || (dStat.mode & 0o022) !== 0) return null;
+  }
+
+  const allAncestors = new Set([
+    ...ancestorDirs(realCandidate),
+    ...ancestorDirs(join(realParent, 'x')),
+  ]);
+  for (const anc of allAncestors) {
+    if (immediateDirs.has(anc)) continue;
+    if (!isSafePosixDir(statSync(anc), selfUid)) return null;
+  }
+
+  return platform === 'darwin' && !link.isSymbolicLink() ? candidate : realCandidate;
+}
+
 export function detectBinary(targets = ['jetski', 'agy'], env = process.env, platform = process.platform) {
   const delimiter = platform === 'win32' ? ';' : ':';
   const pathExtRaw = env?.PATHEXT ?? process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD';
@@ -62,15 +105,8 @@ export function detectBinary(targets = ['jetski', 'agy'], env = process.env, pla
       for (const ext of extensions) {
         const candidate = join(dir, binName + ext);
         try {
-          const stat = statSync(candidate);
-          if (platform !== 'win32') {
-            const parentStat = statSync(dirname(candidate));
-            if ((stat.mode & 0o022) !== 0 || (parentStat.mode & 0o022) !== 0) continue;
-          }
-          if (stat.isFile()) {
-            accessSync(candidate, constants.X_OK);
-            return candidate;
-          }
+          const verified = verifyPosixExecutable(candidate, platform);
+          if (verified) return verified;
         } catch {
           // keep looking
         }
@@ -89,6 +125,18 @@ export async function dispatch({ worktree, prompt, timeoutMs, env, exec = defaul
   }
   if (!resolvedCommand) {
     throw new Error('Google Gemini integration: safe agent binary not found in PATH.');
+  }
+  if (isAbsolute(resolvedCommand)) {
+    let existsOnDisk = false;
+    try { lstatSync(resolvedCommand); existsOnDisk = true; } catch { /* stubbed path in unit test */ }
+    if (exec === defaultExec || existsOnDisk) {
+      let rechecked = null;
+      try { rechecked = verifyPosixExecutable(resolvedCommand); } catch { rechecked = null; }
+      if (!rechecked) {
+        throw new Error('Google Gemini integration: agent binary failed pre-exec trust verification.');
+      }
+      resolvedCommand = rechecked;
+    }
   }
 
   // `modelArgs` (not a bare truthiness check) so the registry's `default`
