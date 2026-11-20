@@ -136,12 +136,16 @@ test('runWithPlants refuses symlinked or out-of-repo absolutePath even with NO_J
       assert.equal(witEnv.status, 0);
 
       if (detectSandbox()) {
+        const witArgsCheck = runWitness({ cmd: process.execPath, args: ['-e', 'process.exit(42)'] }, repo);
+        assert.equal(witArgsCheck.status, 42, 'witness args must be forwarded to sandboxed command');
         const outsideWrite = join(root, 'witness-escape.txt');
+        const insideRepoWrite = join(repo, 'witness-repo-tamper.txt');
         runWitness({
           cmd: process.execPath,
-          args: ['-e', `try { require('node:fs').mkdirSync(${JSON.stringify(root)}, { recursive: true }); require('node:fs').writeFileSync(${JSON.stringify(outsideWrite)}, 'escaped'); } catch {}`],
+          args: ['-e', `try { require('node:fs').mkdirSync(${JSON.stringify(root)}, { recursive: true }); require('node:fs').writeFileSync(${JSON.stringify(outsideWrite)}, 'escaped'); } catch {} try { require('node:fs').writeFileSync(${JSON.stringify(insideRepoWrite)}, 'tampered'); } catch {}`],
         }, repo);
         assert.equal(existsSync(outsideWrite), false, 'sandboxed witness must not persist writes outside repo');
+        assert.equal(existsSync(insideRepoWrite), false, 'sandboxed witness must mount live checkout read-only and block in-repo writes');
 
         const stderrChunks = [];
         const origWrite = process.stderr.write.bind(process.stderr);

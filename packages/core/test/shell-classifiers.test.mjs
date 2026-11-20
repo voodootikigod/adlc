@@ -161,9 +161,9 @@ test('shellIsPositivelyReadOnly rejects GIT_EXTERNAL_DIFF and mutating/creating 
   assert.equal(shellIsPositivelyReadOnly('git branch --merged main'), true);
   assert.equal(shellIsPositivelyReadOnly('git branch --no-merged main'), true);
 
-  // node --test and node --check allowed
-  assert.equal(shellIsPositivelyReadOnly('node --test'), true);
-  assert.equal(shellIsPositivelyReadOnly('node --test test/a.test.mjs'), true);
+  // node --check allowed; node --test executes user JS and is NOT positively read-only
+  assert.equal(shellIsPositivelyReadOnly('node --test'), false);
+  assert.equal(shellIsPositivelyReadOnly('node --test test/a.test.mjs'), false);
   assert.equal(shellIsPositivelyReadOnly('node --check index.mjs'), true);
 });
 

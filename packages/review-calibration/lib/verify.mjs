@@ -4,8 +4,9 @@
 // bug (not an equivalent mutant). Witnesses come from the operator's plants
 // file; nothing here runs a command authored by the reviewer under test.
 
-import { readFileSync } from 'node:fs';
-import { relative } from 'node:path';
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { checkSyntax, syntaxLanguage, tail, sanitizeCandidateEnv, detectSandbox, spawnSandboxed } from '@adlc/core';
 import { writeFileAtomic, NO_JOURNAL, escapesRepoOrSymlink } from './inflight.mjs';
@@ -50,7 +51,18 @@ export function defaultRun(cmd, args, cwd, { detect = detectSandbox, unsafeNoSan
         '(ONLY safe inside a disposable VM or container).'
       );
     }
-    const r = spawnSandboxed(sandboxType, cwd, [cmd, ...args], { timeout: 60_000, env });
+    const witnessTmp = realpathSync(mkdtempSync(join(tmpdir(), 'adlc-rc-witness-')));
+    let r;
+    try {
+      r = spawnSandboxed(sandboxType, witnessTmp, [cmd, ...args], {
+        workDir: cwd,
+        cwd,
+        timeout: 60_000,
+        env: { ...env, TMPDIR: witnessTmp, TMP: witnessTmp, TEMP: witnessTmp },
+      });
+    } finally {
+      rmSync(witnessTmp, { recursive: true, force: true });
+    }
     const stderr = r.stderr ?? '';
     const output = tail(`${r.stdout ?? ''}${stderr}`.trim(), OUTPUT_TAIL);
     if (!r.timedOut && r.exitCode !== 0) {
