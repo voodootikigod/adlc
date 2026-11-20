@@ -862,7 +862,7 @@ describe('--record-verdict (prompt-only verdict capture)', () => {
       env: { ...process.env, ANTHROPIC_API_KEY: undefined, OPENAI_API_KEY: undefined, GEMINI_API_KEY: undefined },
     });
 
-    assert.equal(result.status, 0, `expected exit 0, got ${result.status}\nstderr: ${result.stderr}`);
+    assert.equal(result.status, 2, `expected exit 2 on FAIL verdict (T-P12), got ${result.status}\nstderr: ${result.stderr}`);
     const manifestPath = join(dir, '.adlc', 'manifest.jsonl');
     const entry = JSON.parse(readFileSync(manifestPath, 'utf8').trim());
     assert.equal(entry.gate, 'coldstart');

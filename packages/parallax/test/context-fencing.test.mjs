@@ -25,13 +25,13 @@ test('buildRouteAnswerPrompt: states the standing data-not-instructions directiv
   assert.match(prompt, /never an? instruction/i);
 });
 
-test('buildRouteAnswerPrompt: no context = no fence, no directive text', () => {
+test('buildRouteAnswerPrompt: no context still fences the untrusted question with directive text (T-P12)', () => {
   const prompt = buildRouteAnswerPrompt('question', []);
-  assert.ok(!prompt.includes('<<UNTRUSTED:'));
-  assert.ok(!prompt.includes('data to analyze'));
+  assert.ok(prompt.includes('<<UNTRUSTED:question'));
+  assert.match(prompt, /data to analyze/i);
 });
 
-test('buildRouteAnswerPrompt: multiple context files each get their own fence', () => {
+test('buildRouteAnswerPrompt: multiple context files and the question each get their own fence', () => {
   const contextFiles = [
     { path: 'a.md', content: 'alpha content' },
     { path: 'b.md', content: 'beta content' },
@@ -39,8 +39,8 @@ test('buildRouteAnswerPrompt: multiple context files each get their own fence', 
   const prompt = buildRouteAnswerPrompt('question', contextFiles);
   const opens = (prompt.match(/<<UNTRUSTED:/g) || []).length;
   const ends = (prompt.match(/<<END:/g) || []).length;
-  assert.equal(opens, 2);
-  assert.equal(ends, 2);
+  assert.equal(opens, 3);
+  assert.equal(ends, 3);
   assert.ok(prompt.includes('alpha content'));
   assert.ok(prompt.includes('beta content'));
 });

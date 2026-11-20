@@ -13,10 +13,13 @@ function makeGitFixture(t) {
   execFileSync('git', ['init', '-b', 'main'], { cwd: dir, stdio: 'pipe' });
   execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir, stdio: 'pipe' });
   execFileSync('git', ['config', 'user.name', 'Test'], { cwd: dir, stdio: 'pipe' });
-  mkdirSync(join(dir, '.adlc'), { recursive: true });
+  mkdirSync(join(dir, '.adlc', 'evidence'), { recursive: true });
   writeFileSync(join(dir, '.adlc', 'tickets.json'), JSON.stringify({
     tickets: [{ id: 'T1', title: 'Test', scope: ['src/**'], rails: [], edges: [] }],
   }));
+  writeFileSync(join(dir, '.adlc', 'evidence', 'transcript.txt'), `ticket: T1\nrevision: rev-1\n${'x'.repeat(80)}\n`);
+  writeFileSync(join(dir, '.adlc', 'evidence', 'prompt.txt'), 'default prompt\n');
+  writeFileSync(join(dir, '.adlc', 'evidence', 'inputs.txt'), 'default inputs\n');
   writeFileSync(join(dir, 'README.md'), 'hello\n');
   execFileSync('git', ['add', '.'], { cwd: dir, stdio: 'pipe' });
   execFileSync('git', ['commit', '-m', 'init'], { cwd: dir, stdio: 'pipe' });
@@ -31,9 +34,16 @@ function makePacket(passes, extra = {}) {
       reviewer: 'local-reviewer',
       session: 'test-session',
       command: 'test-cmd',
+      transcript: '.adlc/evidence/transcript.txt',
       ...(extra.provenance ?? {}),
     },
-    ...(extra.review_packet ? { review_packet: extra.review_packet } : {}),
+    review_packet: extra.review_packet ?? {
+      prompt: '.adlc/evidence/prompt.txt',
+      prompt_hash: sha256(Buffer.from('default prompt\n')),
+      inputs: '.adlc/evidence/inputs.txt',
+      inputs_hash: sha256(Buffer.from('default inputs\n')),
+      clean_worktree: 'rev-1',
+    },
     no_findings_attestation: {
       reason: 'no findings',
       method: 'manual check',
@@ -114,7 +124,7 @@ describe('T-P12: prosecute mandatory lenses, symlink rejection, and HEAD binding
     const outsidePrompt = join(outside, 'prompt.txt');
     writeFileSync(outsidePrompt, promptBody);
     mkdirSync(join(dir, '.adlc', 'evidence'), { recursive: true });
-    symlinkSync(outsidePrompt, join(dir, '.adlc', 'evidence', 'prompt.txt'));
+    symlinkSync(outsidePrompt, join(dir, '.adlc', 'evidence', 'prompt-link.txt'));
     writeFileSync(join(dir, '.adlc', 'evidence', 'inputs.txt'), inputsBody);
 
     const res = runProsecution(makePacket([
@@ -123,7 +133,7 @@ describe('T-P12: prosecute mandatory lenses, symlink rejection, and HEAD binding
       { lens: 'tests', findings: [], dry_evidence: 'ok' },
     ], {
       review_packet: {
-        prompt: '.adlc/evidence/prompt.txt',
+        prompt: '.adlc/evidence/prompt-link.txt',
         prompt_hash: sha256(Buffer.from(promptBody)),
         inputs: '.adlc/evidence/inputs.txt',
         inputs_hash: sha256(Buffer.from(inputsBody)),
@@ -133,5 +143,28 @@ describe('T-P12: prosecute mandatory lenses, symlink rejection, and HEAD binding
     assert.equal(res.status, 'op-error');
     assert.equal(res.exitCode, 1);
     assert.ok(res.errors.some((e) => /symlink/i.test(e)), `expected symlink error, got: ${res.errors.join('; ')}`);
+  });
+
+  it('rejects transcript reached through a symlinked parent directory under .adlc/evidence/', (t) => {
+    const { dir } = makeGitFixture(t);
+    const outside = mkdtempSync(join(tmpdir(), 'adlc-outside-dir-'));
+    t.after(() => rmSync(outside, { recursive: true, force: true }));
+    writeFileSync(join(outside, 'transcript.txt'), `ticket: T1\nrevision: rev-1\n${'x'.repeat(80)}\n`);
+    mkdirSync(join(dir, '.adlc', 'evidence'), { recursive: true });
+    symlinkSync(outside, join(dir, '.adlc', 'evidence', 'alias'));
+
+    const res = runProsecution(makePacket([
+      { lens: 'security', findings: [], dry_evidence: 'ok' },
+      { lens: 'correctness', findings: [], dry_evidence: 'ok' },
+      { lens: 'tests', findings: [], dry_evidence: 'ok' },
+    ], { provenance: { transcript: '.adlc/evidence/alias/transcript.txt' } }), {
+      ticket: 'T1',
+      cwd: dir,
+      dir: '.adlc',
+      revision: 'rev-1',
+    });
+    assert.equal(res.status, 'op-error');
+    assert.equal(res.exitCode, 1);
+    assert.ok(res.errors.some((e) => /symlink/i.test(e)), `expected symlink ancestor error, got: ${res.errors.join('; ')}`);
   });
 });

@@ -66,7 +66,7 @@ describe('finalDryLenses boundary', () => {
       passes: [
         { lens: 'tests', findings: [], dry_evidence: 'no test findings' },
         { lens: 'correctness', findings: [], dry_evidence: 'no correctness findings' },
-        { lens: 'behavior', findings: [], dry_evidence: 'no behavior findings' },
+        { lens: 'security', findings: [], dry_evidence: 'no security findings' },
       ],
     }), { dir, ticket: 'T1', revision: FIXTURE_REVISION });
 
@@ -76,7 +76,7 @@ describe('finalDryLenses boundary', () => {
       .split('\n')
       .map((line) => JSON.parse(line))
       .find((entry) => entry.type === 'p5-complete');
-    assert.deepEqual(manifest.dryLenses, ['behavior', 'correctness', 'tests']);
+    assert.deepEqual(manifest.dryLenses, ['correctness', 'security', 'tests']);
   });
 
   it('does not count dry lenses from before a later finding toward final convergence', () => {

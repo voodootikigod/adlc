@@ -104,7 +104,7 @@ function isFailingRecordedVerdict(verdict) {
       return false;
     }
   } catch { /* plain text verdict */ }
-  return /^\s*(?:verdict\s*:\s*)?(?:fail|failed|blocked|clarify)\b/i.test(raw);
+  return /^\s*(?:verdict\s*:\s*)?(?:fail|failed|blocked|clarify|needs-attention|ambiguous|reject|rejected)\b/i.test(raw);
 }
 
 // ── --prompt-only: print prompts and exit 0 ──────────────────────────────────

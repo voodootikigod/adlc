@@ -61,9 +61,9 @@ describe('consecutiveDry counter', () => {
       passes: [
         { lens: 'security', findings: [], dry_evidence: 'no security findings' },
         { lens: 'correctness', findings: [finding({ id: 'F9' })] },
-        { lens: 'tests', findings: [killedFinding({ id: 'F9' })] },
-        { lens: 'behavior', findings: [], dry_evidence: 'no behavior findings' },
-        { lens: 'integration', findings: [], dry_evidence: 'no integration findings' },
+        { lens: 'security', findings: [killedFinding({ id: 'F9' })] },
+        { lens: 'correctness', findings: [], dry_evidence: 'no correctness findings' },
+        { lens: 'tests', findings: [], dry_evidence: 'no test findings' },
       ],
     }), { dir, ticket: 'T1', revision: FIXTURE_REVISION });
 

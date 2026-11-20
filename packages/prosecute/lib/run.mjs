@@ -7,8 +7,8 @@ import { ADLC_DIR, canonicalJson, git, resolveChangeSetRevision, untrackedNonIgn
 import { readManifestForest } from '@adlc/gate-manifest/lib/forest.mjs';
 import { readOwnManifestChain } from '@adlc/gate-manifest/lib/own-chain.mjs';
 import { appendManifestEntry } from '@adlc/gate-manifest';
-import { existsSync, lstatSync, readFileSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
 import { validateInput } from './schema.mjs';
 import { hasCrossModelApprove } from './cross-model.mjs';
 import { LegacyTicketStore, loadTicketSnapshot, normalizeManifestDirAndCwd } from '@adlc/tickets';
@@ -104,25 +104,56 @@ function transcriptReferencesTicket(text, ticket) {
     });
 }
 
+function readRegularEvidenceNoFollow(absolute, cwd, dir, label, rawPath) {
+  // Reject symlinked ancestors inside the worktree as well as the leaf itself,
+  // then read through a single O_NOFOLLOW fd so the validated file cannot be
+  // swapped for a symlink between check and read.
+  const cwdAbs = resolve(cwd);
+  if (isInsideCwd(cwdAbs, absolute)) {
+    if (!isEvidencePath(cwdAbs, absolute, dir)) {
+      return `${label} inside the worktree must live under .adlc/ or .omo/evidence/: ${rawPath}`;
+    }
+    let cur = absolute;
+    while (cur !== cwdAbs && cur !== dirname(cur)) {
+      const st = lstatSync(cur);
+      if (st.isSymbolicLink()) return `${label} must not traverse or target a symlink: ${rawPath}`;
+      cur = dirname(cur);
+    }
+    const realCwd = realpathSync(cwdAbs);
+    const realFile = realpathSync(absolute);
+    if (!isInsideCwd(realCwd, realFile) || !isEvidencePath(realCwd, realFile, dir)) {
+      return `${label} resolves outside worktree evidence directory: ${rawPath}`;
+    }
+  } else {
+    const st = lstatSync(absolute);
+    if (st.isSymbolicLink()) return `${label} must not be a symlink: ${rawPath}`;
+  }
+  const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
+  const fd = openSync(absolute, flags);
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) return `${label} is not a file: ${rawPath}`;
+    const content = readFileSync(fd);
+    return { stat, content };
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function transcriptProof(transcript, cwd, { ticket, revision, dir }) {
   try {
     const absolute = resolve(cwd, transcript);
-    const stat = lstatSync(absolute);
-    if (stat.isSymbolicLink()) return `provenance.transcript must not be a symlink: ${transcript}`;
-    if (!stat.isFile()) return `provenance.transcript is not a file: ${transcript}`;
-    if (isInsideCwd(cwd, absolute) && !isEvidencePath(cwd, absolute, dir)) {
-      return `provenance.transcript inside the worktree must live under .adlc/ or .omo/evidence/: ${transcript}`;
-    }
-    if (stat.size < 64) return `provenance.transcript is too small to serve as review evidence: ${transcript}`;
-    const content = readFileSync(absolute);
-    const text = content.toString('utf8');
+    const read = readRegularEvidenceNoFollow(absolute, cwd, dir, 'provenance.transcript', transcript);
+    if (typeof read === 'string') return read;
+    if (read.stat.size < 64) return `provenance.transcript is too small to serve as review evidence: ${transcript}`;
+    const text = read.content.toString('utf8');
     if (!transcriptReferencesTicket(text, ticket)) {
       return `provenance.transcript must reference ticket ${ticket}: ${transcript}`;
     }
     if (!text.includes(revision)) {
       return `provenance.transcript must reference reviewed revision ${revision}: ${transcript}`;
     }
-    return { path: absolute, hash: sha256(content) };
+    return { path: absolute, hash: sha256(read.content) };
   } catch (err) {
     return `provenance.transcript cannot be read: ${transcript}: ${err.message}`;
   }
@@ -131,14 +162,9 @@ function transcriptProof(transcript, cwd, { ticket, revision, dir }) {
 function artifactProof(path, expectedHash, cwd, label, dir) {
   try {
     const absolute = resolve(cwd, path);
-    const stat = lstatSync(absolute);
-    if (stat.isSymbolicLink()) return `${label} must not be a symlink: ${path}`;
-    if (!stat.isFile()) return `${label} is not a file: ${path}`;
-    if (isInsideCwd(cwd, absolute) && !isEvidencePath(cwd, absolute, dir)) {
-      return `${label} inside the worktree must live under .adlc/ or .omo/evidence/: ${path}`;
-    }
-    const content = readFileSync(absolute);
-    const actualHash = sha256(content);
+    const read = readRegularEvidenceNoFollow(absolute, cwd, dir, label, path);
+    if (typeof read === 'string') return read;
+    const actualHash = sha256(read.content);
     if (actualHash !== expectedHash) {
       return `${label} hash mismatch: ${path}`;
     }
