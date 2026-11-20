@@ -1,0 +1,31 @@
+{
+  "body": "Implements T-P07 and T-P10 from .adlc/specs/enhancement-resolution-plan.md.\n\nAcceptance criteria:\n1. packages/core/lib/syntax.mjs and syntax-check-typescript.mjs probe and resolve TypeScript strictly inside a child process under sanitizeCandidateEnv(process.env) so candidate node_modules/typescript never executes in the parent process (verified by packages/core/test/syntax-isolation.test.mjs and packages/core/test/syntax.test.mjs).\n2. packages/core/lib/risk-tier.mjs requires verdict === approve (when verdict is present) and forbids unscoped entries lacking both ticket and non-empty files from globally satisfying gated paths; regenerated plugins/adlc-codex/hooks/generated-risk-tier.mjs and plugins/adlc-copilot/hooks/generated-risk-tier.mjs match (verified by packages/core/test/risk-tier-hardening.test.mjs).\n3. packages/runner/lib/acceptance.mjs rejects symlinked packets/artifacts via lstatSync and validates non-empty structured packet content; packages/runner/bin/adlc.mjs supports --version, record --help, and upgrade --help (verified by packages/runner/test/assertions-hardening.test.mjs).\n4. packages/quartermaster/lib/load.mjs uses bounded O_NOFOLLOW regular-file reading rather than unguarded readFileSync (verified by packages/quartermaster/test/bounded-registry-read.test.mjs).\n5. packages/consensus-fix/bin/consensus-fix.mjs enforces repo containment and active-ticket/trust-root rail rejection on --files and before applyWinner (verified by packages/consensus-fix/test/apply-rail-safety.test.mjs).\n6. packages/decision-layer/lib/adapters/jev.mjs pins allowed hosts on TYPESAFE_API_URL, pack.mjs verifies realpathSync ancestor containment, and record.mjs locks appends and redacts raw paths in errors (verified by packages/decision-layer/test/jev-url-and-atomic.test.mjs).",
+  "edges": [],
+  "id": "t-wave1b-syntax-containment",
+  "rails": [],
+  "scope": [
+    "packages/core/lib/syntax.mjs",
+    "packages/core/lib/syntax-check-typescript.mjs",
+    "packages/core/test/syntax-isolation.test.mjs",
+    "packages/core/lib/risk-tier.mjs",
+    "packages/core/test/risk-tier-hardening.test.mjs",
+    "packages/runner/bin/adlc.mjs",
+    "packages/runner/lib/assertions.mjs",
+    "packages/runner/lib/acceptance.mjs",
+    "packages/runner/test/assertions-hardening.test.mjs",
+    "packages/quartermaster/lib/registry-path.mjs",
+    "packages/quartermaster/lib/load.mjs",
+    "packages/quartermaster/test/bounded-registry-read.test.mjs",
+    "packages/consensus-fix/bin/consensus-fix.mjs",
+    "packages/consensus-fix/test/apply-rail-safety.test.mjs",
+    "packages/decision-layer/lib/pack.mjs",
+    "packages/decision-layer/lib/record.mjs",
+    "packages/decision-layer/lib/adapters/jev.mjs",
+    "packages/decision-layer/test/jev-url-and-atomic.test.mjs",
+    "plugins/adlc-codex/hooks/generated-risk-tier.mjs",
+    "plugins/adlc-copilot/hooks/generated-risk-tier.mjs",
+    "plugins/adlc-cursor/lib/mcp-build-metadata.mjs",
+    "plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs"
+  ],
+  "title": "Wave 1B Part 2: child-only TypeScript probe (T-P07) and secondary containment hardening across risk-tier, runner, quartermaster, consensus-fix, and decision-layer (T-P10)"
+}

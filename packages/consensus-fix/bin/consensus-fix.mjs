@@ -24,6 +24,8 @@
  *              exclusive with --provider.
  */
 
+import { existsSync } from 'node:fs';
+import { relative, resolve } from 'node:path';
 import {
   parseArgs,
   pass,
@@ -36,6 +38,11 @@ import {
   resolveModel,
   detectProvider,
   PROVIDER_NAMES,
+  loadTickets,
+  activeTickets,
+  globMatch,
+  resolveRailPath,
+  TICKET_TRUST_ROOT_RAILS,
 } from '@adlc/core';
 import { runConsensusFix, RunAbortedError } from '../lib/runner.mjs';
 import { buildPrompt } from '../lib/prompt.mjs';
@@ -71,6 +78,38 @@ if (values['require-rails'] && !railsCmd) {
 }
 const filePaths = values['files'].split(',').map((f) => f.trim()).filter(Boolean);
 if (filePaths.length === 0) opError('--files must list at least one file path');
+
+function assertFilesContainedAndUnrailed(paths, repoRoot = process.cwd()) {
+  const rootAbs = resolve(repoRoot);
+  const railGlobs = [...TICKET_TRUST_ROOT_RAILS];
+  const ticketsPath = resolve(rootAbs, '.adlc', 'tickets.json');
+  const ticketsDir = resolve(rootAbs, '.adlc', 'tickets');
+  if (existsSync(ticketsPath) || existsSync(ticketsDir)) {
+    const loaded = loadTickets(ticketsPath);
+    if (Array.isArray(loaded?.tickets)) {
+      for (const ticket of activeTickets(loaded.tickets)) {
+        for (const rail of Array.isArray(ticket?.rails) ? ticket.rails : []) {
+          if (typeof rail === 'string' && rail) railGlobs.push(rail);
+        }
+      }
+    }
+  }
+  for (const file of paths) {
+    const resolved = resolveRailPath(file, rootAbs);
+    const rel = relative(rootAbs, resolve(rootAbs, file)).replaceAll('\\', '/');
+    if (rel === '' || rel === '..' || rel.startsWith('../') || resolved === null) {
+      opError(`--files path escapes repository root: ${file}`);
+    }
+    const candidate = resolved;
+    for (const rail of railGlobs) {
+      if (globMatch(rail, candidate)) {
+        opError(`--files path matches protected rail (${rail}): ${file}`);
+      }
+    }
+  }
+}
+
+assertFilesContainedAndUnrailed(filePaths);
 
 const n = parseInt(values['n'], 10);
 if (isNaN(n) || n < 1) opError(`--n must be a positive integer, got: ${values['n']}`);
@@ -256,6 +295,7 @@ const {
 let applied = false;
 if (values['apply'] && selectionResult && !allDivergent) {
   const { winner } = selectionResult;
+  assertFilesContainedAndUnrailed(Object.keys(winner.changes ?? {}));
   try {
     applyWinner(winner.changes, outerSnapshot);
     applied = true;

@@ -4,8 +4,8 @@
 // its own under .adlc/decision-packs/<id>/pack.json, but never one that shares
 // a shipped ID. DecisionPack.schema.json documents the same shape this module
 // checks; the validator is hand-written so the package has no dependencies.
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isPlainObject } from '@adlc/core';
 import { canonicalHash } from './canonical.mjs';
@@ -208,7 +208,23 @@ function validateAggregation(aggregation, questions) {
   }
 }
 
-function readPackFile(path, id) {
+function assertPackContained(baseDir, filePath, id) {
+  let realBase;
+  let realFile;
+  try {
+    realBase = realpathSync(baseDir);
+    realFile = realpathSync(filePath);
+  } catch (error) {
+    throw new PackError(`pack "${id}" could not be canonicalized: ${error.message}`);
+  }
+  const rel = relative(realBase, realFile);
+  if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new PackError(`pack "${id}" resolves outside its pack directory`);
+  }
+}
+
+function readPackFile(path, id, baseDir) {
+  if (baseDir) assertPackContained(baseDir, path, id);
   const { size } = statSync(path);
   if (size > MAX_PACK_FILE_BYTES) {
     throw new PackError(`pack "${id}" at ${path} is ${size} bytes; a pack file may be at most ${MAX_PACK_FILE_BYTES}`);
@@ -250,7 +266,7 @@ export function loadPack(id, { projectRoot, shippedDir = SHIPPED_PACKS_DIR }) {
   }
   for (const dir of [shippedDir, projectDir]) {
     const path = join(dir, id, 'pack.json');
-    if (existsSync(path)) return readPackFile(path, id);
+    if (existsSync(path)) return readPackFile(path, id, dir);
   }
   throw new PackError(`no pack "${id}": looked in ${shippedDir} and ${projectDir}`);
 }

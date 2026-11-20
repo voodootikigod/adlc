@@ -336,9 +336,9 @@ test('TYPESAFE_API_KEY takes precedence over JEV_API_KEY, which is the fallback'
 });
 
 test('an https TYPESAFE_API_URL replaces the default endpoint, and the request goes there', async () => {
-  const env = { TYPESAFE_API_KEY: 'primary', TYPESAFE_API_URL: 'https://proxy.example.test/typesafe/v1/systemone' };
+  const env = { TYPESAFE_API_KEY: 'primary', TYPESAFE_API_URL: 'https://api.typesafe.ai/v2/systemone' };
   const options = jevOptions(validateConfig(SHADOW_JEV, env), env);
-  assert.deepEqual(options, { apiKey: 'primary', apiUrl: 'https://proxy.example.test/typesafe/v1/systemone' });
+  assert.deepEqual(options, { apiKey: 'primary', apiUrl: 'https://api.typesafe.ai/v2/systemone' });
   assert.equal(jevOptions(validateConfig(SHADOW_JEV, { TYPESAFE_API_KEY: 'k' }), { TYPESAFE_API_KEY: 'k' }).apiUrl, DEFAULT_API_URL);
   const { fetch, calls } = replay({ status: 200, body: OK_LATEST.body });
   await evaluateDecision({ provider: createJevProvider({ ...options, fetch }), model: 'jev-latest', pack: PACK, sanitizedInput: INPUT, retryDelayMs: 0 });
@@ -391,7 +391,7 @@ test('a key with a trailing carriage return is refused by config, the provider a
 });
 
 test('providerFor hands the jev provider the precedence key and the configured URL', async () => {
-  const env = { TYPESAFE_API_KEY: 'primary', JEV_API_KEY: 'fallback', TYPESAFE_API_URL: 'https://proxy.example.test/v1/systemone' };
+  const env = { TYPESAFE_API_KEY: 'primary', JEV_API_KEY: 'fallback', TYPESAFE_API_URL: 'https://api.typesafe.ai/v2/systemone' };
   const config = validateConfig(SHADOW_JEV, env);
   const original = globalThis.fetch;
   const { fetch, calls } = replay({ status: 200, body: OK_LATEST.body });
@@ -402,7 +402,7 @@ test('providerFor hands the jev provider the precedence key and the configured U
   } finally {
     globalThis.fetch = original;
   }
-  assert.equal(calls[0].url, 'https://proxy.example.test/v1/systemone');
+  assert.equal(calls[0].url, 'https://api.typesafe.ai/v2/systemone');
   assert.equal(calls[0].init.headers.Authorization, 'Bearer primary');
 });
 

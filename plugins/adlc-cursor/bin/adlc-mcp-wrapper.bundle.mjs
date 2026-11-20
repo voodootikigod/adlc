@@ -2049,6 +2049,50 @@ var ARRAY_LITERAL_RE = new RegExp(
 
 // packages/core/lib/syntax.mjs
 import { fileURLToPath } from "node:url";
+
+// packages/core/lib/sandbox-runner.mjs
+var SENSITIVE_HOME_DIRS = Object.freeze([
+  ".ssh",
+  ".aws",
+  ".gnupg",
+  ".config/gh",
+  ".config/gcloud",
+  ".config/adlc",
+  ".config/opencode",
+  ".config/github-copilot",
+  ".config/pi",
+  ".local/share/cursor-agent",
+  ".azure",
+  ".kube",
+  ".docker",
+  ".claude",
+  ".codex",
+  ".gemini",
+  ".cursor",
+  ".copilot",
+  ".pi"
+]);
+var SENSITIVE_HOME_FILES = Object.freeze([
+  ".netrc",
+  ".npmrc",
+  ".git-credentials",
+  ".claude.json",
+  ".claude.json.backup"
+]);
+var USER_EPHEMERAL_ROOTS = Object.freeze([
+  "/home",
+  "/Users",
+  "/root",
+  "/tmp",
+  "/var/tmp",
+  "/srv",
+  "/opt",
+  "/var",
+  "/run",
+  "/mnt"
+]);
+
+// packages/core/lib/syntax.mjs
 var TYPESCRIPT_WORKER = fileURLToPath(new URL("./syntax-check-typescript.mjs", import.meta.url));
 
 // packages/core/lib/cluster.mjs
@@ -2180,48 +2224,6 @@ var WORKDIR_CONTAINERS = Object.freeze([
   "toolInput",
   "args",
   "arguments"
-]);
-
-// packages/core/lib/sandbox-runner.mjs
-var SENSITIVE_HOME_DIRS = Object.freeze([
-  ".ssh",
-  ".aws",
-  ".gnupg",
-  ".config/gh",
-  ".config/gcloud",
-  ".config/adlc",
-  ".config/opencode",
-  ".config/github-copilot",
-  ".config/pi",
-  ".local/share/cursor-agent",
-  ".azure",
-  ".kube",
-  ".docker",
-  ".claude",
-  ".codex",
-  ".gemini",
-  ".cursor",
-  ".copilot",
-  ".pi"
-]);
-var SENSITIVE_HOME_FILES = Object.freeze([
-  ".netrc",
-  ".npmrc",
-  ".git-credentials",
-  ".claude.json",
-  ".claude.json.backup"
-]);
-var USER_EPHEMERAL_ROOTS = Object.freeze([
-  "/home",
-  "/Users",
-  "/root",
-  "/tmp",
-  "/var/tmp",
-  "/srv",
-  "/opt",
-  "/var",
-  "/run",
-  "/mnt"
 ]);
 
 // plugins/adlc-cursor/generated-active-ticket.mjs

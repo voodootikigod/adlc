@@ -4,10 +4,9 @@
 // mutant without proving that the mutant itself is malformed.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { dirname, extname, join, resolve } from 'node:path';
+import { extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { sanitizeCandidateEnv } from './sandbox-runner.mjs';
 
 const JAVASCRIPT_EXT_RE = /\.(?:js|mjs|cjs)$/i;
 const TYPESCRIPT_EXT_RE = /\.(?:ts|mts|cts|tsx|jsx)$/i;
@@ -19,42 +18,30 @@ export function syntaxLanguage(file) {
   return null;
 }
 
-function typeScriptCandidates(filePath) {
-  const candidates = [];
-  let dir = dirname(resolve(filePath));
-  while (true) {
-    const packagePath = join(dir, 'node_modules', 'typescript', 'package.json');
-    if (existsSync(packagePath)) candidates.push({ dir, packagePath });
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return candidates;
-}
-
 function inspectTypeScript(filePath) {
-  const skipped = [];
-  for (const { dir, packagePath } of typeScriptCandidates(filePath)) {
-    let manifest = {};
-    try {
-      manifest = JSON.parse(readFileSync(packagePath, 'utf8'));
-      const require = createRequire(join(dir, 'adlc-syntax-resolver.cjs'));
-      const path = require.resolve('typescript');
-      const ts = require(path);
-      if (typeof ts.createSourceFile === 'function' && typeof ts.createProgram === 'function') {
-        return {
-          resolved: { path, version: ts.version ?? manifest.version ?? 'unknown' },
-          skipped,
-        };
-      }
-      skipped.push({ version: ts.version ?? manifest.version ?? 'unknown', path: packagePath });
-    } catch {
-      // A present package that cannot be loaded is not a usable parser. Keep
-      // walking because a workspace parent can still provide TypeScript 5/6.
-      skipped.push({ version: manifest.version ?? 'unknown', path: packagePath });
-    }
+  const result = spawnSync(
+    process.execPath,
+    [TYPESCRIPT_WORKER, '--probe', resolve(filePath)],
+    {
+      encoding: 'utf8',
+      timeout: 30000,
+      env: sanitizeCandidateEnv(process.env),
+    },
+  );
+  if (result.error || result.signal || result.status !== 0) {
+    return { resolved: null, skipped: [] };
   }
-  return { resolved: null, skipped };
+  try {
+    const parsed = JSON.parse(result.stdout || '{}');
+    return {
+      resolved: parsed?.resolved && typeof parsed.resolved.path === 'string'
+        ? { path: parsed.resolved.path, version: String(parsed.resolved.version ?? 'unknown') }
+        : null,
+      skipped: Array.isArray(parsed?.skipped) ? parsed.skipped : [],
+    };
+  } catch {
+    return { resolved: null, skipped: [] };
+  }
 }
 
 /**
@@ -110,6 +97,7 @@ export function checkSyntaxDetail(filePath, cwd, execPath = process.execPath) {
     cwd,
     encoding: 'utf8',
     timeout: 30000,
+    ...(language === 'typescript' ? { env: sanitizeCandidateEnv(process.env) } : {}),
   });
   if (result.error?.code === 'ETIMEDOUT') {
     return { verdict: 'unknown', detail: 'timed out after 30s' };

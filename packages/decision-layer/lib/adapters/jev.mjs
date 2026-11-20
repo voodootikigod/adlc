@@ -28,14 +28,20 @@
 import { API_KEY_PATTERN, MAX_RESPONSE_BYTES, Unsupported, assertApiKey, noulAnswer, postJson, readBounded, sharedInput, singleCallUnsupported } from './common.mjs';
 
 export const DEFAULT_API_URL = 'https://api.typesafe.ai/v1/systemone';
+export const ALLOWED_API_HOSTS = Object.freeze(['api.typesafe.ai']);
 
 export { API_KEY_PATTERN, MAX_RESPONSE_BYTES, readBounded, singleCallUnsupported as jevUnsupported };
 
-/** The key is only ever sent to an https URL that carries no credentials of its own. */
-export function assertSafeApiUrl(value) {
+/** The key is only ever sent to an https URL on an allowlisted host that carries no credentials of its own. */
+export function assertSafeApiUrl(value, { allowedHosts = ALLOWED_API_HOSTS } = {}) {
   const url = new URL(value);
   if (url.protocol !== 'https:') throw new TypeError('the Jev API URL must use https');
   if (url.username || url.password) throw new TypeError('the Jev API URL may not carry credentials');
+  const host = url.hostname.toLowerCase();
+  const normalized = (allowedHosts ?? ALLOWED_API_HOSTS).map((h) => String(h).toLowerCase());
+  if (!normalized.includes(host)) {
+    throw new TypeError(`the Jev API URL host "${url.hostname}" is not in the allowlist (${normalized.join(', ')})`);
+  }
   return url.href;
 }
 
@@ -105,9 +111,9 @@ export function neutralBody(reply) {
  * @param {{ apiKey: string, apiUrl?: string, fetch?: typeof fetch }} options
  * @returns {{ name: 'jev', call: (request: object, options?: { signal?: AbortSignal }) => Promise<{ body: unknown } | { failure: string } | { rejected: string, dispatched?: false }> }}
  */
-export function createJevProvider({ apiKey, apiUrl = DEFAULT_API_URL, fetch: fetchImpl = globalThis.fetch }) {
+export function createJevProvider({ apiKey, apiUrl = DEFAULT_API_URL, allowedHosts = ALLOWED_API_HOSTS, fetch: fetchImpl = globalThis.fetch }) {
   assertApiKey(apiKey, 'the Jev API key');
-  const url = assertSafeApiUrl(apiUrl);
+  const url = assertSafeApiUrl(apiUrl, { allowedHosts });
   return {
     name: 'jev',
     async call(request, { signal } = {}) {

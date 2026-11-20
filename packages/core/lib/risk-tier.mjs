@@ -137,6 +137,21 @@ function filesOverlapOrUnscoped(entry, matches) {
  * @param {string|null} [opts.ticketId]  the active ticket id, or null if none resolved
  * @returns {{needed: boolean, matches: Array<{path: string, tier: string, pattern: string}>}}
  */
+function hasApprovingVerdict(entry) {
+  const verdict = entry && entry.data && typeof entry.data === 'object' && Object.prototype.hasOwnProperty.call(entry.data, 'verdict')
+    ? entry.data.verdict
+    : entry && Object.prototype.hasOwnProperty.call(entry, 'verdict')
+      ? entry.verdict
+      : undefined;
+  return verdict === undefined || verdict === 'approve';
+}
+
+function entryIsScoped(entry) {
+  const hasTicket = typeof entry?.ticket === 'string' && entry.ticket.trim() !== '';
+  const hasFiles = Boolean(entry?.files && typeof entry.files === 'object' && Object.keys(entry.files).length > 0);
+  return hasTicket || hasFiles;
+}
+
 export function decideAdversarialReviewNotice({ changedPaths = [], manifestEntries = [], ticketId = null } = {}) {
   const { gated, matches } = classifyRiskTier(changedPaths);
   if (!gated) return { needed: false, matches: [] };
@@ -145,6 +160,8 @@ export function decideAdversarialReviewNotice({ changedPaths = [], manifestEntri
     (e) =>
       e &&
       e.gate === 'adversarial-review' &&
+      hasApprovingVerdict(e) &&
+      entryIsScoped(e) &&
       (!ticketId || !e.ticket || e.ticket === ticketId) &&
       filesOverlapOrUnscoped(e, matches)
   );
