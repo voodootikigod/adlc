@@ -92,7 +92,7 @@ describe('#365 R4/AC18 — base resolution reaches all three consumers identical
       // a full P5 run, again with --base only and no --revision, must ALSO find the
       // attestation — proving runProsecution's internal resolveProsecutionRevision call
       // agrees with the other two rather than deriving a fourth, private notion of `base`.
-      const inputPath = join(dir, 'passes.json');
+      const inputPath = join(dir, '.omo/evidence/passes.json');
       mkdirSync(join(dir, '.omo/evidence'), { recursive: true });
       const transcriptPath = join(dir, '.omo/evidence/review.txt');
       const promptPath = join(dir, '.omo/evidence/review-prompt.txt');

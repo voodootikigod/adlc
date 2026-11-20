@@ -59,10 +59,16 @@ function requireNonEmptyString(value, field) {
 // class as lying about --author-provider outright, which the gate concedes it
 // cannot stop. The gate's value is the auditable, revision-bound record, not
 // unforgeable identity.
-function normalizeProvider(value) {
-  return typeof value === 'string'
-    ? value.normalize('NFKC').replace(/\s+/g, '').toLowerCase()
-    : '';
+export function normalizeProvider(value) {
+  if (typeof value !== 'string') return '';
+  const folded = value.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+  if (folded === 'claude' || folded === 'anthropic' || /^claude[-.]/.test(folded)) return 'anthropic';
+  if (folded === 'codex' || folded === 'openai' || /^(?:gpt|o1|o3|o4)(?:[-.]|$)/.test(folded)) return 'openai';
+  if (
+    folded === 'gemini' || folded === 'agy' || folded === 'antigravity' || folded === 'google' ||
+    /^gemini[-.]/.test(folded)
+  ) return 'google';
+  return folded;
 }
 
 /**
@@ -156,7 +162,7 @@ function latestEntryForTicket(entries, ticket) {
  * SIGNED entry carrying it forward — laundering a forged claim into a real attestation through
  * whoever holds the signing key.
  */
-export function carryForwardCrossModelReview({ ticket, fromRevision, revision, dir, key } = {}) {
+export function carryForwardCrossModelReview({ ticket, fromRevision, revision, dir, key, observedEntries } = {}) {
   key = validateKeyParam(key);
   requireNonEmptyString(ticket, 'ticket');
   requireNonEmptyString(fromRevision, 'fromRevision');
@@ -273,6 +279,25 @@ export function carryForwardCrossModelReview({ ticket, fromRevision, revision, d
     );
   }
 
+  // Truncation anchor (opt-in): the attestation store lives OUTSIDE the PR-controlled tree, so
+  // it remembers entries (a revocation, or a carried-from ancestor) the PR branch may have
+  // dropped. Fail closed if any are missing here, or if the store holds a needs-attention for
+  // this ticket against the very same change-set digest (under ANY base).
+  if (observedEntries !== undefined) {
+    const truncationCheck = assertNoTruncation({ prEntries: entries, observedEntries, revision: fromRevision, key, ticket });
+    const digest = changeSetDigest(revision);
+    const observedRevocation = observedEntries.some(
+      (entry) =>
+        verifyEntrySig(key, entry) &&
+        entry?.ticket === ticket &&
+        entry?.data?.verdict === 'needs-attention' &&
+        changeSetDigest(entry?.data?.revision) === digest
+    );
+    if (!truncationCheck.ok || observedRevocation) {
+      throw new Error('cannot carry forward: prior or same-digest attestation was truncated or revoked in attestation store');
+    }
+  }
+
   // Consecutive carries only: a fresh review resets the chain, because a human (or a distinct
   // model) looked at the change against that base.
   const depth = (Number(prior.data?.carryDepth) || 0) + 1;
@@ -342,12 +367,12 @@ function candidateReview(entry, { ticket, revision, runAuthor, key }) {
   if (data.verdict !== 'approve') return null;
   const provider = normalizeProvider(data.provider);
   const entryAuthor = normalizeProvider(data.authorProvider);
-  if (provider === '' || entryAuthor === '' || runAuthor === '') return null;
+  if (provider === '' || entryAuthor === '') return null;
   // Write-side belt-and-suspenders: the attestation must not be same-provider.
   if (provider === entryAuthor) return null;
   // Author anchored to the run: the reviewer must differ from the real
   // (run-declared) author, and the record must be for THIS author. All compared
-  // normalized so a whitespace/case variant cannot fake distinctness.
+  // normalized so a whitespace/case/family variant cannot fake distinctness.
   if (provider === runAuthor) return null;
   if (entryAuthor !== runAuthor) return null;
   return { provider };

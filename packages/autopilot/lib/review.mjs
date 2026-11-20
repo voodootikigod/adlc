@@ -28,6 +28,19 @@ export const MANIFEST_PATH_RE = /^\.adlc\/manifest\.d\/[^/]+\.jsonl$/;
 export const COMMIT_IDENTITY = Object.freeze(['-c', 'user.name=adlc-autopilot', '-c', 'user.email=autopilot@adlc.invalid', '-c', 'commit.gpgsign=false']);
 const LARGEST_PATHS = 5;
 
+// Local copy of @adlc/prosecute's vendor-family mapping (this package does not depend on it).
+export function normalizeProvider(value) {
+  if (typeof value !== 'string') return '';
+  const folded = value.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+  if (folded === 'claude' || folded === 'anthropic' || /^claude[-.]/.test(folded)) return 'anthropic';
+  if (folded === 'codex' || folded === 'openai' || /^(?:gpt|o1|o3|o4)(?:[-.]|$)/.test(folded)) return 'openai';
+  if (
+    folded === 'gemini' || folded === 'agy' || folded === 'antigravity' || folded === 'google' ||
+    /^gemini[-.]/.test(folded)
+  ) return 'google';
+  return folded;
+}
+
 export class ReviewError extends Error {
   constructor(code, detail, extra = {}) {
     super(detail ? `${code}: ${detail}` : code);
@@ -136,7 +149,7 @@ export async function finalReview({ ctx, issue, cwd, baseOid }) {
   const base = validateOid(baseOid, { field: 'baseOid' });
   if (!(await isClean(ctx, cwd))) throw new ReviewError('oid-mismatch', 'tree not clean before the final review');
   const head = await headOf(ctx, cwd);
-  const argv = [ctx.pinned['adversarial-review'], '--base', base, '--provider', 'codex', '--json', '--fail-on', 'medium',
+  const argv = [ctx.pinned['adversarial-review'], '--base', base, '--provider', ctx.config?.autopilot?.reviewProvider ?? ctx.config?.fleet?.reviewProvider ?? 'codex', '--json', '--fail-on', 'medium',
     '--max-bytes', String(ctx.config.autopilot.reviewMaxBytes), '--findings-ledger', ctx.paths.findingsLedger(issue)];
   const r = await ctx.spawn({ argv, cwd, env: childEnv(ctx.env.base), deadlineMs: DEADLINES.finalReview, label: 'adversarial-review' });
   let doc = null;
@@ -197,7 +210,9 @@ export async function attest({ ctx, cwd, ticketId, baseOid, reviewedHead, issue 
     if ((await headOf(ctx, cwd)) !== reviewed) throw new ReviewError('oid-mismatch', 'HEAD moved since the final review');
     if (!(await isClean(ctx, cwd))) throw new ReviewError('oid-mismatch', 'tree not clean at attestation');
   }
-  const argv = adlcArgv(ctx, 'prosecute', 'record-cross-model', '--ticket', id, '--provider', 'codex', '--author-provider', 'anthropic',
+  const provider = normalizeProvider(ctx.config?.autopilot?.reviewProvider ?? ctx.config?.fleet?.reviewProvider ?? 'codex');
+  const authorProvider = normalizeProvider(ctx.config?.autopilot?.authorProvider ?? ctx.config?.fleet?.builderProvider ?? 'anthropic');
+  const argv = adlcArgv(ctx, 'prosecute', 'record-cross-model', '--ticket', id, '--provider', provider, '--author-provider', authorProvider,
     '--verdict', 'approve', '--base', base, '--dir', join(cwd, '.adlc'), '--json');
   const { result: r, hashes } = await trackManifestLines({ ctx, cwd, issue }, () => ctx.spawn({ argv, cwd, env: keyEnv(ctx), deadlineMs: DEADLINES.adlcRecorder, label: 'adlc prosecute record-cross-model' }));
   if (r.status !== 0) throw new ReviewError('oid-mismatch', `record-cross-model exited ${r.status}: ${r.stderr.trim().slice(0, 300)}`);

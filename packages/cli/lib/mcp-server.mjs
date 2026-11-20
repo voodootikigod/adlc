@@ -1,8 +1,17 @@
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+// Untrusted agent-callable surface: never hold or forward the trust-root manifest key.
+delete process.env.ADLC_MANIFEST_KEY;
+
+export function scrubbedChildEnv(env = process.env) {
+  const copy = { ...env };
+  delete copy.ADLC_MANIFEST_KEY;
+  return copy;
+}
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI_ROOT = resolve(HERE, '..');
@@ -30,6 +39,7 @@ const FORBIDDEN_FLAGS = new Set([
   '--attest-unsigned',
   '--authorize',
   '--fix',
+  '--lint-command',
   '--llm',
   '--model',
   '--out',
@@ -41,6 +51,8 @@ const FORBIDDEN_FLAGS = new Set([
   '--review-cmd',
   '--stamp',
   '--test-cmd',
+  '--test-command',
+  '--typecheck-command',
   '--unsafe-no-sandbox',
   '--write',
   '--yes',
@@ -195,6 +207,7 @@ function execute(args) {
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: EXECUTION_TIMEOUT_MS,
       maxBuffer: 2 * 1024 * 1024,
+      env: scrubbedChildEnv(),
     });
     return { ok: true, exitCode: 0, stdout: stdout.trim(), stderr: '' };
   } catch (error) {
@@ -207,7 +220,37 @@ function execute(args) {
   }
 }
 
-export function callTool(name, input = {}) {
+export const DEFAULT_MAX_MCP_CONCURRENCY = 4;
+export const DEFAULT_MAX_MCP_INFLIGHT = 32;
+
+export function executeAsync(args, { activeChildren } = {}) {
+  const target = command();
+  return new Promise((resolvePromise) => {
+    const child = execFile(target.file, [...target.prefix, ...args], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      shell: false,
+      timeout: EXECUTION_TIMEOUT_MS,
+      maxBuffer: 2 * 1024 * 1024,
+      env: scrubbedChildEnv(),
+    }, (error, stdout, stderr) => {
+      activeChildren?.delete(child);
+      if (!error) {
+        resolvePromise({ ok: true, exitCode: 0, stdout: String(stdout).trim(), stderr: '' });
+        return;
+      }
+      resolvePromise({
+        ok: false,
+        exitCode: Number.isInteger(error.code) ? error.code : 1,
+        stdout: String(stdout ?? '').trim(),
+        stderr: String(stderr ?? '').trim() || error.message,
+      });
+    });
+    activeChildren?.add(child);
+  });
+}
+
+function buildToolArgs(name, input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw invalid('tool arguments must be an object');
   let args;
   if (name === 'adlc_gate') {
@@ -223,15 +266,25 @@ export function callTool(name, input = {}) {
     args = ['prosecute', '--input', evidence, '--ticket', ticket, '--dir', dir, '--json'];
     if (input.revision !== undefined) args.push('--revision', assertString(input.revision, 'revision', 256));
   } else throw invalid(`unknown tool: ${name}`);
+  return args;
+}
 
-  const result = execute(args);
+function toolResult(result) {
   return {
     content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
     isError: !result.ok,
   };
 }
 
-export function handleRequest(request) {
+export function callTool(name, input = {}) {
+  return toolResult(execute(buildToolArgs(name, input)));
+}
+
+export async function callToolAsync(name, input = {}, opts = {}) {
+  return toolResult(await executeAsync(buildToolArgs(name, input), opts));
+}
+
+function handleStaticRequest(request) {
   if (!request || request.jsonrpc !== '2.0' || typeof request.method !== 'string') throw invalid('invalid JSON-RPC request');
   if (request.method === 'initialize') {
     return {
@@ -241,28 +294,106 @@ export function handleRequest(request) {
     };
   }
   if (request.method === 'tools/list') return { tools: TOOLS };
-  if (request.method === 'tools/call') return callTool(request.params?.name, request.params?.arguments ?? {});
   if (request.method.startsWith('notifications/')) return undefined;
+  if (request.method === 'tools/call') return null;
   const error = new Error(`method not found: ${request.method}`);
   error.code = -32601;
   throw error;
 }
 
-export function runStdioServer({ input = process.stdin, output = process.stdout } = {}) {
+export function handleRequest(request) {
+  const result = handleStaticRequest(request);
+  if (result === null) return callTool(request.params?.name, request.params?.arguments ?? {});
+  return result;
+}
+
+export async function handleRequestAsync(request, opts = {}) {
+  const result = handleStaticRequest(request);
+  if (result === null) return await callToolAsync(request.params?.name, request.params?.arguments ?? {}, opts);
+  return result;
+}
+
+export function runStdioServer({
+  input = process.stdin,
+  output = process.stdout,
+  maxConcurrency = DEFAULT_MAX_MCP_CONCURRENCY,
+  maxInflight = DEFAULT_MAX_MCP_INFLIGHT,
+  signal,
+} = {}) {
   return new Promise((resolvePromise) => {
     const send = (message) => output.write(`${JSON.stringify(message)}\n`);
     const lines = createInterface({ input, crlfDelay: Infinity });
+    const inflight = new Set();
+    const activeChildren = new Set();
+    const activeSlots = new Set();
+    const waitQueue = [];
+
+    const acquireSlot = async (req) => {
+      if (activeSlots.size < maxConcurrency) {
+        activeSlots.add(req);
+        return;
+      }
+      await new Promise((resume) => { waitQueue.push({ req, resume }); });
+    };
+
+    const releaseSlot = (req) => {
+      activeSlots.delete(req);
+      const next = waitQueue.shift();
+      if (next) {
+        activeSlots.add(next.req);
+        next.resume();
+      }
+    };
+
+    const onAbort = () => {
+      lines.close();
+      for (const child of activeChildren) child.kill('SIGTERM');
+    };
+    if (signal) signal.addEventListener('abort', onAbort);
+
+    // Requests execute with bounded concurrency and queue capacity; responses preserve request order.
+    let tail = Promise.resolve();
     lines.on('line', (line) => {
       if (!line.trim()) return;
-      let request;
-      try {
-        request = JSON.parse(line);
-        const result = handleRequest(request);
-        if (request.id !== undefined && result !== undefined) send({ jsonrpc: '2.0', id: request.id, result });
-      } catch (error) {
-        if (request?.id !== undefined) send({ jsonrpc: '2.0', id: request.id, error: { code: error.code ?? -32603, message: error.message } });
+      if (inflight.size >= maxInflight) {
+        let parsedId = null;
+        try { parsedId = JSON.parse(line)?.id; } catch { /* malformed */ }
+        if (parsedId !== undefined && parsedId !== null) {
+          tail = tail.then(() => send({
+            jsonrpc: '2.0',
+            id: parsedId,
+            error: { code: -32000, message: 'Server busy: request queue limit exceeded' },
+          }));
+        }
+        return;
       }
+      let task;
+      const pending = (async () => {
+        let request;
+        try {
+          request = JSON.parse(line);
+          await acquireSlot(request);
+          try {
+            if (signal?.aborted) return undefined;
+            const result = await handleRequestAsync(request, { activeChildren });
+            if (request.id !== undefined && result !== undefined) return { jsonrpc: '2.0', id: request.id, result };
+          } finally {
+            releaseSlot(request);
+          }
+        } catch (error) {
+          if (request?.id !== undefined) return { jsonrpc: '2.0', id: request.id, error: { code: error.code ?? -32603, message: error.message } };
+        }
+        return undefined;
+      })();
+      task = tail.then(() => pending).then((message) => { if (message !== undefined) send(message); });
+      tail = task;
+      inflight.add(task);
+      task.finally(() => inflight.delete(task));
     });
-    lines.on('close', resolvePromise);
+    lines.on('close', async () => {
+      signal?.removeEventListener('abort', onAbort);
+      await Promise.allSettled([...inflight]);
+      resolvePromise();
+    });
   });
 }

@@ -59,7 +59,7 @@ function hooksExecutables(gitDir) {
 
 /** The complete git-state snapshot of one clone. */
 /** Host git inside a clone the gate has run in carries these, whatever that clone's config says. */
-export const HOST_SAFE_GIT = Object.freeze(['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.sshCommand=/bin/false']);
+export const HOST_SAFE_GIT = Object.freeze(['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.sshCommand=/bin/false', '-c', 'core.logallrefupdates=false']);
 const hostGit = (ctx, cwd, args) => ctx.git.localOut(cwd, [...HOST_SAFE_GIT, ...args]);
 const hostGitRaw = (ctx, cwd, args) => ctx.git.local(cwd, [...HOST_SAFE_GIT, ...args]);
 
@@ -94,7 +94,11 @@ export async function snapshotGateRepo({ ctx, cwd, baseOid }) {
     forEachRef: await hostGit(ctx, cwd, ['for-each-ref']),
     configList: await hostGit(ctx, cwd, ['config', '--list', '--local']),
     hooksExecutables: hooksExecutables(gitDir),
-    infoExclude: existsSync(exclude) ? readFileSync(exclude, 'utf8') : null,
+    infoExclude: (() => {
+      if (!existsSync(exclude)) return null;
+      if (!lstatSync(exclude).isFile()) throw new GateRepoError('exclude-symlink', exclude);
+      return readFileSync(exclude, 'utf8');
+    })(),
     // node_modules is the orchestrator's read-only bind, not the gate's doing.
     statusPorcelain: await hostGit(ctx, cwd, ['status', '--porcelain', '--untracked-files=all', '--', '.', ':(exclude)node_modules']),
   };

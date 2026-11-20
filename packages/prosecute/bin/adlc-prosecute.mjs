@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { parseArgs, printJson, opError, recordFinding, git, repoRoot, changedFiles, splitNulPaths, untrackedNonIgnoredPaths } from '@adlc/core';
 import { readManifestForest } from '@adlc/gate-manifest/lib/forest.mjs';
@@ -11,6 +11,32 @@ import { recordCrossModelReview, carryForwardCrossModelReview, hasCrossModelAppr
 import { readObservedAttestations, assertNoTruncation, mirrorObservedAttestations } from '../lib/attestation-store.mjs';
 import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 import { loadManifestKeyFromEnvLocal } from '../lib/load-env-local.mjs';
+
+// An --input / provenance.transcript path is excluded from the change-set identity, so an
+// in-tree path outside the evidence directories would let real source change without moving
+// the reviewed revision. Symlinks are refused outright (their target is not what was named).
+function assertSafeEvidencePath(rawPath, cwd, dir) {
+  if (typeof rawPath !== 'string' || rawPath === '') return;
+  const abs = resolve(cwd, rawPath);
+  if (existsSync(abs) && lstatSync(abs).isSymbolicLink()) {
+    opError(`evidence path must not be a symlink: ${rawPath}`);
+  }
+  const realCwd = realpathSync(cwd);
+  const realAbs = existsSync(abs) ? realpathSync(abs) : resolve(realCwd, relative(cwd, abs));
+  const rel = relative(realCwd, realAbs).replaceAll('\\', '/');
+  if (rel === '' || rel === '..' || rel.startsWith('../') || isAbsolute(rel)) return;
+  const ledger = relative(cwd, resolve(cwd, dir || '.adlc')).replaceAll('\\', '/');
+  const inLedger = ledger !== '' && ledger !== '..' && !ledger.startsWith('../') && rel.startsWith(`${ledger}/`);
+  if (rel.startsWith('.adlc/') || rel.startsWith('.omo/evidence/') || inLedger) return;
+  opError(`in-repository evidence path must live under .adlc/ or .omo/evidence/: ${rawPath}`);
+}
+
+function assertSafeInputArtifacts(input, inputPath, cwd, dir) {
+  assertSafeEvidencePath(inputPath, cwd, dir);
+  assertSafeEvidencePath(input?.provenance?.transcript, cwd, dir);
+  assertSafeEvidencePath(input?.review_packet?.prompt, cwd, dir);
+  assertSafeEvidencePath(input?.review_packet?.inputs, cwd, dir);
+}
 
 // FAIL-CLOSED distinction: a genuinely ABSENT ticket table contributes no rails
 // (fine — nothing to check). But a table that EXISTS and is unreadable/malformed
@@ -791,11 +817,13 @@ if (positionals[0] === 'record-cross-model') {
   }
   let input;
   if (values.input) {
+    assertSafeEvidencePath(values.input, process.cwd(), values.dir);
     try {
       input = JSON.parse(readFileSync(values.input, 'utf8'));
     } catch (err) {
       opError(`could not read --input: ${err.message}`);
     }
+    assertSafeInputArtifacts(input, values.input, process.cwd(), values.dir);
   }
   const revision = resolveProsecutionRevision({
     dir: values.dir,
@@ -839,6 +867,9 @@ if (positionals[0] === 'record-cross-model') {
         revision,
         dir: values.dir,
         key: getKey(),
+        observedEntries: values['attestation-store']
+          ? readObservedAttestations(values['attestation-store'], { key: getKey() })
+          : undefined,
       });
     } catch (err) {
       opError(err.message); // fail closed: an unmoved/mismatched/uncapped/missing-prior carry is an operational error, never recorded
@@ -970,18 +1001,20 @@ if (positionals[0] === 'tier-check') {
   console.error('tier-check: TRUST-ROOT tier — a distinct-provider cross-model approve is REQUIRED. Reasons:');
   for (const reason of tier.reasons) console.error(`  - ${reason}`);
 
-  const authorProvider = values['author-provider'] ?? process.env.ADLC_AUTHOR_PROVIDER;
+  const authorProvider = values['author-provider'] || process.env.ADLC_AUTHOR_PROVIDER;
   if (!authorProvider) {
     opError('tier-check: trust-root tier but no --author-provider / ADLC_AUTHOR_PROVIDER — distinctness cannot be proven; failing closed');
   }
   const tierInputPath = values.input;
   let tierInput;
   if (tierInputPath !== undefined) {
+    assertSafeEvidencePath(tierInputPath, process.cwd(), values.dir);
     try {
       tierInput = JSON.parse(readFileSync(tierInputPath, 'utf8'));
     } catch (err) {
       opError(`could not read --input: ${err.message}`);
     }
+    assertSafeInputArtifacts(tierInput, tierInputPath, process.cwd(), values.dir);
   }
   const revision = resolveProsecutionRevision({
     dir: values.dir,
@@ -1136,11 +1169,13 @@ if (!values.input) opError('usage: adlc-prosecute --input <passes.json> --ticket
 if (!values.ticket) opError('usage: adlc-prosecute --input <passes.json> --ticket id');
 
 let input;
+assertSafeEvidencePath(values.input, process.cwd(), values.dir);
 try {
   input = JSON.parse(readFileSync(values.input, 'utf8'));
 } catch (err) {
   opError(`could not read input: ${err.message}`);
 }
+assertSafeInputArtifacts(input, values.input, process.cwd(), values.dir);
 
 // §8a non-fatal diagnostics. Printed to STDERR so they never corrupt --json's
 // stdout contract, and printed BEFORE the run so an operator sees the

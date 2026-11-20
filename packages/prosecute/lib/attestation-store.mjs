@@ -17,6 +17,7 @@
 import { existsSync, readFileSync, appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { verifyEntrySig } from '@adlc/gate-manifest/lib/sign.mjs';
+import { changeSetDigest } from '@adlc/core';
 
 // Round-5 cross-model review (codex): a present-but-invalid signature on a STORE
 // entry must FAIL CLOSED, not be silently treated as absent. It means either an
@@ -83,14 +84,34 @@ export function readObservedAttestations(storePath, { key } = {}) {
  *
  * @returns {{ ok: true } | { ok: false, missing: string[] }}
  */
-export function assertNoTruncation({ prEntries, observedEntries, revision, key }) {
-  const observedForRevision = observedEntries.filter((entry) => entry?.data?.revision === revision);
-  const prSigsForRevision = new Set(
-    prEntries
-      .filter((entry) => entry?.data?.revision === revision && verifiedSig(key, entry))
-      .map((entry) => entry.sig)
-  );
-  const missing = observedForRevision.map((entry) => entry.sig).filter((sig) => !prSigsForRevision.has(sig));
+export function assertNoTruncation({ prEntries, observedEntries, revision, key, ticket }) {
+  const matchesTicket = (entry) => ticket === undefined || entry?.ticket === ticket;
+  const scopedPrEntries = prEntries.filter((entry) => matchesTicket(entry) && verifiedSig(key, entry));
+  const scopedObserved = observedEntries.filter((entry) => matchesTicket(entry) && verifiedSig(key, entry));
+  const relevantRevisions = new Set([revision]);
+  // Walk carriedFrom iteratively (fixpoint) so every ancestor revision of `revision`
+  // is covered, whether the link lives in the PR manifest or the observed store.
+  const linkSources = [...scopedPrEntries, ...scopedObserved];
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const entry of linkSources) {
+      const from = entry?.data?.carriedFrom;
+      if (typeof from === 'string' && relevantRevisions.has(entry?.data?.revision) && !relevantRevisions.has(from)) {
+        relevantRevisions.add(from);
+        grew = true;
+      }
+    }
+  }
+  const digest = changeSetDigest(revision);
+  const observedRelevant = scopedObserved.filter((entry) => {
+    if (relevantRevisions.has(entry?.data?.revision)) return true;
+    return Boolean(digest) &&
+      entry?.data?.verdict === 'needs-attention' &&
+      changeSetDigest(entry?.data?.revision) === digest;
+  });
+  const prSigs = new Set(scopedPrEntries.map((entry) => entry.sig));
+  const missing = observedRelevant.map((entry) => entry.sig).filter((sig) => !prSigs.has(sig));
   return missing.length > 0 ? { ok: false, missing } : { ok: true };
 }
 
