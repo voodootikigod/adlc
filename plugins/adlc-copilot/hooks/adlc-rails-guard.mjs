@@ -254,6 +254,7 @@ function railMatchesPath(rail, path) {
   if (path === '' || path === '.') return true;
   if (path === '..' || path.startsWith('../')) return true;
   if (globMatch(rail, path)) return true;
+  if (rail === path || rail.startsWith(`${path}/`)) return true;
   if (rail.endsWith('/**')) return path === rail.slice(0, -3);
   return false;
 }
