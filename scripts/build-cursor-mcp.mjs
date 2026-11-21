@@ -70,7 +70,7 @@ function bundleEntry({ root, entryPath, outputPath, label, metadataValue, buildS
   return Buffer.from(outputFile.contents);
 }
 
-function publishAtomically(entries, { writeFileSyncImpl = writeFileSync, renameSyncImpl = renameSync } = {}) {
+function publishStagedWithRollback(entries, { writeFileSyncImpl = writeFileSync, renameSyncImpl = renameSync } = {}) {
   const staged = [];
   const snapshots = entries.map(({ target }) =>
     existsSync(target)
@@ -90,14 +90,24 @@ function publishAtomically(entries, { writeFileSyncImpl = writeFileSync, renameS
       committed.push(item);
     }
   } catch (err) {
+    const rollbackErrors = [];
     for (let i = committed.length - 1; i >= 0; i -= 1) {
       const { target, snapshot } = committed[i];
+      const rollbackTemp = `${target}.rollback-${process.pid}-${i}`;
       try {
-        if (snapshot.existed) writeFileSync(target, snapshot.previous);
-        else rmSync(target, { force: true });
-      } catch {
-        /* best-effort rollback */
+        if (snapshot.existed) {
+          writeFileSync(rollbackTemp, snapshot.previous);
+          renameSync(rollbackTemp, target);
+        } else {
+          rmSync(target, { force: true });
+        }
+      } catch (rbErr) {
+        rmSync(rollbackTemp, { force: true });
+        rollbackErrors.push(`${target}: ${rbErr?.message ?? rbErr}`);
       }
+    }
+    if (rollbackErrors.length > 0) {
+      throw new Error(`${err?.message ?? err} (rollback errors: ${rollbackErrors.join('; ')})`);
     }
     throw err;
   } finally {
@@ -193,10 +203,10 @@ export function buildCursorMcp({
     hookOutputs.push({ outputPath: hookOutputPath, contents });
   }
 
-  // Stage every artifact to a sibling temp file and atomically rename them into
-  // place with rollback on failure so a partial write never leaves a mixed set.
+  // Stage every artifact to a sibling temp file, then replace each file via
+  // atomic rename with atomic rollback on failure.
   if (write) {
-    publishAtomically(
+    publishStagedWithRollback(
       [
         { target: metadataPath, contents: metadata },
         { target: outputPath, contents: bundle },
