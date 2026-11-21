@@ -127,9 +127,6 @@ export function buildCursorMcp({
     esbuildVersion,
   };
   const metadata = Buffer.from(metadataSource(metadataValue));
-  if (write) {
-    writeFileSync(metadataPath, metadata);
-  }
   const bundle = bundleEntry({
     root,
     entryPath,
@@ -157,7 +154,10 @@ export function buildCursorMcp({
     hookOutputs.push({ outputPath: hookOutputPath, contents });
   }
 
+  // Publish only after every bundle has succeeded so a mid-build failure never
+  // leaves a partially updated set of generated artifacts on disk.
   if (write) {
+    writeFileSync(metadataPath, metadata);
     writeFileSync(outputPath, bundle);
     for (const hook of hookOutputs) {
       writeFileSync(hook.outputPath, hook.contents);

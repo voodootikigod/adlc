@@ -166,13 +166,32 @@ test('buildCursorMcp refuses an out-of-lockstep bundled dependency before buildi
   }
 });
 
-test('buildCursorMcp refuses a builder response without an output file', () => {
+test('buildCursorMcp refuses a builder response without an output file and writes nothing on mid-build failure', () => {
   const root = makeFixture();
   try {
     assert.throws(
       () => buildCursorMcp({ root, buildSyncImpl: () => ({ outputFiles: [] }) }),
       /esbuild returned no Cursor MCP bundle output/,
     );
+    assert.throws(() => readFileSync(join(root, 'plugins', 'adlc-cursor', 'lib', 'mcp-build-metadata.mjs')));
+
+    let calls = 0;
+    assert.throws(
+      () => buildCursorMcp({
+        root,
+        buildSyncImpl(options) {
+          calls += 1;
+          if (calls === 3) return { outputFiles: [] };
+          return buildResult(options);
+        },
+      }),
+      /esbuild returned no Cursor hook/,
+    );
+    assert.throws(() => readFileSync(join(root, 'plugins', 'adlc-cursor', 'lib', 'mcp-build-metadata.mjs')));
+    assert.throws(() => readFileSync(join(root, 'plugins', 'adlc-cursor', 'bin', 'adlc-mcp-wrapper.bundle.mjs')));
+    for (const rel of CURSOR_HOOK_BUNDLES) {
+      assert.throws(() => readFileSync(join(root, rel)));
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

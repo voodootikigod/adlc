@@ -169,6 +169,13 @@ test('AC2: official dry-run builder matches committed metadata and bundle', () =
     `stale MCP bundle (expected esbuild ${rootPkg.devDependencies.esbuild}, actual ${loadedEsbuildVersion}); `
       + 'run npm install, then npm run build:cursor-mcp',
   );
+  for (const [relPath, expectedContents] of Object.entries(generated.hookBundles)) {
+    assert.deepEqual(
+      readFileSync(join(repoRoot, relPath)),
+      expectedContents,
+      `stale Cursor hook bundle ${relPath}; run npm run build:cursor-mcp`,
+    );
+  }
 });
 
 test('AC2: files allowlist ships the runtime surface and never test/', () => {
