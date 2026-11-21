@@ -85,6 +85,13 @@ test('Bash rails gate allows read-only commands and denies opaque, rail-targetin
   assert.equal(ancestorDelete.status, 2);
   assert.match(ancestorDelete.stdout, /frozen rail/);
 
+  const outputOpt = runRails(
+    { tool_name: 'Bash', tool_input: { command: 'git diff --output=.adlc/tickets.json' }, cwd: repo },
+    { cwd: repo },
+  );
+  assert.equal(outputOpt.status, 2);
+  assert.match(outputOpt.stdout, /permissionDecision.*deny/);
+
   const allowedWrite = runRails(
     { tool_name: 'Bash', tool_input: { command: 'touch src/sub/ok.mjs' }, cwd: repo },
     { cwd: repo },
