@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -192,6 +192,42 @@ test('buildCursorMcp refuses a builder response without an output file and write
     for (const rel of CURSOR_HOOK_BUNDLES) {
       assert.throws(() => readFileSync(join(root, rel)));
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('buildCursorMcp rolls back already-replaced artifacts and removes temp files when publication fails mid-rename', () => {
+  const root = makeFixture();
+  try {
+    const initial = buildCursorMcp({ root, buildSyncImpl: buildResult });
+    const prevMeta = readFileSync(initial.metadataPath);
+    const prevBundle = readFileSync(initial.outputPath);
+    const prevFirstHook = readFileSync(join(root, CURSOR_HOOK_BUNDLES[0]));
+
+    let renames = 0;
+    assert.throws(
+      () => buildCursorMcp({
+        root,
+        buildSyncImpl(options) {
+          return {
+            outputFiles: [{ path: options.outfile, contents: Buffer.from(`new:${options.outfile}\n`) }],
+          };
+        },
+        renameSyncImpl(from, to) {
+          renames += 1;
+          if (renames === 4) throw new Error('simulated EIO during rename');
+          renameSync(from, to);
+        },
+      }),
+      /simulated EIO during rename/,
+    );
+
+    assert.deepEqual(readFileSync(initial.metadataPath), prevMeta);
+    assert.deepEqual(readFileSync(initial.outputPath), prevBundle);
+    assert.deepEqual(readFileSync(join(root, CURSOR_HOOK_BUNDLES[0])), prevFirstHook);
+    const hookDir = join(root, 'plugins', 'adlc-cursor', 'hooks');
+    assert.equal(readdirSync(hookDir).some((f) => f.includes('.tmp-')), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
