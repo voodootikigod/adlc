@@ -126,8 +126,12 @@ Cursor's hooks are a **best-effort, in-session** layer, not the control:
 1. **In-session (advisory).** The `preToolUse` hook returns
    `{ "permission": "deny" }` on a frozen-rail edit. Cursor *should* block it — but
    `permission: "deny"` has [open reliability reports](https://forum.cursor.com/t/hooks-returning-deny-do-not-seem-to-block-tool-execution-possible-security-concern/154377),
-   and `afterFileEdit` cannot block at all. The hook is configured `failClosed:
-   false` so a hook bug can never brick your editor. Bash/shell writes are **not**
+   and `afterFileEdit` cannot block at all. All 8 hooks ship as self-contained
+   `esbuild` bundles (`hooks/*.bundle.mjs`, no `node_modules` required), and
+   `preToolUse` is configured `failClosed: true` so a hook crash or timeout fails
+   closed instead of silently allowing rail edits (recovery: set
+   `ADLC_P4_ENFORCEMENT=0` for an active session, or disable the ADLC plugin / edit
+   `.cursor/hooks.json` if a corrupt bundle blocks startup). Bash/shell writes are **not**
    gated in-session (a Turing-complete shell can't be reliably parsed).
 
 2. **Commit-time (unbypassable).** The real control is the CI rail-freeze gate

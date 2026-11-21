@@ -150,3 +150,24 @@ test('cursor-install-smoke rejects each invalid T65 MCP launcher contract', () =
     }
   }
 });
+
+test('bundled preToolUse fails closed on malformed payload under enforcement and recovers with ADLC_P4_ENFORCEMENT=0', () => {
+  const bundle = join(SOURCE_PLUGIN, 'hooks', 'adlc-pretool.bundle.mjs');
+  const enforcing = spawnSync(process.execPath, [bundle], {
+    input: '{not valid json',
+    env: { PATH: process.env.PATH ?? '', ADLC_P4_ENFORCEMENT: '1' },
+    encoding: 'utf8',
+    timeout: 15_000,
+  });
+  assert.equal(enforcing.status, 0, enforcing.stderr);
+  assert.equal(JSON.parse(enforcing.stdout).permission, 'deny');
+
+  const recovery = spawnSync(process.execPath, [bundle], {
+    input: '{not valid json',
+    env: { PATH: process.env.PATH ?? '', ADLC_P4_ENFORCEMENT: '0' },
+    encoding: 'utf8',
+    timeout: 15_000,
+  });
+  assert.equal(recovery.status, 0, recovery.stderr);
+  assert.equal(JSON.parse(recovery.stdout).permission, 'allow');
+});

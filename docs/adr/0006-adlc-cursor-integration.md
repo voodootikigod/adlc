@@ -62,10 +62,14 @@ Cursor's in-session deny is **best-effort**, for two independent reasons:
    make the unbypassable control the commit-time CI gate
    (`docs/ci/rails-guard.yml`).
 
-The hook is wired `failClosed: false` so a hook crash can never brick the editor;
-internal adapter errors **fail open** in-session (the CI gate still catches the
-edit). The one deliberate fail-closed path is a conflicting active-ticket signal,
-which the checker reports as a denial.
+All 8 shipped hooks are bundled with `esbuild` (`hooks/*.bundle.mjs`) so plugin-cache
+installs need no `node_modules` tree. `preToolUse` is wired `failClosed: true` so a
+missing executable, timeout, or startup crash cannot silently bypass frozen rails;
+all observational/advisory hooks remain `failClosed: false`. Recovery path if a
+corrupt install or timeout blocks the editor: disable the ADLC plugin in Cursor
+settings (or remove the `preToolUse` entry in `.cursor/hooks.json`), or set
+`ADLC_P4_ENFORCEMENT=0` when the hook itself runs cleanly. Conflicting active-ticket
+signals remain fail-closed.
 
 ### Rail contract (delegated, sibling-faithful)
 
@@ -324,7 +328,9 @@ in this change (status: fail / pending until a maintainer records pass/fail).
 - Runbook: `scripts/cursor-deny-proof/README.md` (+ `run.mjs` baseline helper).
 - Binding order: pristine baseline (sentinel absent) → enforcement-on attempt →
   unchanged hash + sentinel still absent → **then** enforcement-off control.
-- `failClosed` remains `false` on preToolUse regardless of outcome.
+- Historical T68 baseline used `failClosed: false`; T-P04 subsequently bundled all 8
+  hooks with `esbuild` (eliminating `node_modules` startup failures) and enabled
+  `failClosed: true` on `preToolUse`.
 - Cursor version/platform: _pending maintainer run_.
 
 ## Consequences
