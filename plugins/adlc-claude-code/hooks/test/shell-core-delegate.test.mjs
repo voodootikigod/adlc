@@ -84,6 +84,13 @@ test('Bash rails gate allows read-only commands and denies opaque, rail-targetin
   assert.equal(ancestorDelete.status, 2);
   assert.match(ancestorDelete.stdout, /frozen rail/);
 
+  const rootDelete = runRails(
+    { tool_name: 'Bash', tool_input: { command: 'rm -rf .' }, cwd: repo },
+    { cwd: repo },
+  );
+  assert.equal(rootDelete.status, 2);
+  assert.match(rootDelete.stdout, /frozen rail/);
+
   const sedExec = runRails(
     { tool_name: 'Bash', tool_input: { command: 'cat package.json | sed -n \'e perl -e "unlink q(src/frozen/guard.mjs)"\'' }, cwd: repo },
     { cwd: repo },

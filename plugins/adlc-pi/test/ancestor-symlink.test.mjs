@@ -21,6 +21,7 @@ test('railHit blocks ancestor-directory deletion for concrete and wildcard rails
   const ticket = { id: 'T1', rails: ['src/frozen/guard.mjs'], scope: ['src/**'] };
   assert.equal(railHit('src/frozen', ticket, root), 'src/frozen/guard.mjs');
   assert.equal(railHit('src', ticket, root), 'src/frozen/guard.mjs');
+  assert.ok(railHit('.', ticket, root), 'repo root deletion must hit a rail');
   assert.equal(railHit('src/frozen-other', ticket, root), null);
 
   const wildSingle = { id: 'T2', rails: ['src/*/guard.mjs'], scope: ['src/**'] };
