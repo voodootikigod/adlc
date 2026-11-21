@@ -4,7 +4,7 @@ import { appendManifestEntry } from '@adlc/gate-manifest';
 // below is a chronology claim, and only this chain can carry one. See
 // own-chain.mjs.
 import { readOwnManifestChain } from '@adlc/gate-manifest/lib/own-chain.mjs';
-import { readFileSync, statSync } from 'node:fs';
+import { closeSync, constants, fstatSync, openSync, readFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import {
   historicalTranscriptIntegrityErrors,
@@ -38,6 +38,24 @@ function validateInWorktreeEvidencePath(cwd, label, path) {
   return null;
 }
 
+function readRegularNoFollow(filePath, label, rawPath) {
+  const flags = constants.O_NOFOLLOW ? constants.O_RDONLY | constants.O_NOFOLLOW : constants.O_RDONLY;
+  let fd;
+  try {
+    fd = openSync(filePath, flags);
+  } catch (err) {
+    if (err.code === 'ELOOP') return `${label} must not be a symlink: ${rawPath}`;
+    throw err;
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) return `${label} is not a file: ${rawPath}`;
+    return readFileSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 export function recordAcceptancePacket({
   key,
   dir = '.adlc',
@@ -61,9 +79,9 @@ export function recordAcceptancePacket({
     if (error) errors.push(error);
     const artifactPath = resolve(cwd, artifact);
     try {
-      const stat = statSync(artifactPath);
-      if (!stat.isFile()) errors.push(`artifact is not a file: ${artifact}`);
-      artifactHashes.push({ path: artifactPath, hash: sha256(readFileSync(artifactPath)) });
+      const content = readRegularNoFollow(artifactPath, 'artifact', artifact);
+      if (typeof content === 'string') errors.push(content);
+      else artifactHashes.push({ path: artifactPath, hash: sha256(content) });
     } catch (err) {
       errors.push(`artifact cannot be read: ${artifact}: ${err.message}`);
     }
@@ -74,11 +92,26 @@ export function recordAcceptancePacket({
     if (pathError) errors.push(pathError);
     try {
       packetPath = resolve(cwd, packet);
-      const stat = statSync(packetPath);
-      if (!stat.isFile()) errors.push(`packet is not a file: ${packet}`);
-      const content = readFileSync(packetPath);
-      if (content.length === 0) errors.push(`packet is empty: ${packet}`);
-      packetHash = sha256(content);
+      const content = readRegularNoFollow(packetPath, 'packet', packet);
+      if (typeof content === 'string') {
+        errors.push(content);
+      } else {
+        const text = content.toString('utf8').trim();
+        const isJsonExt = packet.toLowerCase().endsWith('.json');
+        if (text.length === 0) {
+          errors.push(`packet is empty: ${packet}`);
+        } else if (isJsonExt || text.startsWith('{') || text.startsWith('[')) {
+          try {
+            const parsed = JSON.parse(text);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || Object.keys(parsed).length === 0) {
+              errors.push(`packet JSON must be a non-empty object: ${packet}`);
+            }
+          } catch {
+            if (isJsonExt) errors.push(`packet is not valid JSON: ${packet}`);
+          }
+        }
+        packetHash = sha256(content);
+      }
     } catch (err) {
       errors.push(`packet cannot be read: ${packet}: ${err.message}`);
     }

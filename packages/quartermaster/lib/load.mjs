@@ -8,10 +8,42 @@
 // channel selection nobody authorized.
 
 import { createHash } from 'node:crypto';
-import { readFileSync, existsSync, realpathSync } from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, openSync, readSync, realpathSync } from 'node:fs';
 import { homedir as osHomedir } from 'node:os';
 import { resolveRegistryPath, findIgnoredInRepoRegistries } from './registry-path.mjs';
 import { validateRegistry } from './registry.mjs';
+
+export const MAX_REGISTRY_BYTES = 1024 * 1024;
+
+export function readBoundedRegularRegistryFile(path, maxBytes = MAX_REGISTRY_BYTES) {
+  const flags = constants.O_NOFOLLOW ? constants.O_RDONLY | constants.O_NOFOLLOW : constants.O_RDONLY;
+  const fd = openSync(path, flags);
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) {
+      throw new Error('registry path is not a regular file');
+    }
+    if (stat.size > maxBytes) {
+      throw new Error(`registry exceeds max size of ${maxBytes} bytes (${stat.size} bytes)`);
+    }
+    const chunks = [];
+    let total = 0;
+    const chunkSize = Math.min(65536, maxBytes + 1);
+    const buf = Buffer.allocUnsafe(chunkSize);
+    for (;;) {
+      const n = readSync(fd, buf, 0, Math.min(chunkSize, maxBytes - total + 1), null);
+      if (n === 0) break;
+      total += n;
+      if (total > maxBytes) {
+        throw new Error(`registry exceeds max size of ${maxBytes} bytes`);
+      }
+      chunks.push(Buffer.from(buf.subarray(0, n)));
+    }
+    return Buffer.concat(chunks, total).toString('utf8');
+  } finally {
+    closeSync(fd);
+  }
+}
 
 /** Thrown when no registry could be loaded. Carries the notices for the operator. */
 export class RegistryLoadError extends Error {
@@ -34,7 +66,7 @@ export function loadRegistry({
   repoDir,
   adapters,
   homedir = osHomedir,
-  readFile = (p) => readFileSync(p, 'utf8'),
+  readFile = (p) => readBoundedRegularRegistryFile(p),
   exists = existsSync,
   realpath = realpathSync,
 } = {}) {

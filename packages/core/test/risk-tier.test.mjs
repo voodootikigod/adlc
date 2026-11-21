@@ -142,13 +142,13 @@ test('decideAdversarialReviewNotice: gated + adversarial-review recorded for a D
   assert.equal(res.needed, true);
 });
 
-test('decideAdversarialReviewNotice: gated + adversarial-review recorded with NO ticket field, active ticket known → satisfies (untargeted review still counts)', () => {
+test('decideAdversarialReviewNotice: gated + unscoped adversarial-review (no ticket and no files) → still needed (T-P10)', () => {
   const res = decideAdversarialReviewNotice({
     changedPaths: ['src/auth/login.mjs'],
     manifestEntries: [{ gate: 'adversarial-review' }],
     ticketId: 'T1',
   });
-  assert.equal(res.needed, false);
+  assert.equal(res.needed, true);
 });
 
 test('decideAdversarialReviewNotice: gated + no active ticket resolved + ANY adversarial-review record exists → satisfies', () => {

@@ -4,8 +4,8 @@
 // its own under .adlc/decision-packs/<id>/pack.json, but never one that shares
 // a shipped ID. DecisionPack.schema.json documents the same shape this module
 // checks; the validator is hand-written so the package has no dependencies.
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isPlainObject } from '@adlc/core';
 import { canonicalHash } from './canonical.mjs';
@@ -208,7 +208,23 @@ function validateAggregation(aggregation, questions) {
   }
 }
 
-function readPackFile(path, id) {
+function assertPackContained(anchorDir, filePath, id) {
+  let realAnchor;
+  let realFile;
+  try {
+    realAnchor = realpathSync(anchorDir);
+    realFile = realpathSync(filePath);
+  } catch (error) {
+    throw new PackError(`pack "${id}" could not be canonicalized: ${error.message}`);
+  }
+  const rel = relative(realAnchor, realFile);
+  if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new PackError(`pack "${id}" resolves outside its pack directory`);
+  }
+}
+
+function readPackFile(path, id, anchorDir) {
+  if (anchorDir) assertPackContained(anchorDir, path, id);
   const { size } = statSync(path);
   if (size > MAX_PACK_FILE_BYTES) {
     throw new PackError(`pack "${id}" at ${path} is ${size} bytes; a pack file may be at most ${MAX_PACK_FILE_BYTES}`);
@@ -248,9 +264,16 @@ export function loadPack(id, { projectRoot, shippedDir = SHIPPED_PACKS_DIR }) {
   for (const name of packDirectories(projectDir)) {
     if (shipped.has(name)) throw new PackError(`project pack ${join(projectDir, name)} shadows the shipped pack "${name}"`);
   }
-  for (const dir of [shippedDir, projectDir]) {
-    const path = join(dir, id, 'pack.json');
-    if (existsSync(path)) return readPackFile(path, id);
+  const shippedPath = join(shippedDir, id, 'pack.json');
+  if (existsSync(shippedPath)) return readPackFile(shippedPath, id, shippedDir);
+  const projectPath = join(projectDir, id, 'pack.json');
+  if (existsSync(projectPath)) {
+    for (const seg of [join(projectRoot, '.adlc'), projectDir, join(projectDir, id), projectPath]) {
+      if (lstatSync(seg).isSymbolicLink()) {
+        throw new PackError(`pack "${id}" resolves outside its pack directory (symlink component)`);
+      }
+    }
+    return readPackFile(projectPath, id, projectRoot);
   }
   throw new PackError(`no pack "${id}": looked in ${shippedDir} and ${projectDir}`);
 }

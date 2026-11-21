@@ -1,8 +1,11 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs';
 import { parseArgs, printJson, opError, reasonList } from '@adlc/core';
 import { assertPhase, requirementsForPhase, allPhases, requiresTicket } from '../lib/assertions.mjs';
 import { recordAcceptancePacket } from '../lib/acceptance.mjs';
 import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
+
+const PKG = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 const { values, positionals } = parseArgs({
   options: {
@@ -14,6 +17,7 @@ const { values, positionals } = parseArgs({
     after: { type: 'string' },
     json: { type: 'boolean', default: false },
     help: { type: 'boolean', default: false },
+    version: { type: 'boolean', default: false },
   },
 });
 
@@ -38,13 +42,26 @@ Exit codes:
 `);
 }
 
-if (values.help) {
-  help();
+if (values.version) {
+  console.log(PKG.version);
   process.exit(0);
 }
 
 const verb = positionals[0];
 const phase = positionals[1];
+
+if (values.help) {
+  if (verb === 'record') {
+    console.log('adlc-runner record — record runner attestation evidence (reserved for signed runner pool)');
+    process.exit(0);
+  }
+  if (verb === 'upgrade') {
+    console.log('adlc-runner upgrade — upgrade runner binary/config (reserved for signed runner pool)');
+    process.exit(0);
+  }
+  help();
+  process.exit(0);
+}
 if (verb === 'accept') {
   const result = recordAcceptancePacket({
     key: getKey(),
