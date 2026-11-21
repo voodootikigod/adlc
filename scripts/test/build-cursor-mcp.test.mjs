@@ -92,8 +92,7 @@ test('buildCursorMcp returns exact generated output without writing in dry-run m
     }
     assert.match(result.metadata.toString(), /pluginVersion: '1\.2\.3'/);
     assert.match(result.metadata.toString(), /"@adlc\/core": "1\.2\.3"/);
-    assert.match(result.metadata.toString(), /"@adlc\/build-gate": "1\.2\.3"/);
-    assert.match(result.metadata.toString(), /"@adlc\/flail-detector": "1\.2\.3"/);
+    assert.match(result.metadata.toString(), /"@adlc\/tickets": "1\.2\.3"/);
     assert.deepEqual(result.bundle, Buffer.from(`fixture bundle:${result.outputPath}\n`));
     assert.equal(Object.keys(result.hookBundles).length, CURSOR_HOOK_BUNDLES.length);
     for (const rel of CURSOR_HOOK_BUNDLES) {

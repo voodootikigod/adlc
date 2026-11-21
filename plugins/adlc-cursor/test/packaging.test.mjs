@@ -83,7 +83,7 @@ test('AC7/T65: mcp.json launches the Roots proxy wrapper, not raw adlc mcp-serve
 
 test('AC7/T65: bundle metadata locksteps plugin, bundled packages, and esbuild', () => {
   const expectedDependencies = {};
-  for (const name of ['core', 'tickets', 'build-gate', 'flail-detector']) {
+  for (const name of ['core', 'tickets']) {
     const packageJson = JSON.parse(readFileSync(join(repoRoot, 'packages', name, 'package.json'), 'utf8'));
     const packageName = `@adlc/${name}`;
     assert.equal(packageJson.version, pkg.version, `${packageName} must lockstep the Cursor plugin`);

@@ -101,6 +101,7 @@ export function buildCursorMcp({
     );
   }
 
+  const mcpBundledNames = new Set(["@adlc/core", "@adlc/tickets"]);
   const bundledDependencies = {};
   for (const [name, packagePath] of Object.entries(bundledPackages)) {
     const bundledPackage = readJson(packagePath);
@@ -115,7 +116,9 @@ export function buildCursorMcp({
           `declared=${declaredRange ?? "<missing>"}, expected=${expectedRange}`,
       );
     }
-    bundledDependencies[name] = bundledPackage.version;
+    if (mcpBundledNames.has(name)) {
+      bundledDependencies[name] = bundledPackage.version;
+    }
   }
 
   const metadataValue = {
