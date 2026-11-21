@@ -108,6 +108,14 @@ export {
 export const GENERATED_VERSION_FILES = [
   'plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs',
   'plugins/adlc-cursor/lib/mcp-build-metadata.mjs',
+  'plugins/adlc-cursor/hooks/adlc-session-start.bundle.mjs',
+  'plugins/adlc-cursor/hooks/adlc-pretool.bundle.mjs',
+  'plugins/adlc-cursor/hooks/adlc-audit.bundle.mjs',
+  'plugins/adlc-cursor/hooks/adlc-shell-advisory.bundle.mjs',
+  'plugins/adlc-cursor/hooks/adlc-precompact.bundle.mjs',
+  'plugins/adlc-cursor/hooks/adlc-subagent.bundle.mjs',
+  'plugins/adlc-cursor/hooks/adlc-stop.bundle.mjs',
+  'plugins/adlc-cursor/hooks/adlc-preflight.bundle.mjs',
 ];
 
 /**
