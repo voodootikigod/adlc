@@ -1679,11 +1679,11 @@ function rails(input) {
     if (c.changesCwd) {
       return failClosed('mutating Bash command changes cwd; target paths cannot be verified;', 'bash-cwd-change-bypass');
     }
-    if (c.expands) {
-      return failClosed('mutating Bash command uses shell expansion ($VAR, $(…), backticks, globs);', 'bash-expansion-bypass');
+    if (c.expands || bashCommand.includes('\\')) {
+      return failClosed('mutating Bash command uses shell expansion or backslash escaping; target paths cannot be verified;', 'bash-expansion-bypass');
     }
-    if (c.paths.length === 0) {
-      return failClosed('mutating Bash command carries no literal target paths;', 'bash-no-paths-bypass');
+    if (c.paths.length === 0 || fps.length === 0) {
+      return failClosed('mutating Bash command carries no verifiable literal target paths;', 'bash-no-paths-bypass');
     }
   }
 
