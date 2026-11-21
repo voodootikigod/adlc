@@ -40,6 +40,7 @@ test('every shipped shell helper is the canonical one, byte for byte', () => {
   const source = readFileSync(join(ROOT, 'packages/core/lib/shell.mjs'), 'utf8')
     .replace('// GENERATED-SHELL SOURCE.', '// GENERATED FILE — DO NOT EDIT DIRECTLY.');
   for (const output of [
+    'plugins/adlc-claude-code/hooks/generated-shell.mjs',
     'plugins/adlc-codex/hooks/generated-shell.mjs',
     'plugins/adlc-copilot/hooks/generated-shell.mjs',
   ]) assert.equal(readFileSync(join(ROOT, output), 'utf8'), source, `${output} drifted; run the generator`);

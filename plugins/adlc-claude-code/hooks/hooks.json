@@ -15,6 +15,16 @@
             "timeout": 15
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/adlc-hook-run.mjs rails",
+            "timeout": 15
+          }
+        ]
       }
     ],
     "SessionStart": [

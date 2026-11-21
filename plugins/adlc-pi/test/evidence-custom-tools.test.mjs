@@ -115,7 +115,7 @@ test('AC1: suppression revert records evidence; a failing ledger does not stop t
 // AC2/AC3 — custom-tool coverage
 // =========================================================================
 
-test('AC2: synthetic third-party write tool against a rail is denied; in-scope not blocked; no-path tool recorded unvetted', async (t) => {
+test('AC2: synthetic third-party write tool against a rail is denied; in-scope not blocked; no-path tool fails closed under railed ticket and records unvetted under unrailed ticket', async (t) => {
   const root = makeRepo(t);
   const { pi, ctx } = await boot(root);
 
@@ -126,13 +126,20 @@ test('AC2: synthetic third-party write tool against a rail is denied; in-scope n
   const allowed = await pi.handlers.tool_call(call('write_file', { file: 'src/ok.ts', contents: 'x' }, 'c2'), ctx);
   assert.equal(allowed, undefined);
 
-  const unvetted = await pi.handlers.tool_call(call('run_linter', {}, 'c3'), ctx);
-  assert.equal(unvetted, undefined, 'no-path unknown tool is allowed');
-  assert.equal(pi.entries.filter((e) => e.data.type === 'unvetted-tool' && e.data.tool === 'run_linter').length, 1);
+  const deniedUnvetted = await pi.handlers.tool_call(call('run_linter', {}, 'c3'), ctx);
+  assert.equal(deniedUnvetted.block, true, 'no-path unknown tool fails closed while a railed ticket is active');
+  assert.match(deniedUnvetted.reason, /no extractable file targets/);
+
+  // Under an unrailed ticket, a no-path unknown tool is still allowed and recorded once as unvetted.
+  const unrailedRoot = makeRepo(t, { tickets: [{ ...TICKET, rails: [] }] });
+  const unrailed = await boot(unrailedRoot);
+  const allowedUnvetted = await unrailed.pi.handlers.tool_call(call('run_linter', {}, 'c4'), unrailed.ctx);
+  assert.equal(allowedUnvetted, undefined, 'no-path unknown tool is allowed when active ticket has no rails');
+  assert.equal(unrailed.pi.entries.filter((e) => e.data.type === 'unvetted-tool' && e.data.tool === 'run_linter').length, 1);
 
   // once per tool name per session
-  await pi.handlers.tool_call(call('run_linter', {}, 'c4'), ctx);
-  assert.equal(pi.entries.filter((e) => e.data.type === 'unvetted-tool').length, 1);
+  await unrailed.pi.handlers.tool_call(call('run_linter', {}, 'c5'), unrailed.ctx);
+  assert.equal(unrailed.pi.entries.filter((e) => e.data.type === 'unvetted-tool').length, 1);
 });
 
 test('AC3: symlink through a custom tool path arg is resolved and denied', async (t) => {

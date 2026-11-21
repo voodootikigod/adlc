@@ -53,6 +53,7 @@ const ARTIFACTS = [
     source: 'packages/core/lib/shell.mjs',
     marker: '// GENERATED-SHELL SOURCE.',
     outputs: [
+      'plugins/adlc-claude-code/hooks/generated-shell.mjs',
       'plugins/adlc-codex/hooks/generated-shell.mjs',
       'plugins/adlc-copilot/hooks/generated-shell.mjs',
     ],

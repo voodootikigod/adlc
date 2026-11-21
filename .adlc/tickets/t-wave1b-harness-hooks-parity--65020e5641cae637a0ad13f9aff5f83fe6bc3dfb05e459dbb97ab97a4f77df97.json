@@ -1,0 +1,28 @@
+{
+  "acceptance": [
+    "scripts/ticket-readers/generate.mjs emits plugins/adlc-claude-code/hooks/generated-shell.mjs with zero @adlc/* imports and plugins/adlc-claude-code/hooks/{hooks.json,adlc-hook.mjs} gate Bash tool calls against frozen rails and resolve upward enclosing ADLC roots.",
+    "plugins/adlc-codex/hooks/adlc-rails-guard.mjs and plugins/adlc-copilot/hooks/{adlc-rails-guard,adlc-build-gate}.mjs perform upward enclosingAdlcRoot(cwd) discovery and resolveRailPath ancestor symlink resolution.",
+    "plugins/adlc-pi/lib/rails-checker.mjs checks ancestor-directory deletions (cand === rail || rail.startsWith(cand + '/')), resolves symlinks in pathInScope, and fails closed on unvetted custom tools under active railed tickets.",
+    "All new and existing plugin tests pass alongside scripts/test/claude-code-plugin-smoke.test.mjs, scripts/test/ticket-reader-generation.test.mjs, and scripts/test/sync-herdr-mirror.test.mjs."
+  ],
+  "category": "security",
+  "id": "t-wave1b-harness-hooks-parity",
+  "rails": [],
+  "risk": "high",
+  "scope": [
+    "scripts/ticket-readers/generate.mjs",
+    "plugins/adlc-claude-code/hooks/hooks.json",
+    "plugins/adlc-claude-code/hooks/adlc-hook.mjs",
+    "plugins/adlc-claude-code/hooks/generated-shell.mjs",
+    "plugins/adlc-claude-code/hooks/test/shell-core-delegate.test.mjs",
+    "plugins/adlc-codex/hooks/adlc-rails-guard.mjs",
+    "plugins/adlc-codex/hooks/test/subdir-symlink.test.mjs",
+    "plugins/adlc-copilot/hooks/adlc-rails-guard.mjs",
+    "plugins/adlc-copilot/hooks/adlc-build-gate.mjs",
+    "plugins/adlc-copilot/hooks/test/subdir-build-gate.test.mjs",
+    "plugins/adlc-pi/lib/rails-checker.mjs",
+    "plugins/adlc-pi/test/ancestor-symlink.test.mjs"
+  ],
+  "status": "in-progress",
+  "title": "Wave 1B: Hook containment and ancestor/symlink parity for claude-code, codex, copilot, and pi (T-P11a)"
+}
