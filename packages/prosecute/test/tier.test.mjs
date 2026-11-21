@@ -137,14 +137,14 @@ describe('classifyTrustRootTier — negative / ordinary diffs', () => {
     assert.deepEqual(r.reasons, []);
   });
 
-  it('FALSE for a NESTED package.json outside an enforcement package (root-manifest rule is exact, #326 F1)', () => {
-    // The root-install-surface rule is an EXACT match on the repo-root manifests; a
-    // nested non-enforcement manifest must not tier on it (an enforcement package's
-    // own package.json still tiers via its prefix — covered elsewhere).
-    for (const f of ['apps/docs/package.json', 'packages/spec-lint/package.json', 'apps/docs/package-lock.json']) {
+  it('TRUE for nested workspace package.json manifests (T-P06 / S2) and FALSE for nested lockfiles outside enforcement prefixes', () => {
+    for (const f of ['apps/docs/package.json', 'packages/spec-lint/package.json']) {
       const r = classifyTrustRootTier({ changedFiles: [f], tickets: TICKETS });
-      assert.equal(r.isTrustRootTier, false, `${f} must NOT tier on the root-manifest rule`);
+      assert.equal(r.isTrustRootTier, true, `${f} must tier on the workspace package manifest rule`);
+      assert.ok(r.reasons.some((x) => x.includes(f)));
     }
+    const lock = classifyTrustRootTier({ changedFiles: ['apps/docs/package-lock.json'], tickets: TICKETS });
+    assert.equal(lock.isTrustRootTier, false, 'apps/docs/package-lock.json must NOT tier');
   });
 
   it('FALSE for a source change outside any rails deny-path', () => {

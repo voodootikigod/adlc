@@ -20,10 +20,15 @@ test('buildVacuousPrompt: a forged terminator in a criterion cannot close the fe
   assert.ok(payload > open && payload < close, 'the injected directive stays inside the fence');
 });
 
-// The cap is observable, so assert it — an unasserted cap is an off-by-one
-// mutant nothing kills (the coldstart suite pins its own cap the same way).
-test('buildVacuousPrompt caps the fenced criteria at exactly 8000 chars (#1010)', () => {
-  const prompt = buildVacuousPrompt([{ line: 1, text: 'x'.repeat(20_000) }]);
-  const body = prompt.match(/<<UNTRUSTED:CRITERIA[^\n]*\n([\s\S]*?)\n<<END:CRITERIA:/)[1];
+// The cap is observable, so assert the exact boundary — an unasserted cap is an
+// off-by-one mutant nothing kills. Under T-P12 / S15.8, exceeding 8000 bytes
+// fails closed instead of silently truncating.
+test('buildVacuousPrompt allows exactly 8000 bytes and fails closed at 8001 bytes (#1010, T-P12)', () => {
+  const exactPrompt = buildVacuousPrompt([{ line: 1, text: 'x'.repeat(7997) }]);
+  const body = exactPrompt.match(/<<UNTRUSTED:CRITERIA[^\n]*\n([\s\S]*?)\n<<END:CRITERIA:/)[1];
   assert.equal(body.length, 8000);
+  assert.throws(
+    () => buildVacuousPrompt([{ line: 1, text: 'x'.repeat(7998) }]),
+    /exceeds --max-bytes \(8000\)/,
+  );
 });

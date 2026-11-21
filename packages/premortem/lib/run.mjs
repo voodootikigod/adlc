@@ -8,6 +8,24 @@ import { renderReport } from './render.mjs';
 // only when --record-verdict is actually used — see the promptOnlyMode branch
 // below — so plain --prompt-only runs never pay for or depend on it.
 
+const FAILING_VERDICT_VALUES = new Set(['fail', 'failed', 'blocked', 'clarify', 'needs-attention', 'ambiguous', 'reject', 'rejected']);
+
+function isFailingRecordedVerdict(verdict) {
+  const raw = typeof verdict === 'string' ? verdict.trim() : '';
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const v = typeof parsed.verdict === 'string' ? parsed.verdict.trim().toLowerCase() : '';
+      const s = typeof parsed.status === 'string' ? parsed.status.trim().toLowerCase() : '';
+      if (FAILING_VERDICT_VALUES.has(v) || FAILING_VERDICT_VALUES.has(s)) return true;
+      if (parsed.pass === false || parsed.passed === false || parsed.gate === false || parsed.blocked === true) return true;
+      return false;
+    }
+  } catch { /* plain text verdict */ }
+  return /^\s*(?:verdict\s*:\s*)?(?:fail|failed|blocked|clarify|needs-attention|ambiguous|reject|rejected)\b/i.test(raw);
+}
+
 /**
  * Main premortem flow.
  *
@@ -67,14 +85,15 @@ export async function run(opts) {
         console.error('premortem: warning: recording UNSIGNED manifest entry (' + 'ADLC_MANIFEST_KEY' + ' is not set)');
       }
       let entry;
+      let verdict;
       try {
-        const verdict = await readVerdictSource(recordVerdictSource);
+        verdict = await readVerdictSource(recordVerdictSource);
         entry = recordVerdict({ verdict, ticket, specPath, extra: { specPath }, key });
       } catch (err) {
         opError(`could not record verdict to manifest ledger: ${err.message}`);
       }
       console.log(`gate-manifest: recorded seq=${entry.seq} gate=${entry.gate}`);
-      process.exit(0);
+      process.exit(isFailingRecordedVerdict(verdict) ? 2 : 0);
     }
 
     promptOnly(display);

@@ -24,7 +24,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node }}
-      - run: npm install
+      - run: npm ci --ignore-scripts
       - run: npm test --workspace @adlc/tickets
       - if: runner.os == 'Linux' && matrix.node == 20
         run: node packages/tickets/scripts/benchmark.mjs --tickets 1000 --assert-ceilings --json
