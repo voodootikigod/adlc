@@ -112,6 +112,31 @@ test('cursor-install-smoke rejects each invalid T65 MCP launcher contract', () =
       },
       expected: /\.cursor-plugin\/plugin\.json mcpServers must be \.\/mcp\.json/,
     },
+    {
+      name: 'a preToolUse hook with failClosed disabled',
+      change(plugin) {
+        updateJson(join(plugin, 'hooks', 'hooks.json'), (hj) => {
+          hj.hooks.preToolUse[0].failClosed = false;
+        });
+      },
+      expected: /hooks\/hooks\.json: preToolUse failClosed must be true/,
+    },
+    {
+      name: 'an unbundled preToolUse hook command',
+      change(plugin) {
+        updateJson(join(plugin, 'hooks.json'), (hj) => {
+          hj.hooks.preToolUse[0].command = 'node ./node_modules/@adlc/cursor/hooks/adlc-pretool.mjs';
+        });
+      },
+      expected: /hooks\.json: preToolUse does not wire the adlc-pretool\.bundle\.mjs dispatcher/,
+    },
+    {
+      name: 'a missing bundled hook file',
+      change(plugin) {
+        rmSync(join(plugin, 'hooks', 'adlc-preflight.bundle.mjs'));
+      },
+      expected: /hooks\/adlc-preflight\.bundle\.mjs missing/,
+    },
   ];
 
   for (const scenario of cases) {
@@ -124,4 +149,25 @@ test('cursor-install-smoke rejects each invalid T65 MCP launcher contract', () =
       rmSync(root, { recursive: true, force: true });
     }
   }
+});
+
+test('bundled preToolUse fails closed on malformed payload under enforcement and recovers with ADLC_P4_ENFORCEMENT=0', () => {
+  const bundle = join(SOURCE_PLUGIN, 'hooks', 'adlc-pretool.bundle.mjs');
+  const enforcing = spawnSync(process.execPath, [bundle], {
+    input: '{not valid json',
+    env: { PATH: process.env.PATH ?? '', ADLC_P4_ENFORCEMENT: '1' },
+    encoding: 'utf8',
+    timeout: 15_000,
+  });
+  assert.equal(enforcing.status, 0, enforcing.stderr);
+  assert.equal(JSON.parse(enforcing.stdout).permission, 'deny');
+
+  const recovery = spawnSync(process.execPath, [bundle], {
+    input: '{not valid json',
+    env: { PATH: process.env.PATH ?? '', ADLC_P4_ENFORCEMENT: '0' },
+    encoding: 'utf8',
+    timeout: 15_000,
+  });
+  assert.equal(recovery.status, 0, recovery.stderr);
+  assert.equal(JSON.parse(recovery.stdout).permission, 'allow');
 });

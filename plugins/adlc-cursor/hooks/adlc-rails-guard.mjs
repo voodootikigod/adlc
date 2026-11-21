@@ -569,7 +569,12 @@ async function main() {
   process.stdout.write(JSON.stringify(verdict));
 }
 
-// Run as a hook only when invoked directly (tests import `decide` instead).
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+// Run as a hook only when invoked directly (tests import `decide` instead, and
+// bundled hooks inline this module without invoking its standalone entrypoint).
+if (
+  process.argv[1] &&
+  fileURLToPath(import.meta.url) === process.argv[1] &&
+  process.argv[1].endsWith('adlc-rails-guard.mjs')
+) {
   main();
 }

@@ -1,0 +1,29 @@
+{
+  "body": "Implements T-P04 (S5) from .adlc/specs/enhancement-resolution-plan.md.\n\nAcceptance criteria:\n1. Replace computed dynamic import in plugins/adlc-cursor/hooks/adlc-pretool.mjs and adlc-audit.mjs with static literal-specifier loaders (keeping importModule injectable as a test seam) so esbuild statically inlines @adlc/build-gate and @adlc/flail-detector.\n2. Extend scripts/build-cursor-mcp.mjs to verify version lockstep across all 4 @adlc dependencies in plugins/adlc-cursor/package.json (@adlc/core, @adlc/tickets, @adlc/build-gate, @adlc/flail-detector) and bundle all 8 Cursor hook scripts into self-contained ESM .bundle.mjs files.\n3. Register builder-verified hook bundles in scripts/test/ticket-store-boundary.test.mjs (both isDirectWriterBypass and isPointerParseBypass) and GENERATED_VERSION_FILES in scripts/mutation-gate.mjs.\n4. Update both plugins/adlc-cursor/hooks/hooks.json and plugins/adlc-cursor/hooks.json in lockstep to invoke the .bundle.mjs entrypoints and set failClosed: true on preToolUse, updating scripts/cursor-install-smoke.mjs and scripts/test/cursor-install-smoke.test.mjs.\n5. Verify an isolated /tmp copy of plugins/adlc-cursor with zero ancestor node_modules denies a frozen rail write and handles ADLC_BUILD_GATE_ENFORCEMENT=1 without ERR_MODULE_NOT_FOUND.",
+  "edges": [],
+  "id": "t-wave1b-cursor-hooks",
+  "rails": [],
+  "scope": [
+    "scripts/build-cursor-mcp.mjs",
+    "scripts/cursor-install-smoke.mjs",
+    "scripts/mutation-gate.mjs",
+    "scripts/test/build-cursor-mcp.test.mjs",
+    "scripts/test/cursor-install-smoke.test.mjs",
+    "scripts/test/ticket-store-boundary.test.mjs",
+    "plugins/adlc-cursor/hooks.json",
+    "plugins/adlc-cursor/hooks/hooks.json",
+    "plugins/adlc-cursor/hooks/adlc-pretool.mjs",
+    "plugins/adlc-cursor/hooks/adlc-audit.mjs",
+    "plugins/adlc-cursor/hooks/adlc-session-start.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-pretool.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-audit.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-shell-advisory.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-precompact.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-subagent.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-stop.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-preflight.bundle.mjs",
+    "plugins/adlc-cursor/lib/mcp-build-metadata.mjs",
+    "plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs"
+  ],
+  "title": "Wave 1B Part 3 (T-P04): Bundle all 8 adlc-cursor hooks with esbuild and enable failClosed: true on preToolUse"
+}

@@ -79,12 +79,24 @@ function firstAfterEditPath(payload) {
  *
  * @returns {Promise<{flagged: boolean, skipped?: boolean, churn?: Array<{path: string, count: number}>}>}
  */
+// Static literal-specifier map so esbuild statically inlines @adlc/flail-detector
+// into adlc-audit.bundle.mjs while keeping `importModule` injectable in tests.
+const STATIC_FLAIL_LOADERS = Object.freeze({
+  '@adlc/flail-detector/lib/signals.mjs': () => import('@adlc/flail-detector/lib/signals.mjs'),
+});
+
+function defaultImportModule(spec) {
+  const loader = STATIC_FLAIL_LOADERS[spec];
+  if (!loader) return Promise.reject(new Error(`unsupported flail-detector module: ${spec}`));
+  return loader();
+}
+
 export async function flailCheck(payload, {
   root,
   env = process.env,
   now = Date.now(),
   ttlMs = SESSION_TTL_MS,
-  importModule = (spec) => import(spec),
+  importModule = defaultImportModule,
 } = {}) {
   try {
     const paths = extractFilePaths(payload);
