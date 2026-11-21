@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { spawnHook } from './helpers/run-hook.mjs';
 
 const HOOKS_DIR = join(fileURLToPath(new URL('.', import.meta.url)), '..');
 const RAILS_HOOK = join(HOOKS_DIR, 'adlc-rails-guard.mjs');
@@ -40,7 +40,7 @@ test('copilot rails-guard discovers enclosing ADLC root from subdir and blocks a
   const fakeHome = mkdtempSync(join(tmpdir(), 'adlc-copilot-home-'));
   t.after(() => rmSync(fakeHome, { recursive: true, force: true }));
 
-  const symlinkWrite = spawnSync(process.execPath, [RAILS_HOOK], {
+  const symlinkWrite = spawnHook([RAILS_HOOK], {
     cwd: deep,
     env: { PATH: process.env.PATH ?? '', HOME: fakeHome },
     input: JSON.stringify({
@@ -48,14 +48,13 @@ test('copilot rails-guard discovers enclosing ADLC root from subdir and blocks a
       cwd: deep,
       toolArgs: JSON.stringify({ path: '../link-frozen/guard.mjs' }),
     }),
-    encoding: 'utf8',
     timeout: 15_000,
   });
   assert.equal(symlinkWrite.status, 0);
   const symVerdict = JSON.parse(symlinkWrite.stdout);
   assert.match(symVerdict.reason, /blocked rail edit/);
 
-  const ancestorRm = spawnSync(process.execPath, [RAILS_HOOK], {
+  const ancestorRm = spawnHook([RAILS_HOOK], {
     cwd: repo,
     env: { PATH: process.env.PATH ?? '', HOME: fakeHome },
     input: JSON.stringify({
@@ -63,7 +62,6 @@ test('copilot rails-guard discovers enclosing ADLC root from subdir and blocks a
       cwd: repo,
       toolArgs: JSON.stringify({ command: 'rm -rf src/frozen' }),
     }),
-    encoding: 'utf8',
     timeout: 15_000,
   });
   assert.equal(ancestorRm.status, 0);
@@ -79,7 +77,7 @@ test('copilot build-gate discovers enclosing ADLC root from nested subdir and de
   const transcript = join(repo, 'session.jsonl');
   writeFileSync(transcript, `${'{"type":"tool_use"}\n'.repeat(45)}`);
 
-  const res = spawnSync(process.execPath, [BUILD_GATE_HOOK], {
+  const res = spawnHook([BUILD_GATE_HOOK], {
     cwd: deep,
     env: { PATH: process.env.PATH ?? '', HOME: fakeHome },
     input: JSON.stringify({
@@ -88,7 +86,6 @@ test('copilot build-gate discovers enclosing ADLC root from nested subdir and de
       transcriptPath: transcript,
       toolArgs: JSON.stringify({ path: 'ok.mjs' }),
     }),
-    encoding: 'utf8',
     timeout: 15_000,
   });
   assert.equal(res.status, 0);

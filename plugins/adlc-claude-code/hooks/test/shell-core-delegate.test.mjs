@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { spawnHook } from './helpers/run-hook.mjs';
 
 const HOOKS_DIR = join(fileURLToPath(new URL('.', import.meta.url)), '..');
 const HOOK_SCRIPT = join(HOOKS_DIR, 'adlc-hook.mjs');
@@ -36,11 +36,10 @@ function makeRepo(t) {
 }
 
 function runRails(payload, { cwd, env = {} }) {
-  return spawnSync(process.execPath, [HOOK_SCRIPT, 'rails'], {
+  return spawnHook([HOOK_SCRIPT, 'rails'], {
     cwd,
     env: { PATH: process.env.PATH ?? '', HOME: cwd, ...env },
     input: JSON.stringify(payload),
-    encoding: 'utf8',
     timeout: 15_000,
   });
 }
