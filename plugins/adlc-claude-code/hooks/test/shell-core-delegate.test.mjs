@@ -85,6 +85,13 @@ test('Bash rails gate allows read-only commands and denies opaque, rail-targetin
   assert.equal(ancestorDelete.status, 2);
   assert.match(ancestorDelete.stdout, /frozen rail/);
 
+  const sedExec = runRails(
+    { tool_name: 'Bash', tool_input: { command: 'cat package.json | sed -n \'e perl -e "unlink q(src/frozen/guard.mjs)"\'' }, cwd: repo },
+    { cwd: repo },
+  );
+  assert.equal(sedExec.status, 2);
+  assert.match(sedExec.stdout, /permissionDecision.*deny/);
+
   const outputOpt = runRails(
     { tool_name: 'Bash', tool_input: { command: 'git diff --output=.adlc/tickets.json' }, cwd: repo },
     { cwd: repo },

@@ -1335,7 +1335,10 @@ function matchesRailGlob(railGlob, relPath) {
   if (relPath === '' || relPath === '.') return true;
   if (globMatch(railGlob, relPath)) return true;
   if (railGlob === relPath || railGlob.startsWith(`${relPath}/`)) return true;
-  if (railGlob.endsWith('/**') && relPath === railGlob.slice(0, -3)) return true;
+  const railSegs = railGlob.split('/');
+  for (let i = 1; i < railSegs.length; i += 1) {
+    if (globMatch(railSegs.slice(0, i).join('/'), relPath)) return true;
+  }
   return false;
 }
 
@@ -1661,6 +1664,9 @@ function rails(input) {
       return failClosed('Bash payload had no command string to verify;', 'empty-bash-command-bypass');
     }
     const c = bashClassification ?? classifyShellCommand(bashCommand);
+    if (c.opaque) {
+      return failClosed('mutating Bash command uses an opaque form (subshell/eval/git checkout/apply/etc.);', 'bash-opaque-mutation-bypass');
+    }
     if (c.readOnly) {
       if (c.writeOption) {
         return failClosed('read-only Bash command uses an output/write option;', 'bash-write-option-bypass');
@@ -1669,9 +1675,6 @@ function rails(input) {
     }
     if (!c.mutating) {
       return failClosed('Bash command is neither positively read-only nor a path-transparent mutation;', 'bash-unverifiable-bypass');
-    }
-    if (c.opaque) {
-      return failClosed('mutating Bash command uses an opaque form (subshell/eval/git checkout/apply/etc.);', 'bash-opaque-mutation-bypass');
     }
     if (c.changesCwd) {
       return failClosed('mutating Bash command changes cwd; target paths cannot be verified;', 'bash-cwd-change-bypass');

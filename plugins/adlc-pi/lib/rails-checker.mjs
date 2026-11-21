@@ -99,7 +99,10 @@ function railMatchesCandidate(rail, candidate) {
   if (candidate === '' || candidate === '.') return true;
   if (globMatch(rail, candidate)) return true;
   if (candidate === rail || rail.startsWith(`${candidate}/`)) return true;
-  if (rail.endsWith('/**') && candidate === rail.slice(0, -3)) return true;
+  const railSegs = rail.split('/');
+  for (let i = 1; i < railSegs.length; i += 1) {
+    if (globMatch(railSegs.slice(0, i).join('/'), candidate)) return true;
+  }
   return false;
 }
 

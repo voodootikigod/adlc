@@ -16,12 +16,19 @@ function makeRepo(t) {
   return dir;
 }
 
-test('railHit blocks ancestor-directory deletion for concrete file rails', (t) => {
+test('railHit blocks ancestor-directory deletion for concrete and wildcard rails', (t) => {
   const root = makeRepo(t);
   const ticket = { id: 'T1', rails: ['src/frozen/guard.mjs'], scope: ['src/**'] };
   assert.equal(railHit('src/frozen', ticket, root), 'src/frozen/guard.mjs');
   assert.equal(railHit('src', ticket, root), 'src/frozen/guard.mjs');
   assert.equal(railHit('src/frozen-other', ticket, root), null);
+
+  const wildSingle = { id: 'T2', rails: ['src/*/guard.mjs'], scope: ['src/**'] };
+  assert.equal(railHit('src/frozen', wildSingle, root), 'src/*/guard.mjs');
+
+  const wildDeep = { id: 'T3', rails: ['src/**/guard.mjs'], scope: ['src/**'] };
+  assert.equal(railHit('src/frozen', wildDeep, root), 'src/**/guard.mjs');
+  assert.equal(railHit('src', wildDeep, root), 'src/**/guard.mjs');
 });
 
 test('pathInScope resolves symlinks and rejects an in-scope symlink pointing outside ticket scope', (t) => {
