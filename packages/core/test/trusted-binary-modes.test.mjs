@@ -62,6 +62,26 @@ test('ownershipRejection: enforces group/world-writable checks on self-owned fil
     ),
     /its directory is writable by group or others/,
   );
+
+  // Default selfGid derivation when omitted: matches process.getgid() only for process.getuid()
+  if (typeof process.getuid === 'function' && typeof process.getgid === 'function') {
+    const uid = process.getuid();
+    const gid = process.getgid();
+    assert.equal(
+      ownershipRejection(
+        { file: { uid, gid, mode: 0o100775 }, link: { uid, mode: 0o100755 }, dir: { uid, gid, mode: 0o040775 } },
+        uid,
+      ),
+      null,
+    );
+    assert.match(
+      ownershipRejection(
+        { file: { uid: uid + 1, gid, mode: 0o100775 }, link: { uid: uid + 1, mode: 0o100755 }, dir: { uid: uid + 1, gid, mode: 0o040775 } },
+        uid + 1,
+      ),
+      /writable by group or others/,
+    );
+  }
 });
 
 test('clusterByTokenSets: inverted-token pre-filtering preserves empty-set, zero-threshold, and transitive semantics', () => {

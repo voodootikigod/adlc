@@ -30,7 +30,12 @@ export function resolveTrustedBinary(name, pathEnv) {
  * directories above the real file and above the PATH directory, up to `/`:
  * another account able to write any of them could swap what runs.
  */
-export function ownershipRejection({ file, link, dir, ancestors = [] }, selfUid, selfGid = null) {
+function defaultSelfGid(selfUid) {
+  if (typeof process.getuid !== 'function' || typeof process.getgid !== 'function') return null;
+  return selfUid === process.getuid() ? process.getgid() : null;
+}
+
+export function ownershipRejection({ file, link, dir, ancestors = [] }, selfUid, selfGid = defaultSelfGid(selfUid)) {
   if (file.uid === selfUid) {
     const fileMask = selfGid !== null && file.gid === selfGid ? 0o002 : 0o022;
     if ((file.mode & fileMask) !== 0) return 'it is writable by group or others';
@@ -110,7 +115,7 @@ export function candidateStats(candidate, dir, name, file, selfUid) {
  * named even when its stats are missing; `stats` is null when they could not
  * be gathered.
  */
-export function candidateRejection(dir, stats, selfUid, selfGid = null) {
+export function candidateRejection(dir, stats, selfUid, selfGid = defaultSelfGid(selfUid)) {
   if (!isAbsolute(dir)) return 'it is reached through a relative PATH entry, which resolves inside the repository';
   if (dir.includes('node_modules')) return 'it is inside node_modules, where a repository could have placed it';
   if (stats === null) return 'its link or a directory above it could not be inspected';
