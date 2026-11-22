@@ -31,8 +31,7 @@ export function resolveTrustedBinary(name, pathEnv) {
  * another account able to write any of them could swap what runs.
  */
 function defaultSelfGid(selfUid) {
-  if (typeof process.getuid !== 'function' || typeof process.getgid !== 'function') return null;
-  return selfUid === process.getuid() ? process.getgid() : null;
+  return selfUid === process.getuid?.() ? (process.getgid?.() ?? null) : null;
 }
 
 export function ownershipRejection({ file, link, dir, ancestors = [] }, selfUid, selfGid = defaultSelfGid(selfUid)) {

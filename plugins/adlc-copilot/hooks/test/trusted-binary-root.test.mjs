@@ -57,6 +57,16 @@ test('the copilot, codex and Claude Code copies give the same answer on every ca
     }
   }
   assert.deepEqual(copilot.ancestorDirs('/a/b/c'), claudeCode.ancestorDirs('/a/b/c'));
+  if (typeof process.getuid === 'function' && typeof process.getgid === 'function') {
+    const uid = process.getuid();
+    const gid = process.getgid();
+    const upgStats = { file: { uid, gid, mode: 0o100775 }, link: { uid, mode: 0o100755 }, dir: { uid, gid, mode: 0o40775 } };
+    const foreignUidStats = { file: { uid: uid + 1, gid, mode: 0o100775 }, link: { uid: uid + 1, mode: 0o100755 }, dir: { uid: uid + 1, gid, mode: 0o40775 } };
+    for (const [name, mod] of [['claudeCode', claudeCode], ['copilot', copilot], ['codex', codex]]) {
+      assert.equal(mod.ownershipRejection(upgStats, uid), null, `${name} should allow UPG 0775 for current uid`);
+      assert.match(mod.ownershipRejection(foreignUidStats, uid + 1), /writable by group or others/, `${name} must not apply current gid to another uid`);
+    }
+  }
 });
 
 test('node_modules and relative PATH entries are refused before ownership is judged', () => {
