@@ -39,17 +39,20 @@
   "gemini": {
     "hooks": "./hooks.json",
     "skills": "./skills/",
-    "command": "./commands/adlc-init.md"
+    "command": "./commands/adlc-init.md",
+    "mcpServers": "./mcp.json"
   },
   "agy": {
     "hooks": "./hooks.json",
     "skills": "./skills/",
-    "command": "./commands/adlc-init.md"
+    "command": "./commands/adlc-init.md",
+    "mcpServers": "./mcp.json"
   },
   "jetski": {
     "hooks": "./hooks.json",
     "skills": "./skills/",
-    "command": "./commands/adlc-init.md"
+    "command": "./commands/adlc-init.md",
+    "mcpServers": "./mcp.json"
   },
   "files": [
     "agents/",
@@ -66,6 +69,7 @@
     "generated-workspace-root.mjs",
     "hooks/",
     "hooks.json",
+    "mcp.json",
     "rails-checker.mjs",
     "skills/",
     "plugin.json",
