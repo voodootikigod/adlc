@@ -100,6 +100,7 @@ function isInsideRoot(p) {
 
 function resolveTrustedGrep(pathStr = process.env.PATH) {
   const selfUid = typeof process.getuid === 'function' ? process.getuid() : null;
+  const selfGid = typeof process.getgid === 'function' ? process.getgid() : null;
   const binName = process.platform === 'win32' ? 'grep.exe' : 'grep';
   for (const dir of String(pathStr ?? '').split(delimiter)) {
     if (!dir || dir === '.' || !isAbsolute(dir) || /(?:^|[\\\\/])node_modules(?:[\\\\/]|$)/.test(dir)) continue;
@@ -112,7 +113,8 @@ function resolveTrustedGrep(pathStr = process.env.PATH) {
       continue;
     }
     if (!dirSt.isDirectory() || isInsideRoot(resolve(dir)) || isInsideRoot(dirReal)) continue;
-    if (process.platform !== 'win32' && (dirSt.mode & 0o022) !== 0) continue;
+    const dirMask = selfGid !== null && dirSt.uid === selfUid && dirSt.gid === selfGid ? 0o002 : 0o022;
+    if (process.platform !== 'win32' && (dirSt.mode & dirMask) !== 0) continue;
     for (const name of process.platform === 'win32' ? [binName, 'grep'] : ['grep']) {
       const candidate = join(dir, name);
       try {
@@ -123,7 +125,8 @@ function resolveTrustedGrep(pathStr = process.env.PATH) {
         if (!st.isFile()) continue;
         if (process.platform !== 'win32') {
           accessSync(candReal, fsConstants.X_OK);
-          if ((st.mode & 0o022) !== 0) continue;
+          const fileMask = selfGid !== null && st.uid === selfUid && st.gid === selfGid ? 0o002 : 0o022;
+          if ((st.mode & fileMask) !== 0) continue;
         }
         if (selfUid !== null && st.uid !== selfUid) {
           if (linkSt.uid !== 0 || st.uid !== 0 || dirSt.uid !== 0) continue;

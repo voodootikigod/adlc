@@ -528,6 +528,7 @@ export function defaultLockProbes(): {
 // lib/trusted-binary.mjs
 export type TrustedBinaryStatLike = {
   readonly uid: number;
+  readonly gid?: number;
   readonly mode: number;
 };
 export type TrustedBinaryStats = {
@@ -539,7 +540,8 @@ export type TrustedBinaryStats = {
 export function resolveTrustedBinary(name: string, pathEnv: unknown): string | null;
 export function ownershipRejection(
   stats: TrustedBinaryStats,
-  selfUid: number | null
+  selfUid: number | null,
+  selfGid?: number | null
 ): string | null;
 export function ancestorDirs(file: string): string[];
 export function candidateAncestors(candidate: string, dir: string, name: string): string[];
@@ -557,7 +559,8 @@ export function candidateStats(
 export function candidateRejection(
   dir: string,
   stats: TrustedBinaryStats | null,
-  selfUid: number | null
+  selfUid: number | null,
+  selfGid?: number | null
 ): string | null;
 export function untrustedBinaryReason(name: string, pathEnv: unknown): string | null;
 

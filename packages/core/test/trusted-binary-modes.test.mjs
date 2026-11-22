@@ -28,6 +28,40 @@ test('ownershipRejection: enforces group/world-writable checks on self-owned fil
     ownershipRejection({ file: selfFile, link: selfLink, dir: { uid: 1000, mode: 0o040777 } }, 1000),
     /its directory is writable by group or others/,
   );
+
+  // User Private Group (gid === selfGid): group-writable 0775 is allowed, world-writable 0777 and foreign-group 0775 are rejected
+  assert.equal(
+    ownershipRejection(
+      { file: { uid: 1000, gid: 1000, mode: 0o100775 }, link: selfLink, dir: { uid: 1000, gid: 1000, mode: 0o040775 } },
+      1000,
+      1000,
+    ),
+    null,
+  );
+  assert.match(
+    ownershipRejection(
+      { file: { uid: 1000, gid: 1000, mode: 0o100777 }, link: selfLink, dir: { uid: 1000, gid: 1000, mode: 0o040775 } },
+      1000,
+      1000,
+    ),
+    /writable by group or others/,
+  );
+  assert.match(
+    ownershipRejection(
+      { file: { uid: 1000, gid: 2000, mode: 0o100775 }, link: selfLink, dir: { uid: 1000, gid: 1000, mode: 0o040775 } },
+      1000,
+      1000,
+    ),
+    /writable by group or others/,
+  );
+  assert.match(
+    ownershipRejection(
+      { file: { uid: 1000, gid: 1000, mode: 0o100755 }, link: selfLink, dir: { uid: 1000, gid: 2000, mode: 0o040775 } },
+      1000,
+      1000,
+    ),
+    /its directory is writable by group or others/,
+  );
 });
 
 test('clusterByTokenSets: inverted-token pre-filtering preserves empty-set, zero-threshold, and transitive semantics', () => {

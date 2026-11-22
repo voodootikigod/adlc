@@ -30,10 +30,12 @@ export function resolveTrustedBinary(name, pathEnv) {
  * directories above the real file and above the PATH directory, up to `/`:
  * another account able to write any of them could swap what runs.
  */
-export function ownershipRejection({ file, link, dir, ancestors = [] }, selfUid) {
+export function ownershipRejection({ file, link, dir, ancestors = [] }, selfUid, selfGid = null) {
   if (file.uid === selfUid) {
-    if ((file.mode & 0o022) !== 0) return 'it is writable by group or others';
-    if (dir && (dir.mode & 0o022) !== 0) return 'its directory is writable by group or others';
+    const fileMask = selfGid !== null && file.gid === selfGid ? 0o002 : 0o022;
+    if ((file.mode & fileMask) !== 0) return 'it is writable by group or others';
+    const dirMask = dir && selfGid !== null && dir.gid === selfGid ? 0o002 : 0o022;
+    if (dir && (dir.mode & dirMask) !== 0) return 'its directory is writable by group or others';
     return null;
   }
   if (file.uid !== 0) return `it is owned by uid ${file.uid}, not by you or by root`;
@@ -65,6 +67,7 @@ export function binaryCandidates(name, pathEnv) {
   if (typeof pathEnv !== 'string' || pathEnv.length === 0) return [];
   const sep = process.platform === 'win32' ? ';' : ':';
   const selfUid = typeof process.getuid === 'function' ? process.getuid() : null;
+  const selfGid = typeof process.getgid === 'function' ? process.getgid() : null;
   const out = [];
   for (const dir of pathEnv.split(sep)) {
     if (!dir) continue;
@@ -82,7 +85,7 @@ export function binaryCandidates(name, pathEnv) {
     } catch {
       /* refused below as uninspectable */
     }
-    out.push({ candidate, rejection: candidateRejection(dir, stats, selfUid) });
+    out.push({ candidate, rejection: candidateRejection(dir, stats, selfUid, selfGid) });
   }
   return out;
 }
@@ -107,11 +110,11 @@ export function candidateStats(candidate, dir, name, file, selfUid) {
  * named even when its stats are missing; `stats` is null when they could not
  * be gathered.
  */
-export function candidateRejection(dir, stats, selfUid) {
+export function candidateRejection(dir, stats, selfUid, selfGid = null) {
   if (!isAbsolute(dir)) return 'it is reached through a relative PATH entry, which resolves inside the repository';
   if (dir.includes('node_modules')) return 'it is inside node_modules, where a repository could have placed it';
   if (stats === null) return 'its link or a directory above it could not be inspected';
-  return selfUid === null ? null : ownershipRejection(stats, selfUid);
+  return selfUid === null ? null : ownershipRejection(stats, selfUid, selfGid);
 }
 
 /**
