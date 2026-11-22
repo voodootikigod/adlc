@@ -177,8 +177,8 @@ function recordSegmentedTicketEvidence(dir, { gate, data, transactionId, operati
         prev: prevRawLine === null ? null : sha256(prevRawLine),
       };
       if (key) {
-        if (resolved.isNew) entry.sigVersion = 2; // forced: v1 never covers `anchor`
-        entry.sig = entry.sigVersion === 2 ? signV2(key, entry) : sign(key, entry);
+        entry.sigVersion = 2;
+        entry.sig = signV2(key, entry);
       }
       const descriptor = openSync(targetPath, 'a');
       try {

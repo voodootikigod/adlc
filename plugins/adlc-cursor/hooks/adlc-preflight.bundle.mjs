@@ -1203,37 +1203,368 @@ function entrySigValid(key, entry) {
   if (a.length !== b.length) return false;
   return timingSafeEqual(a, b);
 }
-function isChainIntact(lines, key) {
-  if (lines.length === 0) return false;
-  let prevLine = null;
-  let prevSeq = 0;
+function readRawLines(filePath) {
+  if (!existsSync4(filePath)) return [];
+  const content = readFileSync3(filePath, "utf8");
+  return content.split("\n").map((line, i) => ({ line, lineNo: i + 1 })).filter(({ line }) => line.trim() !== "");
+}
+function resolveAnchor(anchor, chainsBySeq, rootExists) {
+  if (anchor === null) {
+    if (rootExists) return { ok: false, reason: "anchor: null is not permitted once a root exists" };
+    return { ok: true };
+  }
+  if (!anchor || typeof anchor !== "object" || Array.isArray(anchor)) {
+    return { ok: false, reason: "anchor must be an object or null" };
+  }
+  const { segment, seq, lineHash } = anchor;
+  if (typeof segment !== "string" || segment === "") {
+    return { ok: false, reason: "anchor.segment must be a non-empty string" };
+  }
+  if (!Number.isInteger(seq) || seq < 1) {
+    return { ok: false, reason: "anchor.seq must be a positive integer" };
+  }
+  if (typeof lineHash !== "string" || lineHash === "") {
+    return { ok: false, reason: "anchor.lineHash must be a non-empty string" };
+  }
+  const target = chainsBySeq.get(segment);
+  if (!target) return { ok: false, reason: `dangling anchor: no such segment '${segment}' in the forest` };
+  const rawLine = target.get(seq);
+  if (rawLine === void 0) return { ok: false, reason: `dangling anchor: segment '${segment}' has no entry with seq ${seq}` };
+  if (sha256(rawLine) !== lineHash) return { ok: false, reason: `anchor lineHash mismatch for '${segment}' seq ${seq}` };
+  return { ok: true };
+}
+function detectAnchorCycle(anchorBySegment) {
+  const state = /* @__PURE__ */ new Map();
+  for (const start of anchorBySegment.keys()) {
+    if (state.get(start) === "done") continue;
+    const path = [];
+    let current = start;
+    while (current !== void 0) {
+      if (state.get(current) === "visiting") return { ok: false, segment: current };
+      if (state.get(current) === "done") break;
+      if (!anchorBySegment.has(current)) break;
+      state.set(current, "visiting");
+      path.push(current);
+      const anchor = anchorBySegment.get(current);
+      current = anchor === null ? void 0 : anchor.segment;
+    }
+    for (const seg of path) state.set(seg, "done");
+  }
+  return { ok: true };
+}
+function orderSegmentNames(segmentNames, anchorBySegment) {
+  const depthCache = /* @__PURE__ */ new Map();
+  function depthOf(name, seen = /* @__PURE__ */ new Set()) {
+    if (depthCache.has(name)) return depthCache.get(name);
+    if (seen.has(name)) return 0;
+    seen.add(name);
+    const anchor = anchorBySegment.get(name);
+    const target = anchor?.segment;
+    const depth = target && target !== "root" && anchorBySegment.has(target) ? depthOf(target, seen) + 1 : 0;
+    depthCache.set(name, depth);
+    return depth;
+  }
+  return [...segmentNames].sort((a, b) => {
+    const depthDiff = depthOf(a) - depthOf(b);
+    if (depthDiff !== 0) return depthDiff;
+    const aa = anchorBySegment.get(a);
+    const bb = anchorBySegment.get(b);
+    const aSeg = aa?.segment ?? "";
+    const bSeg = bb?.segment ?? "";
+    if (aSeg !== bSeg) return aSeg < bSeg ? -1 : 1;
+    const aSeq = aa?.seq ?? 0;
+    const bSeq = bb?.seq ?? 0;
+    if (aSeq !== bSeq) return aSeq - bSeq;
+    const aUlid = ulidOf(a);
+    const bUlid = ulidOf(b);
+    if (aUlid !== bUlid) return aUlid < bUlid ? -1 : 1;
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+}
+function validateForestMarker(dir = ".adlc") {
+  const path = markerPath(dir);
+  let st;
+  try {
+    st = lstatSync2(path);
+  } catch (err) {
+    if (err?.code === "ENOENT") return { ok: true, present: false, auth: null };
+    return { ok: false, reason: `cannot stat .store.json: ${err.message}` };
+  }
+  if (st.isSymbolicLink()) return { ok: false, reason: "symlink" };
+  if (!st.isFile()) return { ok: false, reason: "not a regular file" };
+  const parsed = readBoundedJsonNoFollow(path);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, reason: "invalid or oversized .store.json marker" };
+  }
+  if (parsed.format !== MARKER_FORMAT || parsed.version !== MARKER_VERSION) {
+    return { ok: false, reason: "invalid .store.json format or version" };
+  }
+  if (parsed.auth !== void 0 && parsed.auth !== "keyed" && parsed.auth !== "keyless") {
+    return { ok: false, reason: "invalid .store.json auth mode" };
+  }
+  return { ok: true, present: true, auth: parsed.auth ?? null };
+}
+function hasManifestCutoverTail(rootRaw) {
+  if (!Array.isArray(rootRaw) || rootRaw.length === 0) return false;
+  try {
+    const last = JSON.parse(rootRaw.at(-1).line);
+    return Boolean(last) && typeof last === "object" && last.gate === "manifest-cutover";
+  } catch {
+    return false;
+  }
+}
+function checkForestSignedEra({
+  declaredAuth = null,
+  rootEmpty = false,
+  rootCutover = false,
+  segmentNames,
+  anchorBySegment,
+  rootSawSigned,
+  rootFirstUnsigned = null,
+  segmentResults
+}) {
+  if (declaredAuth === "keyed" && !rootSawSigned && rootFirstUnsigned) {
+    return { ok: false, segment: "root", firstUnsigned: rootFirstUnsigned };
+  }
+  const ordered = orderSegmentNames(segmentNames, anchorBySegment);
+  const anySegmentSigned = ordered.some((name) => Boolean(segmentResults.get(name)?.sawSignedEntry));
+  const keyedForest = declaredAuth === "keyed" || declaredAuth === null && Boolean(rootCutover) && Boolean(rootSawSigned) || declaredAuth !== "keyless" && Boolean(rootEmpty) && anySegmentSigned;
+  const signedSegments = /* @__PURE__ */ new Set();
+  for (const name of ordered) {
+    const res = segmentResults.get(name);
+    const anchor = anchorBySegment.get(name);
+    const parentSeg = anchor && anchor.segment !== "root" ? anchor.segment : null;
+    const parentInSignedEra = keyedForest || parentSeg !== null && signedSegments.has(parentSeg);
+    if (parentInSignedEra && res?.firstUnsigned) {
+      return { ok: false, segment: name, firstUnsigned: res.firstUnsigned };
+    }
+    if (parentInSignedEra || res?.sawSignedEntry) {
+      signedSegments.add(name);
+    }
+  }
+  return { ok: true };
+}
+function isUnsignedKeyedRoot(declaredAuth, key, requireSignatures, rootResult) {
+  return key !== null && !requireSignatures && declaredAuth === "keyed" && rootResult.valid && rootResult.count > 0 && !rootResult.sawSignedEntry && rootResult.firstUnsigned !== null;
+}
+function verifyChain(nonEmpty, { key, requireSignatures, anchorOnFirst }) {
+  if (nonEmpty.length === 0) {
+    if (anchorOnFirst) {
+      return { valid: false, message: "empty segment file has no first entry to carry the required anchor", count: 0, signed: false, break: { seq: null, lineNo: null, reason: "empty segment file" }, lastRawLine: null, firstAnchor: void 0, sawSignedEntry: false, firstUnsigned: null };
+    }
+    return { valid: true, message: "empty manifest", count: 0, signed: false, break: null, lastRawLine: null, firstAnchor: void 0, sawSignedEntry: false, firstUnsigned: null };
+  }
+  let prevRawLine = null;
+  let prevSeq = null;
+  let firstAnchor;
   let seenSignedEntry = false;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  let firstUnsigned = null;
+  for (const { line, lineNo } of nonEmpty) {
     let entry;
     try {
       entry = JSON.parse(line);
     } catch {
-      return false;
+      return fail2(lineNo - 1, { seq: null, lineNo, reason: "malformed JSON" }, `chain broken at line ${lineNo}: malformed JSON`);
     }
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
-    if (i === 0 && !Object.hasOwn(entry, "anchor")) return false;
-    if (i > 0 && Object.hasOwn(entry, "anchor")) return false;
-    const expectedPrev = prevLine === null ? null : sha256(prevLine);
-    if (entry.prev !== expectedPrev || entry.seq !== prevSeq + 1) return false;
-    if (key !== null) {
-      const hasSig = Object.hasOwn(entry, "sig");
-      if (hasSig) {
-        if (!entrySigValid(key, entry)) return false;
-        seenSignedEntry = true;
-      } else if (seenSignedEntry) {
-        return false;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return fail2(lineNo - 1, { seq: null, lineNo, reason: "entry must be an object" }, `chain broken at line ${lineNo}: entry must be an object`);
+    }
+    if (!Number.isInteger(entry.seq) || entry.seq < 1) {
+      return fail2(lineNo - 1, { seq: entry.seq ?? null, lineNo, reason: "invalid seq" }, `chain broken at line ${lineNo}: seq must be a positive integer`);
+    }
+    const isFirst = prevRawLine === null;
+    if (isFirst) {
+      if (entry.prev !== null) {
+        return fail2(0, { seq: entry.seq, lineNo, reason: "first entry prev must be null" }, `chain broken at seq ${entry.seq} (line ${lineNo}): first entry prev must be null`);
+      }
+    } else {
+      const expected = sha256(prevRawLine);
+      if (entry.prev !== expected) {
+        return fail2(lineNo - 1, { seq: entry.seq, lineNo, reason: "prev hash mismatch" }, `chain broken at seq ${entry.seq} (line ${lineNo}): prev hash mismatch`);
       }
     }
-    prevLine = line;
+    if (isFirst) {
+      if (entry.seq !== 1) {
+        return fail2(0, { seq: entry.seq, lineNo, reason: "first entry seq must be 1" }, `chain broken at seq ${entry.seq} (line ${lineNo}): first entry seq must be 1`);
+      }
+    } else if (entry.seq !== prevSeq + 1) {
+      return fail2(lineNo - 1, { seq: entry.seq, lineNo, reason: "seq not contiguous" }, `chain broken at seq ${entry.seq} (line ${lineNo}): seq must be contiguous (+1 from previous)`);
+    }
+    const hasAnchor = Object.hasOwn(entry, "anchor");
+    if (isFirst) {
+      firstAnchor = hasAnchor ? entry.anchor : void 0;
+      if (anchorOnFirst && !hasAnchor) {
+        return fail2(lineNo - 1, { seq: entry.seq, lineNo, reason: "segment first entry missing required anchor field" }, `chain broken at seq ${entry.seq} (line ${lineNo}): segment first entry missing required anchor field`);
+      }
+      if (!anchorOnFirst && hasAnchor) {
+        return fail2(lineNo - 1, { seq: entry.seq, lineNo, reason: "root entry must not carry an anchor field" }, `chain broken at seq ${entry.seq} (line ${lineNo}): root entry must not carry an anchor field`);
+      }
+    } else if (hasAnchor) {
+      return fail2(lineNo - 1, { seq: entry.seq, lineNo, reason: "only a segment's first entry may carry an anchor field" }, `chain broken at seq ${entry.seq} (line ${lineNo}): only a segment's first entry may carry an anchor field`);
+    }
+    if (key !== null) {
+      const hasSig = entry.sig !== void 0 && entry.sig !== null;
+      if (!hasSig) {
+        if (firstUnsigned === null) firstUnsigned = { seq: entry.seq, lineNo };
+        const toleratedLegacyPrefix = !requireSignatures && !seenSignedEntry;
+        if (!toleratedLegacyPrefix) {
+          return fail2(lineNo - 1, { seq: entry.seq, lineNo, reason: "unsigned entry" }, `chain broken at seq ${entry.seq} (line ${lineNo}): unsigned entry`);
+        }
+      } else if (!entrySigValid(key, entry)) {
+        return fail2(lineNo - 1, { seq: entry.seq, lineNo, reason: "signature invalid" }, `chain broken at seq ${entry.seq} (line ${lineNo}): signature invalid`);
+      } else {
+        seenSignedEntry = true;
+      }
+    }
+    prevRawLine = line;
     prevSeq = entry.seq;
   }
-  return true;
+  const signed = key !== null && requireSignatures;
+  return {
+    valid: true,
+    message: signed ? `manifest ok, signed (${nonEmpty.length} entries)` : `manifest ok (${nonEmpty.length} entries)`,
+    count: nonEmpty.length,
+    signed,
+    break: null,
+    lastRawLine: prevRawLine,
+    firstAnchor,
+    sawSignedEntry: seenSignedEntry,
+    firstUnsigned
+  };
+  function fail2(count, breakInfo, message) {
+    return { valid: false, message, count, signed: false, break: breakInfo, lastRawLine: null, firstAnchor: void 0, sawSignedEntry: false, firstUnsigned: null };
+  }
+}
+function seqMap(nonEmpty) {
+  const m = /* @__PURE__ */ new Map();
+  for (const { line } of nonEmpty) {
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (entry && Number.isInteger(entry.seq)) m.set(entry.seq, line);
+  }
+  return m;
+}
+function verifyManifestForest(dir = ".adlc", { requireSignatures = true, requireEntries = false, key = null } = {}) {
+  const rootRaw = readRawLines(join3(dir, "manifest.jsonl"));
+  const { valid: segmentNames, invalid: invalidSegments } = discoverSegments(dir);
+  if (invalidSegments.length > 0) {
+    const first = invalidSegments[0];
+    return {
+      valid: false,
+      message: `manifest.d/${first.name}: ${first.reason}`,
+      count: 0,
+      segments: segmentNames.length,
+      signed: false,
+      break: { seq: null, lineNo: null, reason: first.reason, segment: first.name }
+    };
+  }
+  const markerCheck = validateForestMarker(dir);
+  if (!markerCheck.ok) {
+    return {
+      valid: false,
+      message: `manifest.d/.store.json: ${markerCheck.reason}`,
+      count: 0,
+      segments: segmentNames.length,
+      signed: false,
+      break: { seq: null, lineNo: null, reason: markerCheck.reason, segment: ".store.json" }
+    };
+  }
+  if (segmentNames.length === 0) {
+    if (requireEntries && rootRaw.length === 0) {
+      const reason = "empty manifest (--require-entries requires at least one entry)";
+      return {
+        valid: false,
+        message: reason,
+        count: 0,
+        segments: 0,
+        signed: false,
+        break: { seq: null, lineNo: null, reason, segment: "root" }
+      };
+    }
+    const result = verifyChain(rootRaw, { key, requireSignatures, anchorOnFirst: false });
+    if (isUnsignedKeyedRoot(markerCheck.auth, key, requireSignatures, result)) {
+      const u = result.firstUnsigned;
+      return { valid: false, message: `chain broken at seq ${u.seq} (line ${u.lineNo}): unsigned entry`, count: result.count, segments: 0, signed: false, break: { seq: u.seq, lineNo: u.lineNo, reason: "unsigned entry", segment: "root" } };
+    }
+    return { valid: result.valid, message: result.message, count: result.count, segments: 0, signed: result.signed, break: result.break ? { ...result.break, segment: "root" } : null };
+  }
+  const rootResult = verifyChain(rootRaw, { key, requireSignatures, anchorOnFirst: false });
+  if (!rootResult.valid) {
+    return { valid: false, message: rootResult.message, count: rootResult.count, segments: segmentNames.length, signed: false, break: { ...rootResult.break, segment: "root" } };
+  }
+  const chainsBySeq = /* @__PURE__ */ new Map();
+  chainsBySeq.set("root", seqMap(rootRaw));
+  const anchorBySegment = /* @__PURE__ */ new Map();
+  const segmentResults = /* @__PURE__ */ new Map();
+  let totalCount = rootResult.count;
+  let allSigned = rootResult.count === 0 ? true : rootResult.signed;
+  for (const name of segmentNames) {
+    const raw = readRawLines(segmentPath(dir, name));
+    const result = verifyChain(raw, { key, requireSignatures, anchorOnFirst: true });
+    if (!result.valid) {
+      return { valid: false, message: `manifest.d/${name}: ${result.message}`, count: totalCount + result.count, segments: segmentNames.length, signed: false, break: { ...result.break, segment: name } };
+    }
+    chainsBySeq.set(name, seqMap(raw));
+    anchorBySegment.set(name, result.firstAnchor === void 0 ? null : result.firstAnchor);
+    segmentResults.set(name, result);
+    totalCount += result.count;
+    allSigned = allSigned && (result.count === 0 ? true : result.signed);
+  }
+  for (const name of segmentNames) {
+    const anchor = anchorBySegment.get(name);
+    const resolved = resolveAnchor(anchor, chainsBySeq, rootResult.count > 0);
+    if (!resolved.ok) {
+      return { valid: false, message: `manifest.d/${name}: ${resolved.reason}`, count: totalCount, segments: segmentNames.length, signed: false, break: { seq: null, lineNo: null, reason: resolved.reason, segment: name } };
+    }
+  }
+  const cycleCheck = detectAnchorCycle(anchorBySegment);
+  if (!cycleCheck.ok) {
+    return { valid: false, message: `manifest.d/${cycleCheck.segment}: anchor cycle detected`, count: totalCount, segments: segmentNames.length, signed: false, break: { seq: null, lineNo: null, reason: "anchor cycle", segment: cycleCheck.segment } };
+  }
+  if (key !== null && !requireSignatures) {
+    const eraCheck = checkForestSignedEra({
+      declaredAuth: markerCheck.auth,
+      rootEmpty: rootRaw.length === 0,
+      rootCutover: hasManifestCutoverTail(rootRaw),
+      segmentNames,
+      anchorBySegment,
+      rootSawSigned: rootResult.sawSignedEntry,
+      rootFirstUnsigned: rootResult.firstUnsigned,
+      segmentResults
+    });
+    if (!eraCheck.ok) {
+      const u = eraCheck.firstUnsigned;
+      const msg = `chain broken at seq ${u.seq} (line ${u.lineNo}): unsigned entry`;
+      const prefix = eraCheck.segment === "root" ? "" : `manifest.d/${eraCheck.segment}: `;
+      return {
+        valid: false,
+        message: `${prefix}${msg}`,
+        count: totalCount,
+        segments: segmentNames.length,
+        signed: false,
+        break: { seq: u.seq, lineNo: u.lineNo, reason: "unsigned entry", segment: eraCheck.segment }
+      };
+    }
+  }
+  const signed = allSigned;
+  return {
+    valid: true,
+    message: signed ? `manifest ok, signed (${totalCount} entries, ${segmentNames.length} segments)` : `manifest ok (${totalCount} entries, ${segmentNames.length} segments)`,
+    count: totalCount,
+    segments: segmentNames.length,
+    signed,
+    break: null
+  };
+}
+function isChainIntact(lines, key) {
+  return verifyChain(
+    lines.map((line, i) => ({ line, lineNo: i + 1 })),
+    { key, requireSignatures: false, anchorOnFirst: true }
+  ).valid;
 }
 function resolveOpenSegment(dir = ".adlc", opts = {}) {
   const key = opts?.key ?? null;
@@ -1306,7 +1637,7 @@ function resolveOpenSegment(dir = ".adlc", opts = {}) {
 }
 
 // packages/tickets/lib/manifest-segments.mjs
-function readRawLines(filePath) {
+function readRawLines2(filePath) {
   if (!existsSync5(filePath)) return [];
   return readFileSync4(filePath, "utf8").split("\n").filter((line) => line.trim() !== "");
 }
@@ -1319,42 +1650,12 @@ function parseLines(lines) {
     }
   }).filter(Boolean);
 }
-function chainIsIntact(lines, key = null) {
-  let prevLine = null;
-  let prevSeq = 0;
-  let seenSignedEntry = false;
-  for (const line of lines) {
-    let entry;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      return false;
-    }
-    const expectedPrev = prevLine === null ? null : sha256(prevLine);
-    if (entry?.prev !== expectedPrev || entry?.seq !== prevSeq + 1) return false;
-    if (key !== null) {
-      const hasSig = Boolean(entry) && typeof entry === "object" && Object.hasOwn(entry, "sig");
-      if (hasSig) {
-        if (!entrySigValid(key, entry)) return false;
-        seenSignedEntry = true;
-      } else if (seenSignedEntry) {
-        return false;
-      }
-    }
-    prevLine = line;
-    prevSeq = entry.seq;
-  }
-  return true;
-}
 function forestChainsIntact(dir, { key = null } = {}) {
-  if (!chainIsIntact(readRawLines(join4(dir, "manifest.jsonl")), key)) return false;
-  const { valid, invalid: invalid3 } = discoverSegments(dir);
-  if (invalid3.length > 0) return false;
-  return valid.every((name) => chainIsIntact(readRawLines(segmentPath(dir, name)), key));
+  return verifyManifestForest(dir, { key, requireSignatures: false }).valid;
 }
 function readForestEntries(dir) {
-  const root = parseLines(readRawLines(join4(dir, "manifest.jsonl")));
-  const segments = discoverSegments(dir).valid.flatMap((name) => parseLines(readRawLines(segmentPath(dir, name))));
+  const root = parseLines(readRawLines2(join4(dir, "manifest.jsonl")));
+  const segments = discoverSegments(dir).valid.flatMap((name) => parseLines(readRawLines2(segmentPath(dir, name))));
   return [...root, ...segments];
 }
 
@@ -1478,8 +1779,8 @@ function recordSegmentedTicketEvidence(dir, { gate, data, transactionId, operati
         prev: prevRawLine === null ? null : sha256(prevRawLine)
       };
       if (key) {
-        if (resolved.isNew) entry.sigVersion = 2;
-        entry.sig = entry.sigVersion === 2 ? signV2(key, entry) : sign(key, entry);
+        entry.sigVersion = 2;
+        entry.sig = signV2(key, entry);
       }
       const descriptor = openSync3(targetPath, "a");
       try {

@@ -3,7 +3,6 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { sha256 } from './canonical.mjs';
 import {
   segmentPath,
   lineagePath,
@@ -20,6 +19,8 @@ import {
   recoverOpenSegment,
   resolveOpenSegment,
   normalizeManifestDirAndCwd,
+  verifyChain,
+  verifyManifestForest,
 } from './manifest-primitives.mjs';
 
 export {
@@ -38,6 +39,8 @@ export {
   recoverOpenSegment,
   resolveOpenSegment,
   normalizeManifestDirAndCwd,
+  verifyChain,
+  verifyManifestForest,
 };
 
 function readRawLines(filePath) {
@@ -51,28 +54,11 @@ function parseLines(lines) {
   }).filter(Boolean);
 }
 
-function chainIsIntact(lines, key = null) {
-  let prevLine = null;
-  let prevSeq = 0;
-  let seenSignedEntry = false;
-  for (const line of lines) {
-    let entry;
-    try { entry = JSON.parse(line); } catch { return false; }
-    const expectedPrev = prevLine === null ? null : sha256(prevLine);
-    if (entry?.prev !== expectedPrev || entry?.seq !== prevSeq + 1) return false;
-    if (key !== null) {
-      const hasSig = Boolean(entry) && typeof entry === 'object' && Object.hasOwn(entry, 'sig');
-      if (hasSig) {
-        if (!entrySigValid(key, entry)) return false;
-        seenSignedEntry = true;
-      } else if (seenSignedEntry) {
-        return false; // missing sig after this chain's signed era began
-      }
-    }
-    prevLine = line;
-    prevSeq = entry.seq;
-  }
-  return true;
+function chainIsIntact(lines, key = null, { anchorOnFirst = false } = {}) {
+  return verifyChain(
+    lines.map((line, i) => ({ line, lineNo: i + 1 })),
+    { key, requireSignatures: false, anchorOnFirst },
+  ).valid;
 }
 
 function signedEntriesOnly(lines, key) {
@@ -80,10 +66,7 @@ function signedEntriesOnly(lines, key) {
 }
 
 export function forestChainsIntact(dir, { key = null } = {}) {
-  if (!chainIsIntact(readRawLines(join(dir, 'manifest.jsonl')), key)) return false;
-  const { valid, invalid } = discoverSegments(dir);
-  if (invalid.length > 0) return false; // a non-conforming object anywhere invalidates the whole forest
-  return valid.every((name) => chainIsIntact(readRawLines(segmentPath(dir, name)), key));
+  return verifyManifestForest(dir, { key, requireSignatures: false }).valid;
 }
 
 export function readForestEntries(dir) {
@@ -156,7 +139,7 @@ export function readOwnChains(dir, { cwd, allowRecovery = false, key = null } = 
     }
     let peekedLines = peekedRaw;
     if (key !== null) {
-      if (!chainIsIntact(peekedRaw, key)) {
+      if (!chainIsIntact(peekedRaw, key, { anchorOnFirst: true })) {
         throw new Error(`segment ${peeked.name} failed chain or signature verification — refusing to trust it`);
       }
       peekedLines = signedEntriesOnly(peekedRaw, key);
@@ -241,7 +224,7 @@ export function readOwnChains(dir, { cwd, allowRecovery = false, key = null } = 
   // why a lone later signature must not launder an earlier unsigned forged
   // entry into trust).
   const rawLines = readRawLines(segmentPath(dir, recovered.name));
-  if (!chainIsIntact(rawLines, key)) {
+  if (!chainIsIntact(rawLines, key, { anchorOnFirst: true })) {
     throw new Error(`recovered segment ${recovered.name} failed chain or signature verification — refusing to trust it`);
   }
   const signedRecovered = signedEntriesOnly(rawLines, key);

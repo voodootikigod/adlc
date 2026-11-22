@@ -1,0 +1,24 @@
+{
+  "acceptance": [
+    "Canonical chain verification, fork-anchor resolution (resolveAnchor), cycle detection (detectAnchorCycle), marker validation (validateForestMarker), and signed-era forest verification (checkForestSignedEra, verifyManifestForest) live in packages/tickets/lib/manifest-primitives.mjs with manifest-segments.mjs and gate-manifest/lib/{forest,verify}.mjs delegating to it.",
+    "All newly written signed segment entries (seq >= 1) in packages/tickets/lib/evidence.mjs and packages/ticket-sync/lib/reassign.mjs carry sigVersion: 2 and verify under signV2 while historical v1 entries continue to verify.",
+    "TicketService.planReconciliation enforces #assertNoManifestRails and #assertRailsExist on newly introduced rails and sets evidenceRequired when tickets are deleted (excluding pure renames where a new id is added without dropping contract coverage? No: verify exact existing ticket-sync/push tests and enforce deletion evidence!).",
+    "Cursor bundles are rebuilt in lockstep and packages/tickets, packages/gate-manifest, packages/ticket-sync, workspace-deps-declared, and ticket-store-boundary tests plus full npm run preflight pass."
+  ],
+  "body": "Implement Wave 2 T-P14a: (1) Consolidate canonical chain, fork-anchor (resolveAnchor, detectAnchorCycle), and .store.json auth=keyed forest verification downward into packages/tickets/lib/manifest-primitives.mjs, delegating both packages/tickets/lib/manifest-segments.mjs and packages/gate-manifest/lib/{forest,verify}.mjs to that single implementation; (2) Sign all newly written seq >= 1 segment entries with signV2 (sigVersion: 2) in packages/tickets/lib/evidence.mjs and packages/ticket-sync/lib/reassign.mjs while preserving backward-compatible verification of historical v1 entries; (3) Enforce #assertNoManifestRails, #assertRailsExist, and deletion evidence inside TicketService.planReconciliation in packages/tickets/lib/service.mjs, and rebuild Cursor bundles.",
+  "category": "feature",
+  "id": "t-wave2-forest-consolidation",
+  "rails": [],
+  "risk": "high",
+  "scope": [
+    "packages/tickets/lib/manifest-primitives.mjs",
+    "packages/tickets/lib/manifest-segments.mjs",
+    "packages/tickets/lib/evidence.mjs",
+    "packages/tickets/lib/service.mjs",
+    "packages/gate-manifest/lib/forest.mjs",
+    "packages/gate-manifest/lib/verify.mjs",
+    "packages/ticket-sync/lib/reassign.mjs"
+  ],
+  "status": "in-progress",
+  "title": "Wave 2: Downward forest-verifier consolidation, universal signV2, and planReconciliation invariants (T-P14a)"
+}
