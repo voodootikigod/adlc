@@ -196,7 +196,10 @@ test('reviewProvider enforces identifier grammar and blocks repo-configured same
   assert.equal(opaqueCli.reviewProviderSource, 'cli');
 });
 
-test('buildLiveDeps neutralizes repo-configured reviewProvider when Quartermaster routes or escalates onto the same family', async () => {
+test('buildLiveDeps neutralizes repo-configured reviewProvider when Quartermaster routes or escalates onto the same family', async (t) => {
+  const reviewBin = join(tmp(t, 'fleet-qm-review-bin-'), 'adversarial-review');
+  writeFileSync(reviewBin, '#!/bin/sh\nexit 0\n', 'utf8');
+  chmodSync(reviewBin, 0o755);
   const capturedReviewArgv = [];
   const fakeIo = {
     git: () => () => 'deadbeef',
@@ -234,7 +237,7 @@ test('buildLiveDeps neutralizes repo-configured reviewProvider when Quartermaste
     sandboxSpec: { mode: 'i-am-in-a-disposable-container', backend: null },
     seats,
     io: fakeIo,
-    config: { ...cfg, reviewBin: process.execPath },
+    config: { ...cfg, reviewBin },
   });
   for (const id of ['T-OPENAI', 'T-GATEWAY', 'T-UNKNOWN']) {
     capturedReviewArgv.length = 0;
@@ -259,7 +262,7 @@ test('buildLiveDeps neutralizes repo-configured reviewProvider when Quartermaste
     sandboxSpec: { mode: 'i-am-in-a-disposable-container', backend: null },
     seats: qmSeats,
     io: fakeIo,
-    config: { ...claudeRepoCfg, reviewBin: process.execPath },
+    config: { ...claudeRepoCfg, reviewBin },
   });
   capturedReviewArgv.length = 0;
   await qmDeps.prosecute({ ticket: { id: 'T-ON-CODEX', scope: ['src/**'] }, worktree: '/wt/codex', startSha: 'BASE' });
@@ -283,7 +286,7 @@ test('buildLiveDeps neutralizes repo-configured reviewProvider when Quartermaste
     sandboxSpec: { mode: 'i-am-in-a-disposable-container', backend: null },
     seats: escSeats,
     io: fakeIo,
-    config: { ...cfg, gate: { test: 'npm test' }, reviewBin: process.execPath },
+    config: { ...cfg, gate: { test: 'npm test' }, reviewBin },
   });
   await escDeps.dispatch({ ticket: { id: 'T-ESCALATED', scope: ['src/**'], body: 'spec', acceptanceCriteria: ['ac'] }, worktree: '/wt/esc', strike: 1 });
   await escDeps.dispatch({ ticket: { id: 'T-ESCALATED', scope: ['src/**'], body: 'spec', acceptanceCriteria: ['ac'] }, worktree: '/wt/esc', strike: 2, deadEnds: ['strike 1 failed'] });
@@ -298,7 +301,7 @@ test('buildLiveDeps neutralizes repo-configured reviewProvider when Quartermaste
     sandboxSpec: { mode: 'i-am-in-a-disposable-container', backend: null },
     seats: escSeats,
     io: fakeIo,
-    config: { ...cfg, gate: { test: 'npm test' }, reviewBin: process.execPath },
+    config: { ...cfg, gate: { test: 'npm test' }, reviewBin },
   });
   await resumedDeps.dispatch({ ticket: { id: 'T-ESCALATED', scope: ['src/**'], body: 'spec', acceptanceCriteria: ['ac'] }, worktree: '/wt/esc', strike: 2, deadEnds: ['resumed after strike 1'] });
   capturedReviewArgv.length = 0;

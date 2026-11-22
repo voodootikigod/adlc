@@ -5,6 +5,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { chmodSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 import { makeReviewRunner } from '../lib/review-runner.mjs';
 import { buildLiveDeps } from '../lib/live-deps.mjs';
 
@@ -58,7 +61,7 @@ test('the runner returns review meta {provider, verdict, exitCode} the --json re
   assert.equal(r2.review.provider, null, 'no provider forced and none reported → null, never fabricated');
 });
 
-test('the live deps forward config.reviewMaxBytes into the runner (the whole path, not just the runner)', async () => {
+test('the live deps forward config.reviewMaxBytes into the runner (the whole path, not just the runner)', async (t) => {
   const calls = [];
   const io = {
     git: () => () => 'SHA',
@@ -67,14 +70,17 @@ test('the live deps forward config.reviewMaxBytes into the runner (the whole pat
     readFile: () => '', exists: () => true, mkdirp: () => {}, writeJson: () => {}, appendLog: () => {}, ensureGitignore: () => {},
     env: { PATH: '/usr/bin', HOME: '/h' }, hasGh: () => false, copyTree: () => {},
   };
-  // The runner resolves an absolute reviewBin only if it EXISTS (trusted-binary
-  // rule L1/M2), so the fixture pins a real absolute file: this node binary.
+  // The runner resolves an absolute reviewBin only if it exists with trusted permissions
+  // (trusted-binary rule L1/M2), so create a mode-0755 stand-in inside a mode-0700 temp dir.
+  const reviewBin = join(tmp(t, 'fleet-review-bin-'), 'adversarial-review');
+  writeFileSync(reviewBin, '#!/bin/sh\nexit 0\n', 'utf8');
+  chmodSync(reviewBin, 0o755);
   const deps = buildLiveDeps({
     repo: '/repo', statusDir: undefined, sandboxSpec: { mode: 'sandbox', backend: { name: 'bubblewrap' } }, io,
-    config: { gate: { test: 'npm test' }, reviewProvider: 'codex', reviewMaxBytes: 4096, reviewBin: process.execPath, prosecuteFailOn: 'medium' },
+    config: { gate: { test: 'npm test' }, reviewProvider: 'codex', reviewMaxBytes: 4096, reviewBin, prosecuteFailOn: 'medium' },
   });
   const r = await deps.prosecute({ ticket: { id: 'T1' }, worktree: '/wt', startSha: 'SHA' });
-  const reviewCall = calls.find((c) => c.cmd === process.execPath);
+  const reviewCall = calls.find((c) => c.cmd === reviewBin);
   assert.ok(reviewCall, 'the trusted reviewer binary was spawned');
   assert.ok(reviewCall.args.includes('--max-bytes') && reviewCall.args[reviewCall.args.indexOf('--max-bytes') + 1] === '4096');
   assert.ok(!reviewCall.args.includes('--allow-summary-review'));
