@@ -396,7 +396,7 @@ const UNRESOLVED_CAUSE =
  * the guard is a no-op and allows, with one stderr notice naming the cause.
  */
 export function unresolvedRootVerdict(tool, env = process.env) {
-  if (env?.ADLC_P4_ENFORCEMENT === '1') {
+  if (env?.ADLC_P4_ENFORCEMENT !== '0') {
     return {
       permission: 'deny',
       user_message: `ADLC rails-guard: blocked "${tool || 'unknown'}" — ${UNRESOLVED_CAUSE}`,
@@ -519,7 +519,7 @@ export function decide(payload, { root, env = process.env } = {}) {
     //    the deny path become a silent allow on a frozen rail;
     //  - when enforcement is OFF the guard is a no-op anyway, so fail OPEN to avoid
     //    bricking the editor on a hook bug. The CI gate remains the real control.
-    const enforcing = env?.ADLC_P4_ENFORCEMENT === '1';
+    const enforcing = env?.ADLC_P4_ENFORCEMENT !== '0';
     process.stderr.write(
       `adlc-rails-guard: internal error (failing ${enforcing ? 'CLOSED' : 'OPEN'}) — ${err?.message ?? err}\n`,
     );
@@ -552,7 +552,7 @@ async function main() {
       // Enforcement-aware (consistent with decide()'s categorical fail-safe): an
       // unparseable payload while enforcement is active cannot be verified, so fail
       // CLOSED; otherwise the guard is a no-op, so fail open to avoid bricking the editor.
-      const enforcing = process.env.ADLC_P4_ENFORCEMENT === '1';
+      const enforcing = process.env.ADLC_P4_ENFORCEMENT !== '0';
       process.stderr.write(`adlc-rails-guard: malformed payload JSON (failing ${enforcing ? 'CLOSED' : 'OPEN'}) — ${err.message}\n`);
       process.stdout.write(JSON.stringify(enforcing
         ? {

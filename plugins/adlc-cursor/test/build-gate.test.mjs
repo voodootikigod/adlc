@@ -115,7 +115,7 @@ test('PATHLESS mutator, NO explicit root → the resolveOwning(payload, undefine
   const fx = fixture(t, HIGH_RISK);
   seedCounter(fx, { count: DEFAULT_DEPTH_THRESHOLD + 5, updatedAt: Date.now(), sessionId: 'bg-sess' }, 'bg-sess');
   const pathless = { tool_name: 'Write', tool_input: {}, workspace_roots: [fx.root], session_id: 'bg-sess' };
-  const v = await dispatch(pathless, { env: env(fx) }); // no `root` → forces resolveOwning(payload, undefined)
+  const v = await dispatch(pathless, { env: env(fx, { ADLC_P4_ENFORCEMENT: '0' }) }); // no `root` → forces resolveOwning(payload, undefined)
   assert.equal(v.permission, 'deny', 'a pathless high-risk edit in a degraded session still gates (no crash)');
   assert.match(v.user_message, /build-gate/, 'the deny came from the buildgate — i.e. resolveOwning resolved the root and consultBuildGate ran');
 });

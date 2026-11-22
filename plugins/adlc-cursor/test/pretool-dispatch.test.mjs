@@ -190,7 +190,7 @@ test('wire format: malformed stdin fails CLOSED under enforcement, OPEN otherwis
       cwd: root, env: { ...process.env, ...envOver }, input: '{ not json',
     }).toString());
     assert.equal(run({ ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' }).permission, 'deny');
-    assert.equal(run({ ADLC_P4_ENFORCEMENT: '', ADLC_TICKET: '' }).permission, 'allow');
+    assert.equal(run({ ADLC_P4_ENFORCEMENT: '0', ADLC_TICKET: '' }).permission, 'allow');
   } finally { cleanup(root); }
 });
 

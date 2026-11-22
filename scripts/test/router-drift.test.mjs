@@ -23,37 +23,38 @@ const GEN = join(HERE, '..', 'router', 'gen-routers.mjs');
 const { generateAll, TARGETS } = await import('../router/gen-routers.mjs');
 const model = (await import('../router/router-model.mjs')).routerModel;
 
-const SIX = [
+const SEVEN = [
   'plugins/adlc-claude-code/skills/adlc/SKILL.md',
   'plugins/adlc-gemini/skills/adlc/SKILL.md',
   'plugins/adlc-codex/skills/adlc/SKILL.md',
   'plugins/adlc-pi/skills/adlc/SKILL.md',
   'plugins/adlc-opencode/skill/adlc.md',
   'plugins/adlc-cursor/rules/adlc.mdc',
+  'plugins/adlc-copilot/skills/adlc/SKILL.md',
 ];
 
 test('AC1 — canonical model exports shared and harnesses', () => {
   assert.ok(model && typeof model === 'object', 'routerModel is an object');
   assert.ok(model.shared && typeof model.shared === 'object', 'has shared');
   assert.ok(model.harnesses && typeof model.harnesses === 'object', 'has harnesses');
-  assert.equal(Object.keys(model.harnesses).length, 6, 'six harnesses');
+  assert.equal(Object.keys(model.harnesses).length, 7, 'seven harnesses');
 });
 
-test('TARGETS covers exactly the six router paths', () => {
-  assert.deepEqual([...TARGETS].sort(), [...SIX].sort());
+test('TARGETS covers exactly the seven router paths', () => {
+  assert.deepEqual([...TARGETS].sort(), [...SEVEN].sort());
 });
 
-test('AC2 — generateAll() reproduces the six committed routers byte-for-byte', () => {
+test('AC2 — generateAll() reproduces the seven committed routers byte-for-byte', () => {
   const out = generateAll();
-  for (const rel of SIX) {
+  for (const rel of SEVEN) {
     const committed = readFileSync(join(REPO, rel), 'utf8');
     assert.equal(out[rel], committed, `generated output must equal committed ${rel}`);
   }
 });
 
-test('AC4 — adversarial-review discoverability survives in all six generated routers', () => {
+test('AC4 — adversarial-review discoverability survives in all seven generated routers', () => {
   const out = generateAll();
-  for (const rel of SIX) {
+  for (const rel of SEVEN) {
     assert.match(out[rel], /adversarial-review/, `${rel} names adversarial-review`);
     assert.match(out[rel], /exit 0 = SHIP/, `${rel} contains "exit 0 = SHIP"`);
   }

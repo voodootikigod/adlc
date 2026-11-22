@@ -158,8 +158,8 @@ export function resolveActiveTicketId(root, env) {
  *  - { state: 'active', rails, activeId } — enforcing with a valid ticket + rails.
  */
 export function railPreconditions({ root = process.cwd(), env = process.env } = {}) {
-  if (env.ADLC_P4_ENFORCEMENT !== '1') {
-    return { state: 'inactive', reason: 'enforcement inactive (ADLC_P4_ENFORCEMENT !== "1")' };
+  if (env.ADLC_P4_ENFORCEMENT === '0') {
+    return { state: 'inactive', reason: 'enforcement inactive (ADLC_P4_ENFORCEMENT === "0")' };
   }
 
   let snapshot;

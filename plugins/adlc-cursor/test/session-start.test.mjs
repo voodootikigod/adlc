@@ -254,7 +254,7 @@ test('scaffold mergeHooks wires sessionStart', () => {
 test('phase hint / enforcement boolean mapping', (t) => {
   const root = legacyRepo(t, { pointer: { id: 'T1' } });
   const state = tmp(t, 'adlc-state-');
-  for (const [flag, enforcing] of [['', false], ['0', false], ['false', false], ['1', true]]) {
+  for (const [flag, enforcing] of [['', true], ['0', false], ['false', true], ['1', true]]) {
     const r = handleSessionStart({ session_id: 'Sph', workspace_roots: [root] }, {
       env: { ADLC_CURSOR_STATE_DIR: state, ADLC_P4_ENFORCEMENT: flag },
     });

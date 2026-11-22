@@ -36,11 +36,13 @@ test('a: no tickets.json → allow (no-op)', (t) => {
   assert.equal(r.decision, 'allow');
 });
 
-// ---- (b) no-op when ADLC_P4_ENFORCEMENT != '1' ----
-test('b: enforcement off → allow even on a declared rail', (t) => {
+// ---- (b) no-op when ADLC_P4_ENFORCEMENT === '0' (default is enforcing) ----
+test('b: enforcement off → allow even on a declared rail; unset defaults to enforcing', (t) => {
   const dir = repo(t, { tickets: T1_RAILED });
-  const r = checkRail({ filePath: 'test/x.mjs', tool: 'edit', root: dir, env: { ADLC_TICKET: 'T1' } });
-  assert.equal(r.decision, 'allow');
+  const off = checkRail({ filePath: 'test/x.mjs', tool: 'edit', root: dir, env: { ADLC_P4_ENFORCEMENT: '0', ADLC_TICKET: 'T1' } });
+  assert.equal(off.decision, 'allow');
+  const def = checkRail({ filePath: 'test/x.mjs', tool: 'edit', root: dir, env: { ADLC_TICKET: 'T1' } });
+  assert.equal(def.decision, 'deny');
 });
 
 // ---- (c) no-op when no active ticket ----
@@ -358,8 +360,12 @@ test('m: P5 — read-only prefix cannot shadow a rail-targeting writer (git stat
 
 test('m: bash unverifiable command but enforcement OFF or no ticket → allow (no false denies)', (t) => {
   const dir = repo(t, { tickets: T1_RAILED });
-  assert.equal(checkToolCall({ tool: 'bash', args: { command: 'make' }, root: dir, env: { ADLC_TICKET: 'T1' } }).decision, 'allow');
+  assert.equal(checkToolCall({ tool: 'bash', args: { command: 'make' }, root: dir, env: { ADLC_P4_ENFORCEMENT: '0', ADLC_TICKET: 'T1' } }).decision, 'allow');
   assert.equal(checkToolCall({ tool: 'bash', args: { command: 'make' }, root: dir, env: { ...ON } }).decision, 'allow');
+  assert.equal(
+    checkToolCall({ tool: 'adlc_gate', args: { gate: 'consensus-fix', args: ['--test-command', 'rm -rf test'] }, root: dir, env: { ...ON, ADLC_TICKET: 'T1' } }).decision,
+    'deny',
+  );
 });
 
 // ---- (k) ungated-name spoofing: an "ungated" tool carrying a rail target is denied ----
@@ -384,7 +390,7 @@ test('k: ungated tool with a NON-rail target stays allowed', (t) => {
 
 test('k: ungated tool with rail target but enforcement OFF → allow (no false denies)', (t) => {
   const dir = repo(t, { tickets: T1_RAILED });
-  const r = checkToolCall({ tool: 'todowrite', args: { filePath: 'test/x.mjs' }, root: dir, env: { ADLC_TICKET: 'T1' } });
+  const r = checkToolCall({ tool: 'todowrite', args: { filePath: 'test/x.mjs' }, root: dir, env: { ADLC_P4_ENFORCEMENT: '0', ADLC_TICKET: 'T1' } });
   assert.equal(r.decision, 'allow');
 });
 

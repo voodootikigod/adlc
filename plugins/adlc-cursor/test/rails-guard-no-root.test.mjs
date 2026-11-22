@@ -111,7 +111,7 @@ test('AC3 no enforcement, no resolvable root: allow plus exactly one stderr noti
   const repo = railedRepo(t);
   const payload = noRootPayload(join(repo, 'src', 'frozen.js'));
   payload.tool_input = { ...payload.tool_input, edits: [{ file_path: join(repo, 'src', 'other.js') }] };
-  const { verdict, stderr } = runPretool(t, payload, hookEnv(t, { ADLC_TICKET: 'T1' }));
+  const { verdict, stderr } = runPretool(t, payload, hookEnv(t, { ADLC_P4_ENFORCEMENT: '0', ADLC_TICKET: 'T1' }));
   assert.deepEqual(verdict, { permission: 'allow' });
   const notices = stderr.split('\n').filter((l) => UNRESOLVED.test(l));
   assert.equal(notices.length, 1, `expected one notice, got:\n${stderr}`);
@@ -175,7 +175,7 @@ test('decide: an opaque path-less mutator resolves CURSOR_PROJECT_DIR and denies
 });
 
 test('decide: an opaque path-less mutator with no root and enforcement OFF is allowed', () => {
-  const v = decide({ tool_name: 'apply_patch', tool_input: { patch: 'opaque' } }, { env: {} });
+  const v = decide({ tool_name: 'apply_patch', tool_input: { patch: 'opaque' } }, { env: { ADLC_P4_ENFORCEMENT: '0' } });
   assert.deepEqual(v, { permission: 'allow' });
 });
 
@@ -187,7 +187,7 @@ test('decide: a shell tool with no path and no root is allowed even under enforc
 
 test('dispatch: buildgate on, P4 off, no root, mutating tool → buildgate denies instead of evaluating cwd', async () => {
   const v = await dispatch({ tool_name: 'Write', tool_input: { file_path: '/nowhere/x.js' } },
-    { env: { ADLC_BUILD_GATE_ENFORCEMENT: '1' } });
+    { env: { ADLC_P4_ENFORCEMENT: '0', ADLC_BUILD_GATE_ENFORCEMENT: '1' } });
   assert.equal(v.permission, 'deny');
   assert.match(v.user_message, /build-gate/);
   assert.match(v.user_message, UNRESOLVED);
@@ -195,13 +195,13 @@ test('dispatch: buildgate on, P4 off, no root, mutating tool → buildgate denie
 
 test('dispatch: buildgate on, P4 off, no root, Task spawn → not denied by the buildgate', (t) => {
   const task = JSON.parse(readFileSync(join(HERE, 'fixtures', 'pretool-task-prosecutor.json'), 'utf8'));
-  const { verdict } = runPretool(t, task, hookEnv(t, { ADLC_BUILD_GATE_ENFORCEMENT: '1' }));
+  const { verdict } = runPretool(t, task, hookEnv(t, { ADLC_P4_ENFORCEMENT: '0', ADLC_BUILD_GATE_ENFORCEMENT: '1' }));
   assert.doesNotMatch(verdict.user_message ?? '', /build-gate/);
 });
 
 test('dispatch: buildgate on, P4 off, no root, shell tool → allowed', async () => {
   const v = await dispatch({ tool_name: 'run_terminal_cmd', tool_input: { command: 'npm test' } },
-    { env: { ADLC_BUILD_GATE_ENFORCEMENT: '1' } });
+    { env: { ADLC_P4_ENFORCEMENT: '0', ADLC_BUILD_GATE_ENFORCEMENT: '1' } });
   assert.deepEqual(v, { permission: 'allow' });
 });
 
@@ -313,7 +313,7 @@ test('audit: an unresolvable path in a batch does not hide a later rail touch', 
 test('dispatch: buildgate on, a resolvable first target does not hide a later UNRESOLVED target', async (t) => {
   const repo = railedRepo(t);
   const outside = join(realpathSync(tmp(t, 'adlc-cursor-noroot-bgout-')), 'x.js');
-  const env = { ADLC_BUILD_GATE_ENFORCEMENT: '1', CURSOR_PROJECT_DIR: repo };
+  const env = { ADLC_P4_ENFORCEMENT: '0', ADLC_BUILD_GATE_ENFORCEMENT: '1', CURSOR_PROJECT_DIR: repo };
   for (const order of [[join(repo, 'src', 'free.js'), outside], [outside, join(repo, 'src', 'free.js')]]) {
     const v = await dispatch({ tool_name: 'MultiEdit', tool_input: { edits: order.map((file_path) => ({ file_path })) } }, { env });
     assert.equal(v.permission, 'deny', `order ${order.join(', ')}`);
@@ -352,7 +352,7 @@ test('workspace_roots naming repoA leaves an absolute target in repoB unresolved
   assert.match(enforced.user_message, UNRESOLVED);
 
   // Advisory mode: emits the unresolved stderr notice rather than silently claiming repoA.
-  const { verdict: advisory, stderr } = runPretool(t, payload, hookEnv(t, { ADLC_TICKET: 'T1' }));
+  const { verdict: advisory, stderr } = runPretool(t, payload, hookEnv(t, { ADLC_P4_ENFORCEMENT: '0', ADLC_TICKET: 'T1' }));
   assert.deepEqual(advisory, { permission: 'allow' });
   assert.match(stderr, UNRESOLVED);
 });
@@ -390,7 +390,7 @@ test('multi-root workspace_roots leaves a target outside ALL declared roots unre
     assert.equal(d.permission, 'deny');
     assert.match(d.user_message, UNRESOLVED);
 
-    const bg = await dispatch(batch, { env: { ADLC_BUILD_GATE_ENFORCEMENT: '1' } });
+    const bg = await dispatch(batch, { env: { ADLC_P4_ENFORCEMENT: '0', ADLC_BUILD_GATE_ENFORCEMENT: '1' } });
     assert.equal(bg.permission, 'deny');
     assert.match(bg.user_message, /build-gate/);
     assert.match(bg.user_message, UNRESOLVED);

@@ -24,7 +24,7 @@ const FIX = join(HERE, 'fixtures');
 function stateEnv() {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-p5-'));
   fixtureDirs.add(dir);
-  return { env: { ADLC_CURSOR_STATE_DIR: dir }, dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return { env: { ADLC_CURSOR_STATE_DIR: dir, ADLC_P4_ENFORCEMENT: '0' }, dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 test('no marker → ordinary explore/shell allowed on subagentStart + preToolUse Task', async () => {

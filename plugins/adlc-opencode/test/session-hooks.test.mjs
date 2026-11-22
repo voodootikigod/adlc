@@ -39,7 +39,7 @@ test('checkPreflight: adlc missing + dirty tree + enforcement off → 3 advisory
     'adlc --version': { status: 1, error: new Error('ENOENT') },
     'git status': { status: 0, stdout: ' M file.txt\n' },
   });
-  const r = checkPreflight(root, { spawnImpl, env: {} });
+  const r = checkPreflight(root, { spawnImpl, env: { ADLC_P4_ENFORCEMENT: '0' } });
   assert.equal(r.skipped, false);
   assert.equal(r.ready, false);
   assert.equal(r.warnings.length, 3);
@@ -66,6 +66,17 @@ test('auditGateManifest: no manifest → skipped no-op', (t) => {
   assert.equal(r.skipped, true);
   assert.equal(r.ok, true);
   assert.equal(r.warning, null);
+});
+
+test('auditGateManifest: segmented .adlc/manifest.d/ triggers verify without legacy manifest.jsonl', (t) => {
+  const root = initAdlc(mkroot(t));
+  mkdirSync(join(root, '.adlc', 'manifest.d'), { recursive: true });
+  writeFileSync(join(root, '.adlc', 'manifest.d', 'seg.jsonl'), '{"seq":1}\n');
+  const spawnImpl = stub({ 'adlc gate-manifest verify': { status: 2, stdout: 'segment chain broken' } });
+  const r = auditGateManifest(root, { spawnImpl });
+  assert.equal(r.skipped, false);
+  assert.equal(r.ok, false);
+  assert.match(r.warning, /segment chain broken/);
 });
 
 test('auditGateManifest: verify non-zero → advisory warning', (t) => {

@@ -2697,7 +2697,7 @@ function upsertSessionResolution({
   }, { now });
 }
 function enforcementActive(env = process.env) {
-  return env.ADLC_P4_ENFORCEMENT === "1";
+  return env.ADLC_P4_ENFORCEMENT !== "0";
 }
 function phaseHint({ ticketId, enforcing }) {
   if (enforcing) return "enforcing";

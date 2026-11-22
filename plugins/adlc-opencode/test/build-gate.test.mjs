@@ -118,7 +118,8 @@ test('enforcement off / uninitialized / no ticket → allow (rails gate owns tho
   try {
     const t = createDepthTracker();
     t.markCompacted('s');
-    assert.equal(checkBuildGate({ sessionID: 's', tracker: t, root: dir, env: { ADLC_TICKET: 'T1' } }).decision, 'allow');
+    assert.equal(checkBuildGate({ sessionID: 's', tracker: t, root: dir, env: { ADLC_P4_ENFORCEMENT: '0', ADLC_TICKET: 'T1' } }).decision, 'allow');
+    assert.equal(checkBuildGate({ sessionID: 's', tracker: t, root: dir, env: { ADLC_TICKET: 'T1' } }).decision, 'deny');
     assert.equal(checkBuildGate({ sessionID: 's', tracker: t, root: bare, env: { ...ON } }).decision, 'allow');
     assert.equal(checkBuildGate({ sessionID: 's', tracker: t, root: dir, env: { ADLC_P4_ENFORCEMENT: '1' } }).decision, 'allow');
   } finally {

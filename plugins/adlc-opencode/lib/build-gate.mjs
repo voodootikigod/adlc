@@ -52,8 +52,8 @@ export function createDepthTracker() {
  * @returns {{ decision: 'allow'|'deny', reason: string, overridden?: boolean }}
  */
 export function checkBuildGate({ sessionID, tracker, root = process.cwd(), env = process.env }) {
-  if (env.ADLC_P4_ENFORCEMENT !== '1') {
-    return { decision: 'allow', reason: 'enforcement inactive (ADLC_P4_ENFORCEMENT !== "1")' };
+  if (env.ADLC_P4_ENFORCEMENT === '0') {
+    return { decision: 'allow', reason: 'enforcement inactive (ADLC_P4_ENFORCEMENT === "0")' };
   }
   const override = env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null;
   const ticketsPath = override ? (isAbsolute(override) ? override : join(root, override)) : join(root, '.adlc', 'tickets.json');

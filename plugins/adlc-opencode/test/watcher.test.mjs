@@ -86,7 +86,7 @@ test('rails backstop inert when enforcement off / outside project / own quaranti
   const dir = gitRepo({ tickets: T1 });
   try {
     writeFileSync(join(dir, 'test', 'x.mjs'), 'OVERWRITTEN\n');
-    assert.equal(handleFileEdited({ file: join(dir, 'test', 'x.mjs'), root: dir, env: { ADLC_TICKET: 'T1' }, state: createWatcherState() }).actions.length, 0);
+    assert.equal(handleFileEdited({ file: join(dir, 'test', 'x.mjs'), root: dir, env: { ADLC_P4_ENFORCEMENT: '0', ADLC_TICKET: 'T1' }, state: createWatcherState() }).actions.length, 0);
     assert.equal(handleFileEdited({ file: '/etc/hosts', root: dir, env: { ...ON }, state: createWatcherState() }).actions.length, 0);
     assert.equal(handleFileEdited({ file: join(dir, '.adlc', 'quarantine', 'x'), root: dir, env: { ...ON }, state: createWatcherState() }).actions.length, 0);
   } finally { rmSync(dir, { recursive: true, force: true }); }

@@ -150,8 +150,8 @@ export function resolveActiveTicketId(root, env) {
  */
 export function resolveRailsInForce(root, rawEnv) {
   const env = envForSecondaryCheckout(root, root, rawEnv ?? {});
-  if (env.ADLC_P4_ENFORCEMENT !== '1') {
-    return { active: false, reason: 'enforcement inactive (ADLC_P4_ENFORCEMENT !== "1")' };
+  if (env.ADLC_P4_ENFORCEMENT === '0') {
+    return { active: false, reason: 'enforcement inactive (ADLC_P4_ENFORCEMENT === "0")' };
   }
   const override = env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null;
   const ticketsPath = override ? (isAbsolute(override) ? override : join(root, override)) : join(root, '.adlc', 'tickets.json');
@@ -881,7 +881,7 @@ export function checkToolCall({ tool, args, root = process.cwd(), cwd = root, en
       }
     }
     const primaryForce = resolveRailsInForce(root, env);
-    if (!primaryForce.active && env?.ADLC_P4_ENFORCEMENT === '1' && explicitWorkdirs.length === 1) {
+    if (!primaryForce.active && env?.ADLC_P4_ENFORCEMENT !== '0' && explicitWorkdirs.length === 1) {
       const owning = resolveOwningCheckoutRoot(explicitWorkdirs[0], root, env);
       if (owning && canonicalizeWorkspacePath(resolve(owning)) !== canonicalizeWorkspacePath(resolve(root))) {
         return checkShellCall({
@@ -1054,7 +1054,7 @@ export function checkToolCall({ tool, args, root = process.cwd(), cwd = root, en
           // which can write any path including the tickets.json trust root.
           // No argv scan can vet a command string, so fail closed for every
           // gate; the read-only DEFAULT invocations stay legal.
-          if (/^--[a-z][a-z-]*cmd$/.test(flag)) return deny(`command-executor flag "${flag}" runs an arbitrary program, which an in-session guard cannot vet`);
+          if (/^--[a-z][a-z-]*(?:cmd|command)$/.test(flag)) return deny(`command-executor flag "${flag}" runs an arbitrary program, which an in-session guard cannot vet`);
         }
         // (3) ledger writes are vetted on the EFFECTIVE ledger FILE (not the
         // directory — the directory always ancestor-hits the implicit
@@ -1115,7 +1115,7 @@ export function checkToolCall({ tool, args, root = process.cwd(), cwd = root, en
   const canonicalPrimary = canonicalizeWorkspacePath(resolve(root));
 
   const secondaryStates = new Map();
-  if (env?.ADLC_P4_ENFORCEMENT === '1') {
+  if (env?.ADLC_P4_ENFORCEMENT !== '0') {
     const probeAbs = [
       ...explicitWorkdirs.map((wd) => resolve(baseCwd, wd)),
       ...targets.flatMap((t) =>
@@ -1221,7 +1221,7 @@ export function checkShellCall({ command, workdir, workdirs, root = process.cwd(
       : [];
 
   let anySecondaryActive = false;
-  if (!force.active && env?.ADLC_P4_ENFORCEMENT === '1') {
+  if (!force.active && env?.ADLC_P4_ENFORCEMENT !== '0') {
     const shellProbes = [
       ...candidateDirs.map((w) => resolve(root, w)),
       ...c.paths.flatMap((p) =>

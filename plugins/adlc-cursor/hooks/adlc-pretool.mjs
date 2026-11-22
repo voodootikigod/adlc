@@ -326,7 +326,7 @@ async function main() {
       // Same enforcement-aware fail-safe as the frozen guard's own wire
       // handler: an unparseable payload under active enforcement cannot be
       // verified → fail CLOSED; otherwise fail open (don't brick the editor).
-      const enforcing = process.env.ADLC_P4_ENFORCEMENT === '1';
+      const enforcing = process.env.ADLC_P4_ENFORCEMENT !== '0';
       process.stderr.write(`adlc-pretool: malformed payload JSON (failing ${enforcing ? 'CLOSED' : 'OPEN'}) — ${err.message}\n`);
       process.stdout.write(JSON.stringify(enforcing
         ? {

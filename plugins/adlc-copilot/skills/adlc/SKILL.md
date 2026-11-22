@@ -23,7 +23,7 @@ the user runs `npm i -g @adlc/cli`. Run `/adlc-init` once per repo to create the
 ## Where am I? → which gate
 
 ```
-Vague request, no ticket yet? ───────────────→ P0  /adlc-ticket
+Vague request, no ticket yet? ───────────────→ P0  /adlc-ticket (interrogate, then write)
 Have a spec / acceptance criteria? ──────────→ P1  adlc spec-lint · premortem · parallax · adversarial-review
 Have tickets, planning fan-out? ─────────────→ P2  adlc coldstart · model-router · merge-forecast
 About to build, want to freeze tests? ───────→ P3  adlc rails-guard · adversarial-review
@@ -79,46 +79,47 @@ command) — `adlc run p1` requires and validates that record: it
 rejects a missing `--ticket`/`--files` binding, a non-`"approved"` verdict, a
 `spec_hash` that does not match the file's actual hash, and an approval
 recorded before the ticket's own spec-lint/premortem evidence. The tools:
-- `adlc spec-lint <spec.md>` — every acceptance criterion needs a concrete
+- `adlc spec-lint SPEC.MD` — every acceptance criterion needs a concrete
   verification method; a "wish" with no method gate-fails (exit 2). Add `--llm`
-  (or `--prompt-only`) to also catch vacuous methods. Once it passes cleanly,
-  record it as P1 evidence: `adlc spec-lint <spec.md> --record --ticket <id>`
-  (`--record` requires `--ticket`).
-- `adlc premortem <spec.md> --prompt-only --record-verdict <file|-> --ticket <id>`
-  — stress-test the approved spec for failure modes before implementation.
-  `--ticket` is required alongside `--record-verdict`.
+  (or `--prompt-only`) to also catch vacuous methods. Once it
+  passes, record the evidence Gate 1 needs:
+  `adlc spec-lint SPEC.MD --record --ticket ID`.
+- `adlc premortem SPEC.MD [--prompt-only]` — stress-test the approved spec for
+  failure modes before implementation. Recording the verdict for Gate 1
+  requires `--prompt-only --record-verdict FILE-OR-DASH --ticket ID`.
 - `adlc parallax --request "…"` (or `--file req.md`) — fan out readers to expose
   ambiguity, edge conflicts, or route conflicts. The accuracy dial (D3).
   `--questions-json` emits the divergences as structured
   `{questions: [{point, options}]}` for the interrogation loop.
 - Design review is recommended practice today via `adversarial-review --prompt-only`
-  (feed the ticket/spec to a model yourself) or `adversarial-review --base <ref>`
+  (feed the ticket/spec to a model yourself) or `adversarial-review --base REF`
   (review the diff that introduces it); `exit 0 = SHIP`. First-class artifact input
   (`--input`) is a deferred follow-on — see ADR-0008 (adversarial-review coverage map).
 
 ### P2 — Decompose (an agent can execute without guessing)
-- `adlc coldstart <ticket-id> --prompt-only` (or `--all`) — gate ticket
+- `adlc coldstart TICKET-ID --prompt-only` (or `--all`) — gate ticket
   executability. LLM-backed: in Copilot, use `--prompt-only` and answer the
   printed audit yourself (the bare form needs an API key and exits 1 without one).
-- `adlc model-router [--floor <n>]` — assign tickets to frontier/direct/ladder
+- `adlc model-router [--floor N]` — assign tickets to frontier/direct/ladder
   model strategies. The cost dial (D1).
 - `adlc merge-forecast` — estimate fan-out width, dependency pressure, and merge
   backpressure. The time dial (D2).
 
 ### P3 — Rail (frozen paths are protected)
-- `adlc rails-guard --base <ref> --ticket <id>` — diff-based check that no
+- `adlc rails-guard --base REF --ticket ID` — diff-based check that no
   committed change touched a frozen rail (exit 2 = a rail was edited). This is the
-  **unbypassable commit-time backstop** (`rails-guard-ci`); run it in CI and make
-  it a required check. The plugin's **preToolUse rails-guard hook** is the
-  in-session layer: it denies edits to declared rail paths and freezes the active
-  ticket store itself once rails exist. The deny is a permission ask that
-  **enforces headless** (defaults to deny, overrides `--allow-tool`) — **unless
-  the session runs with `--allow-all-tools`**, which auto-approves the ask, or the
-  hook crashes/times out; in those two fail-open windows it is **not a boundary**.
-  Rail mutations the hook misses — those windows, plus any change on another
-  branch — are caught by the CI diff gate (any spelling), not the hook. Wire that
-  gate with the template at `docs/ci/rails-guard.yml`. Override deliberately with
-  `ADLC_RAILS_BYPASS=1` (recorded to the manifest).
+  **unbypassable commit-time backstop**; run it in CI. The plugin's **PreToolUse
+  rail hook** is the in-session layer: it precisely denies Edit/Write/MultiEdit to
+  declared rail paths and freezes the active ticket store itself once rails exist.
+  In-session **shell** tool calls are also rail-gated via the canonical shell classifier
+  (read-only allowlist, opaque/expansion fail-closed, literal targets checked against
+  frozen rails). The deny is a permission ask that **enforces headless** (defaults to
+  deny, overrides `--allow-tool`) — **unless the session runs with `--allow-all-tools`**,
+  which auto-approves the ask, or the hook crashes/times out; in those two fail-open
+  windows it is **not a boundary**.
+  Wire that gate with the template at `docs/ci/rails-guard.yml` and make it a
+  required check. Override deliberately with `ADLC_RAILS_BYPASS=1` (recorded to
+  the manifest).
 - Rail-set adequacy review — is every invariant covered and unbypassable — is
   recommended practice today via `adversarial-review --prompt-only` (feed the declared
   rail set + ticket + invariants to a model); `exit 0 = SHIP`. `--loop` reviews
@@ -127,7 +128,7 @@ recorded before the ticket's own spec-lint/premortem evidence. The tools:
   follow-on — see ADR-0008 (adversarial-review coverage map).
 
 ### P4 — Build (supervised execution)
-- `adlc flail-detector <log-file> [--scope <glob>]` — detect repeated errors,
+- `adlc flail-detector LOG-FILE [--scope GLOB]` — detect repeated errors,
   scope violations, edit churn, oversized logs.
 - `adlc consensus-fix --test-cmd "…" --files a.mjs,b.mjs` — for a hard failing
   test, fan out independent candidate repairs and select a gated consensus
@@ -140,23 +141,23 @@ recorded before the ticket's own spec-lint/premortem evidence. The tools:
   behavior change visible for the P6 human gate.
 - `adlc review-calibration --review-cmd "… {base} …"` — measure reviewer recall
   by scoring whether review catches injected mutants ("who reviews the reviewer").
-- `adversarial-review --providers <a,b> [--verify]` — ≥2 distinct providers, cross-model
+- `adversarial-review --providers A,B [--verify]` — ≥2 distinct providers, cross-model
   and fresh-context, on the risk gate; loop review→fix→re-review until `exit 0 = SHIP`.
 - **Cross-model is GATED (not just advised) for the trust-root tier.** If the change
   touches an enforcement package (`packages/rails-guard|prosecute|gate-manifest|build-gate/`),
   a gated-artifact producer (`packages/ticket-prune|ticket-sync/`), a rails deny-path, or a
   trust-root file (`scripts/rails-guard-ci.mjs`, `docs/ci/rails-guard.yml`,
   `scripts/test/rails-guard-workflow-hashes.json`, `.adlc/tickets.json`), a clean
-  **same-model** P5 is NOT enough: the P5 prosecute runner (given `--base <ref>`) exits 2
+  **same-model** P5 is NOT enough: the P5 prosecute runner (given `--base REF`) exits 2
   until the manifest holds a `cross-model-review` approve from a provider DISTINCT from the
   author, bound to the reviewed revision. Record it with the runner's `record-cross-model`
-  subcommand (`--ticket <id> --provider <p> --author-provider <a> --verdict approve
-  [--input <passes.json>]`) (T39).
+  subcommand (`--ticket ID --provider PROVIDER --author-provider AUTHOR-PROVIDER --verdict approve
+  [--input PASSES.JSON]`) (T39).
 
 ### P6 — Integrate (the human gate)
 This gate is a human decision, not something an agent passes. Surface the
 evidence: `adlc gate-manifest show` and the `behavior-diff compare` output, then
-let the human decide. Record outcomes with `adlc gate-manifest record <gate>`.
+let the human decide. Record outcomes with `adlc gate-manifest record GATE`.
 
 ### P7 — Distill (turn findings into defenses) → `/adlc-distill`
 - `adlc lesson-foundry --prompt-only` — mine repeated findings into deterministic
