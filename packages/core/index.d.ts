@@ -137,7 +137,7 @@ export function appendEntries<T = unknown>(
   entriesOrFactory: T[] | ((state: { entries: unknown[]; skipped: Array<{ line: number; error: string }>; rawLines: string[]; lastRawLine: string | null }) => T[]),
   dir?: string
 ): T[];
-export function withLedgerLock<T>(target: string, fn: () => T, options?: { retries?: number; delayMs?: number; staleMs?: number; isPidAlive?: (pid: number) => boolean; now?: () => number }): T;
+export function withLedgerLock<T>(target: string, fn: () => T, options?: { retries?: number; delayMs?: number; staleMs?: number; isPidAlive?: (pid: number) => boolean; procStartTime?: (pid: number) => string | null; now?: () => number }): T;
 export function readEntries<T = unknown>(
   name: string,
   dir?: string
@@ -369,8 +369,34 @@ export function readBoundedRegularFile(
 ): string;
 export function acquireDirLock(
   lockDir: string,
-  options?: { staleMs?: number }
-): () => void;
+  options?: {
+    staleMs?: number;
+    retries?: number;
+    delayMs?: number;
+    now?: () => number;
+    isPidAlive?: (pid: number) => boolean;
+    procStartTime?: (pid: number) => string | null;
+    host?: string;
+  }
+): (() => void) & { heartbeat: () => boolean; token: string };
+export function heartbeat(
+  lockDir: string,
+  token: string,
+  options?: { now?: () => number }
+): boolean;
+export function withDirLock<T>(
+  lockDir: string,
+  fn: (ctx: { release: () => void; heartbeat: () => boolean }) => T,
+  options?: {
+    staleMs?: number;
+    retries?: number;
+    delayMs?: number;
+    now?: () => number;
+    isPidAlive?: (pid: number) => boolean;
+    procStartTime?: (pid: number) => string | null;
+    host?: string;
+  }
+): T;
 export function redactSecrets<T = unknown>(input: T): T;
 export const MASKED_SECRET: string;
 export const MASKED_PRIVATE_KEY: string;

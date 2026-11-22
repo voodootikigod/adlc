@@ -31,7 +31,11 @@ export function resolveTrustedBinary(name, pathEnv) {
  * another account able to write any of them could swap what runs.
  */
 export function ownershipRejection({ file, link, dir, ancestors = [] }, selfUid) {
-  if (file.uid === selfUid) return null;
+  if (file.uid === selfUid) {
+    if ((file.mode & 0o022) !== 0) return 'it is writable by group or others';
+    if (dir && (dir.mode & 0o022) !== 0) return 'its directory is writable by group or others';
+    return null;
+  }
   if (file.uid !== 0) return `it is owned by uid ${file.uid}, not by you or by root`;
   const locked = (st) => st.uid === 0 && (st.mode & 0o022) === 0;
   if (!locked(file)) return 'it is root-owned but writable by group or others';

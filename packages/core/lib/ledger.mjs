@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { SECRET_PATTERNS, looksLikeRandomSecret } from './secret-shapes.mjs';
-import { pidAlive } from './proc.mjs';
+import { pidAlive, procStartTimeOf } from './proc.mjs';
 import { isPlainObject } from './cli.mjs';
 
 export const ADLC_DIR = '.adlc';
@@ -27,10 +27,17 @@ function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function isStaleLockOwner(current, { isPidAlive, staleMs, now }) {
+function isStaleLockOwner(current, { isPidAlive, procStartTime = procStartTimeOf, staleMs, now }) {
   if (!isPlainObject(current)) return false;
-  if (current.hostname === hostname() && typeof current.pid === 'number' && !isPidAlive(current.pid)) {
-    return true;
+  if (current.hostname === hostname() && typeof current.pid === 'number') {
+    if (!isPidAlive(current.pid)) return true;
+    if (current.pidStartTime != null) {
+      const liveStart = procStartTime(current.pid);
+      if (liveStart != null && String(liveStart) !== String(current.pidStartTime)) {
+        return true;
+      }
+    }
+    return false;
   }
   return typeof current.startedAt === 'string' && now() - Date.parse(current.startedAt) > staleMs;
 }
@@ -39,11 +46,18 @@ function isStaleLockOwner(current, { isPidAlive, staleMs, now }) {
 export function withLedgerLock(
   target,
   fn,
-  { retries = LOCK_MAX_RETRIES, delayMs = LOCK_RETRY_DELAY_MS, staleMs = LOCK_STALE_MS, isPidAlive = pidAlive, now = Date.now } = {}
+  { retries = LOCK_MAX_RETRIES, delayMs = LOCK_RETRY_DELAY_MS, staleMs = LOCK_STALE_MS, isPidAlive = pidAlive, procStartTime = procStartTimeOf, now = Date.now } = {}
 ) {
   const lockPath = `${target}.lock`;
   mkdirSync(dirname(target), { recursive: true });
-  const owner = { version: 1, token: randomUUID(), pid: process.pid, hostname: hostname(), startedAt: new Date().toISOString() };
+  const owner = {
+    version: 1,
+    token: randomUUID(),
+    pid: process.pid,
+    pidStartTime: procStartTime(process.pid),
+    hostname: hostname(),
+    startedAt: new Date().toISOString(),
+  };
   for (let i = 0; i <= retries; i++) {
     let fd;
     try {
@@ -52,7 +66,7 @@ export function withLedgerLock(
       if (err.code !== 'EEXIST') throw err;
       try {
         const current = JSON.parse(readFileSync(lockPath, 'utf8'));
-        if (isStaleLockOwner(current, { isPidAlive, staleMs, now })) unlinkSync(lockPath);
+        if (isStaleLockOwner(current, { isPidAlive, procStartTime, staleMs, now })) unlinkSync(lockPath);
       } catch {}
       if (i < retries) sleepSync(delayMs);
       continue;
@@ -170,9 +184,10 @@ export function appendEntries(name, entriesOrFactory, dir = ADLC_DIR) {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const p = ledgerPath(name, dir);
   return withLedgerLock(p, () => {
-    const content = existsSync(p) ? readFileSync(p, 'utf8') : '';
-    const state = parseLedger(content);
-    const additions = typeof entriesOrFactory === 'function' ? entriesOrFactory(state) : entriesOrFactory;
+    const additions =
+      typeof entriesOrFactory === 'function'
+        ? entriesOrFactory(parseLedger(existsSync(p) ? readFileSync(p, 'utf8') : ''))
+        : entriesOrFactory;
     if (!Array.isArray(additions)) throw new TypeError('ledger append batch must be an array');
     if (additions.length === 0) return [];
     // Validate BEFORE any bytes are written, so a rejected entry leaves the ledger
@@ -219,6 +234,10 @@ function canonicalizeJsonValue(value) {
   if (value && typeof value === 'object') {
     return Object.fromEntries(
       Object.keys(value)
+        .filter((key) => {
+          const item = value[key];
+          return item !== undefined && typeof item !== 'function' && typeof item !== 'symbol';
+        })
         .sort()
         .map((key) => [key, canonicalizeJsonValue(value[key])])
     );

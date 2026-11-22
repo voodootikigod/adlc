@@ -67,10 +67,36 @@ export function clusterByTokenSets(tokenSets, threshold = 0.5) {
     if (px !== py) parent[px] = py;
   }
 
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
-      if (jaccard(tokenSets[i], tokenSets[j]) >= threshold) {
-        union(i, j);
+  if (threshold <= 0) {
+    for (let i = 1; i < n; i++) union(0, i);
+  } else {
+    let firstEmpty = -1;
+    const postings = new Map();
+    for (let i = 0; i < n; i++) {
+      const setI = tokenSets[i];
+      if (setI.size === 0) {
+        if (threshold <= 1) {
+          if (firstEmpty === -1) firstEmpty = i;
+          else union(firstEmpty, i);
+        }
+        continue;
+      }
+      const candidates = new Set();
+      for (const token of setI) {
+        const list = postings.get(token);
+        if (list) {
+          for (let k = 0; k < list.length; k++) {
+            candidates.add(list[k]);
+          }
+          list.push(i);
+        } else {
+          postings.set(token, [i]);
+        }
+      }
+      for (const prev of candidates) {
+        if (find(prev) !== find(i) && jaccard(tokenSets[prev], setI) >= threshold) {
+          union(prev, i);
+        }
       }
     }
   }

@@ -28,6 +28,8 @@ export { isPlainObject, OpError, tokenizeCommand } from './lib/cli.mjs';
 export {
   writeFileAtomic,
   acquireDirLock,
+  withDirLock,
+  heartbeat,
   redactSecrets,
   readVerdictSource,
   recordPromptOnlyVerdict,

@@ -296,13 +296,15 @@ var init_secret_shapes = __esm({
       [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, "a private key block"],
       [/\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i, "a bearer token"],
       [INLINE_ASSIGNMENT, "an inline credential assignment"],
-      [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\./, "a JWT"]
+      [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*/, "a JWT"]
     ];
     TOKEN_SEPARATORS = /[\s"'`(){}\[\],:]+/;
   }
 });
 
 // packages/core/lib/proc.mjs
+import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 function pidAlive(pid) {
   if (typeof pid !== "number") return false;
   try {
@@ -312,6 +314,21 @@ function pidAlive(pid) {
     return e.code === "EPERM";
   }
 }
+function procStartTimeOf(pid, { platform = process.platform, readFile = readFileSync, execFile = execFileSync } = {}) {
+  if (typeof pid !== "number") return null;
+  try {
+    if (platform === "linux") {
+      const stat = readFile("/proc/" + pid + "/stat", "utf8");
+      const after = stat.slice(stat.lastIndexOf(")") + 2);
+      const fields = after.split(" ");
+      return fields[19] || null;
+    }
+    const out = execFile("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" });
+    return out.trim() || null;
+  } catch {
+    return null;
+  }
+}
 var init_proc = __esm({
   "packages/core/lib/proc.mjs"() {
     init_define_ADLC_MCP_BUILD_METADATA();
@@ -319,7 +336,7 @@ var init_proc = __esm({
 });
 
 // packages/core/lib/ledger.mjs
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync as readFileSync2, unlinkSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { dirname, join } from "node:path";
@@ -329,17 +346,31 @@ function ledgerPath(name, dir = ADLC_DIR) {
 function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
-function isStaleLockOwner(current, { isPidAlive, staleMs, now }) {
+function isStaleLockOwner(current, { isPidAlive, procStartTime = procStartTimeOf, staleMs, now }) {
   if (!isPlainObject(current)) return false;
-  if (current.hostname === hostname() && typeof current.pid === "number" && !isPidAlive(current.pid)) {
-    return true;
+  if (current.hostname === hostname() && typeof current.pid === "number") {
+    if (!isPidAlive(current.pid)) return true;
+    if (current.pidStartTime != null) {
+      const liveStart = procStartTime(current.pid);
+      if (liveStart != null && String(liveStart) !== String(current.pidStartTime)) {
+        return true;
+      }
+    }
+    return false;
   }
   return typeof current.startedAt === "string" && now() - Date.parse(current.startedAt) > staleMs;
 }
-function withLedgerLock(target, fn, { retries = LOCK_MAX_RETRIES, delayMs = LOCK_RETRY_DELAY_MS, staleMs = LOCK_STALE_MS, isPidAlive = pidAlive, now = Date.now } = {}) {
+function withLedgerLock(target, fn, { retries = LOCK_MAX_RETRIES, delayMs = LOCK_RETRY_DELAY_MS, staleMs = LOCK_STALE_MS, isPidAlive = pidAlive, procStartTime = procStartTimeOf, now = Date.now } = {}) {
   const lockPath2 = `${target}.lock`;
   mkdirSync(dirname(target), { recursive: true });
-  const owner = { version: 1, token: randomUUID(), pid: process.pid, hostname: hostname(), startedAt: (/* @__PURE__ */ new Date()).toISOString() };
+  const owner = {
+    version: 1,
+    token: randomUUID(),
+    pid: process.pid,
+    pidStartTime: procStartTime(process.pid),
+    hostname: hostname(),
+    startedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
   for (let i = 0; i <= retries; i++) {
     let fd;
     try {
@@ -347,8 +378,8 @@ function withLedgerLock(target, fn, { retries = LOCK_MAX_RETRIES, delayMs = LOCK
     } catch (err) {
       if (err.code !== "EEXIST") throw err;
       try {
-        const current = JSON.parse(readFileSync(lockPath2, "utf8"));
-        if (isStaleLockOwner(current, { isPidAlive, staleMs, now })) unlinkSync(lockPath2);
+        const current = JSON.parse(readFileSync2(lockPath2, "utf8"));
+        if (isStaleLockOwner(current, { isPidAlive, procStartTime, staleMs, now })) unlinkSync(lockPath2);
       } catch {
       }
       if (i < retries) sleepSync(delayMs);
@@ -365,7 +396,7 @@ function withLedgerLock(target, fn, { retries = LOCK_MAX_RETRIES, delayMs = LOCK
       return fn();
     } finally {
       try {
-        const current = JSON.parse(readFileSync(lockPath2, "utf8"));
+        const current = JSON.parse(readFileSync2(lockPath2, "utf8"));
         if (current.token === owner.token) unlinkSync(lockPath2);
       } catch {
       }
@@ -431,9 +462,7 @@ function appendEntries(name, entriesOrFactory, dir = ADLC_DIR) {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const p = ledgerPath(name, dir);
   return withLedgerLock(p, () => {
-    const content = existsSync(p) ? readFileSync(p, "utf8") : "";
-    const state = parseLedger(content);
-    const additions = typeof entriesOrFactory === "function" ? entriesOrFactory(state) : entriesOrFactory;
+    const additions = typeof entriesOrFactory === "function" ? entriesOrFactory(parseLedger(existsSync(p) ? readFileSync2(p, "utf8") : "")) : entriesOrFactory;
     if (!Array.isArray(additions)) throw new TypeError("ledger append batch must be an array");
     if (additions.length === 0) return [];
     if (name === FINDINGS_LEDGER) for (const entry of additions) assertPublishableFinding(entry);
@@ -459,7 +488,7 @@ function appendEntries(name, entriesOrFactory, dir = ADLC_DIR) {
 function sha256(content) {
   return createHash("sha256").update(content).digest("hex");
 }
-function hashFiles(paths, readFile = (p) => readFileSync(p)) {
+function hashFiles(paths, readFile = (p) => readFileSync2(p)) {
   const out = {};
   for (const p of paths) {
     try {
@@ -1009,7 +1038,7 @@ var init_snapshot = __esm({
 });
 
 // packages/tickets/lib/stores/directory.mjs
-import { existsSync as existsSync2, lstatSync as lstatSync2, readFileSync as readFileSync2, readdirSync } from "node:fs";
+import { existsSync as existsSync2, lstatSync as lstatSync2, readFileSync as readFileSync3, readdirSync } from "node:fs";
 import { dirname as dirname3, join as join3, resolve } from "node:path";
 function assertRealDirectory(path) {
   let stat;
@@ -1054,7 +1083,7 @@ var init_directory = __esm({
         if (!manifestEntry || !manifestEntry.isFile() || manifestEntry.isSymbolicLink()) throw invalid2("INVALID_MANIFEST", `${this.path}/.store.json must be a regular file`);
         let manifest;
         try {
-          manifest = JSON.parse(readFileSync2(join3(this.path, ".store.json"), "utf8"));
+          manifest = JSON.parse(readFileSync3(join3(this.path, ".store.json"), "utf8"));
         } catch (error) {
           throw invalid2("INVALID_MANIFEST", `invalid store manifest: ${error.message}`);
         }
@@ -1073,7 +1102,7 @@ var init_directory = __esm({
           if (!stat.isFile() || stat.isSymbolicLink()) throw invalid2("UNSAFE_SHARD", `${entry.name} must be a regular file`);
           let ticket;
           try {
-            ticket = JSON.parse(readFileSync2(fullPath, "utf8"));
+            ticket = JSON.parse(readFileSync3(fullPath, "utf8"));
           } catch (error) {
             throw invalid2("INVALID_JSON", `invalid JSON in ${entry.name}: ${error.message}`);
           }
@@ -1095,7 +1124,7 @@ var init_directory = __esm({
 });
 
 // packages/tickets/lib/lock.mjs
-import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync3, rmSync, writeFileSync as writeFileSync2 } from "node:fs";
+import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync4, rmSync, writeFileSync as writeFileSync2 } from "node:fs";
 import { hostname as hostname2 } from "node:os";
 import { dirname as dirname4, join as join4 } from "node:path";
 function acquireTicketLock(root = ".", {
@@ -1154,7 +1183,7 @@ function isLockMetadata(value) {
 function readLockMetadata(path) {
   let parsed;
   try {
-    parsed = JSON.parse(readFileSync3(path, "utf8"));
+    parsed = JSON.parse(readFileSync4(path, "utf8"));
   } catch {
     return null;
   }
@@ -1276,7 +1305,7 @@ import {
   existsSync as existsSync5,
   lstatSync as lstatSync3,
   readdirSync as readdirSync2,
-  readFileSync as readFileSync4,
+  readFileSync as readFileSync5,
   writeFileSync as writeFileSync4,
   openSync as openSync4,
   readSync as readSync2,
@@ -1285,7 +1314,7 @@ import {
   mkdirSync as mkdirSync4,
   constants as fsConstants2
 } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync as execFileSync2 } from "node:child_process";
 import { randomBytes, createHmac, timingSafeEqual } from "node:crypto";
 import { dirname as dirname6, isAbsolute, join as join5, relative, resolve as resolve3, sep } from "node:path";
 function segmentDirPath(dir = ".adlc") {
@@ -1305,7 +1334,7 @@ function looksLikeGenuineLedgerLock(path, size) {
   if (size >= MAX_LOCK_OWNER_BYTES) return false;
   let parsed = null;
   try {
-    parsed = JSON.parse(readFileSync4(path, "utf8").trim());
+    parsed = JSON.parse(readFileSync5(path, "utf8").trim());
   } catch {
   }
   return Boolean(parsed) && typeof parsed === "object" && !Array.isArray(parsed) && typeof parsed.token === "string" && typeof parsed.pid === "number" && typeof parsed.hostname === "string" && typeof parsed.startedAt === "string";
@@ -1353,7 +1382,7 @@ function rootEndsInCutover(dir = ".adlc") {
   if (!existsSync5(rootPath)) return false;
   let content;
   try {
-    content = readFileSync4(rootPath, "utf8");
+    content = readFileSync5(rootPath, "utf8");
   } catch {
     return false;
   }
@@ -1460,7 +1489,7 @@ function deriveSlug(branchName) {
 }
 function currentBranch(cwd = process.cwd()) {
   try {
-    const out = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+    const out = execFileSync2("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"]
@@ -1579,7 +1608,7 @@ function assertSegmentPathCommittable(dir = ".adlc", name, opts = {}) {
   delete env.GIT_INDEX_FILE;
   const run = (args) => {
     try {
-      execFileSync("git", args, { cwd: probeCwd, env, stdio: "ignore" });
+      execFileSync2("git", args, { cwd: probeCwd, env, stdio: "ignore" });
       return 0;
     } catch (err) {
       if (err.code === "ENOENT") return "no-git";
@@ -1672,7 +1701,7 @@ function resolveOpenSegment(dir = ".adlc", opts = {}) {
       let lines = [];
       const segFile = segmentPath(dir, recovered.name);
       if (existsSync5(segFile)) {
-        lines = readFileSync4(segFile, "utf8").split("\n").filter((l) => l.trim() !== "");
+        lines = readFileSync5(segFile, "utf8").split("\n").filter((l) => l.trim() !== "");
       }
       let first = null;
       try {
@@ -1704,7 +1733,7 @@ function resolveOpenSegment(dir = ".adlc", opts = {}) {
   const rootPath = join5(dir, "manifest.jsonl");
   let rootLast = null;
   if (existsSync5(rootPath)) {
-    const rootLines = readFileSync4(rootPath, "utf8").split("\n").filter((l) => l.trim() !== "");
+    const rootLines = readFileSync5(rootPath, "utf8").split("\n").filter((l) => l.trim() !== "");
     rootLast = rootLines.at(-1) ?? null;
   }
   let anchor = null;
@@ -1746,11 +1775,11 @@ var init_manifest_primitives = __esm({
 });
 
 // packages/tickets/lib/manifest-segments.mjs
-import { existsSync as existsSync6, readFileSync as readFileSync5 } from "node:fs";
+import { existsSync as existsSync6, readFileSync as readFileSync6 } from "node:fs";
 import { join as join6 } from "node:path";
 function readRawLines(filePath) {
   if (!existsSync6(filePath)) return [];
-  return readFileSync5(filePath, "utf8").split("\n").filter((line) => line.trim() !== "");
+  return readFileSync6(filePath, "utf8").split("\n").filter((line) => line.trim() !== "");
 }
 function parseLines(lines) {
   return lines.map((line) => {
@@ -1822,7 +1851,7 @@ var init_key_contract = __esm({
 });
 
 // packages/tickets/lib/evidence.mjs
-import { closeSync as closeSync5, existsSync as existsSync7, fsyncSync as fsyncSync3, mkdirSync as mkdirSync5, openSync as openSync5, readFileSync as readFileSync6, unlinkSync as unlinkSync3, writeFileSync as writeFileSync5 } from "node:fs";
+import { closeSync as closeSync5, existsSync as existsSync7, fsyncSync as fsyncSync3, mkdirSync as mkdirSync5, openSync as openSync5, readFileSync as readFileSync7, unlinkSync as unlinkSync3, writeFileSync as writeFileSync5 } from "node:fs";
 import { createHmac as createHmac2, randomUUID as randomUUID2 } from "node:crypto";
 import { hostname as hostname3 } from "node:os";
 import { dirname as dirname7, join as join7 } from "node:path";
@@ -1850,7 +1879,7 @@ function withManifestLock(path, fn, { retries = 400, delayMs = 5 } = {}) {
       return fn();
     } finally {
       try {
-        const current = JSON.parse(readFileSync6(lockPath2, "utf8"));
+        const current = JSON.parse(readFileSync7(lockPath2, "utf8"));
         if (current.token === owner.token) unlinkSync3(lockPath2);
       } catch {
       }
@@ -1902,7 +1931,7 @@ function recordSegmentedTicketEvidence(dir, { gate, data, transactionId, operati
     const targetPath = segmentPath(dir, resolved.name);
     mkdirSync5(dirname7(targetPath), { recursive: true });
     return withManifestLock(targetPath, () => {
-      const content = existsSync7(targetPath) ? readFileSync6(targetPath, "utf8") : "";
+      const content = existsSync7(targetPath) ? readFileSync7(targetPath, "utf8") : "";
       const rawLines = content.split("\n").filter((line) => line.trim() !== "");
       if (resolved.isNew && rawLines.length > 0) {
         throw conflict2("INVALID_MANIFEST", `segment ${resolved.name} was expected to be new but already has content`);
@@ -1993,7 +2022,7 @@ function recordTicketEvidence(root, {
   }
   const path = join7(root, ".adlc/manifest.jsonl");
   return withManifestLock(path, () => {
-    const content = existsSync7(path) ? readFileSync6(path, "utf8") : "";
+    const content = existsSync7(path) ? readFileSync7(path, "utf8") : "";
     const lines = content.split("\n").filter((line) => line.trim());
     if (isSegmentedRepo(dir)) {
       throw conflict2("MANIFEST_FROZEN", "manifest chain is frozen; this repo uses .adlc/manifest.d/ \u2014 upgrade adlc if you are seeing this locally");
@@ -2062,7 +2091,7 @@ var init_evidence = __esm({
 });
 
 // packages/tickets/lib/trust-root.mjs
-import { existsSync as existsSync8, lstatSync as lstatSync4, readFileSync as readFileSync7, readdirSync as readdirSync3 } from "node:fs";
+import { existsSync as existsSync8, lstatSync as lstatSync4, readFileSync as readFileSync8, readdirSync as readdirSync3 } from "node:fs";
 import { join as join8 } from "node:path";
 function assertNotSymlink(path) {
   let stat;
@@ -2102,7 +2131,7 @@ function archiveDeclaresRails(root) {
     for (const entry of entries) {
       if (entry.name === STORE_MARKER) {
         try {
-          const marker = JSON.parse(readFileSync7(join8(directory, entry.name), "utf8"));
+          const marker = JSON.parse(readFileSync8(join8(directory, entry.name), "utf8"));
           if (!marker || typeof marker !== "object" || typeof marker.format !== "string") return true;
           sawMarker = true;
         } catch {
@@ -2114,7 +2143,7 @@ function archiveDeclaresRails(root) {
       if (!entry.isFile()) return true;
       let parsed;
       try {
-        parsed = JSON.parse(readFileSync7(join8(directory, entry.name), "utf8"));
+        parsed = JSON.parse(readFileSync8(join8(directory, entry.name), "utf8"));
       } catch {
         return true;
       }
@@ -2125,7 +2154,7 @@ function archiveDeclaresRails(root) {
   }
   if (existsSync8(legacy)) {
     try {
-      const parsed = JSON.parse(readFileSync7(legacy, "utf8"));
+      const parsed = JSON.parse(readFileSync8(legacy, "utf8"));
       if (storeDeclaresRails(parsed?.tickets)) return true;
     } catch {
       return true;
@@ -2153,7 +2182,7 @@ function manifestRecordsBypass(root) {
     if (!existsSync8(file)) continue;
     let text;
     try {
-      text = readFileSync7(file, "utf8");
+      text = readFileSync8(file, "utf8");
     } catch {
       return true;
     }
@@ -2199,7 +2228,7 @@ var init_trust_root = __esm({
 });
 
 // packages/tickets/lib/transaction.mjs
-import { existsSync as existsSync9, readFileSync as readFileSync8 } from "node:fs";
+import { existsSync as existsSync9, readFileSync as readFileSync9 } from "node:fs";
 import { basename, dirname as dirname8, isAbsolute as isAbsolute2, join as join9, relative as relative2, resolve as resolve4 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 function journalPath(root, path) {
@@ -2311,12 +2340,12 @@ var init_transaction = __esm({
     init_durability();
     init_key_contract();
     init_trust_root();
-    fileHash = (path) => sha2562(readFileSync8(path));
+    fileHash = (path) => sha2562(readFileSync9(path));
   }
 });
 
 // packages/tickets/lib/stores/legacy.mjs
-import { existsSync as existsSync10, lstatSync as lstatSync5, readFileSync as readFileSync9 } from "node:fs";
+import { existsSync as existsSync10, lstatSync as lstatSync5, readFileSync as readFileSync10 } from "node:fs";
 import { basename as basename2, dirname as dirname9 } from "node:path";
 function repositoryRootFor(path, explicit) {
   if (explicit !== null && explicit !== void 0) return explicit;
@@ -2368,7 +2397,7 @@ var init_legacy = __esm({
         if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) throw invalid2("UNSAFE_STORE_PATH", `${dirname9(this.path)} must be a real directory`);
         let parsed;
         try {
-          parsed = JSON.parse(readFileSync9(this.path, "utf8"));
+          parsed = JSON.parse(readFileSync10(this.path, "utf8"));
         } catch (error) {
           throw invalid2("INVALID_JSON", `invalid JSON in ${this.path}: ${error.message}`);
         }
@@ -2914,11 +2943,17 @@ var init_text = __esm({
 });
 
 // packages/core/lib/primitives.mjs
+var SECRET_REDACT_RULES;
 var init_primitives = __esm({
   "packages/core/lib/primitives.mjs"() {
     init_define_ADLC_MCP_BUILD_METADATA();
     init_cli();
     init_proc();
+    init_secret_shapes();
+    SECRET_REDACT_RULES = SECRET_PATTERNS.map(([pattern]) => [
+      new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`),
+      pattern === INLINE_ASSIGNMENT ? "$1[REDACTED]" : "[REDACTED]"
+    ]);
   }
 });
 
@@ -3116,14 +3151,14 @@ var init_diff_mask = __esm({
 });
 
 // packages/core/lib/workspace-root.mjs
-import { existsSync as existsSync13, lstatSync as lstatSync9, readFileSync as readFileSync10, readlinkSync as readlinkSync2, realpathSync as realpathSync2, statSync } from "node:fs";
+import { existsSync as existsSync13, lstatSync as lstatSync9, readFileSync as readFileSync11, readlinkSync as readlinkSync2, realpathSync as realpathSync2, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename as basename3, dirname as dirname11, isAbsolute as isAbsolute6, join as join13, relative as relative4, resolve as resolve6 } from "node:path";
 function readSmallRegularFile(filePath) {
   try {
     const st = lstatSync9(filePath);
     if (!st.isFile() || st.size > GITDIR_POINTER_MAX_BYTES) return null;
-    return readFileSync10(filePath, "utf8");
+    return readFileSync11(filePath, "utf8");
   } catch {
     return null;
   }
@@ -3178,7 +3213,7 @@ function inspectGitCheckout(dir) {
   if (!stats.isFile() || stats.size > GITDIR_POINTER_MAX_BYTES) return null;
   let content;
   try {
-    content = readFileSync10(gitEntry, "utf8");
+    content = readFileSync11(gitEntry, "utf8");
   } catch {
     return null;
   }
@@ -3903,10 +3938,10 @@ var init_sign = __esm({
 });
 
 // packages/gate-manifest/lib/forest.mjs
-import { existsSync as existsSync17, lstatSync as lstatSync11, readFileSync as readFileSync13 } from "node:fs";
+import { existsSync as existsSync17, lstatSync as lstatSync11, readFileSync as readFileSync14 } from "node:fs";
 function readRawLines2(filePath) {
   if (!existsSync17(filePath)) return [];
-  const content = readFileSync13(filePath, "utf8");
+  const content = readFileSync14(filePath, "utf8");
   return content.split("\n").map((line, i) => ({ line, lineNo: i + 1 })).filter(({ line }) => line.trim() !== "");
 }
 function resolveAnchor(anchor, chainsBySeq, rootExists) {
@@ -4329,7 +4364,7 @@ var init_lineage = __esm({
 });
 
 // packages/gate-manifest/lib/segment-writer.mjs
-import { existsSync as existsSync18, readFileSync as readFileSync14, mkdirSync as mkdirSync8, openSync as openSync7, writeFileSync as writeFileSync8, fsyncSync as fsyncSync4, closeSync as closeSync7 } from "node:fs";
+import { existsSync as existsSync18, readFileSync as readFileSync15, mkdirSync as mkdirSync8, openSync as openSync7, writeFileSync as writeFileSync8, fsyncSync as fsyncSync4, closeSync as closeSync7 } from "node:fs";
 import { dirname as dirname17 } from "node:path";
 function appendToSegment(payload, dir, { signatureVersion, cwd, key }) {
   ({ dir, cwd } = normalizeManifestDirAndCwd(dir, { cwd }));
@@ -4349,7 +4384,7 @@ function appendWithinLedgerLock(payload, dir, { signatureVersion, cwd, key }) {
   return withLedgerLock(targetPath, () => appendLockedEntry(payload, resolved, targetPath, signatureVersion, key));
 }
 function appendLockedEntry(payload, resolved, targetPath, signatureVersion, key) {
-  const content = existsSync18(targetPath) ? readFileSync14(targetPath, "utf8") : "";
+  const content = existsSync18(targetPath) ? readFileSync15(targetPath, "utf8") : "";
   const rawLines = content.split("\n").filter((line) => line.trim() !== "");
   if (resolved.isNew && rawLines.length > 0) {
     throw new Error(`segment ${resolved.name} was expected to be new but already has content \u2014 refusing to append`);
@@ -4889,7 +4924,7 @@ function checkRail({ filePath, tool, root = process.cwd(), env = process.env }) 
 init_define_ADLC_MCP_BUILD_METADATA();
 init_tickets();
 init_core();
-import { existsSync as existsSync15, mkdirSync as mkdirSync7, readFileSync as readFileSync12, renameSync as renameSync3, writeFileSync as writeFileSync7 } from "node:fs";
+import { existsSync as existsSync15, mkdirSync as mkdirSync7, readFileSync as readFileSync13, renameSync as renameSync3, writeFileSync as writeFileSync7 } from "node:fs";
 import { dirname as dirname14, isAbsolute as isAbsolute8, join as join17, normalize as normalize2, resolve as pathResolve } from "node:path";
 
 // plugins/adlc-cursor/lib/session-state.mjs
@@ -4897,7 +4932,7 @@ init_define_ADLC_MCP_BUILD_METADATA();
 import {
   existsSync as existsSync14,
   mkdirSync as mkdirSync6,
-  readFileSync as readFileSync11,
+  readFileSync as readFileSync12,
   renameSync as renameSync2,
   unlinkSync as unlinkSync4,
   writeFileSync as writeFileSync6
@@ -4992,7 +5027,7 @@ function markerPath2(stateDir, sessionId) {
 }
 function readJson(path) {
   try {
-    return JSON.parse(readFileSync11(path, "utf8"));
+    return JSON.parse(readFileSync12(path, "utf8"));
   } catch {
     return null;
   }

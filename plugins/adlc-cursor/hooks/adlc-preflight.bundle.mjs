@@ -246,7 +246,7 @@ var SECRET_PATTERNS = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, "a private key block"],
   [/\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i, "a bearer token"],
   [INLINE_ASSIGNMENT, "an inline credential assignment"],
-  [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\./, "a JWT"]
+  [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*/, "a JWT"]
 ];
 
 // packages/tickets/lib/pointer.mjs
@@ -2131,6 +2131,12 @@ var ARRAY_LITERAL_RE = new RegExp(
 
 // packages/core/lib/syntax.mjs
 import { fileURLToPath } from "node:url";
+
+// packages/core/lib/primitives.mjs
+var SECRET_REDACT_RULES = SECRET_PATTERNS.map(([pattern]) => [
+  new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`),
+  pattern === INLINE_ASSIGNMENT ? "$1[REDACTED]" : "[REDACTED]"
+]);
 
 // packages/core/lib/sandbox-runner.mjs
 var SENSITIVE_HOME_DIRS = Object.freeze([

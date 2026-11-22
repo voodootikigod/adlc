@@ -271,7 +271,7 @@ var init_secret_shapes = __esm({
       [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, "a private key block"],
       [/\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i, "a bearer token"],
       [INLINE_ASSIGNMENT, "an inline credential assignment"],
-      [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\./, "a JWT"]
+      [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*/, "a JWT"]
     ];
   }
 });
@@ -2578,11 +2578,17 @@ var init_text = __esm({
 });
 
 // packages/core/lib/primitives.mjs
+var SECRET_REDACT_RULES;
 var init_primitives = __esm({
   "packages/core/lib/primitives.mjs"() {
     init_define_ADLC_MCP_BUILD_METADATA();
     init_cli();
     init_proc();
+    init_secret_shapes();
+    SECRET_REDACT_RULES = SECRET_PATTERNS.map(([pattern]) => [
+      new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`),
+      pattern === INLINE_ASSIGNMENT ? "$1[REDACTED]" : "[REDACTED]"
+    ]);
   }
 });
 
