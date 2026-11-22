@@ -386,3 +386,39 @@ test('buildSkillStub and buildSpecGapLine neutralize newlines, YAML metacharacte
   const gapLine = buildSpecGapLine('slug\ninj', [{ desc: 'multi\nline\ndesc', category: 'cat\ninj' }]);
   assert.strictEqual(gapLine.trimEnd().split('\n').length, 1, 'buildSpecGapLine must emit a single checklist line');
 });
+
+test('buildCheckScript: generated resolveTrustedGrep accepts user-private-group 0775 grep and rejects world-writable 0777 grep', { skip: process.platform === 'win32' }, () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'foundry-upg-repo-'));
+  const binDir = mkdtempSync(join(tmpdir(), 'foundry-upg-bin-'));
+  try {
+    chmodSync(binDir, 0o775);
+    const fakeGrep = join(binDir, 'grep');
+    writeFileSync(fakeGrep, '#!/bin/sh\nexit 1\n', 'utf8');
+    chmodSync(fakeGrep, 0o775);
+
+    const gate = buildCheckScript('upg-check', [{ desc: 'Found "NEVER_HERE" in code', category: 'security' }]);
+    const gatePath = join(repoDir, gate.path);
+    writeFileSync(gatePath, gate.content, 'utf8');
+
+    const okRun = spawnSync(process.execPath, [gatePath], {
+      cwd: repoDir,
+      env: { ...process.env, PATH: binDir },
+      encoding: 'utf8',
+      timeout: 15000,
+    });
+    assert.strictEqual(okRun.status, 0, `expected 0775 UPG grep to be trusted; got ${okRun.status}: ${okRun.stderr}`);
+
+    chmodSync(fakeGrep, 0o777);
+    const badRun = spawnSync(process.execPath, [gatePath], {
+      cwd: repoDir,
+      env: { ...process.env, PATH: binDir },
+      encoding: 'utf8',
+      timeout: 15000,
+    });
+    assert.strictEqual(badRun.status, 2, 'world-writable 0777 grep must be rejected');
+    assert.match(badRun.stderr, /no trusted grep binary/);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+  }
+});

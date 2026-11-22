@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { chmodSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmp } from '@adlc/core/test-kit';
 import { makeReviewRunner, resolveTrustedBin } from '../lib/review-runner.mjs';
 import { prosecute } from '../lib/prosecute.mjs';
 
@@ -89,8 +92,12 @@ test('resolveTrustedBin fails closed → prosecute unavailable when no trusted b
   assert.equal(r.verdict, 'unavailable', 'a worktree-shadowable PATH must fail closed, not run the fake');
 });
 
-test('resolveTrustedBin returns an absolute reviewBin only if it exists', async () => {
+test('resolveTrustedBin returns an absolute reviewBin only if it exists', async (t) => {
   assert.equal(resolveTrustedBin('/definitely/not/here/adversarial-review', '/usr/bin', '/wt'), null);
-  // A real absolute path that exists (use node itself as a stand-in existing file).
-  assert.equal(resolveTrustedBin(process.execPath, '/usr/bin', '/wt'), process.execPath);
+  // A real absolute path that exists with trusted non-writable permissions (independent of host toolcache modes).
+  const binDir = tmp(t, 'fleet-trusted-bin-');
+  const reviewBin = join(binDir, 'adversarial-review');
+  writeFileSync(reviewBin, '#!/bin/sh\nexit 0\n', 'utf8');
+  chmodSync(reviewBin, 0o755);
+  assert.equal(resolveTrustedBin(reviewBin, '/usr/bin', '/wt'), reviewBin);
 });

@@ -20,10 +20,19 @@ import {
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { opError, readStdin } from './cli.mjs';
-import { procStartTimeOf } from './proc.mjs';
+import { pidAlive, procStartTimeOf, thisHost } from './proc.mjs';
+import { INLINE_ASSIGNMENT, SECRET_PATTERNS } from './secret-shapes.mjs';
 
-const SECRET_REGEX =
-  /sk-(?:proj-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|(?:AKIA|ASIA)[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|Bearer\s+[A-Za-z0-9._~+/-]{20,}=*|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*/g;
+const SECRET_REDACT_RULES = SECRET_PATTERNS.map(([pattern]) => [
+  new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`),
+  pattern === INLINE_ASSIGNMENT ? '$1[REDACTED]' : '[REDACTED]',
+]);
+
+function sleepSync(ms) {
+  if (ms > 0) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  }
+}
 
 /**
  * Write a file atomically via a unique sibling temporary file and rename.
@@ -65,32 +74,95 @@ export function writeFileAtomic(filePath, content, options = {}) {
 }
 
 /**
- * Acquire an advisory directory lock with optional stale detection.
+ * Refresh the heartbeat timestamp of a held directory lock if the token still matches.
  *
  * @param {string} lockDir
- * @param {{ staleMs?: number }} [options]
- * @returns {() => void} release function
+ * @param {string} token
+ * @param {{ now?: () => number }} [options]
+ * @returns {boolean} true if updated, false if the lock is no longer owned by `token`
+ */
+export function heartbeat(lockDir, token, options = {}) {
+  const now = options.now ?? Date.now;
+  const ownerPath = join(lockDir, 'owner.json');
+  try {
+    const current = JSON.parse(readFileSync(ownerPath, 'utf8'));
+    if (!current || current.token !== token) return false;
+    const ts = now();
+    const updated = { ...current, createdAt: ts, heartbeatAt: ts };
+    writeFileAtomic(ownerPath, JSON.stringify(updated), { mode: 0o600 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Acquire an advisory directory lock using atomic staging-dir rename, with
+ * optional bounded retry and stale-lock recovery. A live same-host owner is
+ * never evicted on age alone.
+ *
+ * @param {string} lockDir
+ * @param {{
+ *   staleMs?: number;
+ *   retries?: number;
+ *   delayMs?: number;
+ *   now?: () => number;
+ *   isPidAlive?: (pid: number) => boolean;
+ *   procStartTime?: (pid: number) => string | null;
+ *   host?: string;
+ * }} [options]
+ * @returns {(() => void) & { heartbeat: () => boolean; token: string }} release function
  */
 export function acquireDirLock(lockDir, options = {}) {
+  const now = options.now ?? Date.now;
+  const isPidAlive = options.isPidAlive ?? pidAlive;
+  const procStartTime = options.procStartTime ?? procStartTimeOf;
+  const currentHost = options.host ?? thisHost();
+  const retries = Number.isInteger(options.retries) && options.retries > 0 ? options.retries : 0;
+  const delayMs = typeof options.delayMs === 'number' && options.delayMs >= 0 ? options.delayMs : 10;
+
   const tryAcquire = () => {
-    mkdirSync(lockDir);
     const owner = {
       pid: process.pid,
-      pidStartTime: procStartTimeOf(process.pid),
+      pidStartTime: procStartTime(process.pid),
+      hostname: currentHost,
       token: randomUUID(),
-      createdAt: Date.now(),
+      createdAt: now(),
     };
-    const ownerPath = join(lockDir, 'owner.json');
+    const stageDir = `${lockDir}.stage-${process.pid}-${randomUUID()}`;
+    mkdirSync(stageDir, { mode: 0o700 });
     try {
-      writeFileSync(ownerPath, JSON.stringify(owner), 'utf8');
-    } catch (writeErr) {
+      writeFileSync(join(stageDir, 'owner.json'), JSON.stringify(owner), { encoding: 'utf8', mode: 0o600 });
+      // POSIX rename(2) overwrites an empty destination directory; reject any
+      // pre-existing lockDir (even empty) with EEXIST so stale checks run cleanly.
+      let alreadyExists = false;
       try {
-        rmdirSync(lockDir);
+        lstatSync(lockDir);
+        alreadyExists = true;
+      } catch (statErr) {
+        if (statErr.code !== 'ENOENT') throw statErr;
+      }
+      if (alreadyExists) {
+        const existErr = new Error(`EEXIST: file already exists, mkdir '${lockDir}'`);
+        existErr.code = 'EEXIST';
+        throw existErr;
+      }
+      renameSync(stageDir, lockDir);
+    } catch (err) {
+      try {
+        rmSync(stageDir, { recursive: true, force: true });
       } catch {}
-      throw writeErr;
+      if (err.code === 'ENOTEMPTY' || err.code === 'EPERM') {
+        const existErr = new Error(`EEXIST: file already exists, mkdir '${lockDir}'`);
+        existErr.code = 'EEXIST';
+        throw existErr;
+      }
+      throw err;
     }
+
+    const ownerPath = join(lockDir, 'owner.json');
     const { ino } = lstatSync(lockDir);
-    return () => {
+    const release = () => {
       try {
         if (lstatSync(lockDir).ino !== ino) return;
         const current = JSON.parse(readFileSync(ownerPath, 'utf8'));
@@ -104,52 +176,96 @@ export function acquireDirLock(lockDir, options = {}) {
         }
       } catch {}
     };
+    release.token = owner.token;
+    release.heartbeat = () => heartbeat(lockDir, owner.token, { now });
+    return release;
   };
 
-  try {
-    return tryAcquire();
-  } catch (err) {
-    if (err.code === 'EEXIST' && options.staleMs !== undefined) {
-      let isStale = false;
-      const ownerPath = join(lockDir, 'owner.json');
-      try {
-        const owner = JSON.parse(readFileSync(ownerPath, 'utf8'));
-        if (typeof owner.createdAt === 'number' && Date.now() - owner.createdAt > options.staleMs) {
-          try {
-            process.kill(owner.pid, 0);
-            if (owner.pidStartTime != null) {
-              const liveStart = procStartTimeOf(owner.pid);
-              if (liveStart != null && String(liveStart) !== String(owner.pidStartTime)) {
-                isStale = true;
-              }
-            }
-          } catch (killErr) {
-            if (killErr.code === 'ESRCH') {
+  const checkStaleAndRecover = () => {
+    if (options.staleMs === undefined) return false;
+    let isStale = false;
+    const ownerPath = join(lockDir, 'owner.json');
+    try {
+      const owner = JSON.parse(readFileSync(ownerPath, 'utf8'));
+      const timestamp = typeof owner.heartbeatAt === 'number' ? owner.heartbeatAt : owner.createdAt;
+      const ageExceeded = typeof timestamp === 'number' && now() - timestamp > options.staleMs;
+      if (ageExceeded) {
+        const sameHost = !owner.hostname || owner.hostname === currentHost;
+        if (sameHost && typeof owner.pid === 'number') {
+          if (!isPidAlive(owner.pid)) {
+            isStale = true;
+          } else if (owner.pidStartTime != null) {
+            const liveStart = procStartTime(owner.pid);
+            if (liveStart != null && String(liveStart) !== String(owner.pidStartTime)) {
               isStale = true;
             }
           }
-        }
-      } catch (readErr) {
-        if (readErr.code === 'ENOENT') {
-          try {
-            const st = lstatSync(lockDir);
-            if (Date.now() - st.mtimeMs > options.staleMs) {
-              isStale = true;
-            }
-          } catch {}
+          // Live same-host process with matching start time is NEVER evicted on age alone.
+        } else if (!sameHost) {
+          isStale = true;
         }
       }
-      if (isStale) {
-        const staleDir = `${lockDir}.stale-${process.pid}-${randomUUID()}`;
+    } catch (readErr) {
+      if (readErr.code === 'ENOENT') {
         try {
-          renameSync(lockDir, staleDir);
-          rmSync(staleDir, { recursive: true, force: true });
-        } catch {
-          throw err;
-        }
-        return tryAcquire();
+          const st = lstatSync(lockDir);
+          if (now() - st.mtimeMs > options.staleMs) {
+            isStale = true;
+          }
+        } catch {}
       }
     }
+    if (!isStale) return false;
+    const staleDir = `${lockDir}.stale-${process.pid}-${randomUUID()}`;
+    try {
+      renameSync(lockDir, staleDir);
+      rmSync(staleDir, { recursive: true, force: true });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return tryAcquire();
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      if (checkStaleAndRecover()) {
+        try {
+          return tryAcquire();
+        } catch (retryErr) {
+          if (retryErr.code !== 'EEXIST' || attempt >= retries) throw retryErr;
+        }
+      } else if (attempt >= retries) {
+        throw err;
+      }
+      sleepSync(delayMs);
+    }
+  }
+}
+
+/**
+ * Execute `fn` while holding an advisory directory lock, guaranteeing release
+ * on both synchronous completion/throw and async Promise settlement.
+ *
+ * @template T
+ * @param {string} lockDir
+ * @param {(ctx: { release: () => void; heartbeat: () => boolean }) => T} fn
+ * @param {Parameters<typeof acquireDirLock>[1]} [options]
+ * @returns {T}
+ */
+export function withDirLock(lockDir, fn, options = {}) {
+  const release = acquireDirLock(lockDir, options);
+  try {
+    const result = fn({ release, heartbeat: release.heartbeat });
+    if (result && typeof result.then === 'function') {
+      return result.finally(() => release());
+    }
+    release();
+    return result;
+  } catch (err) {
+    release();
     throw err;
   }
 }
@@ -163,7 +279,11 @@ export function acquireDirLock(lockDir, options = {}) {
  */
 export function redactSecrets(input) {
   if (typeof input === 'string') {
-    return input.replace(SECRET_REGEX, '[REDACTED]');
+    let out = input;
+    for (const [pattern, replacement] of SECRET_REDACT_RULES) {
+      out = out.replace(pattern, replacement);
+    }
+    return out;
   }
   if (Array.isArray(input)) {
     return input.map((item) => redactSecrets(item));

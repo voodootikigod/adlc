@@ -30,8 +30,21 @@ export function resolveTrustedBinary(name, pathEnv) {
  * directories above the real file and above the PATH directory, up to `/`:
  * another account able to write any of them could swap what runs.
  */
-export function ownershipRejection({ file, link, dir, ancestors = [] }, selfUid) {
-  if (file.uid === selfUid) return null;
+function isOwnGroup(gid, selfUid, selfGid) {
+  if (typeof gid !== 'number') return false;
+  if (selfGid !== null) return gid === selfGid;
+  if (selfUid !== process.getuid?.()) return false;
+  return Boolean(process.getgroups?.().includes(gid));
+}
+
+export function ownershipRejection({ file, link, dir, ancestors = [] }, selfUid, selfGid = null) {
+  if (file.uid === selfUid) {
+    const fileMask = isOwnGroup(file.gid, selfUid, selfGid) ? 0o002 : 0o022;
+    if ((file.mode & fileMask) !== 0) return 'it is writable by group or others';
+    const dirMask = dir && isOwnGroup(dir.gid, selfUid, selfGid) ? 0o002 : 0o022;
+    if (dir && (dir.mode & dirMask) !== 0) return 'its directory is writable by group or others';
+    return null;
+  }
   if (file.uid !== 0) return `it is owned by uid ${file.uid}, not by you or by root`;
   const locked = (st) => st.uid === 0 && (st.mode & 0o022) === 0;
   if (!locked(file)) return 'it is root-owned but writable by group or others';
@@ -103,11 +116,11 @@ export function candidateStats(candidate, dir, name, file, selfUid) {
  * named even when its stats are missing; `stats` is null when they could not
  * be gathered.
  */
-export function candidateRejection(dir, stats, selfUid) {
+export function candidateRejection(dir, stats, selfUid, selfGid = null) {
   if (!isAbsolute(dir)) return 'it is reached through a relative PATH entry, which resolves inside the repository';
   if (dir.includes('node_modules')) return 'it is inside node_modules, where a repository could have placed it';
   if (stats === null) return 'its link or a directory above it could not be inspected';
-  return selfUid === null ? null : ownershipRejection(stats, selfUid);
+  return selfUid === null ? null : ownershipRejection(stats, selfUid, selfGid);
 }
 
 /**

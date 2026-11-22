@@ -1,0 +1,25 @@
+{
+  "acceptance": [
+    "acquireDirLock uses atomic staging-dir rename with owner.json ({ pid, pidStartTime, hostname, token, createdAt }), supports bounded retries/delayMs and heartbeat(), and never steals a live same-host lock on age alone; withDirLock is exported from @adlc/core and declared in index.d.ts.",
+    "isStaleLockOwner in ledger.mjs never evicts a live same-host PID on age alone, appendEntries skips full-file read/parse when given an array batch, and canonicalJson omits undefined object keys consistently.",
+    "redactSecrets in primitives.mjs derives its secret matching directly from SECRET_PATTERNS in secret-shapes.mjs.",
+    "ownershipRejection in trusted-binary.mjs checks (mode & 0o022) === 0 on self-owned files and directories, lesson-foundry/lib/emit.mjs drops the duplicate check, clusterByTokenSets uses inverted-token pre-filtering while preserving exact Jaccard clustering semantics, and generated-trusted-binary + Cursor bundles are rebuilt in lockstep with full npm run preflight passing."
+  ],
+  "body": "Implement Wave 2 T-P13: (1) Harden acquireDirLock (and export withDirLock + heartbeat()) in packages/core/lib/primitives.mjs using atomic staging rename, bounded retry/wait, and liveness checks that never steal a live same-host lock on age alone; (2) Fix isStaleLockOwner in packages/core/lib/ledger.mjs so live same-host PIDs are never evicted at staleMs, guard readFileSync+parseLedger in appendEntries behind typeof entriesOrFactory === 'function', and align canonicalJson across undefined object keys; (3) Derive SECRET_REGEX in primitives.mjs directly from SECRET_PATTERNS in secret-shapes.mjs; (4) Harden ownershipRejection in trusted-binary.mjs to check group/world writability on self-owned files and directories, remove the redundant check in lesson-foundry/lib/emit.mjs, add inverted-token candidate pre-filtering to clusterByTokenSets in cluster.mjs, and regenerate ticket-readers and Cursor bundles.",
+  "category": "feature",
+  "id": "t-wave2-core-primitives",
+  "rails": [],
+  "risk": "high",
+  "scope": [
+    "packages/core/lib/primitives.mjs",
+    "packages/core/lib/ledger.mjs",
+    "packages/core/lib/secret-shapes.mjs",
+    "packages/core/lib/trusted-binary.mjs",
+    "packages/core/lib/cluster.mjs",
+    "packages/core/index.mjs",
+    "packages/core/index.d.ts",
+    "packages/lesson-foundry/lib/emit.mjs"
+  ],
+  "status": "in-progress",
+  "title": "Wave 2: Harden @adlc/core shared primitives, ledger locking, secret shapes, trusted-binary modes, and cluster pre-filtering (T-P13)"
+}

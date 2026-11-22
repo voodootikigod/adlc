@@ -24,7 +24,7 @@ export const SECRET_PATTERNS = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, 'a private key block'],
   [/\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i, 'a bearer token'],
   [INLINE_ASSIGNMENT, 'an inline credential assignment'],
-  [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\./, 'a JWT'],
+  [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*/, 'a JWT'],
 ];
 
 // Shannon entropy (bits/char) of a token — high for random secrets, low for prose.

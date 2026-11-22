@@ -22,7 +22,9 @@ const SELF = 1000;
 const CASES = [
   ['locked root install', { file: ROOT_FILE, link: ROOT_LINK, dir: ROOT_DIR, ancestors: [ROOT_DIR] }, null],
   ['root file placed directly', { file: ROOT_FILE, link: ROOT_FILE, dir: ROOT_DIR }, null],
-  ['own file', { file: { uid: SELF, mode: 0o100777 }, link: { uid: SELF, mode: 0o100777 }, dir: { uid: SELF, mode: 0o40777 } }, null],
+  ['own file', { file: { uid: SELF, mode: 0o100755 }, link: { uid: SELF, mode: 0o100755 }, dir: { uid: SELF, mode: 0o40755 } }, null],
+  ['group-writable own file without gid', { file: { uid: SELF, mode: 0o100775 }, link: { uid: SELF, mode: 0o100755 }, dir: { uid: SELF, mode: 0o40755 } }, /writable by group or others/],
+  ['world-writable own file', { file: { uid: SELF, mode: 0o100777 }, link: { uid: SELF, mode: 0o100755 }, dir: { uid: SELF, mode: 0o40755 } }, /writable by group or others/],
   ['group-writable root file', { file: { uid: 0, mode: 0o100775 }, link: ROOT_LINK, dir: ROOT_DIR }, /writable by group or others/],
   ['other-writable root file', { file: { uid: 0, mode: 0o100757 }, link: ROOT_LINK, dir: ROOT_DIR }, /writable by group or others/],
   ['planted link', { file: ROOT_FILE, link: { uid: SELF, mode: 0o120777 }, dir: ROOT_DIR }, /link that root does not own/],
@@ -56,6 +58,20 @@ test('the copilot, codex and Claude Code copies give the same answer on every ca
     }
   }
   assert.deepEqual(copilot.ancestorDirs('/a/b/c'), claudeCode.ancestorDirs('/a/b/c'));
+  if (typeof process.getuid === 'function' && typeof process.getgroups === 'function') {
+    const uid = process.getuid();
+    const groups = process.getgroups();
+    const ownGid = groups[0];
+    const foreignGid = Math.max(...groups, 1000) + 1000;
+    const upgStats = { file: { uid, gid: ownGid, mode: 0o100775 }, link: { uid, mode: 0o100755 }, dir: { uid, gid: ownGid, mode: 0o40775 } };
+    const foreignGidStats = { file: { uid, gid: foreignGid, mode: 0o100775 }, link: { uid, mode: 0o100755 }, dir: { uid, gid: ownGid, mode: 0o40775 } };
+    const foreignUidStats = { file: { uid: uid + 1, gid: ownGid, mode: 0o100775 }, link: { uid: uid + 1, mode: 0o100755 }, dir: { uid: uid + 1, gid: ownGid, mode: 0o40775 } };
+    for (const [name, mod] of [['claudeCode', claudeCode], ['copilot', copilot], ['codex', codex]]) {
+      assert.equal(mod.ownershipRejection(upgStats, uid), null, `${name} should allow own-group 0775 for current uid`);
+      assert.match(mod.ownershipRejection(foreignGidStats, uid), /writable by group or others/, `${name} must reject foreign-group 0775`);
+      assert.match(mod.ownershipRejection(foreignUidStats, uid + 1), /writable by group or others/, `${name} must not apply current groups to another uid`);
+    }
+  }
 });
 
 test('node_modules and relative PATH entries are refused before ownership is judged', () => {

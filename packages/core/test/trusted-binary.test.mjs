@@ -19,17 +19,53 @@ describe('ownershipRejection', () => {
   const lockedFile = { uid: 0, mode: 0o100755 };
   const rootSymlink = { uid: 0, mode: 0o120777 };
 
-  it('accepts a file owned by selfUid regardless of mode or ancestors', () => {
+  it('accepts a non-group/world-writable file owned by selfUid in a non-writable directory', () => {
     assert.equal(
       ownershipRejection(
         {
-          file: { uid: 1000, mode: 0o100777 },
-          link: { uid: 1000, mode: 0o100777 },
-          dir: { uid: 1000, mode: 0o040777 },
+          file: { uid: 1000, mode: 0o100755 },
+          link: { uid: 1000, mode: 0o100755 },
+          dir: { uid: 1000, mode: 0o040755 },
         },
         1000,
       ),
       null,
+    );
+  });
+
+  it('rejects a self-owned file or directory that is writable by group or others', () => {
+    assert.equal(
+      ownershipRejection(
+        {
+          file: { uid: 1000, mode: 0o100775 },
+          link: { uid: 1000, mode: 0o100755 },
+          dir: { uid: 1000, mode: 0o040755 },
+        },
+        1000,
+      ),
+      'it is writable by group or others',
+    );
+    assert.equal(
+      ownershipRejection(
+        {
+          file: { uid: 1000, mode: 0o100757 },
+          link: { uid: 1000, mode: 0o100755 },
+          dir: { uid: 1000, mode: 0o040755 },
+        },
+        1000,
+      ),
+      'it is writable by group or others',
+    );
+    assert.equal(
+      ownershipRejection(
+        {
+          file: { uid: 1000, mode: 0o100755 },
+          link: { uid: 1000, mode: 0o100755 },
+          dir: { uid: 1000, mode: 0o040775 },
+        },
+        1000,
+      ),
+      'its directory is writable by group or others',
     );
   });
 
@@ -303,6 +339,7 @@ describe('binaryCandidates, resolveTrustedBinary, and untrustedBinaryReason', ()
     mkdirSync(nmBin, { recursive: true });
     mkdirSync(join(dirCollision, 'adlc'), { recursive: true });
     mkdirSync(trustedDir, { recursive: true });
+    chmodSync(trustedDir, 0o755);
 
     const nmCandidate = join(nmBin, 'adlc');
     const trustedCandidate = join(trustedDir, 'adlc');

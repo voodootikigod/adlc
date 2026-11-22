@@ -137,7 +137,7 @@ export function appendEntries<T = unknown>(
   entriesOrFactory: T[] | ((state: { entries: unknown[]; skipped: Array<{ line: number; error: string }>; rawLines: string[]; lastRawLine: string | null }) => T[]),
   dir?: string
 ): T[];
-export function withLedgerLock<T>(target: string, fn: () => T, options?: { retries?: number; delayMs?: number; staleMs?: number; isPidAlive?: (pid: number) => boolean; now?: () => number }): T;
+export function withLedgerLock<T>(target: string, fn: () => T, options?: { retries?: number; delayMs?: number; staleMs?: number; isPidAlive?: (pid: number) => boolean; procStartTime?: (pid: number) => string | null; now?: () => number }): T;
 export function readEntries<T = unknown>(
   name: string,
   dir?: string
@@ -369,8 +369,34 @@ export function readBoundedRegularFile(
 ): string;
 export function acquireDirLock(
   lockDir: string,
-  options?: { staleMs?: number }
-): () => void;
+  options?: {
+    staleMs?: number;
+    retries?: number;
+    delayMs?: number;
+    now?: () => number;
+    isPidAlive?: (pid: number) => boolean;
+    procStartTime?: (pid: number) => string | null;
+    host?: string;
+  }
+): (() => void) & { heartbeat: () => boolean; token: string };
+export function heartbeat(
+  lockDir: string,
+  token: string,
+  options?: { now?: () => number }
+): boolean;
+export function withDirLock<T>(
+  lockDir: string,
+  fn: (ctx: { release: () => void; heartbeat: () => boolean }) => T,
+  options?: {
+    staleMs?: number;
+    retries?: number;
+    delayMs?: number;
+    now?: () => number;
+    isPidAlive?: (pid: number) => boolean;
+    procStartTime?: (pid: number) => string | null;
+    host?: string;
+  }
+): T;
 export function redactSecrets<T = unknown>(input: T): T;
 export const MASKED_SECRET: string;
 export const MASKED_PRIVATE_KEY: string;
@@ -502,6 +528,7 @@ export function defaultLockProbes(): {
 // lib/trusted-binary.mjs
 export type TrustedBinaryStatLike = {
   readonly uid: number;
+  readonly gid?: number;
   readonly mode: number;
 };
 export type TrustedBinaryStats = {
@@ -513,7 +540,8 @@ export type TrustedBinaryStats = {
 export function resolveTrustedBinary(name: string, pathEnv: unknown): string | null;
 export function ownershipRejection(
   stats: TrustedBinaryStats,
-  selfUid: number | null
+  selfUid: number | null,
+  selfGid?: number | null
 ): string | null;
 export function ancestorDirs(file: string): string[];
 export function candidateAncestors(candidate: string, dir: string, name: string): string[];
@@ -531,7 +559,8 @@ export function candidateStats(
 export function candidateRejection(
   dir: string,
   stats: TrustedBinaryStats | null,
-  selfUid: number | null
+  selfUid: number | null,
+  selfGid?: number | null
 ): string | null;
 export function untrustedBinaryReason(name: string, pathEnv: unknown): string | null;
 

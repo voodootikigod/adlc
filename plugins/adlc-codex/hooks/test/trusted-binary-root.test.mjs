@@ -31,9 +31,10 @@ test('a root-owned file through a link, directory or ancestor root does not lock
   assert.match(ownershipRejection({ file: ROOT_FILE, link: ROOT_LINK, dir: ROOT_DIR, ancestors: [ROOT_DIR, { uid: 1001, mode: 0o40755 }] }, SELF), /directory above it/);
 });
 
-test('a file owned by another non-root account is refused; the user\'s own is trusted', () => {
+test('a file owned by another non-root account is refused; the user\'s own non-writable file is trusted', () => {
   assert.match(ownershipRejection({ file: { uid: 1001, mode: 0o100755 }, link: ROOT_LINK, dir: ROOT_DIR }, SELF), /uid 1001/);
-  assert.equal(ownershipRejection({ file: { uid: SELF, mode: 0o100777 }, link: { uid: SELF, mode: 0o100777 }, dir: { uid: SELF, mode: 0o40777 } }, SELF), null);
+  assert.equal(ownershipRejection({ file: { uid: SELF, mode: 0o100755 }, link: { uid: SELF, mode: 0o100755 }, dir: { uid: SELF, mode: 0o40755 } }, SELF), null);
+  assert.match(ownershipRejection({ file: { uid: SELF, mode: 0o100777 }, link: { uid: SELF, mode: 0o100755 }, dir: { uid: SELF, mode: 0o40755 } }, SELF), /writable by group or others/);
 });
 
 test('node_modules and relative PATH entries are refused before ownership is judged', () => {
