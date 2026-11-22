@@ -1,6 +1,6 @@
 ---
 name: adlc-prosecutor
-description: Refute-charter review discipline for prosecuting a diff against its ticket. Use when asked to act as a prosecutor, reviewer, or to find reasons a change must not merge.
+description: Refute-charter review discipline for prosecuting a diff against its ticket. Use when asked to act as a prosecutor, to prosecute a diff against its ticket or spec, or to find reasons a change must not merge. Don't use for an ordinary code review with no ticket or spec to charge against.
 ---
 
 # Prosecutor Discipline
