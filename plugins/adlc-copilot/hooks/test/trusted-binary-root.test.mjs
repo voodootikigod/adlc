@@ -57,14 +57,18 @@ test('the copilot, codex and Claude Code copies give the same answer on every ca
     }
   }
   assert.deepEqual(copilot.ancestorDirs('/a/b/c'), claudeCode.ancestorDirs('/a/b/c'));
-  if (typeof process.getuid === 'function' && typeof process.getgid === 'function') {
+  if (typeof process.getuid === 'function' && typeof process.getgroups === 'function') {
     const uid = process.getuid();
-    const gid = process.getgid();
-    const upgStats = { file: { uid, gid, mode: 0o100775 }, link: { uid, mode: 0o100755 }, dir: { uid, gid, mode: 0o40775 } };
-    const foreignUidStats = { file: { uid: uid + 1, gid, mode: 0o100775 }, link: { uid: uid + 1, mode: 0o100755 }, dir: { uid: uid + 1, gid, mode: 0o40775 } };
+    const groups = process.getgroups();
+    const ownGid = groups[0];
+    const foreignGid = Math.max(...groups, 1000) + 1000;
+    const upgStats = { file: { uid, gid: ownGid, mode: 0o100775 }, link: { uid, mode: 0o100755 }, dir: { uid, gid: ownGid, mode: 0o40775 } };
+    const foreignGidStats = { file: { uid, gid: foreignGid, mode: 0o100775 }, link: { uid, mode: 0o100755 }, dir: { uid, gid: ownGid, mode: 0o40775 } };
+    const foreignUidStats = { file: { uid: uid + 1, gid: ownGid, mode: 0o100775 }, link: { uid: uid + 1, mode: 0o100755 }, dir: { uid: uid + 1, gid: ownGid, mode: 0o40775 } };
     for (const [name, mod] of [['claudeCode', claudeCode], ['copilot', copilot], ['codex', codex]]) {
-      assert.equal(mod.ownershipRejection(upgStats, uid), null, `${name} should allow UPG 0775 for current uid`);
-      assert.match(mod.ownershipRejection(foreignUidStats, uid + 1), /writable by group or others/, `${name} must not apply current gid to another uid`);
+      assert.equal(mod.ownershipRejection(upgStats, uid), null, `${name} should allow own-group 0775 for current uid`);
+      assert.match(mod.ownershipRejection(foreignGidStats, uid), /writable by group or others/, `${name} must reject foreign-group 0775`);
+      assert.match(mod.ownershipRejection(foreignUidStats, uid + 1), /writable by group or others/, `${name} must not apply current groups to another uid`);
     }
   }
 });
