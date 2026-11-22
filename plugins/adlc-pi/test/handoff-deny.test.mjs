@@ -500,7 +500,7 @@ test('a custom tool reaching the deny store by any extractable key is denied', a
 test('a custom tool targeting ordinary files is still allowed with a cold store', async (t) => {
   const root = makeRepo(t);
   const { pi, ctx } = await boot(root, { percent: 5 });
-  for (const input of [{ target: 'src/app.mjs' }, { path: 'src/app.mjs' }, {}]) {
+  for (const input of [{ target: 'src/app.mjs' }, { path: 'src/app.mjs' }]) {
     const verdict = await call(pi, ctx, 'custom_writer', input);
     assert.notEqual(verdict?.block, true, `must allow: ${JSON.stringify(input)}`);
   }

@@ -77,6 +77,7 @@ function isolatedPluginDir(t) {
     'generated-glob-match.mjs',
     'generated-trusted-binary.mjs',
     'generated-workspace-root.mjs',
+    'generated-shell.mjs',
   ]) {
     writeFileSync(join(hooks, f), readFileSync(join(HOOKS_DIR, f), 'utf8'));
   }

@@ -95,17 +95,30 @@ export function resolveActiveTicket(root, rawEnv = process.env) {
   return { ticketId, ticket, error: null };
 }
 
+function railMatchesCandidate(rail, candidate) {
+  if (candidate === '' || candidate === '.') return true;
+  if (globMatch(rail, candidate)) return true;
+  if (candidate === rail || rail.startsWith(`${candidate}/`)) return true;
+  const railSegs = rail.split('/');
+  for (let i = 1; i < railSegs.length; i += 1) {
+    if (globMatch(railSegs.slice(0, i).join('/'), candidate)) return true;
+  }
+  return false;
+}
+
 /**
  * Does a target path hit the frozen rail set (trust roots + the active
  * ticket's rails)? Checks both the lexical path and the symlink-resolved path
- * so an alias can't slip past. Returns the matched rail (string) or null.
+ * so an alias can't slip past, and matches ancestor directories so deleting a
+ * parent directory of a frozen rail is also blocked. Returns the matched rail
+ * (string) or null.
  */
 export function railHit(filePath, ticket, root) {
   const candidates = new Set([canonicalizePath(filePath, root), resolveRailPath(filePath, root)]);
   for (const candidate of candidates) {
-    for (const trustRoot of TRUST_ROOT_RAILS) if (globMatch(trustRoot, candidate)) return trustRoot;
+    for (const trustRoot of TRUST_ROOT_RAILS) if (railMatchesCandidate(trustRoot, candidate)) return trustRoot;
     for (const rail of ticket?.rails ?? []) {
-      if (globMatch(rail, candidate)) return rail;
+      if (railMatchesCandidate(rail, candidate)) return rail;
     }
   }
   return null;
@@ -297,14 +310,18 @@ export function resolveOwningCheckoutRoot(absTarget, primaryRoot, env = process.
 export function pathInScope(filePath, ticket, root) {
   const absTarget = isAbsolute(filePath) ? resolve(filePath) : resolve(root, filePath);
   if (!isPathInside(absTarget, root)) return false;
-  const canonical = canonicalizePath(filePath, root);
-  if (canonical === '..' || canonical.startsWith('../') || isAbsolute(canonical)) return false;
-  // The trust roots are NEVER in scope for agent modification.
-  if (TRUST_ROOT_RAILS.some((trustRoot) => globMatch(trustRoot, canonical))) return false;
-  if (!ticket?.scope || ticket.scope.length === 0) return true;
-  // Framework evidence dirs stay writable under any scope.
-  if (FRAMEWORK_DIRS.some((dir) => canonical.startsWith(dir))) return true;
-  return inScope(ticket, canonical);
+  const candidates = new Set([canonicalizePath(filePath, root), resolveRailPath(filePath, root)]);
+  for (const candidate of candidates) {
+    if (candidate === '..' || candidate.startsWith('../') || isAbsolute(candidate)) return false;
+    // The trust roots are NEVER in scope for agent modification.
+    if (TRUST_ROOT_RAILS.some((trustRoot) => railMatchesCandidate(trustRoot, candidate))) return false;
+    if (ticket?.scope && ticket.scope.length > 0) {
+      // Framework evidence dirs stay writable under any scope.
+      const inFrameworkDir = FRAMEWORK_DIRS.some((dir) => candidate.startsWith(dir));
+      if (!inFrameworkDir && !inScope(ticket, candidate)) return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -542,6 +559,13 @@ export function checkCustomTool(toolName, input, ticket, root, { cwd = root, env
     }
   }
   if (paths.size === 0) {
+    if (ticket && Array.isArray(ticket.rails) && ticket.rails.length > 0) {
+      return {
+        decision: 'deny',
+        reason: `custom tool "${toolName}" has no extractable file targets — failing closed while a railed ticket is active`,
+        unvetted: true,
+      };
+    }
     return { decision: 'allow', reason: 'no extractable file target', unvetted: true };
   }
   return { decision: 'allow', reason: 'targets hit no frozen rail' };

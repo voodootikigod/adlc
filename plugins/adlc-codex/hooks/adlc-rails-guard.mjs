@@ -192,7 +192,11 @@ function railMatchesPath(rail, path) {
   if (path === '' || path === '.') return true;
   if (path === '..' || path.startsWith('../')) return true;
   if (globMatch(rail, path)) return true;
-  if (rail.endsWith('/**')) return path === rail.slice(0, -3);
+  if (rail === path || rail.startsWith(`${path}/`)) return true;
+  const railSegs = rail.split('/');
+  for (let i = 1; i < railSegs.length; i += 1) {
+    if (globMatch(railSegs.slice(0, i).join('/'), path)) return true;
+  }
   return false;
 }
 

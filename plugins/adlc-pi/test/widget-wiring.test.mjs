@@ -207,6 +207,11 @@ test('AC5: the build-gate deny path emits an adlc-gate-notice', async (t) => {
 
 test('AC5: an advisory gate (unvetted tool) does NOT emit a gate-notice', async (t) => {
   const root = makeRepo(t);
+  // Use an unrailed active ticket so the unknown no-path tool takes the advisory unvetted-tool branch.
+  writeFileSync(
+    join(root, '.adlc', 'tickets.json'),
+    JSON.stringify({ tickets: [{ id: 'T1', title: 'unrailed', status: 'in-progress', rails: [] }] }, null, 2)
+  );
   const { pi, ctx } = await boot(root);
   // An unknown tool with no path-like arg is recorded as unvetted, not denied.
   await pi.handlers.tool_call(

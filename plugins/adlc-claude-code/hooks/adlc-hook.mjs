@@ -74,6 +74,7 @@ import { createHash } from 'node:crypto';
 import { loadTicketStoreReadOnly, ticketStoreExists } from './generated-ticket-reader.mjs';
 import { resolveActiveTicketId as resolveActiveTicketIdCanonical } from './generated-active-ticket.mjs';
 import { findInnermostCheckoutRoot, inspectGitCheckout, preferInnermostCheckout } from './generated-workspace-root.mjs';
+import { classifyShellCommand, shellTokens, looksPathLike } from './generated-shell.mjs';
 import {
   resolveTrustedBinary,
   ownershipRejection,
@@ -1330,13 +1331,42 @@ function recordBypass(relPath, why, { cwd = undefined } = {}) {
 // symlinks (e.g. `*/auth/**` where `auth` is a symlink) is the one residual
 // gap — declare rails with literal directory prefixes for symlink resolution to
 // apply; the CI gate remains the commit-time backstop.
+function matchesRailGlob(railGlob, relPath) {
+  if (relPath === '' || relPath === '.') return true;
+  if (globMatch(railGlob, relPath)) return true;
+  if (railGlob === relPath || railGlob.startsWith(`${relPath}/`)) return true;
+  const railSegs = railGlob.split('/');
+  for (let i = 1; i < railSegs.length; i += 1) {
+    if (globMatch(railSegs.slice(0, i).join('/'), relPath)) return true;
+  }
+  return false;
+}
+
 function rails(input) {
-  // TRUST THE MATCHER: hooks.json routes only mutating edit tools to this hook,
-  // so any tool that arrives is one we chose to gate — no in-code tool allowlist
-  // (which would drift from the matcher and fail OPEN for a newly-matched tool).
-  // We gate by the target path; a tool that yields NO path while rails are
-  // declared fails closed below (an edit we can't verify is not allowed).
-  const fps = targetFilePaths(input);
+  // TRUST THE MATCHER: hooks.json routes only mutating edit tools + Bash to
+  // this hook, so any tool that arrives is one we chose to gate — no in-code
+  // tool allowlist (which would drift from the matcher and fail OPEN for a
+  // newly-matched tool). Structured edits gate by target path; Bash commands
+  // delegate to the canonical @adlc/core shell classifier (generated-shell.mjs).
+  const isBashTool = String(input.tool_name ?? '') === 'Bash';
+  const bashCommand = isBashTool ? bashCommandFromInput(input) : null;
+  let bashClassification = null;
+  let fps = isBashTool ? [] : targetFilePaths(input);
+  if (isBashTool && typeof bashCommand === 'string' && bashCommand.trim() !== '') {
+    bashClassification = classifyShellCommand(bashCommand);
+    if (
+      bashClassification.mutating &&
+      !bashClassification.opaque &&
+      !bashClassification.changesCwd &&
+      !bashClassification.expands &&
+      bashClassification.paths.length > 0
+    ) {
+      const firstVerb = shellTokens(bashCommand)[0] ?? '';
+      fps = bashClassification.paths.filter(
+        (p) => p !== '/dev/null' && !(p === firstVerb && !looksPathLike(p))
+      );
+    }
+  }
 
   // ADLC_RAILS_BYPASS: an audited, deliberate override. `1` = session-wide,
   // UNSCOPED (backward compatible); any other non-empty value = a glob that
@@ -1484,7 +1514,7 @@ function rails(input) {
         ticket: '(rail trust root)',
       });
       nestedDecls.push({ glob: '.adlc/current-ticket.json', ticket: '(rail trust root)' });
-      const hit = nestedDecls.find((r) => globMatch(r.glob, relLex) || globMatch(r.glob, relReal));
+      const hit = nestedDecls.find((r) => matchesRailGlob(r.glob, relLex) || matchesRailGlob(r.glob, relReal));
       if (hit) {
         bypassOrDeny(
           `rail ${hit.glob} (ticket ${hit.ticket})`,
@@ -1629,9 +1659,37 @@ function rails(input) {
     railDecls.push({ glob: currentTicketResolved, ticket: '(rail trust root, resolved)' });
   }
 
+  if (isBashTool) {
+    if (typeof bashCommand !== 'string' || bashCommand.trim() === '') {
+      return failClosed('Bash payload had no command string to verify;', 'empty-bash-command-bypass');
+    }
+    const c = bashClassification ?? classifyShellCommand(bashCommand);
+    if (c.opaque) {
+      return failClosed('mutating Bash command uses an opaque form (subshell/eval/git checkout/apply/etc.);', 'bash-opaque-mutation-bypass');
+    }
+    if (c.readOnly) {
+      if (c.writeOption) {
+        return failClosed('read-only Bash command uses an output/write option;', 'bash-write-option-bypass');
+      }
+      return; // positively read-only command → allow
+    }
+    if (!c.mutating) {
+      return failClosed('Bash command is neither positively read-only nor a path-transparent mutation;', 'bash-unverifiable-bypass');
+    }
+    if (c.changesCwd) {
+      return failClosed('mutating Bash command changes cwd; target paths cannot be verified;', 'bash-cwd-change-bypass');
+    }
+    if (c.expands || bashCommand.includes('\\')) {
+      return failClosed('mutating Bash command uses shell expansion or backslash escaping; target paths cannot be verified;', 'bash-expansion-bypass');
+    }
+    if (c.paths.length === 0 || fps.length === 0) {
+      return failClosed('mutating Bash command carries no verifiable literal target paths;', 'bash-no-paths-bypass');
+    }
+  }
+
   // A structured edit whose target path we couldn't extract, while rails are
   // declared, can't be verified → fail closed.
-  if (fps.length === 0) {
+  if (!isBashTool && fps.length === 0) {
     return failClosed(`could not extract the target path from this ${input.tool_name ?? 'edit'} payload;`, 'unparsed-edit-target-bypass');
   }
 
@@ -1644,7 +1702,7 @@ function rails(input) {
     // throw on a symlink loop → propagates to the global handler → fail closed.)
     const relLex = toRepoRelativeLexical(fp);
     const relReal = toRepoRelative(fp);
-    const hit = railDecls.find((r) => globMatch(r.glob, relLex) || globMatch(r.glob, relReal));
+    const hit = railDecls.find((r) => matchesRailGlob(r.glob, relLex) || matchesRailGlob(r.glob, relReal));
     if (hit) hits.push({ rel: relReal, glob: hit.glob, ticket: hit.ticket });
   }
   if (hits.length === 0) return; // no target path hit a rail → allow
