@@ -23,6 +23,7 @@ const CASES = [
   ['locked root install', { file: ROOT_FILE, link: ROOT_LINK, dir: ROOT_DIR, ancestors: [ROOT_DIR] }, null],
   ['root file placed directly', { file: ROOT_FILE, link: ROOT_FILE, dir: ROOT_DIR }, null],
   ['own file', { file: { uid: SELF, mode: 0o100755 }, link: { uid: SELF, mode: 0o100755 }, dir: { uid: SELF, mode: 0o40755 } }, null],
+  ['group-writable own file without gid', { file: { uid: SELF, mode: 0o100775 }, link: { uid: SELF, mode: 0o100755 }, dir: { uid: SELF, mode: 0o40755 } }, /writable by group or others/],
   ['world-writable own file', { file: { uid: SELF, mode: 0o100777 }, link: { uid: SELF, mode: 0o100755 }, dir: { uid: SELF, mode: 0o40755 } }, /writable by group or others/],
   ['group-writable root file', { file: { uid: 0, mode: 0o100775 }, link: ROOT_LINK, dir: ROOT_DIR }, /writable by group or others/],
   ['other-writable root file', { file: { uid: 0, mode: 0o100757 }, link: ROOT_LINK, dir: ROOT_DIR }, /writable by group or others/],
