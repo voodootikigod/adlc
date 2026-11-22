@@ -70,8 +70,8 @@ export function checkPreflight(root, { spawnImpl = spawnSync, env = process.env 
     warnings.push('git worktree is dirty — a non-deterministic tree weakens evidence; commit or stash before fan-out.');
   }
 
-  if (env.ADLC_P4_ENFORCEMENT !== '1') {
-    warnings.push('ADLC_P4_ENFORCEMENT is not set — in-session rail enforcement is inactive (advisory). The CI gate remains authoritative.');
+  if (env.ADLC_P4_ENFORCEMENT === '0') {
+    warnings.push('ADLC_P4_ENFORCEMENT=0 — in-session rail enforcement is inactive (advisory). The CI gate remains authoritative.');
   }
 
   return { ready: warnings.length === 0, skipped: false, warnings };
@@ -82,7 +82,7 @@ export function checkPreflight(root, { spawnImpl = spawnSync, env = process.env 
  * Returns { ok, skipped, warning }.
  */
 export function auditGateManifest(root, { spawnImpl = spawnSync } = {}) {
-  if (!existsSync(join(root, '.adlc', 'manifest.jsonl'))) {
+  if (!existsSync(join(root, '.adlc', 'manifest.jsonl')) && !existsSync(join(root, '.adlc', 'manifest.d'))) {
     return { ok: true, skipped: true, warning: null }; // nothing recorded yet → no-op
   }
   // --allow-legacy-unsigned tolerates a repo's honest pre-signing history
@@ -250,7 +250,7 @@ export function auditAdversarialReview(root, { spawnImpl = spawnSync, env = proc
   const ticketId = active.conflict ? null : active.id; // advisory: degrade, never fail closed
 
   let manifestEntries = [];
-  if (existsSync(join(root, '.adlc', 'manifest.jsonl'))) {
+  if (existsSync(join(root, '.adlc', 'manifest.jsonl')) || existsSync(join(root, '.adlc', 'manifest.d'))) {
     const show = run(spawnImpl, 'adlc', ['gate-manifest', 'show', '--json'], root);
     if (!show.error && show.status === 0 && show.stdout) {
       try {

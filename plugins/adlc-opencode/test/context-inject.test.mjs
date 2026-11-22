@@ -44,7 +44,7 @@ test('resolveTicketContext: null when off / uninitialized / no ticket / conflict
   const dir = repo({ tickets: T1 });
   const bare = mkdtempSync(join(tmpdir(), 'oc-ctx-'));
   try {
-    assert.equal(resolveTicketContext(dir, { ADLC_TICKET: 'T1' }), null);       // enforcement off
+    assert.equal(resolveTicketContext(dir, { ADLC_P4_ENFORCEMENT: '0', ADLC_TICKET: 'T1' }), null); // enforcement off
     assert.equal(resolveTicketContext(bare, { ...ON }), null);                   // uninitialized
     assert.equal(resolveTicketContext(dir, { ADLC_P4_ENFORCEMENT: '1' }), null); // no active ticket
     writeFileSync(join(dir, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T2' }));
@@ -60,7 +60,7 @@ test('buildSystemContext: names ticket, frozen rails, scope; null when inert', (
     assert.match(block, /FROZEN RAILS/);
     assert.match(block, /test\/\*\*/);
     assert.match(block, /In scope.*src\/\*\*/);
-    assert.equal(buildSystemContext(dir, { ADLC_TICKET: 'T1' }), null);
+    assert.equal(buildSystemContext(dir, { ADLC_P4_ENFORCEMENT: '0', ADLC_TICKET: 'T1' }), null);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -72,7 +72,7 @@ test('buildToolRailNotice: lists rails; null when no rails / inert', () => {
     // no declared rails → trust roots still frozen, but the tool notice is only
     // for declared rails; a rails-less ticket returns the trust roots, so notice exists.
     assert.ok(buildToolRailNotice(noRails, { ...ON }) === null || /\.adlc/.test(buildToolRailNotice(noRails, { ...ON })));
-    assert.equal(buildToolRailNotice(dir, { ADLC_TICKET: 'T1' }), null); // off
+    assert.equal(buildToolRailNotice(dir, { ADLC_P4_ENFORCEMENT: '0', ADLC_TICKET: 'T1' }), null); // off
   } finally { rmSync(dir, { recursive: true, force: true }); rmSync(noRails, { recursive: true, force: true }); }
 });
 
@@ -98,7 +98,7 @@ test('buildStatusLine: names ticket + enforcement + rail count; null when inert'
   const dir = repo({ tickets: T1 });
   try {
     assert.match(buildStatusLine(dir, { ...ON }), /ADLC T1 · P4 enforcing · \d rail/);
-    assert.equal(buildStatusLine(dir, { ADLC_TICKET: 'T1' }), null);
+    assert.equal(buildStatusLine(dir, { ADLC_P4_ENFORCEMENT: '0', ADLC_TICKET: 'T1' }), null);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

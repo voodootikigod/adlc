@@ -2873,8 +2873,8 @@ function resolveActiveTicketId2(root, env) {
   return { id: resolved.value?.id ?? null, conflict: false };
 }
 function railPreconditions({ root = process.cwd(), env = process.env } = {}) {
-  if (env.ADLC_P4_ENFORCEMENT !== "1") {
-    return { state: "inactive", reason: 'enforcement inactive (ADLC_P4_ENFORCEMENT !== "1")' };
+  if (env.ADLC_P4_ENFORCEMENT === "0") {
+    return { state: "inactive", reason: 'enforcement inactive (ADLC_P4_ENFORCEMENT === "0")' };
   }
   let snapshot;
   try {
@@ -3212,7 +3212,7 @@ function hostProjectRoot(env = process.env) {
 }
 var UNRESOLVED_CAUSE = "the workspace root could not be resolved from the hook payload (workspace_roots/cwd/root) or CURSOR_PROJECT_DIR";
 function unresolvedRootVerdict(tool, env = process.env) {
-  if (env?.ADLC_P4_ENFORCEMENT === "1") {
+  if (env?.ADLC_P4_ENFORCEMENT !== "0") {
     return {
       permission: "deny",
       user_message: `ADLC rails-guard: blocked "${tool || "unknown"}" \u2014 ${UNRESOLVED_CAUSE}`,
@@ -3287,7 +3287,7 @@ function decide(payload, { root, env = process.env } = {}) {
     }
     return { permission: "allow" };
   } catch (err) {
-    const enforcing = env?.ADLC_P4_ENFORCEMENT === "1";
+    const enforcing = env?.ADLC_P4_ENFORCEMENT !== "0";
     process.stderr.write(
       `adlc-rails-guard: internal error (failing ${enforcing ? "CLOSED" : "OPEN"}) \u2014 ${err?.message ?? err}
 `
@@ -3314,7 +3314,7 @@ async function main() {
     try {
       payload = JSON.parse(raw);
     } catch (err) {
-      const enforcing = process.env.ADLC_P4_ENFORCEMENT === "1";
+      const enforcing = process.env.ADLC_P4_ENFORCEMENT !== "0";
       process.stderr.write(`adlc-rails-guard: malformed payload JSON (failing ${enforcing ? "CLOSED" : "OPEN"}) \u2014 ${err.message}
 `);
       process.stdout.write(JSON.stringify(enforcing ? {
@@ -3383,7 +3383,8 @@ function stopAudit(root, { spawnImpl = spawnSync, env = process.env, base } = {}
     return { skipped: true, warnings: [] };
   }
   const warnings = [];
-  if (existsSync15(join16(root, ".adlc", "manifest.jsonl"))) {
+  const hasManifest = existsSync15(join16(root, ".adlc", "manifest.jsonl")) || existsSync15(join16(root, ".adlc", "manifest.d"));
+  if (hasManifest) {
     const verify = run(spawnImpl, "adlc", ["gate-manifest", "verify", "--json", "--allow-legacy-unsigned"], root);
     if (!verify.error && verify.status !== 0) {
       warnings.push(`gate-manifest verify reported a problem: ${(verify.stderr || verify.stdout || "").trim().slice(0, 300)}`);
@@ -3395,7 +3396,7 @@ function stopAudit(root, { spawnImpl = spawnSync, env = process.env, base } = {}
     const active = resolveActiveTicketId2(root, env);
     const ticketId = active.conflict ? null : active.id;
     let manifestEntries = [];
-    if (existsSync15(join16(root, ".adlc", "manifest.jsonl"))) {
+    if (hasManifest) {
       const show = run(spawnImpl, "adlc", ["gate-manifest", "show", "--json"], root);
       if (!show.error && show.status === 0 && show.stdout) {
         try {

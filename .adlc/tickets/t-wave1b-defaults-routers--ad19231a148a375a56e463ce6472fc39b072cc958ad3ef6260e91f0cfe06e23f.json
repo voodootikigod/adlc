@@ -1,0 +1,30 @@
+{
+  "acceptance": [
+    "adlc-gemini hooks.json quotes hook command paths, adlc-rails-guard.cjs fails closed on PreToolUse errors with fs.writeSync(1) flush and uses a mode-0700 user-private state directory instead of /dev/shm/.adlc, and plugins/adlc-gemini/mcp.json registers the adlc MCP server.",
+    "ADLC_P4_ENFORCEMENT defaults to enforcing (!== '0') across cursor, gemini, and opencode while honoring ADLC_P4_ENFORCEMENT=0 opt-down; adlc-cursor and adlc-opencode detect .adlc/manifest.d/; adlc-opencode MUTATION_FLAGS matches --*command; Cursor bundles are rebuilt in lockstep.",
+    "scripts/router/{router-model,gen-routers}.mjs and scripts/test/router-drift.test.mjs cover all 7 harnesses including plugins/adlc-copilot/skills/adlc/SKILL.md and accurate Bash write-gate descriptions.",
+    "All gemini, opencode, cursor, router-drift, and sync-herdr-mirror tests plus full npm run preflight pass."
+  ],
+  "body": "Implement Wave 1B T-P11b: (1) harden adlc-gemini hooks.json quoting, fail-closed PreToolUse shim with writeSync(1) flush, mode-0700 user-private state dir instead of /dev/shm/.adlc, and mcp.json registration; (2) default ADLC_P4_ENFORCEMENT to enforcing (!== '0') across cursor, gemini, and opencode, add .adlc/manifest.d/ detection to adlc-cursor and adlc-opencode, add --*command to adlc-opencode MUTATION_FLAGS, and rebuild Cursor bundles; (3) expand router-model.mjs, gen-routers.mjs, and router-drift.test.mjs to all 7 harnesses (adding copilot and updating Bash write-gate notes).",
+  "category": "feature",
+  "id": "t-wave1b-defaults-routers",
+  "rails": [],
+  "risk": "high",
+  "scope": [
+    "plugins/adlc-gemini/hooks.json",
+    "plugins/adlc-gemini/hooks/adlc-rails-guard.cjs",
+    "plugins/adlc-gemini/hooks/adlc-rails-guard.mjs",
+    "plugins/adlc-gemini/rails-checker.mjs",
+    "plugins/adlc-gemini/mcp.json",
+    "plugins/adlc-opencode/rails-checker.mjs",
+    "plugins/adlc-cursor/rails-checker.mjs",
+    "plugins/adlc-cursor/hooks/adlc-pretool.mjs",
+    "plugins/adlc-cursor/hooks/adlc-rails-guard.mjs",
+    "plugins/adlc-cursor/hooks/adlc-stop.mjs",
+    "scripts/router/router-model.mjs",
+    "scripts/router/gen-routers.mjs",
+    "scripts/test/router-drift.test.mjs"
+  ],
+  "status": "in-progress",
+  "title": "Wave 1B: Enforcement defaults, segmented-manifest parity, and 7-harness router sync (T-P11b)"
+}

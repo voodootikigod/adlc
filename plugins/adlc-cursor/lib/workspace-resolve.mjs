@@ -228,7 +228,7 @@ export function readSessionResolution(sessionId, { env = process.env, now = Date
 }
 
 export function enforcementActive(env = process.env) {
-  return env.ADLC_P4_ENFORCEMENT === '1';
+  return env.ADLC_P4_ENFORCEMENT !== '0';
 }
 
 export function phaseHint({ ticketId, enforcing }) {

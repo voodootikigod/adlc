@@ -39,16 +39,29 @@ function entryEvidence(entry) {
   return entry?.type ?? entry?.gate;
 }
 
-/** Read (gate, ticket) pairs from .adlc/manifest.jsonl; [] when absent/unreadable. */
-function manifestEntries(root) {
-  const path = join(root, '.adlc', 'manifest.jsonl');
-  if (!existsSync(path)) return [];
+/** Read (gate, ticket) pairs from .adlc/manifest.jsonl and .adlc/manifest.d/*.jsonl; [] when absent/unreadable. */
+function parseJsonlFile(path) {
   try {
     return readFileSync(path, 'utf8').split('\n')
       .map((l) => l.trim()).filter(Boolean)
       .map((l) => { try { return JSON.parse(l); } catch { return null; } })
       .filter(Boolean);
   } catch { return []; }
+}
+
+function manifestEntries(root) {
+  const out = [];
+  const legacyPath = join(root, '.adlc', 'manifest.jsonl');
+  if (existsSync(legacyPath)) out.push(...parseJsonlFile(legacyPath));
+  const segDir = join(root, '.adlc', 'manifest.d');
+  if (existsSync(segDir)) {
+    try {
+      for (const name of readdirSync(segDir).filter((f) => f.endsWith('.jsonl')).sort()) {
+        out.push(...parseJsonlFile(join(segDir, name)));
+      }
+    } catch { /* ignore unreadable segment dir */ }
+  }
+  return out;
 }
 
 /**

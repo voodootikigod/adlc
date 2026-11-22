@@ -102,8 +102,9 @@ escape hatch. `/adlc:adlc-spec` runs the loop;
   **unbypassable commit-time backstop**; run it in CI. The plugin's **PreToolUse
   rail hook** is the in-session layer: it precisely denies Edit/Write/MultiEdit to
   declared rail paths and freezes the active ticket store itself once rails exist.
-  **Bash is not gated in-session** — a shell can't be reliably parsed, so rail
-  mutations via Bash are caught by the CI diff gate (any spelling), not the hook.
+  In-session **Bash** tool calls are also rail-gated via the canonical shell classifier
+  (read-only allowlist, opaque/expansion fail-closed, literal targets checked against
+  frozen rails); rail mutations via any spelling remain caught by the CI diff gate.
   Wire that gate with the template at `docs/ci/rails-guard.yml` and make it a
   required check. Override deliberately with `ADLC_RAILS_BYPASS=1` (recorded to
   the manifest).

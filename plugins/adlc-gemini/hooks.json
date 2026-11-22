@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node $HOME/.gemini/config/plugins/adlc-gemini/hooks/adlc-rails-guard.cjs",
+            "command": "node \"$HOME/.gemini/config/plugins/adlc-gemini/hooks/adlc-rails-guard.cjs\"",
             "timeout": 20
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node $HOME/.gemini/config/plugins/adlc-gemini/hooks/adlc-rails-guard.cjs posttooluse",
+            "command": "node \"$HOME/.gemini/config/plugins/adlc-gemini/hooks/adlc-rails-guard.cjs\" posttooluse",
             "timeout": 15
           }
         ]
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node $HOME/.gemini/config/plugins/adlc-gemini/hooks/adlc-rails-guard.cjs preinvocation",
+            "command": "node \"$HOME/.gemini/config/plugins/adlc-gemini/hooks/adlc-rails-guard.cjs\" preinvocation",
             "timeout": 15
           }
         ]
@@ -42,7 +42,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node $HOME/.gemini/config/plugins/adlc-gemini/hooks/adlc-rails-guard.cjs stop",
+            "command": "node \"$HOME/.gemini/config/plugins/adlc-gemini/hooks/adlc-rails-guard.cjs\" stop",
             "timeout": 15
           }
         ]

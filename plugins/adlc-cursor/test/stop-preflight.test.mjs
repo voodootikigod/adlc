@@ -225,6 +225,23 @@ test('stopAudit surfaces the gate-manifest verify problem as a warning when veri
   } finally { cleanup(root); }
 });
 
+test('stopAudit verifies segmented .adlc/manifest.d/ when legacy manifest.jsonl is absent', () => {
+  const root = mkdtempSync(join(tmpdir(), 'adlc-cursor-stop-seg-'));
+  try {
+    mkdirSync(join(root, '.adlc', 'manifest.d'), { recursive: true });
+    writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [] }));
+    writeFileSync(join(root, '.adlc', 'manifest.d', 'seg.jsonl'), '{"seq":1}\n');
+    const spawnImpl = (bin, args) => {
+      if (bin === 'adlc' && args.includes('verify')) return { status: 2, stdout: '', stderr: 'segment chain broken' };
+      return { status: 0, stdout: '', stderr: '' };
+    };
+    const res = stopAudit(root, { spawnImpl, env: {} });
+    assert.equal(res.skipped, false);
+    assert.equal(res.warnings.length, 1);
+    assert.match(res.warnings[0], /segment chain broken/);
+  } finally { cleanup(root); }
+});
+
 // (c) gitChangedPaths porcelain slice(3) + the -z NUL form: a two-status "AM"
 // entry with a SPACE in the path must yield the clean, whole path. The `-z` flag
 // is load-bearing — without it git C-quotes spaced paths ("...path.js" → a quoted

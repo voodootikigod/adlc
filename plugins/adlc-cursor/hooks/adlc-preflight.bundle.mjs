@@ -2786,8 +2786,8 @@ function canonicalizePath2(filePath, root) {
   return relative5(root, abs).split("\\").join("/");
 }
 function railPreconditions({ root = process.cwd(), env = process.env } = {}) {
-  if (env.ADLC_P4_ENFORCEMENT !== "1") {
-    return { state: "inactive", reason: 'enforcement inactive (ADLC_P4_ENFORCEMENT !== "1")' };
+  if (env.ADLC_P4_ENFORCEMENT === "0") {
+    return { state: "inactive", reason: 'enforcement inactive (ADLC_P4_ENFORCEMENT === "0")' };
   }
   let snapshot;
   try {
@@ -3120,7 +3120,7 @@ function hostProjectRoot(env = process.env) {
 }
 var UNRESOLVED_CAUSE = "the workspace root could not be resolved from the hook payload (workspace_roots/cwd/root) or CURSOR_PROJECT_DIR";
 function unresolvedRootVerdict(tool, env = process.env) {
-  if (env?.ADLC_P4_ENFORCEMENT === "1") {
+  if (env?.ADLC_P4_ENFORCEMENT !== "0") {
     return {
       permission: "deny",
       user_message: `ADLC rails-guard: blocked "${tool || "unknown"}" \u2014 ${UNRESOLVED_CAUSE}`,
@@ -3195,7 +3195,7 @@ function decide(payload, { root, env = process.env } = {}) {
     }
     return { permission: "allow" };
   } catch (err) {
-    const enforcing = env?.ADLC_P4_ENFORCEMENT === "1";
+    const enforcing = env?.ADLC_P4_ENFORCEMENT !== "0";
     process.stderr.write(
       `adlc-rails-guard: internal error (failing ${enforcing ? "CLOSED" : "OPEN"}) \u2014 ${err?.message ?? err}
 `
@@ -3222,7 +3222,7 @@ async function main() {
     try {
       payload = JSON.parse(raw);
     } catch (err) {
-      const enforcing = process.env.ADLC_P4_ENFORCEMENT === "1";
+      const enforcing = process.env.ADLC_P4_ENFORCEMENT !== "0";
       process.stderr.write(`adlc-rails-guard: malformed payload JSON (failing ${enforcing ? "CLOSED" : "OPEN"}) \u2014 ${err.message}
 `);
       process.stdout.write(JSON.stringify(enforcing ? {

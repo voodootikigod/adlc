@@ -123,6 +123,20 @@ test('AC3 drift-pin: PHASE_PREREQ evidence names match the runner authoritative 
   assert.deepEqual(new Set(PHASE_PREREQ['adlc-prosecute'].gates), new Set(requirementsForPhase('p2')));
 });
 
+test('AC3: segmented .adlc/manifest.d/*.jsonl satisfies P2 prerequisite without legacy manifest.jsonl', () => {
+  const dir = repo({ tickets: [{ id: 'T1', rails: [] }] });
+  try {
+    mkdirSync(join(dir, '.adlc', 'manifest.d'), { recursive: true });
+    writeFileSync(
+      join(dir, '.adlc', 'manifest.d', 'seg.jsonl'),
+      evEntry('coldstart', 'T1') + evEntry('merge-forecast', 'T1'),
+    );
+    assert.equal(checkCommandOrder('/adlc-prosecute', dir, { ...ON, ADLC_TICKET: 'T1' }).warn, null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('AC3: unmapped command, no active ticket, or non-adlc command → never warns', () => {
   const dir = repo({ tickets: [{ id: 'T1', rails: [] }] });
   try {
