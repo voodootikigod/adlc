@@ -90,11 +90,27 @@ function buildGateDeny(reason) {
  * `importModule` is a test seam: a broken importer simulates a missing
  * @adlc/build-gate install, which must degrade this gate only (return null).
  */
+// Static literal-specifier map so esbuild statically inlines @adlc/build-gate
+// into adlc-pretool.bundle.mjs while keeping `importModule` injectable in tests.
+const STATIC_BUILD_GATE_LOADERS = Object.freeze({
+  '@adlc/build-gate/lib/risk.mjs': () => import('@adlc/build-gate/lib/risk.mjs'),
+  '@adlc/build-gate/lib/decide.mjs': () => import('@adlc/build-gate/lib/decide.mjs'),
+  '@adlc/build-gate/lib/depth-signal.mjs': () => import('@adlc/build-gate/lib/depth-signal.mjs'),
+  '@adlc/build-gate/lib/active-ticket.mjs': () => import('@adlc/build-gate/lib/active-ticket.mjs'),
+  '@adlc/build-gate/lib/override.mjs': () => import('@adlc/build-gate/lib/override.mjs'),
+});
+
+function defaultImportModule(spec) {
+  const loader = STATIC_BUILD_GATE_LOADERS[spec];
+  if (!loader) return Promise.reject(new Error(`unsupported build-gate module: ${spec}`));
+  return loader();
+}
+
 export async function consultBuildGate(payload, {
   root,
   env = process.env,
   now = Date.now(),
-  importModule = (spec) => import(spec),
+  importModule = defaultImportModule,
 } = {}) {
   let risk, decideMod, depthSignal, activeTicket, override;
   try {

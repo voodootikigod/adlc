@@ -7,8 +7,9 @@
 // unit tests. Does NOT require the Cursor binary and does not mutate the user
 // environment. Exit 0 = all checks pass; exit 2 = a check failed.
 
-import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -71,13 +72,29 @@ else {
 }
 
 // ---- AC1 + T47: hooks wiring (dispatcher + audit + shell + stop + preflight) ----
+const HOOK_BUNDLES = [
+  'adlc-session-start.bundle.mjs',
+  'adlc-pretool.bundle.mjs',
+  'adlc-audit.bundle.mjs',
+  'adlc-shell-advisory.bundle.mjs',
+  'adlc-precompact.bundle.mjs',
+  'adlc-subagent.bundle.mjs',
+  'adlc-stop.bundle.mjs',
+  'adlc-preflight.bundle.mjs',
+];
+
+for (const bundleFile of HOOK_BUNDLES) {
+  if (!existsSync(join(PLUGIN, 'hooks', bundleFile))) fail(`hooks/${bundleFile} missing`);
+  else ok(`hooks/${bundleFile} present`);
+}
+
 function assertHookConfig(label, hooksJsonPath, { relativeNeedle }) {
   if (!existsSync(hooksJsonPath)) { fail(`${label} missing`); return; }
   const hj = JSON.parse(read(hooksJsonPath));
   if (hj.version !== 1) fail(`${label} version is not 1`); else ok(`${label} version 1`);
   const pre = hj.hooks?.preToolUse ?? [];
-  if (!pre.some((e) => /adlc-pretool\.mjs/.test(e.command ?? ''))) fail(`${label}: preToolUse does not wire the adlc-pretool.mjs dispatcher`);
-  else ok(`${label}: preToolUse wires the single dispatcher`);
+  if (!pre.some((e) => /adlc-pretool\.bundle\.mjs/.test(e.command ?? ''))) fail(`${label}: preToolUse does not wire the adlc-pretool.bundle.mjs dispatcher`);
+  else ok(`${label}: preToolUse wires the single bundled dispatcher`);
   if (pre.some((e) => /adlc-rails-guard\.mjs/.test(e.command ?? ''))) fail(`${label}: preToolUse still wires adlc-rails-guard.mjs directly`);
   else ok(`${label}: no direct rails-guard preToolUse entry`);
   if (pre.filter((e) => /adlc-/.test(e.command ?? '')).length !== 1) fail(`${label}: preToolUse must carry exactly ONE ADLC entry`);
@@ -86,22 +103,22 @@ function assertHookConfig(label, hooksJsonPath, { relativeNeedle }) {
     fail(`${label}: hook commands must be relative (needle=${relativeNeedle}), not absolute`);
   } else ok(`${label}: relative hook command paths`);
   const after = hj.hooks?.afterFileEdit ?? [];
-  if (!after.some((e) => /adlc-audit\.mjs/.test(e.command ?? ''))) fail(`${label}: afterFileEdit missing audit`);
-  else ok(`${label}: afterFileEdit audit`);
+  if (!after.some((e) => /adlc-audit\.bundle\.mjs/.test(e.command ?? ''))) fail(`${label}: afterFileEdit missing bundled audit`);
+  else ok(`${label}: afterFileEdit bundled audit`);
   const shell = hj.hooks?.beforeShellExecution ?? [];
-  if (!shell.some((e) => /adlc-shell-advisory\.mjs/.test(e.command ?? ''))) fail(`${label}: beforeShellExecution missing`);
-  else ok(`${label}: beforeShellExecution advisory`);
+  if (!shell.some((e) => /adlc-shell-advisory\.bundle\.mjs/.test(e.command ?? ''))) fail(`${label}: beforeShellExecution missing bundled advisory`);
+  else ok(`${label}: beforeShellExecution bundled advisory`);
 
   const sessionStart = hj.hooks?.sessionStart ?? [];
-  if (!sessionStart.some((e) => /adlc-session-start\.mjs/.test(e.command ?? ''))) fail(`${label}: sessionStart missing adlc-session-start.mjs`);
+  if (!sessionStart.some((e) => /adlc-session-start\.bundle\.mjs/.test(e.command ?? ''))) fail(`${label}: sessionStart missing adlc-session-start.bundle.mjs`);
   else ok(`${label}: sessionStart wired`);
   if (!sessionStart.every((e) => e.failClosed === false && e.timeout === 10)) fail(`${label}: sessionStart must use failClosed:false timeout:10`);
   else ok(`${label}: sessionStart failClosed/timeout lockstep`);
   const stop = hj.hooks?.stop ?? [];
-  if (!stop.some((e) => /adlc-stop\.mjs/.test(e.command ?? ''))) fail(`${label}: stop must wire adlc-stop.mjs by default (T47)`);
+  if (!stop.some((e) => /adlc-stop\.bundle\.mjs/.test(e.command ?? ''))) fail(`${label}: stop must wire adlc-stop.bundle.mjs by default (T47)`);
   else ok(`${label}: stop wired by default`);
   const preflight = hj.hooks?.beforeSubmitPrompt ?? [];
-  if (!preflight.some((e) => /adlc-preflight\.mjs/.test(e.command ?? ''))) fail(`${label}: beforeSubmitPrompt must wire adlc-preflight.mjs by default (T47)`);
+  if (!preflight.some((e) => /adlc-preflight\.bundle\.mjs/.test(e.command ?? ''))) fail(`${label}: beforeSubmitPrompt must wire adlc-preflight.bundle.mjs by default (T47)`);
   else ok(`${label}: beforeSubmitPrompt wired by default`);
   const VERIFIED_EVENTS = new Set([
     'sessionStart', 'preToolUse', 'afterFileEdit', 'beforeShellExecution', 'beforeReadFile',
@@ -116,17 +133,17 @@ function assertHookConfig(label, hooksJsonPath, { relativeNeedle }) {
     else if (!entries.every((e) => e.failClosed === false && e.timeout === 10)) fail(`${label}: ${ev} must use failClosed:false timeout:10`);
     else ok(`${label}: ${ev} wired`);
   }
-  if (!(hj.hooks?.preCompact ?? []).some((e) => /adlc-precompact\.mjs/.test(e.command ?? ''))) {
-    fail(`${label}: preCompact must wire adlc-precompact.mjs`);
+  if (!(hj.hooks?.preCompact ?? []).some((e) => /adlc-precompact\.bundle\.mjs/.test(e.command ?? ''))) {
+    fail(`${label}: preCompact must wire adlc-precompact.bundle.mjs`);
   }
-  if (!(hj.hooks?.subagentStart ?? []).some((e) => /adlc-subagent\.mjs/.test(e.command ?? ''))) {
-    fail(`${label}: subagentStart must wire adlc-subagent.mjs`);
+  if (!(hj.hooks?.subagentStart ?? []).some((e) => /adlc-subagent\.bundle\.mjs/.test(e.command ?? ''))) {
+    fail(`${label}: subagentStart must wire adlc-subagent.bundle.mjs`);
   }
-  if (!(hj.hooks?.subagentStop ?? []).some((e) => /adlc-subagent\.mjs/.test(e.command ?? ''))) {
-    fail(`${label}: subagentStop must wire adlc-subagent.mjs`);
+  if (!(hj.hooks?.subagentStop ?? []).some((e) => /adlc-subagent\.bundle\.mjs/.test(e.command ?? ''))) {
+    fail(`${label}: subagentStop must wire adlc-subagent.bundle.mjs`);
   }
-  if (pre[0]?.failClosed !== false) fail(`${label}: preToolUse failClosed must be false`);
-  else ok(`${label}: failClosed:false`);
+  if (pre[0]?.failClosed !== true) fail(`${label}: preToolUse failClosed must be true`);
+  else ok(`${label}: preToolUse failClosed:true`);
   const matcher = pre.find((e) => /adlc-pretool/.test(e.command ?? ''))?.matcher ?? '';
   const re = new RegExp(matcher, 'i');
   const routed = ['Write', 'str_replace', 'modify_file', 'frobnicate', 'Read'].every((t) => re.test(t));
@@ -136,6 +153,97 @@ function assertHookConfig(label, hooksJsonPath, { relativeNeedle }) {
 
 assertHookConfig('hooks/hooks.json', join(PLUGIN, 'hooks', 'hooks.json'), { relativeNeedle: './hooks/' });
 assertHookConfig('hooks.json', join(PLUGIN, 'hooks.json'), { relativeNeedle: './node_modules/@adlc/cursor/hooks/' });
+
+// ---- T-P04: isolated /tmp copy with zero ancestor node_modules ----
+{
+  const isolatedRoot = mkdtempSync(join(tmpdir(), 'adlc-cursor-isolated-'));
+  try {
+    const isolatedPlugin = join(isolatedRoot, 'plugin');
+    const isolatedRepo = join(isolatedRoot, 'repo');
+    const isolatedState = join(isolatedRoot, 'state');
+    cpSync(PLUGIN, isolatedPlugin, {
+      recursive: true,
+      filter(source) {
+        const parts = source.split(/[\\/]/);
+        return !parts.includes('node_modules') && !parts.includes('test');
+      },
+    });
+    mkdirSync(join(isolatedRepo, '.adlc'), { recursive: true });
+    mkdirSync(join(isolatedRepo, 'src'), { recursive: true });
+    writeFileSync(join(isolatedRepo, 'src', 'frozen.txt'), 'frozen\n');
+    writeFileSync(join(isolatedRepo, 'src', 'allowed.txt'), 'allowed\n');
+    writeFileSync(join(isolatedRepo, '.adlc', 'tickets.json'), JSON.stringify({
+      tickets: [{
+        id: 't-isolated-smoke',
+        title: 'Isolated Cursor hook smoke ticket',
+        status: 'in-progress',
+        risk: 'high',
+        rails: ['src/frozen.txt'],
+        scope: ['src/**'],
+      }],
+    }, null, 2));
+    writeFileSync(join(isolatedRepo, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 't-isolated-smoke' }));
+
+    const pretoolBundle = join(isolatedPlugin, 'hooks', 'adlc-pretool.bundle.mjs');
+    const baseEnv = {
+      PATH: process.env.PATH ?? '',
+      HOME: isolatedRoot,
+      ADLC_P4_ENFORCEMENT: '1',
+      ADLC_CURSOR_STATE_DIR: isolatedState,
+      CURSOR_PROJECT_DIR: isolatedRepo,
+    };
+
+    const railRun = spawnSync(process.execPath, [pretoolBundle], {
+      cwd: isolatedPlugin,
+      env: baseEnv,
+      input: JSON.stringify({
+        tool_name: 'Write',
+        tool_input: { path: join(isolatedRepo, 'src', 'frozen.txt') },
+        workspace_roots: [isolatedRepo],
+      }),
+      encoding: 'utf8',
+      timeout: 15_000,
+    });
+    if (railRun.status !== 0 || /ERR_MODULE_NOT_FOUND/.test(railRun.stderr ?? '')) {
+      fail(`isolated preToolUse rail check crashed (status=${railRun.status}, stderr=${railRun.stderr})`);
+    } else {
+      let verdict;
+      try { verdict = JSON.parse(railRun.stdout); } catch { verdict = null; }
+      if (verdict?.permission !== 'deny') fail(`isolated preToolUse rail check did not deny: ${railRun.stdout}`);
+      else ok('isolated /tmp preToolUse denies frozen rail with zero node_modules');
+    }
+
+    const bgRun = spawnSync(process.execPath, [pretoolBundle], {
+      cwd: isolatedPlugin,
+      env: {
+        ...baseEnv,
+        ADLC_BUILD_GATE_ENFORCEMENT: '1',
+        ADLC_BUILD_GATE_DEPTH: '999',
+        ADLC_CURSOR_SESSION_ID: 'isolated-smoke-session',
+      },
+      input: JSON.stringify({
+        tool_name: 'Write',
+        tool_input: { path: join(isolatedRepo, 'src', 'allowed.txt') },
+        workspace_roots: [isolatedRepo],
+      }),
+      encoding: 'utf8',
+      timeout: 15_000,
+    });
+    if (bgRun.status !== 0 || /ERR_MODULE_NOT_FOUND/.test(bgRun.stderr ?? '')) {
+      fail(`isolated preToolUse build-gate check crashed (status=${bgRun.status}, stderr=${bgRun.stderr})`);
+    } else {
+      let verdict;
+      try { verdict = JSON.parse(bgRun.stdout); } catch { verdict = null; }
+      if (verdict?.permission !== 'deny' || !/build-gate/i.test(verdict?.user_message ?? '')) {
+        fail(`isolated preToolUse build-gate check did not deny degraded high-risk write: ${bgRun.stdout} (stderr=${bgRun.stderr})`);
+      } else {
+        ok('isolated /tmp preToolUse denies degraded ADLC_BUILD_GATE_ENFORCEMENT=1 with zero node_modules');
+      }
+    }
+  } finally {
+    rmSync(isolatedRoot, { recursive: true, force: true });
+  }
+}
 
 // ---- T47: marketplace + plugin manifest + skills ----
 const pkg = JSON.parse(read(join(PLUGIN, 'package.json')));
