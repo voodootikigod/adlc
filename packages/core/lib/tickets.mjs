@@ -144,8 +144,9 @@ function compileGlobNfa(pattern) {
   const tokens = pattern.split(GLOB_TOKEN_SPLIT).filter((p) => p !== '');
   const states = [{ eps: [], edges: [] }];
   const addState = () => {
+    const id = states.length;
     states.push({ eps: [], edges: [] });
-    return states.length - 1;
+    return id;
   };
 
   let cur = 0;
