@@ -16,6 +16,8 @@ test('maskStringLiterals blanks quoted and template contents while preserving le
   assert.ok(masked.includes('const empty = "";'), 'empty string closes immediately and does not swallow following code');
   assert.ok(masked.includes('${a === b}'), 'executable template interpolation remains visible for mutation');
   assert.ok(masked.includes('if (a === b) return true;'));
+  // Empty string as the VERY FIRST literal on a line must close immediately (catches escaped=true init)
+  assert.equal(maskStringLiterals('const empty = ""; if (a === b) return;'), 'const empty = ""; if (a === b) return;');
 });
 
 test('operators ignore string/template literals and splice single offset spans instead of /g', () => {
