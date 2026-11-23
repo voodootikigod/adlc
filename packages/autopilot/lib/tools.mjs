@@ -8,7 +8,8 @@
 // group- or world-writable. Children receive PATH = that sanitized list.
 
 import { existsSync, statSync, realpathSync, constants } from 'node:fs';
-import { isAbsolute, join, dirname, sep, delimiter } from 'node:path';
+import { isAbsolute, join, sep, delimiter } from 'node:path';
+import { ancestorDirs, ownershipRejection } from '@adlc/core';
 import { isUnder } from './input.mjs';
 import { registerSeams, active } from './mutations.mjs';
 
@@ -42,21 +43,39 @@ export function sanitizedSearchList(pathValue, { repoRoot, trustedBinDirs = null
 }
 
 /**
+ * Extract the `<prefix>/lib/node_modules/<pkg-or-scope-pkg>` package root from a
+ * resolved global npm CLI realpath, or null when not a global node_modules CLI.
+ */
+export function globalNodeModuleTree(realPath) {
+  if (typeof realPath !== 'string') return null;
+  const m = /^(.*\/lib\/node_modules\/(?:@(?!\.\.?\/)[A-Za-z0-9._-]+\/(?!\.\.?$)[A-Za-z0-9._-]+|(?!\.\.?$)[A-Za-z0-9._-]+))(?:\/|$)/.exec(realPath);
+  return m ? m[1] : null;
+}
+
+/**
  * The ownership/writability check over the realpath and every ancestor.
+ * Delegates ownership rules to `@adlc/core`'s `ownershipRejection` and
+ * `ancestorDirs`, and additionally enforces that every ancestor up to `/`
+ * is owned by `uid` or root and not group- or world-writable.
  * `stat` is injectable (tests fixture another uid / group-writable ancestors).
  */
 export function checkTrustedPath(realPath, { uid, stat = statSync }) {
   // Mutation seam `tools.trustAnyPath`: ownership/writability is never checked.
   if (active('tools.trustAnyPath')) return { ok: true };
-  let p = realPath;
-  for (;;) {
-    let st;
-    try { st = stat(p); } catch (e) { return { ok: false, detail: `${p}: ${e.message}` }; }
+  let file;
+  try { file = stat(realPath); } catch (e) { return { ok: false, detail: `${realPath}: ${e.message}` }; }
+  const ancestors = ancestorDirs(realPath);
+  const ancStats = [];
+  for (const anc of ancestors) {
+    try { ancStats.push(stat(anc)); } catch (e) { return { ok: false, detail: `${anc}: ${e.message}` }; }
+  }
+  const rejected = ownershipRejection({ file, link: file, dir: ancStats[0], ancestors: ancStats }, uid);
+  if (rejected) return { ok: false, detail: `${realPath}: ${rejected}` };
+  for (let i = 0; i < ancestors.length; i++) {
+    const p = ancestors[i];
+    const st = ancStats[i];
     if (st.uid !== uid && st.uid !== 0) return { ok: false, detail: `${p} is owned by uid ${st.uid}, not ${uid} or root` };
     if (st.mode & (constants.S_IWGRP | constants.S_IWOTH)) return { ok: false, detail: `${p} is group- or world-writable` };
-    const parent = dirname(p);
-    if (parent === p) break;
-    p = parent;
   }
   return { ok: true };
 }
@@ -78,7 +97,9 @@ export function pinToolchain({ pathValue, repoRoot, uid, trustedBinDirs = null, 
     let real;
     try { real = realpath(found); } catch (e) { throw new ToolError(`untrusted-tool:${name}`, e.message); }
     const parts = real.split(sep);
-    if (!active('tools.trustAnyPath') && (parts.includes('.worktrees') || parts.includes('node_modules') || (repoRoot && isUnder(repoRoot, real)))) {
+    const inRepo = Boolean(repoRoot && isUnder(repoRoot, real));
+    const inUntrustedNodeModules = parts.includes('node_modules') && !globalNodeModuleTree(real);
+    if (!active('tools.trustAnyPath') && (parts.includes('.worktrees') || inRepo || inUntrustedNodeModules)) {
       throw new ToolError(`untrusted-tool:${name}`, `${real} resolves under a rejected directory`);
     }
     const trust = checkTrustedPath(real, { uid, stat });

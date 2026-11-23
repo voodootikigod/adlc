@@ -50,7 +50,10 @@ test('a SYSTEM_ROOT is bound whole, a regular file as a single file, anything el
   assert.equal(classifyReadOnlyEntry('/usr/', { isFile }), 'system-root', 'a trailing slash does not change identity');
   assert.equal(classifyReadOnlyEntry('/home/op/.local/bin/claude', { isFile }), 'file');
   assert.equal(classifyReadOnlyEntry('/home/op/.local/bin', { isFile }), 'directory');
-  assert.deepEqual([...SYSTEM_ROOTS], ['/usr', '/lib', '/lib64', '/etc/ssl', '/etc/resolv.conf', '/etc/hosts'],
+  assert.deepEqual([...SYSTEM_ROOTS],
+    process.platform === 'darwin'
+      ? ['/usr', '/bin', '/lib', '/lib64', '/etc/ssl', '/etc/resolv.conf', '/etc/hosts', '/System', '/Library', '/private/etc']
+      : ['/usr', '/bin', '/lib', '/lib64', '/etc/ssl', '/etc/resolv.conf', '/etc/hosts'],
     'the fixed root list is a security contract — widening it must be a visible diff');
 });
 

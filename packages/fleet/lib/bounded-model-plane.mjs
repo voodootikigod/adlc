@@ -29,8 +29,16 @@ import { resolve, sep } from 'node:path';
 /**
  * The fixed system roots (spec §6.4 INVARIANT). Bound WHOLE; a pinned executable
  * that lives under one of them (`/usr/bin/git`) needs no separate bind.
+ * Includes `/bin` (merged-usr and split-usr hosts) plus macOS roots on darwin.
  */
-export const SYSTEM_ROOTS = Object.freeze(['/usr', '/lib', '/lib64', '/etc/ssl', '/etc/resolv.conf', '/etc/hosts']);
+export const BASE_SYSTEM_ROOTS = Object.freeze(['/usr', '/bin', '/lib', '/lib64', '/etc/ssl', '/etc/resolv.conf', '/etc/hosts']);
+export const MACOS_SYSTEM_ROOTS = Object.freeze(['/System', '/Library', '/private/etc']);
+export const SYSTEM_ROOTS = Object.freeze(
+  process.platform === 'darwin'
+    ? [...BASE_SYSTEM_ROOTS, ...MACOS_SYSTEM_ROOTS]
+    : [...BASE_SYSTEM_ROOTS],
+);
+const ALL_SYSTEM_ROOTS = Object.freeze([...BASE_SYSTEM_ROOTS, ...MACOS_SYSTEM_ROOTS]);
 
 /** The private tmp root. A caller-supplied TMPDIR must live under it. */
 export const PRIVATE_TMP = '/tmp';
@@ -51,7 +59,7 @@ function defaultIsFile(path) {
  */
 export function classifyReadOnlyEntry(path, { isFile = defaultIsFile } = {}) {
   const p = norm(path);
-  if (SYSTEM_ROOTS.includes(p)) return 'system-root';
+  if (ALL_SYSTEM_ROOTS.includes(p)) return 'system-root';
   return isFile(p) ? 'file' : 'directory';
 }
 
@@ -92,7 +100,7 @@ export function checkReadSetInvariant({
   const leaves = bindTargets(homeBinds);
   const scratch = dedupe(homeScratchDirs);
   const allowed = dedupe(allowedDirs);
-  const roots = SYSTEM_ROOTS.filter((r) => ro.includes(r));
+  const roots = ALL_SYSTEM_ROOTS.filter((r) => ro.includes(r));
 
   for (const p of ro) {
     for (const w of writable) {
@@ -110,7 +118,7 @@ export function checkReadSetInvariant({
     }
     const coveringAllowed = allowed.find((a) => isStrictAncestor(a, p));
     if (coveringAllowed) { redundant.push(`${p} is already covered by allowed tree ${coveringAllowed}`); continue; }
-    if (SYSTEM_ROOTS.includes(p) || allowed.includes(p)) continue;
+    if (ALL_SYSTEM_ROOTS.includes(p) || allowed.includes(p)) continue;
     const child = ro.find((q) => isStrictAncestor(p, q));
     if (child) violations.push(`read-only entry ${p} is a directory bind exposing the parent of ${child}`);
     else if (isFile && !isFile(p)) {

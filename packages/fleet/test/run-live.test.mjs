@@ -111,7 +111,7 @@ test('--json is total for a THROWN preflight (reason preflight, no lock release 
 });
 
 test('preflight canary binds existing CANARY_SYSTEM_ROOTS including /bin read-only for bubblewrap (#1266)', async () => {
-  assert.deepEqual([...CANARY_SYSTEM_ROOTS], [...SYSTEM_ROOTS, '/bin']);
+  assert.deepEqual([...CANARY_SYSTEM_ROOTS], [...new Set([...SYSTEM_ROOTS, '/bin'])]);
   assert.equal(Object.isFrozen(CANARY_SYSTEM_ROOTS), true);
   assert.deepEqual(
     canaryReadOnlyPaths((p) => p === '/usr' || p === '/bin'),

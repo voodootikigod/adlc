@@ -12,7 +12,9 @@
 // empty private directory, an env with no inherited NPM_CONFIG_*/npm_config_*
 // and `npm_config_cache` = the run's private cache.
 
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
 import { join, basename } from 'node:path';
 import { validateIssueNumber, validateOid } from './input.mjs';
 import { DEADLINES } from './spawn.mjs';
@@ -90,14 +92,48 @@ export async function buildWorkerDeps({ ctx, issue, baseOid }) {
   return join(dest, 'node_modules');
 }
 
-/** §6.5b(iii): the gates' tree — a clone at attestedHead from the GATE mirror, installed OFFLINE from the private cache. */
+/** Lockfile-keyed hash for caching read-only gate `node_modules` trees across runs/rounds. */
+export function lockfileCacheKey(dir) {
+  const lockPath = join(dir, 'package-lock.json');
+  if (!existsSync(lockPath)) return null;
+  return createHash('sha256').update(readFileSync(lockPath)).digest('hex');
+}
+
+/**
+ * Clone a cached `node_modules` tree using OS hardlinks (`cp -al` on Linux) or
+ * copy-on-write reflinks (`cp -cR` on macOS). Returns true on success.
+ */
+export function cloneCachedNodeModules(src, dest, { spawn = spawnSync, platform = process.platform } = {}) {
+  if (!existsSync(src)) return false;
+  const args = platform === 'darwin' ? ['-cR', src, dest] : ['-al', src, dest];
+  const r = spawn('cp', args, { stdio: 'ignore' });
+  return r?.status === 0 && existsSync(dest);
+}
+
+/** §6.5b(iii): the gates' tree — a clone at attestedHead from the GATE mirror, reusing a lockfile-keyed cache or falling back to offline npm ci. */
 export async function installGateDeps({ ctx, issue, attestedHead }) {
   validateIssueNumber(issue); validateOid(attestedHead);
   const dest = ctx.paths.gateDeps(issue);
   await cloneAt({ ctx, runDir: ctx.paths.runDir(issue), source: ctx.paths.gateMirror(issue), dest, oid: attestedHead });
+  const targetModules = join(dest, 'node_modules');
+  const key = lockfileCacheKey(dest);
+  const cacheRoot = key && ctx.paths.runsDir ? join(ctx.paths.runsDir, 'gate-deps-cache') : null;
+  const cacheEntry = cacheRoot ? join(cacheRoot, key) : null;
+  if (cacheEntry && !active('deps.allowOnlineGate') && cloneCachedNodeModules(cacheEntry, targetModules)) {
+    return targetModules;
+  }
   const r = await npmCi({ ctx, issue, cwd: dest, userconfigName: 'npmrc-gate', homeName: 'npm-home-gate', offline: true, label: 'npm-ci:gate-deps' });
   if (r.status !== 0) throw new DepsError('gate-deps-missing', `offline npm ci exited ${r.status ?? r.reason}`);
-  return join(dest, 'node_modules');
+  if (cacheEntry && existsSync(targetModules) && !existsSync(cacheEntry)) {
+    try {
+      mkdirSync(cacheRoot, { recursive: true, mode: 0o700 });
+      const staging = `${cacheEntry}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`;
+      if (cloneCachedNodeModules(targetModules, staging)) {
+        try { renameSync(staging, cacheEntry); } catch { rmSync(staging, { recursive: true, force: true }); }
+      }
+    } catch { /* best-effort cache population */ }
+  }
+  return targetModules;
 }
 
 const fail = (code, detail) => ({ ok: false, code, detail });

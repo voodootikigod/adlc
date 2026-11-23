@@ -199,7 +199,8 @@ export async function createSequenceFixture({ issue = 7, gateStatus = () => 0, r
     }
     if (sub === 'pr' && verb === 'checks') {
       state.checkPolls++;
-      const rows = checks ? checks(state) : ['test (18)', 'test (20)', 'test (22)', 'rails-guard', 'mutation-gate', 'cross-model-gate', 'ticket-store-platform (ubuntu-latest, 20)'].map((name) => ({ name, state: 'SUCCESS', bucket: 'pass', workflow: 'ci' }));
+      const platformLegs = ['ubuntu-latest', 'macos-latest', 'windows-latest'].flatMap((os) => ['18', '20', '22'].map((v) => `ticket-store-platform (${os}, ${v})`));
+      const rows = checks ? checks(state) : ['test (18)', 'test (20)', 'test (22)', 'rails-guard', 'mutation-gate', 'cross-model-gate', ...platformLegs].map((name) => ({ name, state: 'SUCCESS', bucket: 'pass', workflow: 'ci' }));
       return { status: rows.every((r) => r.bucket === 'pass') ? 0 : 8, stdout: JSON.stringify(rows) };
     }
     if (sub === 'issue' && verb === 'view') {

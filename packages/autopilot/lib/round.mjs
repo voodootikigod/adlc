@@ -224,7 +224,7 @@ export function createRunSteps({ ctx, deps, issue, ticket, ticketId, mirror, wor
       return retry(`${dc.code}:\n${(dc.paths ?? []).join('\n')}`);
     }
 
-    return attestTail({ head: ff.head, completed: false });
+    return attestTail({ head: ff.head, completed: false, fleetAttestedTreeIdentity: fleet.parsed?.attestedTreeIdentity ?? null });
   }
 
   /**
@@ -232,18 +232,27 @@ export function createRunSteps({ ctx, deps, issue, ticket, ticketId, mirror, wor
    * is already complete on this head), size gate + final review, attest, gate
    * mirror + gate deps, outer gates. Shared with the maintenance retry round.
    */
-  async function attestTail({ head, completed = false, reason = null }) {
-    // §6.6 — the outer gates run on the INTEGRATED head in per-gate clones of a
-    // gate mirror holding exactly that head and BASE_OID (spec step 6).
-    let gateDeps;
-    try {
-      await deps.mirror.createGateMirror({ ctx, issue: n, attestedHead: head, baseOid: ctx.baseOid });
-      gateDeps = await deps.deps.installGateDeps({ ctx, issue: n, attestedHead: head });
-    } catch (e) { return terminal(failed(e.code ?? 'gate-setup-failed', e.message)); }
-    const gates = await deps.gates.runOuterGates({ ctx, issue: n, attestedHead: head, baseOid: ctx.baseOid, gateDepsNodeModules: gateDeps });
-    if (!gates.ok) {
-      if (GATE_ENVIRONMENT_CODES.includes(gates.code)) return terminal(failed(gates.code, gates.reason ?? gates.detail ?? null));
-      return retry(gateFailureText(gates));
+  async function attestTail({ head, completed = false, reason = null, fleetAttestedTreeIdentity = null }) {
+    // §6.6 / P4 — skip duplicate outer gate runs when fleet already attested the
+    // exact same git tree identity for `head`.
+    let headTreeIdentity = null;
+    if (typeof fleetAttestedTreeIdentity === 'string' && fleetAttestedTreeIdentity.length > 0) {
+      const treeRes = await ctx.git.local(issueWt, ['rev-parse', `${head}^{tree}`]);
+      if (treeRes.status === 0) headTreeIdentity = treeRes.stdout.trim();
+    }
+    if (!headTreeIdentity || headTreeIdentity !== fleetAttestedTreeIdentity) {
+      // §6.6 — the outer gates run on the INTEGRATED head in per-gate clones of a
+      // gate mirror holding exactly that head and BASE_OID (spec step 6).
+      let gateDeps;
+      try {
+        await deps.mirror.createGateMirror({ ctx, issue: n, attestedHead: head, baseOid: ctx.baseOid });
+        gateDeps = await deps.deps.installGateDeps({ ctx, issue: n, attestedHead: head });
+      } catch (e) { return terminal(failed(e.code ?? 'gate-setup-failed', e.message)); }
+      const gates = await deps.gates.runOuterGates({ ctx, issue: n, attestedHead: head, baseOid: ctx.baseOid, gateDepsNodeModules: gateDeps });
+      if (!gates.ok) {
+        if (GATE_ENVIRONMENT_CODES.includes(gates.code)) return terminal(failed(gates.code, gates.reason ?? gates.detail ?? null));
+        return retry(gateFailureText(gates));
+      }
     }
 
     // §6.6a — completion: the last content commit of the round (a rebased head keeps its completion commit).

@@ -4,10 +4,10 @@
 // leaves a record the next iteration can disambiguate by inspecting git/gh.
 // Free-text fields pass through the structured redactor; identifiers never do.
 
-import { writeFileSync, readFileSync, existsSync, renameSync, mkdirSync, unlinkSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, unlinkSync, readdirSync } from 'node:fs';
+import { writeFileAtomic } from '@adlc/core';
 
 registerSeams(['records.unlinkBeforeTombstone']);
-import { randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { redactRecord } from './redact.mjs';
 import { registerSeams, active } from './mutations.mjs';
@@ -35,9 +35,7 @@ export const TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export function writeAtomicJson(path, data) {
   mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`;
-  writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n');
-  renameSync(tmp, path);
+  writeFileAtomic(path, `${JSON.stringify(data, null, '  ')}\n`, { mode: 0o600 });
   return data;
 }
 
