@@ -91,8 +91,12 @@ export function testTargetFor(file, root = ROOT) {
     return globs.length > 0 ? globs.join(' ') : null;
   }
   if ((m = /^plugins\/([^/]+)\//.exec(file))) {
-    const d = `plugins/${m[1]}/test`;
-    return existsSync(join(root, d)) ? `${d}/*.test.mjs` : null;
+    const globs = [];
+    const pluginDir = `plugins/${m[1]}/test`;
+    const hooksDir = `plugins/${m[1]}/hooks/test`;
+    if (existsSync(join(root, pluginDir))) globs.push(`${pluginDir}/*.test.mjs`);
+    if (existsSync(join(root, hooksDir))) globs.push(`${hooksDir}/*.test.mjs`);
+    return globs.length > 0 ? globs.join(' ') : null;
   }
   if ((m = /^scripts\/(?:.+\/)?([^/]+)\.(?:mjs|cjs|js)$/.exec(file))) {
     const base = m[1];
@@ -105,19 +109,22 @@ export function testTargetFor(file, root = ROOT) {
     // the generator silently stops prosecuting everything changed beside it.
     const EXACT = {
       'scripts/ticket-readers/generate.mjs': 'scripts/test/ticket-reader-generation.test.mjs',
-      // router-model.mjs is named for what it declares, not for what asserts
-      // it (no scripts/test/router-model.test.mjs) — router-drift.test.mjs is
-      // what actually exercises it (drift = generateAll(model) vs committed
-      // routers). Without this, the file has no fast target and the whole run
-      // drops to the slow path, whose budget cap (3 mutants) is spent across
-      // the ENTIRE diff.
+      // router-model.mjs and gen-routers.mjs are both exercised by router-drift.test.mjs.
       'scripts/router/router-model.mjs': 'scripts/test/router-drift.test.mjs',
+      'scripts/router/gen-routers.mjs': 'scripts/test/router-drift.test.mjs',
       // The install smokes are named for their host; smoke-teardown.test.mjs
-      // runs both and asserts they remove every fixture they create.
+      // runs them and asserts they remove every fixture they create.
       'scripts/codex-install-smoke.mjs': 'scripts/test/smoke-teardown.test.mjs',
+      'scripts/copilot-install-smoke.mjs': 'scripts/test/smoke-teardown.test.mjs',
       'scripts/gemini-install-smoke.mjs': 'scripts/test/smoke-teardown.test.mjs',
+      'scripts/toolkit-floor-check.mjs': 'scripts/test/toolkit-floor.test.mjs',
+      'scripts/run-tests.mjs': 'scripts/test/run-tests.test.mjs scripts/test/run-tests-parallel.test.mjs',
+      'scripts/preflight-fast.mjs': 'scripts/test/run-tests-parallel.test.mjs',
     };
-    if (EXACT[file] && existsSync(join(root, EXACT[file]))) return EXACT[file];
+    if (EXACT[file]) {
+      const parts = EXACT[file].split(' ').filter((p) => existsSync(join(root, p)));
+      if (parts.length > 0) return parts.join(' ');
+    }
     // A NESTED source may use the same-basename convention only when that
     // basename identifies exactly one source under scripts/**. Two files
     // sharing a name are still different files, and handing one the other's
@@ -244,6 +251,36 @@ export function classify(changed, requestedMax, root = ROOT) {
     uncovered,
     skipped,
   };
+}
+
+/** Build a per-file `{ [file]: 'node --test <target>' }` map for fast-path mutation runs. */
+export function fileTestCmdsFor(files, root = ROOT) {
+  const out = {};
+  for (const file of files) {
+    const target = testTargetFor(file, root);
+    if (target) out[file] = `node --test ${target}`;
+  }
+  return out;
+}
+
+/** Assemble the CLI arguments passed to `hollow-test.mjs` for a classified diff. */
+export function hollowTestArgsFor(decision, { base, budget, root = ROOT, extraArgs = [] }) {
+  const bin = join(root, 'packages', 'hollow-test', 'bin', 'hollow-test.mjs');
+  const fastExtraArgs = decision.kind === 'fast'
+    ? [
+      '--skip-baseline',
+      '--file-test-map', JSON.stringify(fileTestCmdsFor(decision.files, root)),
+    ]
+    : [];
+  return [
+    bin,
+    '--base', base,
+    '--test-cmd', decision.testCmd,
+    '--max', String(budget.draw),
+    '--timeout-ms', String(decision.kind === 'fast' ? FAST_RUN_TIMEOUT_MS : SLOW_RUN_TIMEOUT_MS),
+    ...fastExtraArgs,
+    ...extraArgs,
+  ];
 }
 
 /**

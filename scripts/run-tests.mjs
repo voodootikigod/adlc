@@ -16,8 +16,9 @@
 // Ordering is preserved and output still streams through, so a normal green run
 // looks the same as before.
 
-import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, realpathSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import { availableParallelism, tmpdir } from 'node:os';
 import { join, delimiter, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -128,15 +129,37 @@ export function packageHasTests(name, { existsSync: exists = existsSync, package
   return PACKAGE_TEST_DIRS.some((dir) => exists(join(packagesDir, name, dir)));
 }
 
+export const MAX_DEFAULT_CONCURRENCY = 6;
+
+/** Resolve bounded test-segment worker concurrency from env (`ADLC_TEST_CONCURRENCY`). */
+export function resolveTestConcurrency(env = process.env, parallelism = availableParallelism()) {
+  const raw = env?.ADLC_TEST_CONCURRENCY;
+  if (raw !== undefined && raw !== '') {
+    const parsed = Number.parseInt(String(raw), 10);
+    if (Number.isInteger(parsed) && parsed >= 1) return parsed;
+  }
+  return Math.max(1, Math.min(parallelism, MAX_DEFAULT_CONCURRENCY));
+}
+
 /** Each package's tests run as their OWN segment: one failing package must not hide the others. */
 export function packageSegments({ existsSync: exists = existsSync, readdirSync: readDir = readdirSync } = {}) {
   return readDir('packages', { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .filter((entry) => packageHasTests(entry.name, { existsSync: exists }))
     .map((entry) => {
-      const globs = PACKAGE_TEST_DIRS.filter((dir) => exists(join('packages', entry.name, dir))).map(
-        (dir) => `packages/${entry.name}/${dir}/*.test.mjs`,
-      );
+      const globs = PACKAGE_TEST_DIRS.filter((dir) => exists(join('packages', entry.name, dir))).map((dir) => {
+        // Exclude autopilot's spec-coverage.test.mjs from pass 1 so it executes once inside `autopilot AC gate`.
+        if (entry.name === 'autopilot' && dir === 'test') {
+          try {
+            const files = readDir(join('packages', 'autopilot', 'test'))
+              .filter((f) => typeof f === 'string' && f.endsWith('.test.mjs') && f !== 'spec-coverage.test.mjs')
+              .sort()
+              .map((f) => `packages/autopilot/test/${f}`);
+            if (files.length > 0) return files.join(' ');
+          } catch { /* fallback to glob in synthetic test fixtures */ }
+        }
+        return `packages/${entry.name}/${dir}/*.test.mjs`;
+      });
       return [`packages/${entry.name}`, `node --test ${globs.join(' ')}`];
     });
 }
@@ -172,7 +195,67 @@ export const SEGMENTS = [
   ['docs app', 'node --test apps/docs/test/*.test.mjs'],
 ];
 
-function main() {
+function runSegmentAsync(command, env) {
+  const segTmp = mkdtempSync(join(tmpdir(), 'adlc-test-seg-'));
+  const childEnv = { ...env, TMPDIR: segTmp, TMP: segTmp, TEMP: segTmp };
+  return new Promise((resolve) => {
+    const chunks = [];
+    const child = spawn(command, { shell: true, stdio: ['ignore', 'pipe', 'pipe'], env: childEnv });
+    child.stdout?.on('data', (chunk) => chunks.push(chunk));
+    child.stderr?.on('data', (chunk) => chunks.push(chunk));
+    const finish = (status, signal) => {
+      try { rmSync(segTmp, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+      resolve({ status, signal, output: Buffer.concat(chunks).toString('utf8') });
+    };
+    child.on('error', (err) => {
+      chunks.push(Buffer.from(`${err.message}\n`, 'utf8'));
+      finish(1, null);
+    });
+    child.on('close', (code, signal) => finish(code, signal));
+  });
+}
+
+/**
+ * Execute `segments` through a bounded async worker pool, buffering each
+ * segment's output and flushing it deterministically in original segment order.
+ */
+export async function runSegmentsPool(
+  segments,
+  {
+    concurrency = resolveTestConcurrency(),
+    env = process.env,
+    runOne = runSegmentAsync,
+    onResult = null,
+  } = {},
+) {
+  const limit = Math.max(1, Math.min(concurrency, segments.length || 1));
+  const results = new Array(segments.length);
+  let nextStart = 0;
+  let nextFlush = 0;
+
+  const flushReady = () => {
+    while (nextFlush < results.length && results[nextFlush] !== undefined) {
+      if (onResult) onResult(results[nextFlush]);
+      nextFlush++;
+    }
+  };
+
+  async function worker() {
+    while (true) {
+      const idx = nextStart++;
+      if (idx >= segments.length) return;
+      const [name, command] = segments[idx];
+      const res = await runOne(command, env, name);
+      results[idx] = { name, status: res.status, signal: res.signal ?? null, output: res.output ?? '' };
+      flushReady();
+    }
+  }
+
+  await Promise.all(Array.from({ length: limit }, () => worker()));
+  return results;
+}
+
+async function main() {
   const { env: segmentEnv, scrubbed } = buildSegmentEnv(process.env);
   if (scrubbed.length) {
     console.log(`note: ${scrubbed.join(', ')} set in your shell — scrubbed for test segments`);
@@ -185,18 +268,24 @@ function main() {
     process.exit(1);
   }
 
-  const failed = [];
-  for (const [name, command] of segments) {
-    console.log(`\n─── ${name}`);
-    const result = spawnSync(command, { shell: true, stdio: 'inherit', env: segmentEnv });
-    // A signal (status null) is a failure too — never let a killed segment read as a pass.
-    if (result.status !== 0) failed.push({ name, status: result.status, signal: result.signal });
-  }
+  const concurrency = resolveTestConcurrency(process.env);
+  const results = await runSegmentsPool(segments, {
+    concurrency,
+    env: segmentEnv,
+    onResult: (r) => {
+      process.stdout.write(`\n─── ${r.name}\n`);
+      if (r.output) process.stdout.write(r.output);
+    },
+  });
 
+  // A signal (status null) is a failure too — never let a killed segment read as a pass.
+  const failed = results.filter((r) => r.status !== 0);
   console.log(`\n═══ ${segments.length - failed.length}/${segments.length} segments passed`);
   if (failed.length) {
     for (const f of failed) console.log(`  FAILED  ${f.name}${f.signal ? ` (${f.signal})` : ` (exit ${f.status})`}`);
-    process.exit(1);
+    // Use exitCode instead of process.exit(1) so buffered stdout drains completely on CI pipes.
+    process.exitCode = 1;
+    return;
   }
   console.log('  all green');
 }

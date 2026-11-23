@@ -53,16 +53,13 @@ function diffArrays(before, after, path, changes, limit) {
       after: after.length,
     });
   }
+  // Compare the full shared prefix so later element regressions are never masked
+  // by an earlier divergent index (bounded by `limit` / MAX_PATHS).
   const len = Math.min(before.length, after.length);
   for (let i = 0; i < len; i++) {
     if (limit !== undefined && changes.length >= limit) break;
     const elemPath = `${path}[${i}]`;
     collectChanges(before[i], after[i], elemPath, changes, limit);
-    // Cap: only report first divergent index details then stop array recursion
-    if (changes.length > 0) {
-      const lastWasForThisIndex = changes[changes.length - 1].path.startsWith(elemPath);
-      if (lastWasForThisIndex) break; // found first divergent index, stop drilling further into array
-    }
   }
 }
 
@@ -137,6 +134,13 @@ export function diffRoute(beforeEntry, afterEntry) {
 
   if (normalizeContentType(beforeEntry.contentType) !== normalizeContentType(afterEntry.contentType)) {
     diffs.push({ field: 'contentType', before: beforeEntry.contentType, after: afterEntry.contentType });
+  }
+
+  if (beforeEntry.headers && afterEntry.headers && typeof beforeEntry.headers === 'object' && typeof afterEntry.headers === 'object') {
+    const { changes: headerChanges } = diffJson(beforeEntry.headers, afterEntry.headers);
+    if (headerChanges.length > 0) {
+      diffs.push({ field: 'headers', changes: headerChanges });
+    }
   }
 
   // Body diff: prefer structural for JSON, hash-based for text

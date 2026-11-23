@@ -311,6 +311,8 @@ export namespace mutate {
   export function identifierSegments(name: string): string[];
   /** True when the identifier names a TUNING knob (mask it) rather than a BOUNDARY (mutate it). */
   export function isTuningIdentifier(name: string): boolean;
+  /** Blank string and template literal contents while preserving exact line length. */
+  export function maskStringLiterals(line: string): string;
 }
 
 // lib/shell.mjs — shell-command classification for in-session rail gating
@@ -356,6 +358,10 @@ export function checkSyntaxDetail(filePath: string, cwd: string, execPath?: stri
 };
 export function checkSyntax(filePath: string, cwd: string, execPath?: string): SyntaxCheckResult;
 export function syntaxCheckProblem(filePath: string): string | null;
+export function createTypeScriptSyntaxWorker(execPath?: string): {
+  check(filePath: string): Promise<{ verdict: SyntaxCheckResult; detail: string | null }>;
+  close(): void;
+};
 // lib/primitives.mjs
 export function writeFileAtomic(
   filePath: string,

@@ -9,7 +9,7 @@ import { readFileSync, realpathSync, existsSync } from 'node:fs';
 import { resolve, relative, isAbsolute, sep } from 'node:path';
 import {
   parseArgs, pass, gateFail, opError, printJson, checkSyntaxDetail, reasonList,
-  resolveTypeScript, syntaxCheckProblem, syntaxLanguage,
+  resolveTypeScript, syntaxCheckProblem, syntaxLanguage, createTypeScriptSyntaxWorker,
 } from '@adlc/core';
 import { gitDiff, isDirty, isGitRepo, resolveBase, mutate, git, repoRoot } from '@adlc/core';
 import {
@@ -17,7 +17,7 @@ import {
   readRailsFromTicketFile, expandRailsToFiles, isMutableSource, isSupportedSourceExtension,
   normalizeRepoRelativePath,
 } from '../lib/targets.mjs';
-import { runMutant, runTest, formatDiagnosticOutput } from '../lib/runner.mjs';
+import { runMutantWithWorker, runTest, formatDiagnosticOutput } from '../lib/runner.mjs';
 import { deletedLinesFromDiff, readOldSource } from '../lib/diff-deletions.mjs';
 import { writeThenExit } from '../lib/exit.mjs';
 import {
@@ -49,6 +49,8 @@ const { values } = parseArgs({
     // Repo-relative paths of generated files a release bump rewrites. Only these
     // can be reported as version-only; see fileChangeIsVersionOnly.
     generated:    { type: 'string', multiple: true },
+    'skip-baseline': { type: 'boolean', default: false },
+    'file-test-map': { type: 'string' },
     json:         { type: 'boolean', default: false },
     help:         { type: 'boolean', default: false },
   },
@@ -98,6 +100,19 @@ const testGlobs = values['test-glob'] ?? [];
 // `spec-lint.mjs`. Convention alone cannot resolve that ambiguity; the project must.
 const sourceGlobs = values['source-glob'] ?? [];
 const generatedFiles = new Set(values.generated ?? []);
+const skipBaseline = values['skip-baseline'] === true;
+let fileTestMap = null;
+if (values['file-test-map'] !== undefined) {
+  try {
+    const parsed = JSON.parse(values['file-test-map']);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      opError('--file-test-map must be a JSON object mapping repo-relative paths to test commands');
+    }
+    fileTestMap = parsed;
+  } catch (err) {
+    opError(`--file-test-map is not valid JSON: ${err.message}`);
+  }
+}
 const maxMutants = parseInt(values.max, 10);
 const timeoutMs  = parseInt(values['timeout-ms'], 10);
 const useJson    = values.json;
@@ -284,36 +299,31 @@ if (base === undefined) {
   }
 }
 
-// ── green baseline ────────────────────────────────────────────────────────────
-// Run the unmutated test command ONCE before mutating anything. If it is not
-// green, every mutant would trivially look "killed" (the suite already exits
-// non-zero), turning the gate into a hollow pass. Refuse to run unless the real
-// suite passes on unmutated code.
-
-const baseline = runTest(testCmd, timeoutMs, cwd);
-if (baseline.status !== 0) {
-  // Report `reason` when the command could not be run to completion. Without it
-  // a launch/buffer failure prints as "exit null", which reads as a failing
-  // suite and sends the reader looking for a broken test that does not exist.
-  const reason = baseline.timedOut
-    ? 'timed out'
-    : baseline.spawnFailed
-      ? `could not run the test command: ${baseline.reason}`
-      : `exit ${baseline.status}`;
-  // One write, awaited before exiting: up to 128 KiB of diagnostics outruns a
-  // piped stderr, and process.exit() drops whatever is still queued — the
-  // reason line, written last, first of all.
-  const diagnostics = [baseline.stdout, baseline.stderr]
-    .filter(Boolean)
-    .map((output) => formatDiagnosticOutput(output))
-    .join('');
-  await writeThenExit(
-    process.stderr,
-    diagnostics +
-      `error: baseline suite is not green (${reason}) — cannot measure mutation kill; ` +
-      'fix the suite / --test-cmd first\n',
-    1
-  );
+// ── green baseline helper ────────────────────────────────────────────────────
+// Run the unmutated test command ONCE before mutating anything (unless the caller
+// already proved the baseline green and passed --skip-baseline, or the diff is
+// purely comment-/version-only and exits fast with 0 mutants).
+async function assertGreenBaseline() {
+  if (skipBaseline) return;
+  const baseline = runTest(testCmd, timeoutMs, cwd);
+  if (baseline.status !== 0) {
+    const reason = baseline.timedOut
+      ? 'timed out'
+      : baseline.spawnFailed
+        ? `could not run the test command: ${baseline.reason}`
+        : `exit ${baseline.status}`;
+    const diagnostics = [baseline.stdout, baseline.stderr]
+      .filter(Boolean)
+      .map((output) => formatDiagnosticOutput(output))
+      .join('');
+    await writeThenExit(
+      process.stderr,
+      diagnostics +
+        `error: baseline suite is not green (${reason}) — cannot measure mutation kill; ` +
+        'fix the suite / --test-cmd first\n',
+      1
+    );
+  }
 }
 
 // ── diff + target selection ─────────────────────────────────────────────────
@@ -558,10 +568,8 @@ for (const f of explicitFiles) {
 // rails-authoring tickets) must not silently satisfy this gate — refuse to
 // run instead, and point the caller at --target/--rails (issues #70, #41).
 
-// The whole diff was comments. Nothing was skipped by accident and nothing is
-// unverified — there is simply no changed behaviour in it. Reported, then a
-// clean exit, rather than the "nothing to mutate" refusal below, which exists
-// for a diff whose source files were never eligible in the first place.
+// The whole diff was comments or version bumps: exit fast with 0 mutants
+// without paying for a baseline test-suite run.
 if (diffEligibleFiles.length === 0 && explicitFiles.length === 0 && notCovered.size > 0) {
   if (useJson) {
     printJson({ ...buildJsonReport([]), ...skippedReport() });
@@ -571,6 +579,8 @@ if (diffEligibleFiles.length === 0 && explicitFiles.length === 0 && notCovered.s
     ? 'comment- or version-only diff — no changed behaviour to mutate'
     : 'comment-only diff — no changed behaviour to mutate');
 }
+
+await assertGreenBaseline();
 
 if (diffEligibleFiles.length === 0 && explicitFiles.length === 0) {
   opError(
@@ -745,97 +755,106 @@ const results = [];
 // distinct reasons below (#658) rather than being conflated into one vague
 // "nothing happened" message.
 const unreadableTargets = new Set();
+const hasTypeScriptTargets = fileTargets.some((t) => syntaxLanguage(t.absolutePath) === 'typescript');
+const tsWorker = hasTypeScriptTargets ? createTypeScriptSyntaxWorker() : null;
 
-for (const target of fileTargets) {
-  const content = readFileSafe(target.absolutePath);
-  if (content === null) {
-    unreadableTargets.add(target.file);
-    if (!useJson) {
-      console.warn(`warning: could not read ${target.file} — skipping`);
-    }
-    continue;
-  }
-
-  // A zero-quota file remains selected for the fail-closed budget check below,
-  // but no candidate from it is attempted.
-  if (target.quota === 0) continue;
-
-  // Keep the mutator's existing line/operator order. The quota counts only
-  // candidates that reached a syntax-valid test verdict; invalid and
-  // undetermined candidates stay visible in results but do not spend a slot.
-  const tryLimit = target.quota * INVALID_TRIES_PER_SLOT;
-  const mutants = mutate.generateMutants(content, {
-    targetLines: target.targetLines,
-    maxMutants: tryLimit,
-  });
-  let validResults = 0;
-
-  for (const mutant of mutants) {
-    let mutatedContent;
-    try {
-      mutatedContent = mutate.applyMutant(content, mutant);
-    } catch (err) {
+try {
+  for (const target of fileTargets) {
+    const content = readFileSafe(target.absolutePath);
+    if (content === null) {
+      unreadableTargets.add(target.file);
       if (!useJson) {
-        console.warn(`warning: could not apply mutant at ${target.file}:${mutant.line} — ${err.message}`);
+        console.warn(`warning: could not read ${target.file} — skipping`);
       }
       continue;
     }
 
-    // Register for emergency restore twice over: in memory for a signal we can
-    // catch, and on disk for one we cannot.
-    //
-    // FAIL CLOSED if the record cannot be written. Swallowing the error would
-    // mutate the file with no way back — precisely the SIGKILL case the record
-    // exists for, silently unprotected. The mutant bytes go in too, so recovery
-    // can PROVE the file is still what we wrote before overwriting it.
-    currentFilePath = target.absolutePath;
-    currentOriginal = content;
-    if (inflightPath !== null) {
-      try {
-        writeRecord(inflightPath, {
-          pid: process.pid,
-          relFile: relative(root, target.absolutePath),
-          original: content,
-          mutated: mutatedContent,
-        });
-      } catch (err) {
-        opError(
-          `could not write the in-flight record (${err.message}) — refusing to mutate ` +
-          `${target.file}, because a run interrupted now could not be recovered`
-        );
-      }
-    }
+    // A zero-quota file remains selected for the fail-closed budget check below,
+    // but no candidate from it is attempted.
+    if (target.quota === 0) continue;
 
-    const trial = runMutant(
-      target.absolutePath,
-      content,
-      mutatedContent,
-      testCmd,
-      timeoutMs,
-      cwd
-    );
-
-    // Trial done; the file is restored, so clear both emergency records.
-    //
-    currentFilePath = null;
-    currentOriginal = null;
-    clearInflight();
-
-    results.push({
-      file: target.file,
-      line: mutant.line,
-      operator: mutant.operator,
-      killed: trial.killed,
-      invalid: trial.invalid === true,
-      undetermined: trial.undetermined === true,
-      reason: trial.reason ?? null,
-      timedOut: trial.timedOut,
-      original: mutant.original,
-      mutated: mutant.mutated,
+    // Keep the mutator's existing line/operator order. The quota counts only
+    // candidates that reached a syntax-valid test verdict; invalid and
+    // undetermined candidates stay visible in results but do not spend a slot.
+    const tryLimit = target.quota * INVALID_TRIES_PER_SLOT;
+    const mutants = mutate.generateMutants(content, {
+      targetLines: target.targetLines,
+      maxMutants: tryLimit,
     });
-    if (!trial.invalid && !trial.undetermined) validResults++;
-    if (validResults >= target.quota) break;
+    const targetTestCmd = fileTestMap && typeof fileTestMap[target.file] === 'string'
+      ? fileTestMap[target.file]
+      : testCmd;
+    let validResults = 0;
+
+    for (const mutant of mutants) {
+      let mutatedContent;
+      try {
+        mutatedContent = mutate.applyMutant(content, mutant);
+      } catch (err) {
+        if (!useJson) {
+          console.warn(`warning: could not apply mutant at ${target.file}:${mutant.line} — ${err.message}`);
+        }
+        continue;
+      }
+
+      // Register for emergency restore twice over: in memory for a signal we can
+      // catch, and on disk for one we cannot.
+      //
+      // FAIL CLOSED if the record cannot be written. Swallowing the error would
+      // mutate the file with no way back — precisely the SIGKILL case the record
+      // exists for, silently unprotected. The mutant bytes go in too, so recovery
+      // can PROVE the file is still what we wrote before overwriting it.
+      currentFilePath = target.absolutePath;
+      currentOriginal = content;
+      if (inflightPath !== null) {
+        try {
+          writeRecord(inflightPath, {
+            pid: process.pid,
+            relFile: relative(root, target.absolutePath),
+            original: content,
+            mutated: mutatedContent,
+          });
+        } catch (err) {
+          opError(
+            `could not write the in-flight record (${err.message}) — refusing to mutate ` +
+            `${target.file}, because a run interrupted now could not be recovered`
+          );
+        }
+      }
+
+      const trial = await runMutantWithWorker(
+        target.absolutePath,
+        content,
+        mutatedContent,
+        targetTestCmd,
+        timeoutMs,
+        cwd,
+        { tsWorker }
+      );
+
+      // Trial done; the file is restored, so clear both emergency records.
+      currentFilePath = null;
+      currentOriginal = null;
+      clearInflight();
+
+      results.push({
+        file: target.file,
+        line: mutant.line,
+        operator: mutant.operator,
+        killed: trial.killed,
+        invalid: trial.invalid === true,
+        undetermined: trial.undetermined === true,
+        reason: trial.reason ?? null,
+        timedOut: trial.timedOut,
+        original: mutant.original,
+        mutated: mutant.mutated,
+      });
+      if (!trial.invalid && !trial.undetermined) validResults++;
+      if (validResults >= target.quota) break;
+    }
   }
+} finally {
+  tsWorker?.close();
 }
 
 // Files with at least one result, shared by both starvation checks below.

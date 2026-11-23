@@ -3,8 +3,9 @@
 // always `unknown`: treating infrastructure failure as invalid would discard a
 // mutant without proving that the mutant itself is malformed.
 
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { extname, resolve } from 'node:path';
+import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { sanitizeCandidateEnv } from './sandbox-runner.mjs';
 
@@ -135,4 +136,73 @@ export function syntaxCheckProblem(filePath) {
     ? `; ${skipped.map((item) => `skipped typescript ${item.version} at ${item.path}: no JavaScript parser API`).join('; ')}`
     : '';
   return `${filePath}: the typescript package with a JavaScript parser API was not found from its directory${skippedText}; install it with npm i -D typescript`;
+}
+
+/**
+ * Spawn one persistent `syntax-check-typescript.mjs --daemon` worker so a
+ * multi-mutant run pays TypeScript module load once instead of per mutant.
+ */
+export function createTypeScriptSyntaxWorker(execPath = process.execPath) {
+  let child = null;
+  let rl = null;
+  const pending = [];
+
+  const rejectAll = (detail) => {
+    while (pending.length > 0) {
+      const next = pending.shift();
+      next.resolve({ verdict: 'unknown', detail });
+    }
+  };
+
+  const ensureStarted = () => {
+    if (child && !child.killed && child.exitCode === null) return;
+    child = spawn(execPath, [TYPESCRIPT_WORKER, '--daemon'], {
+      stdio: ['pipe', 'pipe', 'ignore'],
+      env: sanitizeCandidateEnv(process.env),
+    });
+    child.unref?.();
+    rl = createInterface({ input: child.stdout, crlfDelay: Infinity });
+    rl.on('line', (line) => {
+      const next = pending.shift();
+      if (!next) return;
+      try {
+        const parsed = JSON.parse(line);
+        next.resolve({
+          verdict: parsed?.verdict === 'valid' || parsed?.verdict === 'invalid' ? parsed.verdict : 'unknown',
+          detail: parsed?.detail ?? null,
+        });
+      } catch {
+        next.resolve({ verdict: 'unknown', detail: 'malformed worker response' });
+      }
+    });
+    child.on('exit', () => {
+      child = null;
+      rl = null;
+      rejectAll('typescript syntax worker exited unexpectedly');
+    });
+    child.on('error', (err) => {
+      child = null;
+      rl = null;
+      rejectAll(err.message);
+    });
+  };
+
+  return {
+    check(filePath) {
+      ensureStarted();
+      return new Promise((resolvePromise) => {
+        pending.push({ resolve: resolvePromise });
+        child.stdin.write(`${JSON.stringify({ file: resolve(filePath) })}\n`);
+      });
+    },
+    close() {
+      if (rl) { rl.close(); rl = null; }
+      if (child) {
+        try { child.stdin.end(); } catch {}
+        try { child.kill(); } catch {}
+        child = null;
+      }
+      rejectAll('typescript syntax worker closed');
+    },
+  };
 }
