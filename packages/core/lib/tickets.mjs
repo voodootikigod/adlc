@@ -138,49 +138,87 @@ export function inScope(ticket, path) {
   return (ticket.scope ?? []).some((g) => globMatch(g, path));
 }
 
+const GLOB_TOKEN_SPLIT = /(\*\*\/|\*\*|\*)/;
+
+function compileGlobNfa(pattern) {
+  const tokens = pattern.split(GLOB_TOKEN_SPLIT).filter((p) => p !== '');
+  const states = [{ eps: [], edges: [] }];
+  const addState = () => {
+    states.push({ eps: [], edges: [] });
+    return states.length - 1;
+  };
+
+  let cur = 0;
+  for (const token of tokens) {
+    if (token === '**') {
+      const next = addState();
+      states[cur].edges.push({ kind: 'any', to: cur });
+      states[cur].eps.push(next);
+      cur = next;
+    } else if (token === '**/') {
+      const loop = addState();
+      const next = addState();
+      states[cur].eps.push(next, loop);
+      states[loop].edges.push({ kind: 'any', to: loop });
+      states[loop].edges.push({ kind: 'char', ch: '/', to: next });
+      cur = next;
+    } else if (token === '*') {
+      const next = addState();
+      states[cur].edges.push({ kind: 'nonSlash', to: cur });
+      states[cur].eps.push(next);
+      cur = next;
+    } else {
+      for (let i = 0; i < token.length; i++) {
+        const next = addState();
+        states[cur].edges.push({ kind: 'char', ch: token[i], to: next });
+        cur = next;
+      }
+    }
+  }
+  return { states, accept: cur };
+}
+
+function edgesCompatible(eA, eB) {
+  if (eA.kind === 'char' && eB.kind === 'char') return eA.ch === eB.ch;
+  if (eA.kind === 'char') return eB.kind === 'any' || eA.ch !== '/';
+  if (eB.kind === 'char') return eA.kind === 'any' || eB.ch !== '/';
+  return true;
+}
+
+/** Exact glob-language intersection: true iff some path matches both ga and gb. */
 function globsOverlap(ga, gb) {
   if (ga === gb) return true;
-  if (globMatch(ga, gb) || globMatch(gb, ga)) return true;
+  const nfaA = compileGlobNfa(ga);
+  const nfaB = compileGlobNfa(gb);
+  const nB = nfaB.states.length;
+  const visited = new Uint8Array(nfaA.states.length * nB);
+  const queue = [0];
+  visited[0] = 1;
 
-  const aIdx = ga.indexOf('*');
-  const bIdx = gb.indexOf('*');
-  // A literal pattern (no `*`) only matches itself; globMatch above already
-  // decided whether the other pattern matches that exact path.
-  if (aIdx === -1 || bIdx === -1) return false;
+  const enqueue = (a, b) => {
+    const key = a * nB + b;
+    if (!visited[key]) {
+      visited[key] = 1;
+      queue.push(key);
+    }
+  };
 
-  // Necessary condition on trailing literal suffixes after the final `*`.
-  const aSuffix = ga.slice(ga.lastIndexOf('*') + 1);
-  const bSuffix = gb.slice(gb.lastIndexOf('*') + 1);
-  if (aSuffix && bSuffix && !aSuffix.endsWith(bSuffix) && !bSuffix.endsWith(aSuffix)) {
-    return false;
+  for (let head = 0; head < queue.length; head++) {
+    const key = queue[head];
+    const a = Math.floor(key / nB);
+    const b = key - a * nB;
+    if (a === nfaA.accept && b === nfaB.accept) return true;
+
+    const stA = nfaA.states[a];
+    const stB = nfaB.states[b];
+    for (const nextA of stA.eps) enqueue(nextA, b);
+    for (const nextB of stB.eps) enqueue(a, nextB);
+    for (const eA of stA.edges) {
+      for (const eB of stB.edges) {
+        if (edgesCompatible(eA, eB)) enqueue(eA.to, eB.to);
+      }
+    }
   }
-
-  const aBase = ga.slice(0, aIdx);
-  const bBase = gb.slice(0, bIdx);
-
-  // Leading wildcard on either side: `**` crosses segments; a single-segment
-  // pattern with neither `/` nor `**` cannot match a pattern requiring `/`.
-  if (aBase === '' || bBase === '') {
-    if (ga.startsWith('**') || gb.startsWith('**')) return true;
-    if (!ga.includes('/') && !ga.includes('**') && gb.includes('/')) return false;
-    if (!gb.includes('/') && !gb.includes('**') && ga.includes('/')) return false;
-    return true;
-  }
-
-  if (aBase === bBase) return true;
-
-  // One literal prefix extends the other. The shorter pattern can reach paths
-  // under the longer prefix only if the shorter pattern's wildcard can span
-  // the remainder (any `**`, or a single `*` when the remainder has no `/`).
-  if (bBase.startsWith(aBase)) {
-    const rest = bBase.slice(aBase.length);
-    return ga.includes('**') || !rest.includes('/');
-  }
-  if (aBase.startsWith(bBase)) {
-    const rest = aBase.slice(bBase.length);
-    return gb.includes('**') || !rest.includes('/');
-  }
-
   return false;
 }
 

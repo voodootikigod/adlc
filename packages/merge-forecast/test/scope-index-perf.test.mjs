@@ -94,6 +94,28 @@ describe('merge-forecast T-P17: walkTree, concrete overlap veto, and O(|F|+|E|) 
       },
     );
 
+    // End-to-end runForecast: disjoint multi-level globs (src/*.mjs vs src/**/foo/bar.mjs)
+    // must NOT be hard-vetoed.
+    await withTempRepo(
+      {
+        'src/top.mjs': 'export const top = 1;\n',
+        'src/deep/foo/bar.mjs': 'export const bar = 2;\n',
+      },
+      async (root) => {
+        const result = await runForecast({
+          root,
+          tickets: [
+            { id: 'T1', title: 'top mjs', scope: ['src/*.mjs'], edges: [] },
+            { id: 'T2', title: 'deep bar', scope: ['src/**/foo/bar.mjs'], edges: [] },
+          ],
+        });
+        assert.equal(result.pairs.length, 1);
+        assert.equal(result.pairs[0].verdict, 'PARALLEL');
+        assert.equal(result.pairs[0].hardVeto, false);
+        assert.equal(result.pairs[0].signal, 'none');
+      },
+    );
+
     // pairScore returns hardVeto when scopeIndex reports concrete file overlap
     const scored = pairScore(disjointA, disjointB, { repoFiles, scopeIndex: fakeIndex });
     assert.deepEqual(scored, { score: 1.0, signal: 'scope-overlap', hardVeto: true });

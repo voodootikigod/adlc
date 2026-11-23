@@ -57,6 +57,12 @@ describe('scopesOverlap', () => {
       [['*foo**'], ['myfoo/**'], true],
       [['src/a/*'], ['src/a/foo*'], true],
       [['src/a/*.mjs'], ['src/a/*.ts'], false],
+      // Multi-level depth regression: `*` cannot cross `/`, so src/*.mjs and
+      // src/**/foo/bar.mjs are disjoint, while src/**/bar.mjs overlaps on src/bar.mjs.
+      [['src/*.mjs'], ['src/**/foo/bar.mjs'], false],
+      [['src/*.mjs'], ['src/**/bar.mjs'], true],
+      [['src/**/a/*.mjs'], ['src/x/**/b/*.mjs'], false],
+      [['src/**/a/*.mjs'], ['src/x/**/*.mjs'], true],
     ];
     for (const [sa, sb, expected] of cases) {
       const [a, b] = pair(sa, sb);
