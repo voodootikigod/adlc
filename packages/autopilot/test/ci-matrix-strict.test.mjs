@@ -56,6 +56,15 @@ test('R5: matrix prefixes require expected leg count before passing', () => {
   const expiredRes = normalizeChecks(partial, { clockExpired: true });
   assert.equal(expiredRes.verdict, 'red');
   assert.deepEqual(expiredRes.red, ['missing: ticket-store-platform ( (1/9)']);
+
+  // Duplicate rows with the same name must NOT satisfy the 9 distinct legs requirement
+  const duped = fullGreen().filter((r) => !r.name.startsWith('ticket-store-platform ('));
+  for (let i = 0; i < 9; i++) {
+    duped.push(row('ticket-store-platform (ubuntu-latest, 18)', 'pass', 'SUCCESS', 'Ticket store platform'));
+  }
+  const dupRes = normalizeChecks(duped);
+  assert.equal(dupRes.verdict, 'wait');
+  assert.deepEqual(dupRes.missing, ['ticket-store-platform ( (1/9)']);
 });
 
 test('R4: watchCi invokes ctx.lock.heartbeat() on every poll iteration', async () => {

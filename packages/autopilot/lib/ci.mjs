@@ -61,13 +61,14 @@ export function blockingPrefixOf(row, prefixes = BLOCKING_PREFIXES) {
  */
 export function normalizeChecks(rows, { blockingPrefixes = BLOCKING_PREFIXES, expectedMatrixCounts = EXPECTED_MATRIX_COUNTS, clockExpired = false } = {}) {
   if (!Array.isArray(rows)) return { verdict: 'red', red: ['<checks not a list>'], waiting: [], missing: [], ignored: [], rows: [] };
-  const red = []; const waiting = []; const ignored = []; const seenCounts = new Map(); const out = [];
+  const red = []; const waiting = []; const ignored = []; const seenNames = new Map(); const out = [];
   for (const row of rows) {
     const prefix = blockingPrefixOf(row, blockingPrefixes);
     const name = typeof row?.name === 'string' ? row.name : '<unnamed>';
     const norm = normalizeRow(row);
     if (!prefix) { ignored.push(name); out.push({ name, prefix: null, norm, blocking: false }); continue; }
-    seenCounts.set(prefix, (seenCounts.get(prefix) ?? 0) + 1);
+    if (!seenNames.has(prefix)) seenNames.set(prefix, new Set());
+    seenNames.get(prefix).add(name);
     let effective = norm;
     if (norm === 'skipped') effective = !active('ci.skippedIsPass') ? 'red' : 'pass';
     if (effective === 'red') red.push(name);
@@ -76,7 +77,7 @@ export function normalizeChecks(rows, { blockingPrefixes = BLOCKING_PREFIXES, ex
   }
   const missing = [];
   for (const p of blockingPrefixes) {
-    const count = seenCounts.get(p) ?? 0;
+    const count = seenNames.get(p)?.size ?? 0;
     const minRequired = expectedMatrixCounts && Number.isInteger(expectedMatrixCounts[p]) && expectedMatrixCounts[p] > 1
       ? expectedMatrixCounts[p]
       : 1;

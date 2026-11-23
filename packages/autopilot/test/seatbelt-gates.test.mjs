@@ -1,8 +1,9 @@
 import { test } from './helpers/node-test.mjs';
 import assert from 'node:assert/strict';
+import { existsSync, lstatSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
-import { composeGateArgv, spawnInGateSandbox, GatesError } from '../lib/gates.mjs';
+import { buildGateSeatbeltProfile, composeGateArgv, spawnInGateSandbox, GatesError } from '../lib/gates.mjs';
 import { withMutation } from '../lib/mutations.mjs';
 
 test('R2: composeGateArgv supports macOS Seatbelt without crashing on missing --chdir', () => {
@@ -51,12 +52,15 @@ test('R2: composeGateArgv supports macOS Seatbelt without crashing on missing --
   );
 });
 
-test('R2: spawnInGateSandbox dispatches Seatbelt backend cleanly with pinned sandbox-exec', async (t) => {
+test('R2: spawnInGateSandbox dispatches Seatbelt backend cleanly, links clone/node_modules, and escapes SBPL paths', async (t) => {
   const root = tmp(t, 'ap-seatbelt-');
   const clone = join(root, 'clone');
   const home = join(root, 'home');
   const nodeModules = join(root, 'deps', 'node_modules');
+  mkdirSync(clone, { recursive: true });
+  mkdirSync(nodeModules, { recursive: true });
   let captured = null;
+  let sawLinkDuringSpawn = false;
   const ctx = {
     pinned: {
       node: process.execPath,
@@ -67,6 +71,7 @@ test('R2: spawnInGateSandbox dispatches Seatbelt backend cleanly with pinned san
     env: { base: { PATH: '/usr/bin:/bin', HOME: '/Users/op' } },
     spawn: async (opts) => {
       captured = opts;
+      sawLinkDuringSpawn = lstatSync(join(clone, 'node_modules')).isSymbolicLink();
       return { status: 0, stdout: 'ok', stderr: '', timedOut: false };
     },
   };
@@ -81,8 +86,18 @@ test('R2: spawnInGateSandbox dispatches Seatbelt backend cleanly with pinned san
     bindDeps: true,
   });
   assert.equal(res.status, 0);
+  assert.equal(sawLinkDuringSpawn, true, 'clone/node_modules symlink exists during Seatbelt spawn');
+  assert.equal(existsSync(join(clone, 'node_modules')), false, 'clone/node_modules symlink cleaned up after spawn');
   assert.equal(captured.argv[0], '/usr/bin/sandbox-exec');
   assert.equal(captured.argv[1], '-p');
   assert.ok(captured.argv[2].includes(nodeModules));
   assert.equal(captured.cwd, clone);
+
+  // SBPL injection defense: control characters rejected and quotes escaped
+  assert.throws(
+    () => buildGateSeatbeltProfile({ clone: '/tmp/bad\n(allow default)', home: '/tmp/h' }),
+    (e) => e instanceof GatesError && e.code === 'sandbox-unavailable',
+  );
+  const escaped = buildGateSeatbeltProfile({ clone: '/tmp/a"b', home: '/tmp/h', nodeModules: '/tmp/nm' });
+  assert.ok(escaped.includes('/tmp/a\\"b'), 'quotes in Seatbelt paths must be escaped');
 });

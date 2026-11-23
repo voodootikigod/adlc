@@ -17,7 +17,7 @@
 // three bwrap arguments are spliced into the wrapped argv here, before the
 // `--` separator, after fleet's own binds (a later bind shadows an earlier one).
 
-import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, statSync, symlinkSync, unlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { escapeSeatbeltPath } from '@adlc/core';
 import { Sandbox, NETWORK, READ_POLICY, SANDBOX_MODES, detectBackend } from '@adlc/fleet/lib/sandbox.mjs';
@@ -113,6 +113,35 @@ export function gateReadOnlyPaths(ctx) {
   return out;
 }
 
+/** Build an escaped macOS SBPL profile for a gate run (never interpolates unescaped paths). */
+export function buildGateSeatbeltProfile({ clone, home, readOnlyPaths = [], nodeModules = null, bindDeps = true, allowNetwork = false }) {
+  const esc = (p) => {
+    const s = String(p ?? '');
+    if (/[\0\r\n]/.test(s)) throw new GatesError('sandbox-unavailable', 'seatbelt path contains control characters');
+    return escapeSeatbeltPath(s);
+  };
+  const rules = [
+    '(version 1)',
+    '(deny default)',
+    '(allow process*)',
+    '(allow sysctl-read)',
+    allowNetwork ? '(allow network*)' : '(deny network*)',
+    `(allow file-read* (subpath "${esc(clone)}"))`,
+    `(allow file-write* (subpath "${esc(clone)}"))`,
+    `(allow file-read* (subpath "${esc(home)}"))`,
+    `(allow file-write* (subpath "${esc(home)}"))`,
+    '(allow file-read* (subpath "/dev"))',
+    '(allow file-write-data (literal "/dev/null"))',
+  ];
+  for (const ro of readOnlyPaths) {
+    rules.push(`(allow file-read* (subpath "${esc(ro)}"))`);
+  }
+  if (bindDeps && !active('gates.skipDepsBind') && nodeModules) {
+    rules.push(`(allow file-read* (subpath "${esc(nodeModules)}"))`);
+  }
+  return rules.join('\n');
+}
+
 /**
  * Splice the composition arguments (see the header) into fleet's wrapped argv,
  * supporting both Linux `bwrap` and macOS Seatbelt (`sandbox-exec`).
@@ -126,7 +155,9 @@ export function composeGateArgv({ wrapped, inner, bwrap, sandboxExec = null, bac
     }
     const extraRules = [];
     if (bindDeps && !active('gates.skipDepsBind') && nodeModules) {
-      extraRules.push(`(allow file-read* (subpath "${escapeSeatbeltPath(nodeModules)}"))`);
+      if (/[\0\r\n]/.test(String(nodeModules))) throw new GatesError('sandbox-unavailable', 'seatbelt nodeModules path contains control characters');
+      const rule = `(allow file-read* (subpath "${escapeSeatbeltPath(nodeModules)}"))`;
+      if (!wrapped[2].includes(rule)) extraRules.push(rule);
     }
     if (!allowNetwork && !active('gates.allowNetwork') && !wrapped[2].includes('(deny network*)')) {
       extraRules.push('(deny network*)');
@@ -158,9 +189,35 @@ export function gateEnv(ctx, home) {
 export async function spawnInGateSandbox({ ctx, clone, inner, nodeModules, backend, home, label, deadlineMs = DEADLINES.preflightScript, bindDeps = true }) {
   mkdirSync(home, { recursive: true, mode: 0o700 });
   const allowNetwork = active('gates.allowNetwork');
+  const readOnlyPaths = gateReadOnlyPaths(ctx);
+  if (backend?.name === 'seatbelt') {
+    const sbpl = buildGateSeatbeltProfile({ clone, home, readOnlyPaths, nodeModules, bindDeps, allowNetwork });
+    const argv = composeGateArgv({
+      wrapped: [ctx.pinned['sandbox-exec'] ?? backend?.path ?? 'sandbox-exec', '-p', sbpl, ...inner],
+      inner,
+      bwrap: ctx.pinned.bwrap,
+      sandboxExec: ctx.pinned['sandbox-exec'] ?? backend?.path ?? null,
+      backend,
+      clone,
+      nodeModules,
+      bindDeps,
+      allowNetwork,
+    });
+    const cloneModules = join(clone, 'node_modules');
+    let linked = false;
+    if (bindDeps && !active('gates.skipDepsBind') && nodeModules && existsSync(clone) && !existsSync(cloneModules)) {
+      symlinkSync(nodeModules, cloneModules);
+      linked = true;
+    }
+    try {
+      return await ctx.spawn({ argv, cwd: clone, env: gateEnv(ctx, home), deadlineMs, label });
+    } finally {
+      if (linked) { try { unlinkSync(cloneModules); } catch {} }
+    }
+  }
   const sandbox = new Sandbox({
     mode: SANDBOX_MODES.SANDBOX, backend, worktree: clone, syntheticHome: home,
-    readOnlyPaths: gateReadOnlyPaths(ctx), network: allowNetwork ? NETWORK.ALLOW : NETWORK.DENY, readPolicy: READ_POLICY.BOUNDED,
+    readOnlyPaths, network: allowNetwork ? NETWORK.ALLOW : NETWORK.DENY, readPolicy: READ_POLICY.BOUNDED,
   });
   const argv = composeGateArgv({
     wrapped: sandbox.wrap(inner),
