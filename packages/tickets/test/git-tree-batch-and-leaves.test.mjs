@@ -100,6 +100,21 @@ test('DirectoryTicketStore.loadOne and TicketService.loadOne read a single shard
   assert.equal(service.loadOne('MISSING'), null);
   assert.equal(store.loadOne(''), null);
 
+  // Fallback path: TicketService.loadOne works on stores without a native loadOne method
+  const snap = store.load();
+  const fallbackService = new TicketService({ load: () => snap });
+  assert.equal(fallbackService.loadOne('T1')?.title, 'Ticket T1 — café 🚀');
+  assert.equal(fallbackService.loadOne('MISSING'), null);
+
+  // Fast path: TicketService.loadOne invokes store.loadOne directly without calling load()
+  let loadCalled = false;
+  const fastService = new TicketService({
+    load: () => { loadCalled = true; return snap; },
+    loadOne: (id) => store.loadOne(id),
+  });
+  assert.equal(fastService.loadOne('T1')?.title, 'Ticket T1 — café 🚀');
+  assert.equal(loadCalled, false);
+
   // Malformed ticket shard must be rejected by loadOne just like load()
   writeFileSync(join(store.path, ticketFilename('T-BAD')), JSON.stringify({ id: 'T-BAD' }), 'utf8');
   assert.throws(() => store.loadOne('T-BAD'), /ticket store validation failed/);

@@ -10,10 +10,10 @@ const LOCK_DIR = '.adlc/tickets.lock';
 const heldLocks = new Map();
 
 /** Acquire the shared ticket lock at `.adlc/tickets.lock`. */
-export function acquireLock(dir = '.', { retries = 50, delayMs = 20, staleMs } = {}) {
+export function acquireLock(dir = '.', options = {}) {
   const key = resolve(dir);
   try {
-    const lock = acquireTicketLock(dir, { retries, delayMs, staleMs, command: 'ticket-prune' });
+    const lock = acquireTicketLock(dir, { ...options, command: 'ticket-prune' });
     heldLocks.set(key, lock);
     return true;
   } catch (err) {
