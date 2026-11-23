@@ -481,7 +481,7 @@ export function loadExtensionFiles(config, readFile = (p) => readBoundedFile(p))
 
 /** The canary's timeout: the whole remaining budget, never padded; undefined without a deadline. */
 /** System roots the preflight canary binds read-only — SYSTEM_ROOTS plus /bin so /bin/sh resolves on merged-usr and split-usr hosts (#1266). */
-export const CANARY_SYSTEM_ROOTS = Object.freeze([...new Set([...SYSTEM_ROOTS, '/bin'])]);
+export const CANARY_SYSTEM_ROOTS = Object.freeze([...SYSTEM_ROOTS]);
 
 export function canaryReadOnlyPaths(pathExists = existsSync) {
   return CANARY_SYSTEM_ROOTS.filter((p) => pathExists(p));
