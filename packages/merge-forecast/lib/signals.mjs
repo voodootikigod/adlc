@@ -312,9 +312,9 @@ export function signalNamespace(a, b, repoFiles, index = createScopeIndex(repoFi
 
 // ─── Signal 5: Semantic Graph Coupling ───────────────────────────────────────
 
-// Pre-indexed CodeGraph edges keyed by the edges array so O(|E|) indexing
-// happens once per forecast run instead of scanning all edges for every pair.
-const edgeIndexByEdges = new WeakMap();
+// Pre-indexed CodeGraph edges scoped to (scopeIndex, edges) so O(|E|) indexing
+// happens once per forecast run without caching stale edges across separate runs.
+const edgeIndexByScope = new WeakMap();
 
 function addEndpoint(map, key, entry) {
   let list = map.get(key);
@@ -325,8 +325,13 @@ function addEndpoint(map, key, entry) {
   list.push(entry);
 }
 
-function indexEdges(edges) {
-  let cached = edgeIndexByEdges.get(edges);
+function indexEdges(index, edges) {
+  let byEdges = edgeIndexByScope.get(index);
+  if (!byEdges) {
+    byEdges = new WeakMap();
+    edgeIndexByScope.set(index, byEdges);
+  }
+  let cached = byEdges.get(edges);
   if (cached) return cached;
 
   const scores = [];
@@ -394,7 +399,7 @@ function indexEdges(edges) {
   }
 
   cached = { scores, matchFiles };
-  edgeIndexByEdges.set(edges, cached);
+  byEdges.set(edges, cached);
   return cached;
 }
 
@@ -433,7 +438,7 @@ export function signalGraphCoupling(a, b, graphCouplingData, repoFiles, index = 
     : null;
 
   if (edges) {
-    const { scores, matchFiles } = indexEdges(edges);
+    const { scores, matchFiles } = indexEdges(index, edges);
     const aMatches = matchFiles(aFiles);
     const bMatches = matchFiles(bFiles);
     let maxCoupling = 0;

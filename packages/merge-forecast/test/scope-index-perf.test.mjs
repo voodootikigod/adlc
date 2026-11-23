@@ -188,6 +188,12 @@ describe('merge-forecast T-P17: walkTree, concrete overlap veto, and O(|F|+|E|) 
     // Unconnected pair returns 0
     assert.equal(signalGraphCoupling(B, C, graph, repoFiles, index), 0);
 
+    // Mutating a reused edges array is observed by subsequent runs (fresh scopeIndex)
+    const mutableGraph = { edges: [] };
+    assert.equal(signalGraphCoupling(B, C, mutableGraph, repoFiles), 0);
+    mutableGraph.edges.push({ from: 'packages/b/src/beta.mjs', to: 'packages/c/src/gamma.mjs', weight: 1.0 });
+    assert.ok(Math.abs(signalGraphCoupling(B, C, mutableGraph, repoFiles) - 0.7) < 1e-9);
+
     // Scale test: 30 tickets x 1500 edges completes quickly via O(|E|) pre-index
     const bigFiles = Array.from({ length: 60 }, (_, i) => `pkg${i}/src/f${i}.mjs`);
     const bigIndex = createScopeIndex(bigFiles);
