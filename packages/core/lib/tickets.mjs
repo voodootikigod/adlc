@@ -138,18 +138,59 @@ export function inScope(ticket, path) {
   return (ticket.scope ?? []).some((g) => globMatch(g, path));
 }
 
+function globsOverlap(ga, gb) {
+  if (ga === gb) return true;
+  if (globMatch(ga, gb) || globMatch(gb, ga)) return true;
+
+  const aIdx = ga.indexOf('*');
+  const bIdx = gb.indexOf('*');
+  // A literal pattern (no `*`) only matches itself; globMatch above already
+  // decided whether the other pattern matches that exact path.
+  if (aIdx === -1 || bIdx === -1) return false;
+
+  // Necessary condition on trailing literal suffixes after the final `*`.
+  const aSuffix = ga.slice(ga.lastIndexOf('*') + 1);
+  const bSuffix = gb.slice(gb.lastIndexOf('*') + 1);
+  if (aSuffix && bSuffix && !aSuffix.endsWith(bSuffix) && !bSuffix.endsWith(aSuffix)) {
+    return false;
+  }
+
+  const aBase = ga.slice(0, aIdx);
+  const bBase = gb.slice(0, bIdx);
+
+  // Leading wildcard on either side: `**` crosses segments; a single-segment
+  // pattern with neither `/` nor `**` cannot match a pattern requiring `/`.
+  if (aBase === '' || bBase === '') {
+    if (ga.startsWith('**') || gb.startsWith('**')) return true;
+    if (!ga.includes('/') && !ga.includes('**') && gb.includes('/')) return false;
+    if (!gb.includes('/') && !gb.includes('**') && ga.includes('/')) return false;
+    return true;
+  }
+
+  if (aBase === bBase) return true;
+
+  // One literal prefix extends the other. The shorter pattern can reach paths
+  // under the longer prefix only if the shorter pattern's wildcard can span
+  // the remainder (any `**`, or a single `*` when the remainder has no `/`).
+  if (bBase.startsWith(aBase)) {
+    const rest = bBase.slice(aBase.length);
+    return ga.includes('**') || !rest.includes('/');
+  }
+  if (aBase.startsWith(bBase)) {
+    const rest = aBase.slice(bBase.length);
+    return gb.includes('**') || !rest.includes('/');
+  }
+
+  return false;
+}
+
 /** Do two tickets' declared scopes overlap (shared glob territory)? */
 export function scopesOverlap(a, b) {
   const as = a.scope ?? [];
   const bs = b.scope ?? [];
-  // Conservative: overlap if any glob from one matches the other's glob
-  // treated as a literal-ish path, or globs are identical prefixes.
   for (const ga of as) {
     for (const gb of bs) {
-      if (ga === gb) return true;
-      const aBase = ga.split('*')[0];
-      const bBase = gb.split('*')[0];
-      if (aBase && bBase && (aBase.startsWith(bBase) || bBase.startsWith(aBase))) return true;
+      if (globsOverlap(ga, gb)) return true;
     }
   }
   return false;

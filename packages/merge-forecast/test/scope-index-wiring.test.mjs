@@ -159,8 +159,8 @@ describe('signals use the scope index they are given', () => {
       const { spy, calls } = spyIndex(REPO_FILES);
       const opts = { repoFiles: REPO_FILES, root, coChangeData: CO_CHANGE, graphCouplingData: GRAPH };
       const withSpy = pairScore(A, B, { ...opts, scopeIndex: spy });
-      // routes 2 + migrations 2 + graph 2 + co-change 2; import radius 2 + 2.
-      assert.deepEqual(calls, { files: 8, filesNormalized: 2, matches: 0, matcher: 2 });
+      // scope-overlap 2 + routes 2 + migrations 2 + graph 2 + co-change 2; import radius 2 + 2.
+      assert.deepEqual(calls, { files: 10, filesNormalized: 2, matches: 0, matcher: 2 });
       assert.deepEqual(withSpy, pairScore(A, B, opts));
       assert.deepEqual(withSpy, { score: 0, signal: 'none', hardVeto: false });
     });
