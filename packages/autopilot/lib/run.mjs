@@ -17,6 +17,7 @@ import { validateIssueNumber, validateOid } from './input.mjs';
 import { FLEET_BLOCKING_REASONS } from './fleet-args.mjs';
 import { createRunSteps, outcomeFor, gapsToFindings, RECORD_VANISHED } from './round.mjs';
 import { updateIfPresent } from './records.mjs';
+import { HEARTBEAT_MS } from './lock.mjs';
 import { active } from './mutations.mjs';
 
 export { outcomeFor };
@@ -126,6 +127,18 @@ export async function continueRun({ ctx, deps, issue, ticket, revision = null, a
   const n = validateIssueNumber(issue);
   const cfg = ctx.config.autopilot;
   const record = () => ctx.records.load(n);
+  const beat = () => { try { ctx.lock?.heartbeat?.(); } catch {} };
+  beat();
+  const heartbeatTimer = typeof ctx.lock?.heartbeat === 'function' ? setInterval(beat, HEARTBEAT_MS) : null;
+  heartbeatTimer?.unref?.();
+  try {
+    return await continueRunBody({ ctx, deps, issue: n, cfg, record, ticket, revision, authorization, from });
+  } finally {
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+  }
+}
+
+async function continueRunBody({ ctx, deps, issue: n, cfg, record, ticket, revision, authorization, from }) {
   let ticketId = record()?.ticketId ?? null;
 
   if (from === 'evidence') {

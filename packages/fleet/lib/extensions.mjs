@@ -123,7 +123,7 @@ export async function buildBoundedModelSandbox({ config, io, sandboxSpec, worktr
   }
 }
 
-export const NODE_TOOL_TREE_RE = /\/lib\/node_modules\/(npm|corepack)$/;
+export const NODE_TOOL_TREE_RE = /\/lib\/node_modules\/(?:@(?!\.\.?\/)[A-Za-z0-9._-]+\/(?!\.\.?$)[A-Za-z0-9._-]+|(?!\.\.?$)[A-Za-z0-9._-]+)$/;
 const dedupeList = (xs) => [...new Set(xs)];
 /** `<prefix>/lib/node_modules/{npm,corepack}` next to a node realpath, when present. */
 export function nodeToolTrees(nodePath) {

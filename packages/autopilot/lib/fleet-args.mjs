@@ -3,8 +3,9 @@
 // element — never a shell string — and the pre-strike helper receives the
 // resolved values explicitly with a MINIMAL environment of exactly four keys.
 
+import { SYSTEM_ROOTS } from '@adlc/fleet/lib/bounded-model-plane.mjs';
 import { branchFor, validateIssueNumber, validateTicketId } from './input.mjs';
-import { pinnedRealpaths } from './tools.mjs';
+import { pinnedRealpaths, globalNodeModuleTree } from './tools.mjs';
 import { registerSeams, active } from './mutations.mjs';
 
 registerSeams(['fleetArgs.dropNoPr', 'fleetArgs.bareAdlcInHelper', 'fleetArgs.readSetIncludesRepo', 'fleetArgs.leakEnvToHelper', 'fleetArgs.bindToolDirs', 'fleetArgs.openEgress']);
@@ -13,7 +14,8 @@ registerSeams(['fleetArgs.dropNoPr', 'fleetArgs.bareAdlcInHelper', 'fleetArgs.re
 export const REASON_CODES_FLEET = Object.freeze(['quota-paused', 'lock-held', 'wall-clock', 'strikes-exhausted', 'ticket-blocked', 'flail', 'review-unavailable', 'mirror-fetch-failed']);
 export const FLEET_BLOCKING_REASONS = Object.freeze(['wall-clock', 'strikes-exhausted', 'ticket-blocked', 'flail', 'review-unavailable', 'mirror-fetch-failed']);
 
-export const SYSTEM_ROOTS = Object.freeze(['/usr', '/lib', '/lib64', '/etc/ssl', '/etc/resolv.conf', '/etc/hosts']);
+export { SYSTEM_ROOTS };
+export const MAX_DISPATCH_STRIKES = 3;
 export const PRE_STRIKE_ENV_KEYS = Object.freeze(['PATH', 'HOME', 'ADLC_AUTOPILOT_STATUS_FILE', 'ADLC_AUTOPILOT_LOCK_TOKEN']);
 
 /** The pre-strike helper argv (§3.2): the pinned adlc, explicit resolved values, no shell. */
@@ -42,10 +44,17 @@ export function preStrikeEnv({ ctx }) {
  */
 export function readSet({ ctx }) {
   const nodePrefix = ctx.pinned['node:realpath'] ? ctx.pinned['node:realpath'].replace(/\/bin\/node$/, '') : null;
-  let files = pinnedRealpaths(ctx.pinned).filter((p) => !SYSTEM_ROOTS.some((r) => p === r || p.startsWith(r + '/')));
+  const reals = pinnedRealpaths(ctx.pinned);
+  let files = reals.filter((p) => !SYSTEM_ROOTS.some((r) => p === r || p.startsWith(r + '/')));
   // Mutation seam: bind the tools' parent DIRECTORIES instead of single files.
   if (active('fleetArgs.bindToolDirs')) files = files.map((p) => p.replace(/\/[^/]+$/, ''));
-  const trees = nodePrefix ? [`${nodePrefix}/lib/node_modules/npm`, `${nodePrefix}/lib/node_modules/corepack`] : [];
+  const pkgTrees = reals
+    .map((p) => globalNodeModuleTree(p))
+    .filter((t) => t && !SYSTEM_ROOTS.some((r) => t === r || t.startsWith(r + '/')));
+  const trees = [
+    ...(nodePrefix ? [`${nodePrefix}/lib/node_modules/npm`, `${nodePrefix}/lib/node_modules/corepack`] : []),
+    ...pkgTrees,
+  ];
   const set = [...new Set([...files, ...trees, ...SYSTEM_ROOTS])];
   // Mutation seam: the repository itself enters the read set.
   if (active('fleetArgs.readSetIncludesRepo')) set.push(ctx.repoRoot);
@@ -56,6 +65,7 @@ export function readSet({ ctx }) {
 export function buildFleetArgv({ ctx, issue, ticketId, budget, deadEndFile = null, mirror, workerDeps }) {
   const n = validateIssueNumber(issue);
   if (ticketId !== 'T-<ULID>') validateTicketId(ticketId);
+  const dispatchStrikes = Math.min(MAX_DISPATCH_STRIKES, budget.strikes);
   const argv = [
     ctx.pinned.adlc, 'fleet', 'run',
     '--tickets', ticketId,
@@ -63,7 +73,7 @@ export function buildFleetArgv({ ctx, issue, ticketId, budget, deadEndFile = nul
     '--adapter', ctx.local.adapter,
     '--model', ctx.local.model,
     '--concurrency', '1',
-    '--max-strikes', String(budget.strikes),
+    '--max-strikes', String(dispatchStrikes),
     '--wall-clock-minutes', String(budget.wallClockMinutes),
     ...(active('fleetArgs.dropNoPr') ? ['--no-complete'] : ['--no-pr', '--no-complete']),
     '--pre-strike-argv', JSON.stringify(preStrikeArgv({ ctx, iterationId: ctx.iterationId, wallClockRemaining: budget.wallClockMinutes })),

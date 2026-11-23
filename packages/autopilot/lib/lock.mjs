@@ -9,6 +9,7 @@
 // token before removing.
 
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, renameSync, rmSync, readdirSync, lstatSync } from 'node:fs';
+import { writeFileAtomic } from '@adlc/core';
 
 registerSeams(['lock.twoStepPublish', 'lock.releaseByToken']);
 
@@ -30,6 +31,10 @@ export class LockHeldError extends Error {
 export const ownerPath = (lockDir) => join(lockDir, OWNER_FILE);
 
 function writeAtomic(path, data, fsx = LOCK_FS) {
+  if (fsx === LOCK_FS) {
+    writeFileAtomic(path, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 });
+    return;
+  }
   const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`;
   fsx.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n');
   fsx.renameSync(tmp, path);

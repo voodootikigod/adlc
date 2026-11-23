@@ -23,6 +23,7 @@ registerSeams([
 ]);
 
 export const BLOCKING_PREFIXES = Object.freeze(['test (18)', 'test (20)', 'test (22)', 'rails-guard', 'mutation-gate', 'cross-model-gate', 'ticket-store-platform (']);
+export const EXPECTED_MATRIX_COUNTS = Object.freeze({ 'ticket-store-platform (': 9 });
 export const CI_FIX_MAX_STRIKES = 2;
 export const CI_FIX_WALL_MINUTES = 15;
 export const DEFAULT_CI_FIX_ROUNDS = 2;
@@ -58,22 +59,30 @@ export function blockingPrefixOf(row, prefixes = BLOCKING_PREFIXES) {
  * The §6.9 table over the raw rows.
  * @returns {{ verdict:'pass'|'red'|'wait', red:string[], waiting:string[], missing:string[], ignored:string[], rows:[] }}
  */
-export function normalizeChecks(rows, { blockingPrefixes = BLOCKING_PREFIXES, clockExpired = false } = {}) {
+export function normalizeChecks(rows, { blockingPrefixes = BLOCKING_PREFIXES, expectedMatrixCounts = EXPECTED_MATRIX_COUNTS, clockExpired = false } = {}) {
   if (!Array.isArray(rows)) return { verdict: 'red', red: ['<checks not a list>'], waiting: [], missing: [], ignored: [], rows: [] };
-  const red = []; const waiting = []; const ignored = []; const seen = new Set(); const out = [];
+  const red = []; const waiting = []; const ignored = []; const seenCounts = new Map(); const out = [];
   for (const row of rows) {
     const prefix = blockingPrefixOf(row, blockingPrefixes);
     const name = typeof row?.name === 'string' ? row.name : '<unnamed>';
     const norm = normalizeRow(row);
     if (!prefix) { ignored.push(name); out.push({ name, prefix: null, norm, blocking: false }); continue; }
-    seen.add(prefix);
+    seenCounts.set(prefix, (seenCounts.get(prefix) ?? 0) + 1);
     let effective = norm;
-    if (norm === 'skipped') effective = prefix.startsWith('test (') && !active('ci.skippedIsPass') ? 'red' : 'pass';
+    if (norm === 'skipped') effective = !active('ci.skippedIsPass') ? 'red' : 'pass';
     if (effective === 'red') red.push(name);
     else if (effective === 'wait') waiting.push(name);
     out.push({ name, prefix, norm, effective, blocking: true, state: row?.state ?? null });
   }
-  const missing = blockingPrefixes.filter((p) => !seen.has(p));
+  const missing = [];
+  for (const p of blockingPrefixes) {
+    const count = seenCounts.get(p) ?? 0;
+    const minRequired = expectedMatrixCounts && Number.isInteger(expectedMatrixCounts[p]) && expectedMatrixCounts[p] > 1
+      ? expectedMatrixCounts[p]
+      : 1;
+    if (count === 0) missing.push(p);
+    else if (count < minRequired) missing.push(`${p} (${count}/${minRequired})`);
+  }
   if (clockExpired) for (const m of missing) red.push(`missing: ${m}`);
   const verdict = red.length ? 'red' : (waiting.length || (missing.length && !clockExpired)) ? 'wait' : 'pass';
   return { verdict, red, waiting, missing, ignored, rows: out };
@@ -141,6 +150,7 @@ export async function watchCi({ ctx, record, attestedHead, budgetMs, poll = POLL
   let head = attestedHead; let deadline = ctx.now() + budget; let cur = ctx.records.load(n) ?? record;
   if (!write({ state: 'ci-watch', attestedHead: head })) return { ...RECORD_VANISHED_OUTCOME };
   for (;;) {
+    try { ctx.lock?.heartbeat?.(); } catch {}
     const view = await ctx.gh.json(['pr', 'view', String(pr), '--json', 'headRefOid']);
     if (!active('ci.ignoreHeadBinding') && view?.headRefOid !== head) {
       write({ state: 'oid-mismatch', lastError: `oid-mismatch: PR #${pr} head ${view?.headRefOid ?? 'unknown'} != attestedHead ${head}` });

@@ -373,7 +373,8 @@ test('watchCi: a record that vanishes while the watch is polling still reports a
   const w = makeWorld({ state: 'ci-watch', extra: { prNumber: 41 } });
   try {
     const rec = ciRecord(w);
-    const pass = ['test (18)', 'test (20)', 'test (22)', 'rails-guard', 'mutation-gate', 'cross-model-gate', 'ticket-store-platform (x)'].map((name) => ({ name, bucket: 'pass', workflow: 'ci' }));
+    const platformLegs = ['ubuntu-latest', 'macos-latest', 'windows-latest'].flatMap((os) => ['18', '20', '22'].map((v) => `ticket-store-platform (${os}, ${v})`));
+    const pass = ['test (18)', 'test (20)', 'test (22)', 'rails-guard', 'mutation-gate', 'cross-model-gate', ...platformLegs].map((name) => ({ name, bucket: 'pass', workflow: 'ci' }));
     let views = 0;
     const r = await settled(() => watchCi({ ctx: ciCtx(w, { rows: pass, onView: () => { views++; vanish(w); } }), record: rec, attestedHead: OID, runFixRound: async () => ({ ok: true }), sleep: async () => {} }));
     assert.deepEqual(r, { outcome: 'done', head: OID });

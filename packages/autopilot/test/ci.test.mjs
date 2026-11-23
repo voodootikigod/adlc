@@ -15,7 +15,8 @@ import { buildCtx, scratch, cleanup, prOpenRecord, FAKE, OID } from './helpers/r
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const FIXTURE_900 = JSON.parse(readFileSync(join(HERE, 'fixtures', 'gh-pr-checks-900.json'), 'utf8'));
 const row = (name, bucket, state, workflow = 'CI') => ({ bucket, name, state, workflow });
-const allGreen = () => ['test (18)', 'test (20)', 'test (22)', 'rails-guard', 'mutation-gate', 'ticket-store-platform (ubuntu-latest, 18)'].map((n) => row(n, 'pass', 'SUCCESS')).concat([row('gate', 'pass', 'SUCCESS', 'cross-model-gate')]);
+const PLATFORM_LEGS = ['ubuntu-latest', 'macos-latest', 'windows-latest'].flatMap((os) => ['18', '20', '22'].map((v) => `ticket-store-platform (${os}, ${v})`));
+const allGreen = () => ['test (18)', 'test (20)', 'test (22)', 'rails-guard', 'mutation-gate', ...PLATFORM_LEGS].map((n) => row(n, 'pass', 'SUCCESS')).concat([row('gate', 'pass', 'SUCCESS', 'cross-model-gate')]);
 
 /** A gh fake over a queue of check rows and a head OID (both mutable by the test). */
 function ghQueue({ polls, head }) {
@@ -67,7 +68,7 @@ export async function ac8_ciFollowUpTable() {
   // Row fixtures: red / skipped test (N) / skipped rails-guard / ignored non-blocking / wait / missing.
   assert.equal(normalizeChecks([...allGreen().filter((r) => r.name !== 'rails-guard'), row('rails-guard', 'fail', 'FAILURE')]).verdict, 'red', 'rails-guard FAILURE → red');
   assert.deepEqual(normalizeChecks([...allGreen().filter((r) => r.name !== 'test (20)'), row('test (20)', 'skipping', 'SKIPPED')]).red, ['test (20)'], 'test (20) SKIPPED → red');
-  assert.equal(normalizeChecks([...allGreen().filter((r) => r.name !== 'rails-guard'), row('rails-guard', 'skipping', 'SKIPPED')]).verdict, 'pass', 'a skipped non-test blocking job passes');
+  assert.equal(normalizeChecks([...allGreen().filter((r) => r.name !== 'rails-guard'), row('rails-guard', 'skipping', 'SKIPPED')]).verdict, 'red', 'a skipped blocking job is red (R5)');
   assert.equal(normalizeChecks([...allGreen(), row('pre-ga-gate', 'fail', 'FAILURE')]).verdict, 'pass', 'pre-ga-gate FAILURE → ignored');
   const pending = [...allGreen().filter((r) => r.name !== 'mutation-gate'), row('mutation-gate', 'pending', 'PENDING')];
   assert.equal(normalizeChecks(pending).verdict, 'wait');

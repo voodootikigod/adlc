@@ -19,12 +19,13 @@
 
 import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { escapeSeatbeltPath } from '@adlc/core';
 import { Sandbox, NETWORK, READ_POLICY, SANDBOX_MODES, detectBackend } from '@adlc/fleet/lib/sandbox.mjs';
 import { repoCommandEnv } from '@adlc/fleet/lib/env-scrub.mjs';
 import { SYSTEM_ROOTS } from '@adlc/fleet/lib/bounded-model-plane.mjs';
 import { validateIssueNumber, validateOid } from './input.mjs';
 import { childEnv } from './keys.mjs';
-import { pinnedRealpaths } from './tools.mjs';
+import { pinnedRealpaths, globalNodeModuleTree } from './tools.mjs';
 import { DEADLINES } from './spawn.mjs';
 import { cloneGateRepo } from './mirror.mjs';
 import { snapshotGateRepo, compareSnapshots, cloneSanity, GateRepoError, gitMetadataUnchanged } from './gate-repo.mjs';
@@ -96,11 +97,13 @@ export function gateArgvFor(gate, { node, baseOid }) {
   return [node, ...args.map((a) => (a === BASE_TOKEN ? `refs/remotes/origin/${baseOid}` : a))];
 }
 
-/** READ_SET of a gate: the fixed system roots, /bin, each pinned executable's realpath (FILE binds) and the npm/corepack trees. */
+/** READ_SET of a gate: the fixed system roots, /bin, each pinned executable's realpath (FILE binds) and the npm/corepack + pinned CLI package trees. */
 export function gateReadOnlyPaths(ctx) {
   const node = ctx.pinned['node:realpath'] ?? ctx.pinned.node;
   const prefix = dirname(dirname(node));
-  const candidates = [...SYSTEM_ROOTS, '/bin', ...pinnedRealpaths(ctx.pinned), join(prefix, 'lib', 'node_modules', 'npm'), join(prefix, 'lib', 'node_modules', 'corepack')];
+  const reals = pinnedRealpaths(ctx.pinned);
+  const pkgTrees = reals.map((p) => globalNodeModuleTree(p)).filter(Boolean);
+  const candidates = [...SYSTEM_ROOTS, '/bin', ...reals, ...pkgTrees, join(prefix, 'lib', 'node_modules', 'npm'), join(prefix, 'lib', 'node_modules', 'corepack')];
   const out = [];
   for (const p of candidates) {
     if (!existsSync(p) || out.includes(p)) continue;
@@ -110,8 +113,27 @@ export function gateReadOnlyPaths(ctx) {
   return out;
 }
 
-/** Splice the composition arguments (see the header) into fleet's wrapped argv, pinning bwrap. */
-export function composeGateArgv({ wrapped, inner, bwrap, clone, nodeModules, bindDeps = true }) {
+/**
+ * Splice the composition arguments (see the header) into fleet's wrapped argv,
+ * supporting both Linux `bwrap` and macOS Seatbelt (`sandbox-exec`).
+ */
+export function composeGateArgv({ wrapped, inner, bwrap, sandboxExec = null, backend = null, clone, nodeModules, bindDeps = true, allowNetwork = false }) {
+  const isSeatbelt = backend?.name === 'seatbelt'
+    || (Array.isArray(wrapped) && (wrapped[0] === 'sandbox-exec' || String(wrapped[0] ?? '').endsWith('/sandbox-exec')));
+  if (isSeatbelt) {
+    if (!Array.isArray(wrapped) || wrapped[1] !== '-p' || typeof wrapped[2] !== 'string') {
+      throw new GatesError('sandbox-unavailable', 'unexpected seatbelt sandbox argv shape');
+    }
+    const extraRules = [];
+    if (bindDeps && !active('gates.skipDepsBind') && nodeModules) {
+      extraRules.push(`(allow file-read* (subpath "${escapeSeatbeltPath(nodeModules)}"))`);
+    }
+    if (!allowNetwork && !active('gates.allowNetwork') && !wrapped[2].includes('(deny network*)')) {
+      extraRules.push('(deny network*)');
+    }
+    const sbpl = extraRules.length ? `${wrapped[2]}\n${extraRules.join('\n')}` : wrapped[2];
+    return [sandboxExec ?? wrapped[0], '-p', sbpl, '--', ...inner];
+  }
   const sep = wrapped.length - inner.length - 1;
   const chdir = wrapped.indexOf('--chdir');
   if (wrapped[sep] !== '--' || chdir === -1 || chdir + 1 >= sep) throw new GatesError('sandbox-unavailable', 'unexpected sandbox argv shape');
@@ -135,11 +157,22 @@ export function gateEnv(ctx, home) {
 /** Spawn `inner` inside the repo-command-plane sandbox with cwd = clone. Exported for the probe tests of AC 149/157. */
 export async function spawnInGateSandbox({ ctx, clone, inner, nodeModules, backend, home, label, deadlineMs = DEADLINES.preflightScript, bindDeps = true }) {
   mkdirSync(home, { recursive: true, mode: 0o700 });
+  const allowNetwork = active('gates.allowNetwork');
   const sandbox = new Sandbox({
     mode: SANDBOX_MODES.SANDBOX, backend, worktree: clone, syntheticHome: home,
-    readOnlyPaths: gateReadOnlyPaths(ctx), network: active('gates.allowNetwork') ? NETWORK.ALLOW : NETWORK.DENY, readPolicy: READ_POLICY.BOUNDED,
+    readOnlyPaths: gateReadOnlyPaths(ctx), network: allowNetwork ? NETWORK.ALLOW : NETWORK.DENY, readPolicy: READ_POLICY.BOUNDED,
   });
-  const argv = composeGateArgv({ wrapped: sandbox.wrap(inner), inner, bwrap: ctx.pinned.bwrap, clone, nodeModules, bindDeps });
+  const argv = composeGateArgv({
+    wrapped: sandbox.wrap(inner),
+    inner,
+    bwrap: ctx.pinned.bwrap,
+    sandboxExec: ctx.pinned['sandbox-exec'] ?? backend?.path ?? null,
+    backend,
+    clone,
+    nodeModules,
+    bindDeps,
+    allowNetwork,
+  });
   return ctx.spawn({ argv, cwd: clone, env: gateEnv(ctx, home), deadlineMs, label });
 }
 

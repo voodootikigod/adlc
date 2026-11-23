@@ -55,7 +55,7 @@ export function ac5_dispatchArgv() {
   assert.ok(argv.includes('--no-pr') && argv.includes('--no-complete'));
   assert.ok(argv.includes('--pre-strike-argv'), 'every strike is gated by the pre-strike quota helper (AC 18)');
   assert.ok(JSON.parse(valueOf(argv, '--pre-strike-argv'))[0] === ctx.pinned.adlc, 'the helper argv is a JSON array whose argv[0] is the pinned adlc');
-  assert.equal(valueOf(argv, '--max-strikes'), '15');
+  assert.equal(valueOf(argv, '--max-strikes'), '3');
   assert.equal(valueOf(argv, '--wall-clock-minutes'), '90');
   assert.equal(valueOf(argv, '--model'), 'opus');
   assert.equal(valueOf(argv, '--concurrency'), '1');
@@ -177,7 +177,9 @@ export function ac25_globalBudget() {
   assert.equal(remainingBudget({ roundsUsed: 0, wallClockUsedMs: 95 * 60_000 }, cfg).wallClockMinutes, 0);
   const ctx = fakeCtx();
   const argv = buildFleetArgv({ ctx, issue: 7, ticketId: 'T-01M0Z3FN7SAS4HAH7CS63YQ0DH', budget: remainingBudget({ roundsUsed: 1, wallClockUsedMs: 0 }, cfg), mirror: '/m', workerDeps: '/w' });
-  assert.equal(valueOf(argv, '--max-strikes'), '14');
+  assert.equal(valueOf(argv, '--max-strikes'), '3');
+  const argvLow = buildFleetArgv({ ctx, issue: 7, ticketId: 'T-01M0Z3FN7SAS4HAH7CS63YQ0DH', budget: remainingBudget({ roundsUsed: 13, wallClockUsedMs: 0 }, cfg), mirror: '/m', workerDeps: '/w' });
+  assert.equal(valueOf(argvLow, '--max-strikes'), '2');
 }
 test('AC25: the round budget is one counter — after a preflight failure the next argv carries --max-strikes 14 and roundsUsed 15 leaves zero strikes', ac25_globalBudget);
 

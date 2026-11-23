@@ -1,0 +1,35 @@
+{
+  "acceptance": [
+    "pinToolchain delegates ownership/mode checks to @adlc/core trusted-binary.mjs and allows trusted global <prefix>/lib/node_modules/<pkg> CLI symlink targets while rejecting node_modules on PATH entries or inside repoRoot/.worktrees/untrusted project trees.",
+    "autopilot/lib/fleet-args.mjs readSet and SYSTEM_ROOTS, fleet/lib/bounded-model-plane.mjs SYSTEM_ROOTS, and fleet/lib/extensions.mjs NODE_TOOL_TREE_RE/allowedDirs are updated in lockstep to allow pinned CLI package trees under <prefix>/lib/node_modules/<scope-or-pkg> (never binding <prefix>/bin) plus /bin and macOS /System, /Library, /private/etc.",
+    "composeGateArgv and spawnInGateSandbox in packages/autopilot/lib/gates.mjs support both Linux bwrap and macOS Seatbelt via @adlc/core sandbox-runner.mjs without crashing on Seatbelt wrapped argv.",
+    "normalizeChecks in packages/autopilot/lib/ci.mjs treats norm === 'skipped' as 'red' across all BLOCKING_PREFIXES (preserving ci.skippedIsPass seam) and enforces expected matrix leg counts for matrix prefixes like 'ticket-store-platform ('.",
+    "Periodic lock.heartbeat() is wired in run.mjs and watchCi, and records.mjs/status.mjs/digest.mjs use @adlc/core writeFileAtomic and @adlc/tickets canonicalJson where appropriate.",
+    "installGateDeps caches/clones lockfile-keyed read-only node_modules across gate worktrees with fallback to offline npm ci, buildFleetArgv caps single-dispatch --max-strikes to Math.min(3, budget.strikes), and round.mjs skips duplicate outer gate runs when fleet already attested the identical tree identity.",
+    "All existing autopilot tests including AUTOPILOT_GATE_FULL=1 spec-coverage.test.mjs and fleet tests pass."
+  ],
+  "body": "Execute Wave 2 T-P15 from .adlc/specs/enhancement-resolution-plan.md covering R1, R2, R4, R5, P4, C2, and C6 across packages/autopilot and packages/fleet without touching frozen rails (packages/fleet/lib/sandbox.mjs, packages/fleet/lib/env-scrub.mjs) or breaking any registered mutation seams tested by packages/autopilot/test/spec-coverage.test.mjs.",
+  "id": "t-wave2-autopilot-fleet",
+  "scope": [
+    "packages/autopilot/lib/tools.mjs",
+    "packages/autopilot/lib/fleet-args.mjs",
+    "packages/autopilot/lib/gates.mjs",
+    "packages/autopilot/lib/ci.mjs",
+    "packages/autopilot/lib/round.mjs",
+    "packages/autopilot/lib/run.mjs",
+    "packages/autopilot/lib/lock.mjs",
+    "packages/autopilot/lib/records.mjs",
+    "packages/autopilot/lib/status.mjs",
+    "packages/autopilot/lib/digest.mjs",
+    "packages/autopilot/lib/deps.mjs",
+    "packages/autopilot/test/toolchain-symlinks.test.mjs",
+    "packages/autopilot/test/seatbelt-gates.test.mjs",
+    "packages/autopilot/test/ci-matrix-strict.test.mjs",
+    "packages/fleet/lib/bounded-model-plane.mjs",
+    "packages/fleet/lib/extensions.mjs",
+    "packages/fleet/test/bounded-tool-trees.test.mjs"
+  ],
+  "tier": "standard",
+  "title": "Wave 2 T-P15: autopilot & fleet toolchain symlink pinning, Seatbelt sandbox support, strict CI matrix gate, and cached gate node_modules",
+  "verification": "node --test packages/autopilot/test packages/fleet/test/bounded-tool-trees.test.mjs && AUTOPILOT_GATE_FULL=1 node --test packages/autopilot/test/spec-coverage.test.mjs"
+}

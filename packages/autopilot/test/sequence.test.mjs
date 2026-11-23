@@ -43,7 +43,8 @@ export async function ac30_fullSequence() {
     assert.equal(fleets.length, 2, 'two fleet invocations');
     assert.ok(!fleets[0].includes('--dead-end-file'), 'the first carries no dead-end file');
     assert.ok(fleets[1].includes('--dead-end-file'), 'the second carries --dead-end-file');
-    assert.equal(fleets[1][fleets[1].indexOf('--max-strikes') + 1], '14', 'the second carries --max-strikes 14');
+    assert.equal(fleets[1][fleets[1].indexOf('--max-strikes') + 1], '3', 'the second carries --max-strikes capped to 3');
+    assert.equal(record.roundsUsed, 2, 'both rounds are charged to the global budget');
     const completes = fx.argvsOf(FAKE.adlc).filter((a) => a[0] === 'ticket' && a[1] === 'complete');
     assert.equal(completes.length, 1, 'adlc ticket complete invoked exactly once');
     const idx = (pred) => fx.recorder.findIndex(pred);
@@ -53,7 +54,8 @@ export async function ac30_fullSequence() {
 }
 test('AC30: a full once --issue N run produces the worktree, the shard, the marker, a branch whose merge-base with baseOid is baseOid, a pushed head equal to the attested head; a gate failure on the first pass yields a second fleet invocation with --dead-end-file and --max-strikes 14 and exactly one ticket complete after the last successful gate', { timeout: 120_000 }, ac30_fullSequence);
 
-const PASS_ROWS = ['test (18)', 'test (20)', 'test (22)', 'rails-guard', 'mutation-gate', 'cross-model-gate', 'ticket-store-platform (ubuntu-latest, 20)'].map((name) => ({ name, state: 'SUCCESS', bucket: 'pass', workflow: 'ci' }));
+const PLATFORM_LEGS = ['ubuntu-latest', 'macos-latest', 'windows-latest'].flatMap((os) => ['18', '20', '22'].map((v) => `ticket-store-platform (${os}, ${v})`));
+const PASS_ROWS = ['test (18)', 'test (20)', 'test (22)', 'rails-guard', 'mutation-gate', 'cross-model-gate', ...PLATFORM_LEGS].map((name) => ({ name, state: 'SUCCESS', bucket: 'pass', workflow: 'ci' }));
 const RED_ROWS = PASS_ROWS.map((r) => (r.name === 'rails-guard' ? { ...r, state: 'FAILURE', bucket: 'fail' } : r));
 const gitSpawns = (fx) => fx.recorder.filter((r) => r.argv[0] === GIT);
 const pushSpawns = (fx) => gitSpawns(fx).filter((r) => r.argv.includes('push') && r.argv.some((a) => String(a).startsWith('--git-dir=')));
