@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { LOCK_DIRECTORY } from './constants.mjs';
@@ -134,7 +135,11 @@ export function acquireTicketLock(root = '.', {
       if (staleMs !== undefined) {
         const currentOwner = readLockMetadata(join(path, 'owner.json'));
         if (isStaleTicketLock(currentOwner, { staleMs, now, isPidAlive, procStartTime, host })) {
-          try { removeLock(path, { recursive: true, force: true }); } catch {}
+          const staleDir = `${path}.stale-${process.pid}-${randomUUID()}`;
+          try {
+            renameSync(path, staleDir);
+            removeLock(staleDir, { recursive: true, force: true });
+          } catch {}
           continue;
         }
       }

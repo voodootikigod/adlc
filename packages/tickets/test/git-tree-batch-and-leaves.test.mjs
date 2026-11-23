@@ -71,6 +71,19 @@ test('GitTreeTicketStore rejects non-UTF-8 paths from ls-tree -z', (t) => {
   assert.throws(() => store.load(), (err) => err.code === 'UNSAFE_GIT_PATH');
 });
 
+test('GitTreeTicketStore formats binary Buffer stderr into GIT_READ_FAILED without TypeError', (t) => {
+  const fakeSpawn = (_cmd, args) => {
+    if (args[0] === 'rev-parse') return { status: 0, stdout: 'a'.repeat(40) };
+    if (args[0] === 'ls-tree') return { status: 128, stdout: Buffer.alloc(0), stderr: Buffer.from('fatal: bad object\n', 'utf8') };
+    return { status: 1, stderr: 'unexpected' };
+  };
+  const store = new GitTreeTicketStore({ cwd: tmp(t, 'gittree-stderr-'), revision: 'HEAD', spawnFn: fakeSpawn });
+  assert.throws(
+    () => store.load(),
+    (err) => err.code === 'GIT_READ_FAILED' && /fatal: bad object/.test(err.message),
+  );
+});
+
 test('DirectoryTicketStore.loadOne and TicketService.loadOne read a single shard cleanly', (t) => {
   const root = tmp(t, 'adlc-loadone-');
   const storeDir = join(root, '.adlc/tickets');

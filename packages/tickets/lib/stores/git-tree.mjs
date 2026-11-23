@@ -19,7 +19,8 @@ function runGit(cwd, args, opts = {}) {
   if (result.error) throw operational('GIT_READ_FAILED', `git ${args[0]} failed: ${result.error.message}`);
   if (result.signal) throw operational('GIT_READ_FAILED', `git ${args[0]} timed out or was killed by ${result.signal}`);
   if (allowFailure) return null;
-  throw operational('GIT_READ_FAILED', `git ${args[0]} failed: ${result.stderr?.trim() || `exit ${result.status}`}`);
+  const stderrText = Buffer.isBuffer(result.stderr) ? result.stderr.toString('utf8').trim() : result.stderr?.trim();
+  throw operational('GIT_READ_FAILED', `git ${args[0]} failed: ${stderrText || `exit ${result.status}`}`);
 }
 
 function splitNulUtf8(raw, revision) {

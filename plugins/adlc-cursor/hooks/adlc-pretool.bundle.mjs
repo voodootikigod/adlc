@@ -1173,7 +1173,8 @@ var init_directory = __esm({
 });
 
 // packages/tickets/lib/lock.mjs
-import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync4, rmSync, writeFileSync as writeFileSync2 } from "node:fs";
+import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync4, renameSync, rmSync, writeFileSync as writeFileSync2 } from "node:fs";
+import { randomUUID as randomUUID2 } from "node:crypto";
 import { hostname as hostname2 } from "node:os";
 import { dirname as dirname4, join as join4 } from "node:path";
 function defaultPidAlive(pid) {
@@ -1267,8 +1268,10 @@ function acquireTicketLock(root = ".", {
       if (staleMs !== void 0) {
         const currentOwner = readLockMetadata(join4(path, "owner.json"));
         if (isStaleTicketLock(currentOwner, { staleMs, now, isPidAlive, procStartTime, host })) {
+          const staleDir = `${path}.stale-${process.pid}-${randomUUID2()}`;
           try {
-            removeLock(path, { recursive: true, force: true });
+            renameSync(path, staleDir);
+            removeLock(staleDir, { recursive: true, force: true });
           } catch {
           }
           continue;
@@ -1334,7 +1337,7 @@ import {
   lstatSync as lstatSync3,
   mkdirSync as mkdirSync3,
   openSync as openSync3,
-  renameSync,
+  renameSync as renameSync2,
   rmSync as rmSync2,
   unlinkSync as unlinkSync2,
   writeFileSync as writeFileSync3
@@ -1404,7 +1407,7 @@ function durableCopy(source, target) {
 function durableRename(source, target) {
   const sourceParent = dirname5(resolve2(source));
   const targetParent = dirname5(resolve2(target));
-  renameSync(source, target);
+  renameSync2(source, target);
   fsyncDirectory(targetParent);
   if (sourceParent !== targetParent) fsyncDirectory(sourceParent);
 }
@@ -2271,13 +2274,13 @@ var init_key_contract = __esm({
 
 // packages/tickets/lib/evidence.mjs
 import { closeSync as closeSync5, existsSync as existsSync7, fsyncSync as fsyncSync3, mkdirSync as mkdirSync5, openSync as openSync5, readFileSync as readFileSync7, unlinkSync as unlinkSync4, writeFileSync as writeFileSync5 } from "node:fs";
-import { createHmac as createHmac2, randomUUID as randomUUID2 } from "node:crypto";
+import { createHmac as createHmac2, randomUUID as randomUUID3 } from "node:crypto";
 import { hostname as hostname3 } from "node:os";
 import { dirname as dirname7, join as join7 } from "node:path";
 function withManifestLock(path, fn, { retries = 400, delayMs = 5 } = {}) {
   const lockPath2 = `${path}.lock`;
   mkdirSync5(dirname7(path), { recursive: true });
-  const owner = { version: 1, token: randomUUID2(), pid: process.pid, hostname: hostname3(), startedAt: (/* @__PURE__ */ new Date()).toISOString() };
+  const owner = { version: 1, token: randomUUID3(), pid: process.pid, hostname: hostname3(), startedAt: (/* @__PURE__ */ new Date()).toISOString() };
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     let descriptor;
     try {
@@ -2649,7 +2652,7 @@ var init_trust_root = __esm({
 // packages/tickets/lib/transaction.mjs
 import { existsSync as existsSync9, readFileSync as readFileSync9 } from "node:fs";
 import { basename, dirname as dirname8, isAbsolute as isAbsolute2, join as join9, relative as relative2, resolve as resolve4 } from "node:path";
-import { randomUUID as randomUUID3 } from "node:crypto";
+import { randomUUID as randomUUID4 } from "node:crypto";
 function journalPath(root, path) {
   const absolute = resolve4(path);
   const rel = relative2(resolve4(root), absolute);
@@ -2675,7 +2678,7 @@ function bypassAuditPlan(before, { operation, evidenceRequired, key, allowUnsign
 function applyLegacyTransaction(store, tickets, { expectedSnapshotHash, operation = "update", evidenceRequired = false, ticketId = null, beforeTicketId = null, root = ".", faultInjector = null, lock: existingLock = null, key = null, allowUnsigned = false } = {}) {
   key = validateKeyParam(key);
   validateTickets(tickets);
-  const transactionId = randomUUID3();
+  const transactionId = randomUUID4();
   const lock = existingLock ?? acquireTicketLock(root, { transactionId, command: `ticket:${operation}` });
   const transactionRoot = join9(root, TRANSACTION_DIRECTORY, transactionId);
   try {
@@ -4980,7 +4983,7 @@ function checkRail({ filePath, tool, root = process.cwd(), env = process.env }) 
 init_define_ADLC_MCP_BUILD_METADATA();
 init_tickets();
 init_core();
-import { existsSync as existsSync15, mkdirSync as mkdirSync7, readFileSync as readFileSync13, renameSync as renameSync3, writeFileSync as writeFileSync7 } from "node:fs";
+import { existsSync as existsSync15, mkdirSync as mkdirSync7, readFileSync as readFileSync13, renameSync as renameSync4, writeFileSync as writeFileSync7 } from "node:fs";
 import { dirname as dirname14, isAbsolute as isAbsolute8, join as join17, normalize as normalize2, resolve as pathResolve } from "node:path";
 
 // plugins/adlc-cursor/lib/session-state.mjs
@@ -4989,7 +4992,7 @@ import {
   existsSync as existsSync14,
   mkdirSync as mkdirSync6,
   readFileSync as readFileSync12,
-  renameSync as renameSync2,
+  renameSync as renameSync3,
   unlinkSync as unlinkSync5,
   writeFileSync as writeFileSync6
 } from "node:fs";
@@ -5093,7 +5096,7 @@ function atomicWrite(path, value) {
   const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
   writeFileSync6(tmp, `${JSON.stringify(value)}
 `);
-  renameSync2(tmp, path);
+  renameSync3(tmp, path);
 }
 var LOCK_WAIT_BUF = new Int32Array(new SharedArrayBuffer(4));
 function withStateLock(lockPath2, fn, {

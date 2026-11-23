@@ -704,10 +704,11 @@ import { basename as basename2, dirname as dirname7 } from "node:path";
 // packages/tickets/lib/transaction.mjs
 import { existsSync as existsSync8, readFileSync as readFileSync7 } from "node:fs";
 import { basename, dirname as dirname6, isAbsolute as isAbsolute2, join as join7, relative as relative2, resolve as resolve4 } from "node:path";
-import { randomUUID as randomUUID2 } from "node:crypto";
+import { randomUUID as randomUUID3 } from "node:crypto";
 
 // packages/tickets/lib/lock.mjs
-import { existsSync as existsSync2, mkdirSync, readFileSync as readFileSync2, rmSync, writeFileSync } from "node:fs";
+import { existsSync as existsSync2, mkdirSync, readFileSync as readFileSync2, renameSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { dirname as dirname2, join as join2 } from "node:path";
 var sleep = (milliseconds) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
@@ -802,8 +803,10 @@ function acquireTicketLock(root = ".", {
       if (staleMs !== void 0) {
         const currentOwner = readLockMetadata(join2(path, "owner.json"));
         if (isStaleTicketLock(currentOwner, { staleMs, now, isPidAlive, procStartTime, host })) {
+          const staleDir = `${path}.stale-${process.pid}-${randomUUID()}`;
           try {
-            removeLock(path, { recursive: true, force: true });
+            renameSync(path, staleDir);
+            removeLock(staleDir, { recursive: true, force: true });
           } catch {
           }
           continue;
@@ -853,7 +856,7 @@ function releaseTicketLock(lock, { removeLock = rmSync } = {}) {
 
 // packages/tickets/lib/evidence.mjs
 import { closeSync as closeSync3, existsSync as existsSync6, fsyncSync as fsyncSync2, mkdirSync as mkdirSync4, openSync as openSync3, readFileSync as readFileSync5, unlinkSync as unlinkSync3, writeFileSync as writeFileSync4 } from "node:fs";
-import { createHmac as createHmac2, randomUUID } from "node:crypto";
+import { createHmac as createHmac2, randomUUID as randomUUID2 } from "node:crypto";
 import { hostname as hostname2 } from "node:os";
 import { dirname as dirname5, join as join5 } from "node:path";
 
@@ -866,7 +869,7 @@ import {
   lstatSync as lstatSync2,
   mkdirSync as mkdirSync2,
   openSync,
-  renameSync,
+  renameSync as renameSync2,
   rmSync as rmSync2,
   unlinkSync,
   writeFileSync as writeFileSync2
@@ -936,7 +939,7 @@ function durableCopy(source, target) {
 function durableRename(source, target) {
   const sourceParent = dirname3(resolve2(source));
   const targetParent = dirname3(resolve2(target));
-  renameSync(source, target);
+  renameSync2(source, target);
   fsyncDirectory(targetParent);
   if (sourceParent !== targetParent) fsyncDirectory(sourceParent);
 }
@@ -1785,7 +1788,7 @@ var sleep2 = (milliseconds) => Atomics.wait(new Int32Array(new SharedArrayBuffer
 function withManifestLock(path, fn, { retries = 400, delayMs = 5 } = {}) {
   const lockPath = `${path}.lock`;
   mkdirSync4(dirname5(path), { recursive: true });
-  const owner = { version: 1, token: randomUUID(), pid: process.pid, hostname: hostname2(), startedAt: (/* @__PURE__ */ new Date()).toISOString() };
+  const owner = { version: 1, token: randomUUID2(), pid: process.pid, hostname: hostname2(), startedAt: (/* @__PURE__ */ new Date()).toISOString() };
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     let descriptor;
     try {
@@ -2160,7 +2163,7 @@ function bypassAuditPlan(before, { operation, evidenceRequired, key, allowUnsign
 function applyLegacyTransaction(store, tickets, { expectedSnapshotHash, operation = "update", evidenceRequired = false, ticketId = null, beforeTicketId = null, root = ".", faultInjector = null, lock: existingLock = null, key = null, allowUnsigned = false } = {}) {
   key = validateKeyParam(key);
   validateTickets(tickets);
-  const transactionId = randomUUID2();
+  const transactionId = randomUUID3();
   const lock = existingLock ?? acquireTicketLock(root, { transactionId, command: `ticket:${operation}` });
   const transactionRoot = join7(root, TRANSACTION_DIRECTORY, transactionId);
   try {
@@ -3272,7 +3275,7 @@ import { isAbsolute as isAbsolute9, resolve as resolve7, relative as relative6, 
 import { realpathSync as realpathSync3, existsSync as existsSync14 } from "node:fs";
 
 // plugins/adlc-cursor/lib/workspace-resolve.mjs
-import { existsSync as existsSync13, mkdirSync as mkdirSync5, readFileSync as readFileSync10, renameSync as renameSync2, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync13, mkdirSync as mkdirSync5, readFileSync as readFileSync10, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
 import { dirname as dirname11, isAbsolute as isAbsolute8, join as join14, normalize as normalize2, resolve as pathResolve } from "node:path";
 
 // plugins/adlc-cursor/lib/session-identity.mjs
