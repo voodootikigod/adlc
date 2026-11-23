@@ -1,0 +1,28 @@
+{
+  "acceptance": [
+    "GitTreeTicketStore.load() reads all directory-store shards in a single git cat-file --batch invocation (verified by spawn count in tests) and uses NUL-safe buffer parsing in git-tree.mjs and rail-existence.mjs.",
+    "DirectoryTicketStore and TicketService expose loadOne(id) single-shard lookup and TicketService memoizes ticketHash during planning without changing snapshot or plan hashes.",
+    "packages/tickets/package.json exports ./lib/{canonical,durability,lock,manifest-primitives}.mjs while staying strictly zero-dependency; tickets/lib/lock.mjs supports stale-lock recovery via same-host PID/start-time liveness and tickets/lib/durability.mjs refuses symlinks on durableWrite/writeFileAtomic.",
+    "packages/ticket-prune/lib/store.mjs delegates locking and atomic staging to @adlc/tickets, scripts/test/workspace-deps-declared.test.mjs enforces acyclicity across all packages/*, Cursor bundles are rebuilt in lockstep, and full npm run preflight passes."
+  ],
+  "body": "Implement Wave 2 T-P14b: (1) Replace the N+1 git show loop in GitTreeTicketStore.load() with a single git cat-file --batch stream, add loadOne(id) single-shard lookup on DirectoryTicketStore/TicketService, memoize ticketHash per pass in TicketService, and switch git-tree.mjs and rail-existence.mjs to NUL-safe buffer splitting; (2) Export ./lib/{canonical,durability,lock,manifest-primitives}.mjs from packages/tickets/package.json, upgrade tickets/lib/{lock,durability}.mjs with stale-lock recovery (pid+procStartTimeOf) and symlink-safe atomic durability, delegate packages/ticket-prune/lib/store.mjs and packages/core/lib/{primitives,ledger}.mjs downward where appropriate while keeping @adlc/core -> @adlc/tickets strictly one-way, add workspace dependency acyclicity assertion in scripts/test/workspace-deps-declared.test.mjs, and rebuild Cursor bundles.",
+  "category": "feature",
+  "id": "t-wave2-tickets-batch-leaves",
+  "rails": [],
+  "risk": "high",
+  "scope": [
+    "packages/tickets/package.json",
+    "packages/tickets/lib/lock.mjs",
+    "packages/tickets/lib/durability.mjs",
+    "packages/tickets/lib/rail-existence.mjs",
+    "packages/tickets/lib/service.mjs",
+    "packages/tickets/lib/stores/directory.mjs",
+    "packages/tickets/lib/stores/git-tree.mjs",
+    "packages/ticket-prune/lib/store.mjs",
+    "packages/core/lib/primitives.mjs",
+    "packages/core/lib/ledger.mjs",
+    "scripts/test/workspace-deps-declared.test.mjs"
+  ],
+  "status": "in-progress",
+  "title": "Wave 2: GitTreeTicketStore git cat-file --batch, loadOne, NUL-safe paths, and zero-dep @adlc/tickets leaf primitives (T-P14b)"
+}

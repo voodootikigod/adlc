@@ -3,12 +3,15 @@ import {
   copyFileSync,
   existsSync,
   fsyncSync,
+  lstatSync,
   mkdirSync,
   openSync,
   renameSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 
 export function fsyncFile(path) {
@@ -51,12 +54,49 @@ export function durableMkdir(path) {
 }
 
 export function durableWrite(path, content) {
+  let st = null;
+  try {
+    st = lstatSync(path);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  if (st && st.isSymbolicLink()) {
+    throw new Error('refusing to write through symlink: ' + path);
+  }
   const descriptor = openSync(path, 'w');
   try {
     writeFileSync(descriptor, content);
     fsyncSync(descriptor);
   } finally { closeSync(descriptor); }
   fsyncDirectory(dirname(resolve(path)));
+}
+
+export function writeFileAtomic(filePath, content, options = {}) {
+  let st = null;
+  try {
+    st = lstatSync(filePath);
+  } catch {}
+  if (st && st.isSymbolicLink()) {
+    throw new Error('refusing to write through symlink: ' + filePath);
+  }
+  const mode = options.mode ?? (st ? (st.mode & 0o777) : 0o600);
+  const tmpPath = `${filePath}.tmp-${process.pid}-${randomUUID()}`;
+  let fd = null;
+  let closed = false;
+  try {
+    fd = openSync(tmpPath, 'wx', mode);
+    writeFileSync(fd, content);
+    fsyncSync(fd);
+    closeSync(fd);
+    closed = true;
+    renameSync(tmpPath, filePath);
+  } catch (err) {
+    if (fd !== null && !closed) {
+      try { closeSync(fd); } catch {}
+    }
+    try { unlinkSync(tmpPath); } catch {}
+    throw err;
+  }
 }
 
 export function durableCopy(source, target) {

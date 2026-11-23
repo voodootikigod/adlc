@@ -253,6 +253,102 @@ var init_cli = __esm({
   }
 });
 
+// packages/tickets/lib/errors.mjs
+var TicketStoreError, invalid, conflict, policy, operational;
+var init_errors = __esm({
+  "packages/tickets/lib/errors.mjs"() {
+    init_define_ADLC_MCP_BUILD_METADATA();
+    TicketStoreError = class extends Error {
+      constructor(kind, code, message, details) {
+        super(message);
+        this.name = "TicketStoreError";
+        this.kind = kind;
+        this.code = code;
+        if (details !== void 0) this.details = details;
+      }
+    };
+    invalid = (code, message, details) => new TicketStoreError("invalid", code, message, details);
+    conflict = (code, message, details) => new TicketStoreError("conflict", code, message, details);
+    policy = (code, message, details) => new TicketStoreError("policy", code, message, details);
+    operational = (code, message, details) => new TicketStoreError("operational", code, message, details);
+  }
+});
+
+// packages/tickets/lib/pointer.mjs
+var MAX_POINTER_BYTES, DEPRECATED_ID_KEYS;
+var init_pointer = __esm({
+  "packages/tickets/lib/pointer.mjs"() {
+    init_define_ADLC_MCP_BUILD_METADATA();
+    MAX_POINTER_BYTES = 64 * 1024;
+    DEPRECATED_ID_KEYS = Object.freeze(["ticket", "ticketId"]);
+  }
+});
+
+// packages/tickets/lib/constants.mjs
+var ACTIVE_MANIFEST, ARCHIVE_MANIFEST, ACTIVE_DIRECTORY, ARCHIVE_DIRECTORY, LEGACY_FILE, LEGACY_ARCHIVE_FILE, LOCK_DIRECTORY, TRANSACTION_DIRECTORY, TICKET_HASH_DOMAIN, STORE_HASH_DOMAIN;
+var init_constants = __esm({
+  "packages/tickets/lib/constants.mjs"() {
+    init_define_ADLC_MCP_BUILD_METADATA();
+    init_pointer();
+    ACTIVE_MANIFEST = Object.freeze({ format: "adlc-ticket-directory", version: 1 });
+    ARCHIVE_MANIFEST = Object.freeze({ format: "adlc-ticket-archive", version: 1 });
+    ACTIVE_DIRECTORY = ".adlc/tickets";
+    ARCHIVE_DIRECTORY = ".adlc/ticket-archive";
+    LEGACY_FILE = ".adlc/tickets.json";
+    LEGACY_ARCHIVE_FILE = ".adlc/tickets.archive.json";
+    LOCK_DIRECTORY = ".adlc/tickets.lock";
+    TRANSACTION_DIRECTORY = ".adlc/ticket-transactions";
+    TICKET_HASH_DOMAIN = "adlc:ticket:v1\0";
+    STORE_HASH_DOMAIN = "adlc:active-store:v1\0";
+  }
+});
+
+// packages/tickets/lib/canonical.mjs
+import { createHash } from "node:crypto";
+function compareTicketIds(left, right) {
+  const a = Buffer.from(left, "utf8");
+  const b = Buffer.from(right, "utf8");
+  return Buffer.compare(a, b);
+}
+function normalize(value, path = "$") {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw invalid("NON_JSON_VALUE", `${path} contains a non-finite number`);
+    return value;
+  }
+  if (Array.isArray(value)) return value.map((item, index) => normalize(item, `${path}[${index}]`));
+  if (typeof value !== "object") throw invalid("NON_JSON_VALUE", `${path} contains ${typeof value}`);
+  const output = {};
+  for (const key of Object.keys(value).sort(compareTicketIds)) {
+    const item = value[key];
+    if (item === void 0 || typeof item === "function" || typeof item === "symbol") {
+      throw invalid("NON_JSON_VALUE", `${path}.${key} is not JSON`);
+    }
+    output[key] = normalize(item, `${path}.${key}`);
+  }
+  return output;
+}
+function storeHashFromPairs(pairs) {
+  const sorted = [...pairs].sort(([left], [right]) => compareTicketIds(left, right));
+  return sha256(STORE_HASH_DOMAIN + canonicalJson(sorted));
+}
+function storeHash(tickets) {
+  return storeHashFromPairs(tickets.map((ticket) => [ticket.id, ticketHash(ticket)]));
+}
+var canonicalJson, prettyCanonicalJson, sha256, ticketHash;
+var init_canonical = __esm({
+  "packages/tickets/lib/canonical.mjs"() {
+    init_define_ADLC_MCP_BUILD_METADATA();
+    init_errors();
+    init_constants();
+    canonicalJson = (value) => JSON.stringify(normalize(value));
+    prettyCanonicalJson = (value) => `${JSON.stringify(normalize(value), null, 2)}
+`;
+    sha256 = (value) => createHash("sha256").update(value).digest("hex");
+    ticketHash = (ticket) => sha256(TICKET_HASH_DOMAIN + canonicalJson(ticket));
+  }
+});
+
 // packages/core/lib/secret-shapes.mjs
 var INLINE_ASSIGNMENT, SECRET_PATTERNS;
 var init_secret_shapes = __esm({
@@ -287,102 +383,10 @@ var init_proc = __esm({
 var init_ledger = __esm({
   "packages/core/lib/ledger.mjs"() {
     init_define_ADLC_MCP_BUILD_METADATA();
+    init_canonical();
     init_secret_shapes();
     init_proc();
     init_cli();
-  }
-});
-
-// packages/tickets/lib/pointer.mjs
-var MAX_POINTER_BYTES, DEPRECATED_ID_KEYS;
-var init_pointer = __esm({
-  "packages/tickets/lib/pointer.mjs"() {
-    init_define_ADLC_MCP_BUILD_METADATA();
-    MAX_POINTER_BYTES = 64 * 1024;
-    DEPRECATED_ID_KEYS = Object.freeze(["ticket", "ticketId"]);
-  }
-});
-
-// packages/tickets/lib/constants.mjs
-var ACTIVE_MANIFEST, ARCHIVE_MANIFEST, ACTIVE_DIRECTORY, ARCHIVE_DIRECTORY, LEGACY_FILE, LEGACY_ARCHIVE_FILE, LOCK_DIRECTORY, TRANSACTION_DIRECTORY, TICKET_HASH_DOMAIN, STORE_HASH_DOMAIN;
-var init_constants = __esm({
-  "packages/tickets/lib/constants.mjs"() {
-    init_define_ADLC_MCP_BUILD_METADATA();
-    init_pointer();
-    ACTIVE_MANIFEST = Object.freeze({ format: "adlc-ticket-directory", version: 1 });
-    ARCHIVE_MANIFEST = Object.freeze({ format: "adlc-ticket-archive", version: 1 });
-    ACTIVE_DIRECTORY = ".adlc/tickets";
-    ARCHIVE_DIRECTORY = ".adlc/ticket-archive";
-    LEGACY_FILE = ".adlc/tickets.json";
-    LEGACY_ARCHIVE_FILE = ".adlc/tickets.archive.json";
-    LOCK_DIRECTORY = ".adlc/tickets.lock";
-    TRANSACTION_DIRECTORY = ".adlc/ticket-transactions";
-    TICKET_HASH_DOMAIN = "adlc:ticket:v1\0";
-    STORE_HASH_DOMAIN = "adlc:active-store:v1\0";
-  }
-});
-
-// packages/tickets/lib/errors.mjs
-var TicketStoreError, invalid, conflict, policy, operational;
-var init_errors = __esm({
-  "packages/tickets/lib/errors.mjs"() {
-    init_define_ADLC_MCP_BUILD_METADATA();
-    TicketStoreError = class extends Error {
-      constructor(kind, code, message, details) {
-        super(message);
-        this.name = "TicketStoreError";
-        this.kind = kind;
-        this.code = code;
-        if (details !== void 0) this.details = details;
-      }
-    };
-    invalid = (code, message, details) => new TicketStoreError("invalid", code, message, details);
-    conflict = (code, message, details) => new TicketStoreError("conflict", code, message, details);
-    policy = (code, message, details) => new TicketStoreError("policy", code, message, details);
-    operational = (code, message, details) => new TicketStoreError("operational", code, message, details);
-  }
-});
-
-// packages/tickets/lib/canonical.mjs
-import { createHash } from "node:crypto";
-function compareTicketIds(left, right) {
-  const a = Buffer.from(left, "utf8");
-  const b = Buffer.from(right, "utf8");
-  return Buffer.compare(a, b);
-}
-function normalize(value, path = "$") {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw invalid("NON_JSON_VALUE", `${path} contains a non-finite number`);
-    return value;
-  }
-  if (Array.isArray(value)) return value.map((item, index) => normalize(item, `${path}[${index}]`));
-  if (typeof value !== "object") throw invalid("NON_JSON_VALUE", `${path} contains ${typeof value}`);
-  const output = {};
-  for (const key of Object.keys(value).sort(compareTicketIds)) {
-    const item = value[key];
-    if (item === void 0 || typeof item === "function" || typeof item === "symbol") {
-      throw invalid("NON_JSON_VALUE", `${path}.${key} is not JSON`);
-    }
-    output[key] = normalize(item, `${path}.${key}`);
-  }
-  return output;
-}
-function storeHash(tickets) {
-  const pairs = tickets.map((ticket) => [ticket.id, ticketHash(ticket)]).sort(([left], [right]) => compareTicketIds(left, right));
-  return sha256(STORE_HASH_DOMAIN + canonicalJson(pairs));
-}
-var canonicalJson, prettyCanonicalJson, sha256, ticketHash;
-var init_canonical = __esm({
-  "packages/tickets/lib/canonical.mjs"() {
-    init_define_ADLC_MCP_BUILD_METADATA();
-    init_errors();
-    init_constants();
-    canonicalJson = (value) => JSON.stringify(normalize(value));
-    prettyCanonicalJson = (value) => `${JSON.stringify(normalize(value), null, 2)}
-`;
-    sha256 = (value) => createHash("sha256").update(value).digest("hex");
-    ticketHash = (ticket) => sha256(TICKET_HASH_DOMAIN + canonicalJson(ticket));
   }
 });
 
@@ -769,6 +773,51 @@ var init_directory = __esm({
         validateTickets(tickets, { archive: this.archive, validateGraph: !this.archive });
         return new TicketSnapshot({ backend: "directory", formatVersion: 1, tickets });
       }
+      loadOne(id) {
+        if (typeof id !== "string" || id.length === 0) return null;
+        assertRealDirectory(this.path);
+        const expectedManifest = this.archive ? ARCHIVE_MANIFEST : ACTIVE_MANIFEST;
+        const manifestPath = join(this.path, ".store.json");
+        let manifestStat;
+        try {
+          manifestStat = lstatSync(manifestPath);
+        } catch {
+          throw invalid("INVALID_MANIFEST", `${this.path}/.store.json must be a regular file`);
+        }
+        if (!manifestStat.isFile() || manifestStat.isSymbolicLink()) {
+          throw invalid("INVALID_MANIFEST", `${this.path}/.store.json must be a regular file`);
+        }
+        let manifest;
+        try {
+          manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+        } catch (error) {
+          throw invalid("INVALID_MANIFEST", `invalid store manifest: ${error.message}`);
+        }
+        if (canonicalJson(manifest) !== canonicalJson(expectedManifest)) {
+          const hint = Number.isInteger(manifest?.version) && manifest.version > 1 ? "upgrade @adlc/tickets to read this store" : "expected format version 1";
+          throw invalid("UNSUPPORTED_STORE_FORMAT", `unsupported ticket store manifest (${hint})`, manifest);
+        }
+        const name = ticketFilename(id);
+        const fullPath = join(this.path, name);
+        let stat;
+        try {
+          stat = lstatSync(fullPath);
+        } catch (error) {
+          if (error.code === "ENOENT") return null;
+          throw operational("STORE_READ_FAILED", `cannot inspect ${fullPath}: ${error.message}`);
+        }
+        if (!stat.isFile() || stat.isSymbolicLink()) throw invalid("UNSAFE_SHARD", `${name} must be a regular file`);
+        let ticket;
+        try {
+          ticket = JSON.parse(readFileSync(fullPath, "utf8"));
+        } catch (error) {
+          throw invalid("INVALID_JSON", `invalid JSON in ${name}: ${error.message}`);
+        }
+        if (!ticket || typeof ticket !== "object" || Array.isArray(ticket) || ticket.id !== id) {
+          throw invalid("FILENAME_MISMATCH", `${name} does not match ticket id ${id}`);
+        }
+        return Object.freeze(ticket);
+      }
       resolvedPath() {
         return resolve(this.path);
       }
@@ -780,11 +829,51 @@ var init_directory = __esm({
 import { existsSync as existsSync2, mkdirSync, readFileSync as readFileSync2, rmSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname as dirname2, join as join2 } from "node:path";
+function defaultPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err?.code === "EPERM";
+  }
+}
+function defaultProcStartTimeOf(pid) {
+  if (!Number.isInteger(pid) || pid <= 0 || process.platform !== "linux") return null;
+  try {
+    const stat = readFileSync2(`/proc/${pid}/stat`, "utf8");
+    const closeParen = stat.lastIndexOf(")");
+    if (closeParen < 0) return null;
+    const fields = stat.slice(closeParen + 2).trim().split(/\s+/);
+    return fields[19] ?? null;
+  } catch {
+    return null;
+  }
+}
+function isStaleTicketLock(owner, { staleMs, now, isPidAlive, procStartTime, host }) {
+  if (!owner || staleMs === void 0) return false;
+  const startedAtMs = Date.parse(owner.startedAt);
+  if (!Number.isFinite(startedAtMs) || now() - startedAtMs <= staleMs) return false;
+  if (owner.hostname === host) {
+    if (!isPidAlive(owner.pid)) return true;
+    if (owner.pidStartTime != null) {
+      const liveStart = procStartTime(owner.pid);
+      if (liveStart != null && String(liveStart) !== String(owner.pidStartTime)) return true;
+    }
+    return false;
+  }
+  return true;
+}
 function acquireTicketLock(root = ".", {
   retries = 50,
   delayMs = 20,
   command = process.argv.join(" "),
   transactionId = null,
+  staleMs,
+  now = Date.now,
+  isPidAlive = defaultPidAlive,
+  procStartTime = defaultProcStartTimeOf,
+  host = hostname(),
   writeOwner = writeFileSync,
   removeLock = rmSync,
   makeLockDirectory = mkdirSync
@@ -800,7 +889,16 @@ function acquireTicketLock(root = ".", {
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     let created = false;
     try {
-      const metadata = { version: 1, pid: process.pid, hostname: hostname(), startedAt: (/* @__PURE__ */ new Date()).toISOString(), command, transactionId };
+      const pidStartTime = procStartTime(process.pid);
+      const metadata = {
+        version: 1,
+        pid: process.pid,
+        ...pidStartTime != null ? { pidStartTime } : {},
+        hostname: host,
+        startedAt: new Date(now()).toISOString(),
+        command,
+        transactionId
+      };
       const serialized = `${JSON.stringify(metadata, null, 2)}
 `;
       makeLockDirectory(path);
@@ -819,6 +917,16 @@ function acquireTicketLock(root = ".", {
         }
       }
       if (error.code !== "EEXIST") throw operational("LOCK_FAILED", `cannot acquire ticket lock: ${error.message}`);
+      if (staleMs !== void 0) {
+        const currentOwner = readLockMetadata(join2(path, "owner.json"));
+        if (isStaleTicketLock(currentOwner, { staleMs, now, isPidAlive, procStartTime, host })) {
+          try {
+            removeLock(path, { recursive: true, force: true });
+          } catch {
+          }
+          continue;
+        }
+      }
       if (attempt < retries) sleep(delayMs);
     }
   }
@@ -876,10 +984,12 @@ import {
   copyFileSync,
   existsSync as existsSync3,
   fsyncSync,
+  lstatSync as lstatSync2,
   mkdirSync as mkdirSync2,
   openSync,
   renameSync,
   rmSync as rmSync2,
+  unlinkSync,
   writeFileSync as writeFileSync2
 } from "node:fs";
 import { dirname as dirname3, resolve as resolve2 } from "node:path";
@@ -921,6 +1031,15 @@ function durableMkdir(path) {
   }
 }
 function durableWrite(path, content) {
+  let st = null;
+  try {
+    st = lstatSync2(path);
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+  if (st && st.isSymbolicLink()) {
+    throw new Error("refusing to write through symlink: " + path);
+  }
   const descriptor = openSync(path, "w");
   try {
     writeFileSync2(descriptor, content);
@@ -956,14 +1075,14 @@ var init_durability = __esm({
 // packages/tickets/lib/manifest-primitives.mjs
 import {
   existsSync as existsSync4,
-  lstatSync as lstatSync2,
+  lstatSync as lstatSync3,
   readdirSync as readdirSync2,
   readFileSync as readFileSync3,
   writeFileSync as writeFileSync3,
   openSync as openSync2,
   readSync,
   closeSync as closeSync2,
-  unlinkSync,
+  unlinkSync as unlinkSync2,
   mkdirSync as mkdirSync3,
   constants as fsConstants
 } from "node:fs";
@@ -995,7 +1114,7 @@ function looksLikeGenuineLedgerLock(path, size) {
 function isSymlinkOrOtherNonRegular(path) {
   let st;
   try {
-    st = lstatSync2(path);
+    st = lstatSync3(path);
   } catch {
     return false;
   }
@@ -1004,7 +1123,7 @@ function isSymlinkOrOtherNonRegular(path) {
 function readBoundedJsonNoFollow(path) {
   let st;
   try {
-    st = lstatSync2(path);
+    st = lstatSync3(path);
   } catch {
     return null;
   }
@@ -1055,7 +1174,7 @@ function discoverSegments(dir = ".adlc") {
   const segDir = segmentDirPath(dir);
   let dirStat;
   try {
-    dirStat = lstatSync2(segDir);
+    dirStat = lstatSync3(segDir);
   } catch {
     return { valid: [], invalid: [] };
   }
@@ -1079,7 +1198,7 @@ function discoverSegments(dir = ".adlc") {
     const full = join3(segDir, name);
     let st;
     try {
-      st = lstatSync2(full);
+      st = lstatSync3(full);
     } catch (err) {
       invalid3.push({ name, reason: `cannot stat: ${err.message}` });
       continue;
@@ -1161,7 +1280,7 @@ function readLineageToken(dir = ".adlc") {
 function writeLineageToken(dir = ".adlc", token) {
   mkdirSync3(segmentDirPath(dir), { recursive: true });
   const p = lineagePath(dir);
-  if (isSymlinkOrOtherNonRegular(p)) unlinkSync(p);
+  if (isSymlinkOrOtherNonRegular(p)) unlinkSync2(p);
   const fd = openSync2(p, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW);
   try {
     writeFileSync3(fd, JSON.stringify(token));
@@ -1386,7 +1505,7 @@ function validateForestMarker(dir = ".adlc") {
   const path = markerPath(dir);
   let st;
   try {
-    st = lstatSync2(path);
+    st = lstatSync3(path);
   } catch (err) {
     if (err?.code === "ENOENT") return { ok: true, present: false, auth: null };
     return { ok: false, reason: `cannot stat .store.json: ${err.message}` };
@@ -1804,7 +1923,7 @@ var init_key_contract = __esm({
 });
 
 // packages/tickets/lib/evidence.mjs
-import { closeSync as closeSync3, existsSync as existsSync6, fsyncSync as fsyncSync2, mkdirSync as mkdirSync4, openSync as openSync3, readFileSync as readFileSync5, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { closeSync as closeSync3, existsSync as existsSync6, fsyncSync as fsyncSync2, mkdirSync as mkdirSync4, openSync as openSync3, readFileSync as readFileSync5, unlinkSync as unlinkSync3, writeFileSync as writeFileSync4 } from "node:fs";
 import { createHmac as createHmac2, randomUUID } from "node:crypto";
 import { hostname as hostname2 } from "node:os";
 import { dirname as dirname5, join as join5 } from "node:path";
@@ -1833,7 +1952,7 @@ function withManifestLock(path, fn, { retries = 400, delayMs = 5 } = {}) {
     } finally {
       try {
         const current = JSON.parse(readFileSync5(lockPath, "utf8"));
-        if (current.token === owner.token) unlinkSync2(lockPath);
+        if (current.token === owner.token) unlinkSync3(lockPath);
       } catch {
       }
     }
@@ -2044,12 +2163,12 @@ var init_evidence = __esm({
 });
 
 // packages/tickets/lib/trust-root.mjs
-import { existsSync as existsSync7, lstatSync as lstatSync3, readFileSync as readFileSync6, readdirSync as readdirSync3 } from "node:fs";
+import { existsSync as existsSync7, lstatSync as lstatSync4, readFileSync as readFileSync6, readdirSync as readdirSync3 } from "node:fs";
 import { join as join6 } from "node:path";
 function assertNotSymlink(path) {
   let stat;
   try {
-    stat = lstatSync3(path);
+    stat = lstatSync4(path);
   } catch (error) {
     if (error?.code === "ENOENT") return;
     throw operational("TRUST_ROOT_PATH_UNREADABLE", `cannot determine whether ${path} holds trust-root evidence: ${error.message}`);
@@ -2298,7 +2417,7 @@ var init_transaction = __esm({
 });
 
 // packages/tickets/lib/stores/legacy.mjs
-import { existsSync as existsSync9, lstatSync as lstatSync4, readFileSync as readFileSync8 } from "node:fs";
+import { existsSync as existsSync9, lstatSync as lstatSync5, readFileSync as readFileSync8 } from "node:fs";
 import { basename as basename2, dirname as dirname7 } from "node:path";
 function repositoryRootFor(path, explicit) {
   if (explicit !== null && explicit !== void 0) return explicit;
@@ -2344,9 +2463,9 @@ var init_legacy = __esm({
       }
       load() {
         if (!this.exists()) throw operational("STORE_NOT_FOUND", `tickets file not found: ${this.path}`);
-        const stat = lstatSync4(this.path);
+        const stat = lstatSync5(this.path);
         if (stat.isSymbolicLink() || !stat.isFile()) throw invalid("UNSAFE_STORE_PATH", `${this.path} must be a regular file`);
-        const parentStat = lstatSync4(dirname7(this.path));
+        const parentStat = lstatSync5(dirname7(this.path));
         if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) throw invalid("UNSAFE_STORE_PATH", `${dirname7(this.path)} must be a real directory`);
         let parsed;
         try {
@@ -2365,12 +2484,12 @@ var init_legacy = __esm({
 });
 
 // packages/tickets/lib/store.mjs
-import { existsSync as existsSync10, lstatSync as lstatSync5, readdirSync as readdirSync4 } from "node:fs";
+import { existsSync as existsSync10, lstatSync as lstatSync6, readdirSync as readdirSync4 } from "node:fs";
 import { isAbsolute as isAbsolute3, join as join8, resolve as resolve5 } from "node:path";
 function pendingTransactions(root = ".") {
   const path = join8(root, TRANSACTION_DIRECTORY);
   if (!existsSync10(path)) return [];
-  const stat = lstatSync5(path);
+  const stat = lstatSync6(path);
   if (stat.isSymbolicLink() || !stat.isDirectory()) throw conflict("RECOVERY_REQUIRED", `${path} is not a safe transaction directory`);
   return readdirSync4(path).filter((entry) => !entry.startsWith(".")).sort();
 }
@@ -2792,7 +2911,7 @@ var init_shell = __esm({
 });
 
 // packages/core/lib/railpath.mjs
-import { lstatSync as lstatSync6, readlinkSync, realpathSync } from "node:fs";
+import { lstatSync as lstatSync7, readlinkSync, realpathSync } from "node:fs";
 import { isAbsolute as isAbsolute4, join as join9, parse, relative as relative3 } from "node:path";
 function realpathOr(p) {
   try {
@@ -2806,7 +2925,7 @@ function segmentsOf(p) {
 }
 function lstatOrNull(p) {
   try {
-    return lstatSync6(p);
+    return lstatSync7(p);
   } catch {
     return null;
   }
@@ -2885,6 +3004,7 @@ var init_primitives = __esm({
     init_cli();
     init_proc();
     init_secret_shapes();
+    init_durability();
     SECRET_REDACT_RULES = SECRET_PATTERNS.map(([pattern]) => [
       new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`),
       pattern === INLINE_ASSIGNMENT ? "$1[REDACTED]" : "[REDACTED]"
@@ -3086,12 +3206,12 @@ var init_diff_mask = __esm({
 });
 
 // packages/core/lib/workspace-root.mjs
-import { existsSync as existsSync11, lstatSync as lstatSync7, readFileSync as readFileSync9, readlinkSync as readlinkSync2, realpathSync as realpathSync2, statSync } from "node:fs";
+import { existsSync as existsSync11, lstatSync as lstatSync8, readFileSync as readFileSync9, readlinkSync as readlinkSync2, realpathSync as realpathSync2, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename as basename3, dirname as dirname8, isAbsolute as isAbsolute5, join as join10, relative as relative4, resolve as resolve6 } from "node:path";
 function readSmallRegularFile(filePath) {
   try {
-    const st = lstatSync7(filePath);
+    const st = lstatSync8(filePath);
     if (!st.isFile() || st.size > GITDIR_POINTER_MAX_BYTES) return null;
     return readFileSync9(filePath, "utf8");
   } catch {
@@ -3111,7 +3231,7 @@ function canonicalizePath(targetPath) {
       if (seen.has(cur)) return abs;
       seen.add(cur);
       try {
-        if (lstatSync7(cur).isSymbolicLink()) {
+        if (lstatSync8(cur).isSymbolicLink()) {
           cur = resolve6(dirname8(cur), readlinkSync2(cur));
           continue;
         }
@@ -3136,7 +3256,7 @@ function inspectGitCheckout(dir) {
   const gitEntry = join10(dir, ".git");
   let stats;
   try {
-    stats = lstatSync7(gitEntry);
+    stats = lstatSync8(gitEntry);
   } catch {
     return null;
   }
@@ -3220,7 +3340,7 @@ function findInnermostCheckoutRoot(startPath, options = {}) {
     if (!isDir) {
       let isSym = false;
       try {
-        isSym = lstatSync7(startLexical).isSymbolicLink();
+        isSym = lstatSync8(startLexical).isSymbolicLink();
       } catch {
         isSym = false;
       }
@@ -3499,7 +3619,7 @@ import { isAbsolute as isAbsolute6, join as join12, relative as relative5 } from
 
 // plugins/adlc-cursor/generated-active-ticket.mjs
 init_define_ADLC_MCP_BUILD_METADATA();
-import { lstatSync as lstatSync8, openSync as openSync4, fstatSync, readSync as readSync2, closeSync as closeSync4, constants as fsConstants2 } from "node:fs";
+import { lstatSync as lstatSync9, openSync as openSync4, fstatSync, readSync as readSync2, closeSync as closeSync4, constants as fsConstants2 } from "node:fs";
 import { dirname as dirname9, join as join11 } from "node:path";
 var CURRENT_TICKET_FILE2 = ".adlc/current-ticket.json";
 var MAX_POINTER_BYTES2 = 64 * 1024;
@@ -3507,14 +3627,14 @@ var ABSENT = /* @__PURE__ */ Symbol("pointer-absent");
 function readPointerFileBounded(path) {
   let parentLst;
   try {
-    parentLst = lstatSync8(dirname9(path));
+    parentLst = lstatSync9(dirname9(path));
   } catch (err) {
     return err && err.code === "ENOENT" ? ABSENT : null;
   }
   if (!parentLst.isDirectory()) return null;
   let lst;
   try {
-    lst = lstatSync8(path);
+    lst = lstatSync9(path);
   } catch (err) {
     return err && err.code === "ENOENT" ? ABSENT : null;
   }

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { canonicalJson, sha256, storeHash, ticketHash } from './canonical.mjs';
+import { canonicalJson, sha256, storeHash, storeHashFromPairs, ticketHash } from './canonical.mjs';
 import { ARCHIVE_DIRECTORY, LEGACY_ARCHIVE_FILE } from './constants.mjs';
 import { conflict, invalid, policy } from './errors.mjs';
 import { ticketFilename } from './filename.mjs';
@@ -39,6 +39,11 @@ export class TicketService {
     return this.store.load();
   }
 
+  loadOne(id) {
+    if (typeof this.store.loadOne === 'function') return this.store.loadOne(id);
+    return this.snapshot().get(id) ?? null;
+  }
+
   #plan(operation, mutate, { sensitive = [], evidenceRequired = false, expectedSnapshotHash = null } = {}) {
     const before = this.snapshot();
     if (expectedSnapshotHash && before.hash !== expectedSnapshotHash) {
@@ -47,8 +52,9 @@ export class TicketService {
     const tickets = before.mutableTickets();
     const detail = mutate(tickets, before) ?? {};
     validateTickets(tickets);
-    const hashes = Object.fromEntries(tickets.map((ticket) => [ticket.id, ticketHash(ticket)]));
-    const afterHash = (awaitSnapshotHash(tickets));
+    const hashPairs = tickets.map((ticket) => [ticket.id, ticketHash(ticket)]);
+    const hashes = Object.fromEntries(hashPairs);
+    const afterHash = storeHashFromPairs(hashPairs);
     const plan = {
       version: 1,
       operation,
@@ -317,11 +323,6 @@ export class TicketService {
     }
     throw policy('READ_ONLY_STORE', 'this ticket store is read-only');
   }
-}
-
-function awaitSnapshotHash(tickets) {
-  // Kept local so plans depend only on logical content, never a backend path.
-  return storeHash(tickets);
 }
 
 export const serializePlan = (plan) => publicPlan(plan);

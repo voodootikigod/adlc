@@ -2,9 +2,10 @@
 // gate-manifest entries, prosecution findings, routing priors, etc.
 
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
+import { sha256 as ticketsSha256 } from '@adlc/tickets/lib/canonical.mjs';
 import { SECRET_PATTERNS, looksLikeRandomSecret } from './secret-shapes.mjs';
 import { pidAlive, procStartTimeOf } from './proc.mjs';
 import { isPlainObject } from './cli.mjs';
@@ -226,7 +227,7 @@ export function readEntries(name, dir = ADLC_DIR) {
 }
 
 export function sha256(content) {
-  return createHash('sha256').update(content).digest('hex');
+  return ticketsSha256(content);
 }
 
 function canonicalizeJsonValue(value) {

@@ -258,6 +258,225 @@ var init_cli = __esm({
   }
 });
 
+// packages/tickets/lib/errors.mjs
+var TicketStoreError, invalid, conflict, policy, operational;
+var init_errors = __esm({
+  "packages/tickets/lib/errors.mjs"() {
+    init_define_ADLC_MCP_BUILD_METADATA();
+    TicketStoreError = class extends Error {
+      constructor(kind, code, message, details) {
+        super(message);
+        this.name = "TicketStoreError";
+        this.kind = kind;
+        this.code = code;
+        if (details !== void 0) this.details = details;
+      }
+    };
+    invalid = (code, message, details) => new TicketStoreError("invalid", code, message, details);
+    conflict = (code, message, details) => new TicketStoreError("conflict", code, message, details);
+    policy = (code, message, details) => new TicketStoreError("policy", code, message, details);
+    operational = (code, message, details) => new TicketStoreError("operational", code, message, details);
+  }
+});
+
+// packages/tickets/lib/pointer.mjs
+import { lstatSync, openSync, fstatSync, readSync, closeSync, constants as fsConstants } from "node:fs";
+import { dirname, join } from "node:path";
+function readPointerFileBounded(path) {
+  let parentLst;
+  try {
+    parentLst = lstatSync(dirname(path));
+  } catch (err) {
+    return err && err.code === "ENOENT" ? ABSENT : null;
+  }
+  if (!parentLst.isDirectory()) return null;
+  let lst;
+  try {
+    lst = lstatSync(path);
+  } catch (err) {
+    return err && err.code === "ENOENT" ? ABSENT : null;
+  }
+  if (!lst.isFile() || lst.size > MAX_POINTER_BYTES) return null;
+  let fd;
+  try {
+    fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOFOLLOW);
+  } catch {
+    return null;
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > MAX_POINTER_BYTES) return null;
+    if (lst.dev !== 0 && lst.ino !== 0 && (stat.dev !== lst.dev || stat.ino !== lst.ino)) return null;
+    const length = stat.size;
+    const buf = Buffer.allocUnsafe(length);
+    let read = 0;
+    while (read < length) {
+      const n = readSync(fd, buf, read, length - read, read);
+      if (n === 0) break;
+      read += n;
+    }
+    return buf.toString("utf8", 0, read);
+  } catch {
+    return null;
+  } finally {
+    try {
+      closeSync(fd);
+    } catch {
+    }
+  }
+}
+function conflictMessage(envId, fileId) {
+  return `ADLC_TICKET ("${envId}") conflicts with ${CURRENT_TICKET_FILE} ("${fileId}"): they name different tickets. The active ticket is per-worktree state \u2014 ADLC supports exactly one active ticket per worktree, and parallel work on a second ticket needs its own worktree (git worktree add <path> -b <branch>), not a second pointer in this one. Failing closed: which ticket governs this build cannot be determined.`;
+}
+function readActiveTicketPointer(root = ".") {
+  const path = join(root, CURRENT_TICKET_FILE);
+  const raw = readPointerFileBounded(path);
+  if (raw === ABSENT) return ok({ present: false });
+  if (raw === null) {
+    return fail("operational", "INVALID_CURRENT_TICKET", `cannot read ${CURRENT_TICKET_FILE} as a bounded regular file`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    return invalid2("INVALID_CURRENT_TICKET", `cannot parse ${CURRENT_TICKET_FILE}: ${error.message}`);
+  }
+  if (typeof parsed === "string") {
+    const id2 = parsed.trim();
+    if (!id2) return invalid2("INVALID_CURRENT_TICKET", `${CURRENT_TICKET_FILE} is an empty string pointer`);
+    return ok({ present: true, id: id2, ticketHash: null, legacyString: true });
+  }
+  if (!isPlainObject2(parsed)) {
+    return invalid2(
+      "INVALID_CURRENT_TICKET",
+      `${CURRENT_TICKET_FILE} must be an object like {"id":"T1","ticketHash":"<64 hex>"} (got ${Array.isArray(parsed) ? "an array" : JSON.stringify(parsed)}). To deactivate, delete the file.`
+    );
+  }
+  let usedKey = null;
+  for (const key of [CANONICAL_ID_KEY, ...DEPRECATED_ID_KEYS]) {
+    if (Object.hasOwn(parsed, key)) {
+      usedKey = key;
+      break;
+    }
+  }
+  if (usedKey === null) {
+    const found = Object.keys(parsed);
+    return invalid2(
+      "INVALID_CURRENT_TICKET",
+      `${CURRENT_TICKET_FILE} declares no ticket id: expected "${CANONICAL_ID_KEY}" (or deprecated ${DEPRECATED_ID_KEYS.map((k) => `"${k}"`).join("/")}), found ${found.length ? found.map((k) => `"${k}"`).join(", ") : "no keys"}. Failing closed rather than treating an unrecognized pointer as "no active ticket". To deactivate, delete the file.`
+    );
+  }
+  const id = trimmed(parsed[usedKey]);
+  if (!id) {
+    return invalid2(
+      "INVALID_CURRENT_TICKET",
+      `${CURRENT_TICKET_FILE} has a "${usedKey}" that is not a non-empty string`
+    );
+  }
+  const value = { present: true, id, ticketHash: trimmed(parsed.ticketHash) || null, legacyString: false };
+  if (usedKey !== CANONICAL_ID_KEY) value.deprecatedAlias = usedKey;
+  return ok(value);
+}
+function resolveActiveTicketId({ root = ".", env = process.env } = {}) {
+  const pointer = readActiveTicketPointer(root);
+  if (!pointer.ok) return pointer;
+  const envId = trimmed(env.ADLC_TICKET) || null;
+  const file = pointer.value;
+  const fileId = file.present ? file.id : null;
+  if (envId && fileId && envId !== fileId) return conflict2("ACTIVE_TICKET_CONFLICT", conflictMessage(envId, fileId));
+  const id = envId ?? fileId;
+  if (!id) return ok(null);
+  return ok({
+    id,
+    pointerPresent: file.present,
+    ticketHash: file.present ? file.ticketHash : null,
+    legacyString: file.present ? Boolean(file.legacyString) : false,
+    ...file.deprecatedAlias ? { deprecatedAlias: file.deprecatedAlias } : {}
+  });
+}
+var CURRENT_TICKET_FILE, MAX_POINTER_BYTES, ABSENT, CANONICAL_ID_KEY, DEPRECATED_ID_KEYS, ok, fail, invalid2, conflict2, isPlainObject2, trimmed;
+var init_pointer = __esm({
+  "packages/tickets/lib/pointer.mjs"() {
+    init_define_ADLC_MCP_BUILD_METADATA();
+    CURRENT_TICKET_FILE = ".adlc/current-ticket.json";
+    MAX_POINTER_BYTES = 64 * 1024;
+    ABSENT = /* @__PURE__ */ Symbol("pointer-absent");
+    CANONICAL_ID_KEY = "id";
+    DEPRECATED_ID_KEYS = Object.freeze(["ticket", "ticketId"]);
+    ok = (value) => ({ ok: true, value });
+    fail = (kind, code, message) => ({ ok: false, kind, code, message });
+    invalid2 = (code, message) => fail("invalid", code, message);
+    conflict2 = (code, message) => fail("conflict", code, message);
+    isPlainObject2 = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+    trimmed = (value) => typeof value === "string" ? value.trim() : "";
+  }
+});
+
+// packages/tickets/lib/constants.mjs
+var ACTIVE_MANIFEST, ARCHIVE_MANIFEST, ACTIVE_DIRECTORY, ARCHIVE_DIRECTORY, LEGACY_FILE, LEGACY_ARCHIVE_FILE, LOCK_DIRECTORY, TRANSACTION_DIRECTORY, TICKET_HASH_DOMAIN, STORE_HASH_DOMAIN;
+var init_constants = __esm({
+  "packages/tickets/lib/constants.mjs"() {
+    init_define_ADLC_MCP_BUILD_METADATA();
+    init_pointer();
+    ACTIVE_MANIFEST = Object.freeze({ format: "adlc-ticket-directory", version: 1 });
+    ARCHIVE_MANIFEST = Object.freeze({ format: "adlc-ticket-archive", version: 1 });
+    ACTIVE_DIRECTORY = ".adlc/tickets";
+    ARCHIVE_DIRECTORY = ".adlc/ticket-archive";
+    LEGACY_FILE = ".adlc/tickets.json";
+    LEGACY_ARCHIVE_FILE = ".adlc/tickets.archive.json";
+    LOCK_DIRECTORY = ".adlc/tickets.lock";
+    TRANSACTION_DIRECTORY = ".adlc/ticket-transactions";
+    TICKET_HASH_DOMAIN = "adlc:ticket:v1\0";
+    STORE_HASH_DOMAIN = "adlc:active-store:v1\0";
+  }
+});
+
+// packages/tickets/lib/canonical.mjs
+import { createHash } from "node:crypto";
+function compareTicketIds(left, right) {
+  const a = Buffer.from(left, "utf8");
+  const b = Buffer.from(right, "utf8");
+  return Buffer.compare(a, b);
+}
+function normalize(value, path = "$") {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw invalid("NON_JSON_VALUE", `${path} contains a non-finite number`);
+    return value;
+  }
+  if (Array.isArray(value)) return value.map((item, index) => normalize(item, `${path}[${index}]`));
+  if (typeof value !== "object") throw invalid("NON_JSON_VALUE", `${path} contains ${typeof value}`);
+  const output = {};
+  for (const key of Object.keys(value).sort(compareTicketIds)) {
+    const item = value[key];
+    if (item === void 0 || typeof item === "function" || typeof item === "symbol") {
+      throw invalid("NON_JSON_VALUE", `${path}.${key} is not JSON`);
+    }
+    output[key] = normalize(item, `${path}.${key}`);
+  }
+  return output;
+}
+function storeHashFromPairs(pairs) {
+  const sorted = [...pairs].sort(([left], [right]) => compareTicketIds(left, right));
+  return sha256(STORE_HASH_DOMAIN + canonicalJson(sorted));
+}
+function storeHash(tickets) {
+  return storeHashFromPairs(tickets.map((ticket) => [ticket.id, ticketHash(ticket)]));
+}
+var canonicalJson, prettyCanonicalJson, sha256, ticketHash;
+var init_canonical = __esm({
+  "packages/tickets/lib/canonical.mjs"() {
+    init_define_ADLC_MCP_BUILD_METADATA();
+    init_errors();
+    init_constants();
+    canonicalJson = (value) => JSON.stringify(normalize(value));
+    prettyCanonicalJson = (value) => `${JSON.stringify(normalize(value), null, 2)}
+`;
+    sha256 = (value) => createHash("sha256").update(value).digest("hex");
+    ticketHash = (ticket) => sha256(TICKET_HASH_DOMAIN + canonicalJson(ticket));
+  }
+});
+
 // packages/core/lib/secret-shapes.mjs
 function tokenEntropy(s) {
   const freq = /* @__PURE__ */ new Map();
@@ -336,12 +555,12 @@ var init_proc = __esm({
 });
 
 // packages/core/lib/ledger.mjs
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync as readFileSync2, unlinkSync, writeFileSync } from "node:fs";
-import { createHash, randomUUID } from "node:crypto";
+import { closeSync as closeSync2, existsSync, fsyncSync, mkdirSync, openSync as openSync2, readFileSync as readFileSync2, unlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname as dirname2, join as join2 } from "node:path";
 function ledgerPath(name, dir = ADLC_DIR) {
-  return join(dir, `${name}.jsonl`);
+  return join2(dir, `${name}.jsonl`);
 }
 function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -362,7 +581,7 @@ function isStaleLockOwner(current, { isPidAlive, procStartTime = procStartTimeOf
 }
 function withLedgerLock(target, fn, { retries = LOCK_MAX_RETRIES, delayMs = LOCK_RETRY_DELAY_MS, staleMs = LOCK_STALE_MS, isPidAlive = pidAlive, procStartTime = procStartTimeOf, now = Date.now } = {}) {
   const lockPath2 = `${target}.lock`;
-  mkdirSync(dirname(target), { recursive: true });
+  mkdirSync(dirname2(target), { recursive: true });
   const owner = {
     version: 1,
     token: randomUUID(),
@@ -374,7 +593,7 @@ function withLedgerLock(target, fn, { retries = LOCK_MAX_RETRIES, delayMs = LOCK
   for (let i = 0; i <= retries; i++) {
     let fd;
     try {
-      fd = openSync(lockPath2, "wx");
+      fd = openSync2(lockPath2, "wx");
     } catch (err) {
       if (err.code !== "EEXIST") throw err;
       try {
@@ -390,7 +609,7 @@ function withLedgerLock(target, fn, { retries = LOCK_MAX_RETRIES, delayMs = LOCK
 `);
       fsyncSync(fd);
     } finally {
-      closeSync(fd);
+      closeSync2(fd);
     }
     try {
       return fn();
@@ -466,33 +685,33 @@ function appendEntries(name, entriesOrFactory, dir = ADLC_DIR) {
     if (!Array.isArray(additions)) throw new TypeError("ledger append batch must be an array");
     if (additions.length === 0) return [];
     if (name === FINDINGS_LEDGER) for (const entry of additions) assertPublishableFinding(entry);
-    const descriptor = openSync(p, "a");
+    const descriptor = openSync2(p, "a");
     try {
       writeFileSync(descriptor, additions.map((entry) => `${JSON.stringify(entry)}
 `).join(""));
       fsyncSync(descriptor);
     } finally {
-      closeSync(descriptor);
+      closeSync2(descriptor);
     }
     if (process.platform !== "win32") {
-      const directory = openSync(dirname(p), "r");
+      const directory = openSync2(dirname2(p), "r");
       try {
         fsyncSync(directory);
       } finally {
-        closeSync(directory);
+        closeSync2(directory);
       }
     }
     return additions;
   });
 }
-function sha256(content) {
-  return createHash("sha256").update(content).digest("hex");
+function sha2562(content) {
+  return sha256(content);
 }
 function hashFiles(paths, readFile = (p) => readFileSync2(p)) {
   const out = {};
   for (const p of paths) {
     try {
-      out[p] = sha256(readFile(p));
+      out[p] = sha2562(readFile(p));
     } catch {
       out[p] = null;
     }
@@ -503,6 +722,7 @@ var ADLC_DIR, LOCK_RETRY_DELAY_MS, LOCK_MAX_RETRIES, LOCK_STALE_MS, FINDINGS_LED
 var init_ledger = __esm({
   "packages/core/lib/ledger.mjs"() {
     init_define_ADLC_MCP_BUILD_METADATA();
+    init_canonical();
     init_secret_shapes();
     init_proc();
     init_cli();
@@ -514,222 +734,6 @@ var init_ledger = __esm({
     MAX_FINDING_DESC = 600;
     MAX_FINDING_ENTRY = 4e3;
     MAX_FINDING_LINES = 10;
-  }
-});
-
-// packages/tickets/lib/pointer.mjs
-import { lstatSync, openSync as openSync2, fstatSync, readSync, closeSync as closeSync2, constants as fsConstants } from "node:fs";
-import { dirname as dirname2, join as join2 } from "node:path";
-function readPointerFileBounded(path) {
-  let parentLst;
-  try {
-    parentLst = lstatSync(dirname2(path));
-  } catch (err) {
-    return err && err.code === "ENOENT" ? ABSENT : null;
-  }
-  if (!parentLst.isDirectory()) return null;
-  let lst;
-  try {
-    lst = lstatSync(path);
-  } catch (err) {
-    return err && err.code === "ENOENT" ? ABSENT : null;
-  }
-  if (!lst.isFile() || lst.size > MAX_POINTER_BYTES) return null;
-  let fd;
-  try {
-    fd = openSync2(path, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOFOLLOW);
-  } catch {
-    return null;
-  }
-  try {
-    const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.size > MAX_POINTER_BYTES) return null;
-    if (lst.dev !== 0 && lst.ino !== 0 && (stat.dev !== lst.dev || stat.ino !== lst.ino)) return null;
-    const length = stat.size;
-    const buf = Buffer.allocUnsafe(length);
-    let read = 0;
-    while (read < length) {
-      const n = readSync(fd, buf, read, length - read, read);
-      if (n === 0) break;
-      read += n;
-    }
-    return buf.toString("utf8", 0, read);
-  } catch {
-    return null;
-  } finally {
-    try {
-      closeSync2(fd);
-    } catch {
-    }
-  }
-}
-function conflictMessage(envId, fileId) {
-  return `ADLC_TICKET ("${envId}") conflicts with ${CURRENT_TICKET_FILE} ("${fileId}"): they name different tickets. The active ticket is per-worktree state \u2014 ADLC supports exactly one active ticket per worktree, and parallel work on a second ticket needs its own worktree (git worktree add <path> -b <branch>), not a second pointer in this one. Failing closed: which ticket governs this build cannot be determined.`;
-}
-function readActiveTicketPointer(root = ".") {
-  const path = join2(root, CURRENT_TICKET_FILE);
-  const raw = readPointerFileBounded(path);
-  if (raw === ABSENT) return ok({ present: false });
-  if (raw === null) {
-    return fail("operational", "INVALID_CURRENT_TICKET", `cannot read ${CURRENT_TICKET_FILE} as a bounded regular file`);
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    return invalid("INVALID_CURRENT_TICKET", `cannot parse ${CURRENT_TICKET_FILE}: ${error.message}`);
-  }
-  if (typeof parsed === "string") {
-    const id2 = parsed.trim();
-    if (!id2) return invalid("INVALID_CURRENT_TICKET", `${CURRENT_TICKET_FILE} is an empty string pointer`);
-    return ok({ present: true, id: id2, ticketHash: null, legacyString: true });
-  }
-  if (!isPlainObject2(parsed)) {
-    return invalid(
-      "INVALID_CURRENT_TICKET",
-      `${CURRENT_TICKET_FILE} must be an object like {"id":"T1","ticketHash":"<64 hex>"} (got ${Array.isArray(parsed) ? "an array" : JSON.stringify(parsed)}). To deactivate, delete the file.`
-    );
-  }
-  let usedKey = null;
-  for (const key of [CANONICAL_ID_KEY, ...DEPRECATED_ID_KEYS]) {
-    if (Object.hasOwn(parsed, key)) {
-      usedKey = key;
-      break;
-    }
-  }
-  if (usedKey === null) {
-    const found = Object.keys(parsed);
-    return invalid(
-      "INVALID_CURRENT_TICKET",
-      `${CURRENT_TICKET_FILE} declares no ticket id: expected "${CANONICAL_ID_KEY}" (or deprecated ${DEPRECATED_ID_KEYS.map((k) => `"${k}"`).join("/")}), found ${found.length ? found.map((k) => `"${k}"`).join(", ") : "no keys"}. Failing closed rather than treating an unrecognized pointer as "no active ticket". To deactivate, delete the file.`
-    );
-  }
-  const id = trimmed(parsed[usedKey]);
-  if (!id) {
-    return invalid(
-      "INVALID_CURRENT_TICKET",
-      `${CURRENT_TICKET_FILE} has a "${usedKey}" that is not a non-empty string`
-    );
-  }
-  const value = { present: true, id, ticketHash: trimmed(parsed.ticketHash) || null, legacyString: false };
-  if (usedKey !== CANONICAL_ID_KEY) value.deprecatedAlias = usedKey;
-  return ok(value);
-}
-function resolveActiveTicketId({ root = ".", env = process.env } = {}) {
-  const pointer = readActiveTicketPointer(root);
-  if (!pointer.ok) return pointer;
-  const envId = trimmed(env.ADLC_TICKET) || null;
-  const file = pointer.value;
-  const fileId = file.present ? file.id : null;
-  if (envId && fileId && envId !== fileId) return conflict("ACTIVE_TICKET_CONFLICT", conflictMessage(envId, fileId));
-  const id = envId ?? fileId;
-  if (!id) return ok(null);
-  return ok({
-    id,
-    pointerPresent: file.present,
-    ticketHash: file.present ? file.ticketHash : null,
-    legacyString: file.present ? Boolean(file.legacyString) : false,
-    ...file.deprecatedAlias ? { deprecatedAlias: file.deprecatedAlias } : {}
-  });
-}
-var CURRENT_TICKET_FILE, MAX_POINTER_BYTES, ABSENT, CANONICAL_ID_KEY, DEPRECATED_ID_KEYS, ok, fail, invalid, conflict, isPlainObject2, trimmed;
-var init_pointer = __esm({
-  "packages/tickets/lib/pointer.mjs"() {
-    init_define_ADLC_MCP_BUILD_METADATA();
-    CURRENT_TICKET_FILE = ".adlc/current-ticket.json";
-    MAX_POINTER_BYTES = 64 * 1024;
-    ABSENT = /* @__PURE__ */ Symbol("pointer-absent");
-    CANONICAL_ID_KEY = "id";
-    DEPRECATED_ID_KEYS = Object.freeze(["ticket", "ticketId"]);
-    ok = (value) => ({ ok: true, value });
-    fail = (kind, code, message) => ({ ok: false, kind, code, message });
-    invalid = (code, message) => fail("invalid", code, message);
-    conflict = (code, message) => fail("conflict", code, message);
-    isPlainObject2 = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
-    trimmed = (value) => typeof value === "string" ? value.trim() : "";
-  }
-});
-
-// packages/tickets/lib/constants.mjs
-var ACTIVE_MANIFEST, ARCHIVE_MANIFEST, ACTIVE_DIRECTORY, ARCHIVE_DIRECTORY, LEGACY_FILE, LEGACY_ARCHIVE_FILE, LOCK_DIRECTORY, TRANSACTION_DIRECTORY, TICKET_HASH_DOMAIN, STORE_HASH_DOMAIN;
-var init_constants = __esm({
-  "packages/tickets/lib/constants.mjs"() {
-    init_define_ADLC_MCP_BUILD_METADATA();
-    init_pointer();
-    ACTIVE_MANIFEST = Object.freeze({ format: "adlc-ticket-directory", version: 1 });
-    ARCHIVE_MANIFEST = Object.freeze({ format: "adlc-ticket-archive", version: 1 });
-    ACTIVE_DIRECTORY = ".adlc/tickets";
-    ARCHIVE_DIRECTORY = ".adlc/ticket-archive";
-    LEGACY_FILE = ".adlc/tickets.json";
-    LEGACY_ARCHIVE_FILE = ".adlc/tickets.archive.json";
-    LOCK_DIRECTORY = ".adlc/tickets.lock";
-    TRANSACTION_DIRECTORY = ".adlc/ticket-transactions";
-    TICKET_HASH_DOMAIN = "adlc:ticket:v1\0";
-    STORE_HASH_DOMAIN = "adlc:active-store:v1\0";
-  }
-});
-
-// packages/tickets/lib/errors.mjs
-var TicketStoreError, invalid2, conflict2, policy, operational;
-var init_errors = __esm({
-  "packages/tickets/lib/errors.mjs"() {
-    init_define_ADLC_MCP_BUILD_METADATA();
-    TicketStoreError = class extends Error {
-      constructor(kind, code, message, details) {
-        super(message);
-        this.name = "TicketStoreError";
-        this.kind = kind;
-        this.code = code;
-        if (details !== void 0) this.details = details;
-      }
-    };
-    invalid2 = (code, message, details) => new TicketStoreError("invalid", code, message, details);
-    conflict2 = (code, message, details) => new TicketStoreError("conflict", code, message, details);
-    policy = (code, message, details) => new TicketStoreError("policy", code, message, details);
-    operational = (code, message, details) => new TicketStoreError("operational", code, message, details);
-  }
-});
-
-// packages/tickets/lib/canonical.mjs
-import { createHash as createHash2 } from "node:crypto";
-function compareTicketIds(left, right) {
-  const a = Buffer.from(left, "utf8");
-  const b = Buffer.from(right, "utf8");
-  return Buffer.compare(a, b);
-}
-function normalize(value, path = "$") {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw invalid2("NON_JSON_VALUE", `${path} contains a non-finite number`);
-    return value;
-  }
-  if (Array.isArray(value)) return value.map((item, index) => normalize(item, `${path}[${index}]`));
-  if (typeof value !== "object") throw invalid2("NON_JSON_VALUE", `${path} contains ${typeof value}`);
-  const output = {};
-  for (const key of Object.keys(value).sort(compareTicketIds)) {
-    const item = value[key];
-    if (item === void 0 || typeof item === "function" || typeof item === "symbol") {
-      throw invalid2("NON_JSON_VALUE", `${path}.${key} is not JSON`);
-    }
-    output[key] = normalize(item, `${path}.${key}`);
-  }
-  return output;
-}
-function storeHash(tickets) {
-  const pairs = tickets.map((ticket) => [ticket.id, ticketHash(ticket)]).sort(([left], [right]) => compareTicketIds(left, right));
-  return sha2562(STORE_HASH_DOMAIN + canonicalJson(pairs));
-}
-var canonicalJson, prettyCanonicalJson, sha2562, ticketHash;
-var init_canonical = __esm({
-  "packages/tickets/lib/canonical.mjs"() {
-    init_define_ADLC_MCP_BUILD_METADATA();
-    init_errors();
-    init_constants();
-    canonicalJson = (value) => JSON.stringify(normalize(value));
-    prettyCanonicalJson = (value) => `${JSON.stringify(normalize(value), null, 2)}
-`;
-    sha2562 = (value) => createHash2("sha256").update(value).digest("hex");
-    ticketHash = (ticket) => sha2562(TICKET_HASH_DOMAIN + canonicalJson(ticket));
   }
 });
 
@@ -750,7 +754,7 @@ var init_filename = __esm({
   "packages/tickets/lib/filename.mjs"() {
     init_define_ADLC_MCP_BUILD_METADATA();
     init_canonical();
-    ticketFilename = (id) => `${ticketSlug(id)}--${sha2562(Buffer.from(id, "utf8"))}.json`;
+    ticketFilename = (id) => `${ticketSlug(id)}--${sha256(Buffer.from(id, "utf8"))}.json`;
   }
 });
 
@@ -786,7 +790,7 @@ function validateTicket(ticket, { archive = false } = {}) {
   return errors;
 }
 function validateTickets(tickets, { archive = false, validateGraph = !archive } = {}) {
-  if (!Array.isArray(tickets)) throw invalid2("INVALID_ENVELOPE", "tickets must be an array");
+  if (!Array.isArray(tickets)) throw invalid("INVALID_ENVELOPE", "tickets must be an array");
   const errors = [];
   const byId = /* @__PURE__ */ new Map();
   for (const ticket of tickets) {
@@ -819,7 +823,7 @@ function validateTickets(tickets, { archive = false, validateGraph = !archive } 
   if (errors.length) {
     const count = errors.length;
     errors.push("see `adlc ticket schema` and `adlc ticket doctor`");
-    throw invalid2("INVALID_TICKET_STORE", `ticket store validation failed (${count} error(s)): ${errors.join("; ")}`, errors);
+    throw invalid("INVALID_TICKET_STORE", `ticket store validation failed (${count} error(s)): ${errors.join("; ")}`, errors);
   }
   return tickets;
 }
@@ -1048,11 +1052,11 @@ function assertRealDirectory(path) {
     if (error.code === "ENOENT") throw operational("STORE_NOT_FOUND", `ticket store not found: ${path}`);
     throw operational("STORE_READ_FAILED", `cannot inspect ${path}: ${error.message}`);
   }
-  if (stat.isSymbolicLink() || !stat.isDirectory()) throw invalid2("UNSAFE_STORE_PATH", `${path} must be a real directory`);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw invalid("UNSAFE_STORE_PATH", `${path} must be a real directory`);
   const parent = dirname3(path);
   if (parent !== path) {
     const parentStat = lstatSync2(parent);
-    if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) throw invalid2("UNSAFE_STORE_PATH", `${parent} must be a real directory`);
+    if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) throw invalid("UNSAFE_STORE_PATH", `${parent} must be a real directory`);
   }
 }
 var DirectoryTicketStore;
@@ -1078,43 +1082,88 @@ var init_directory = __esm({
         const expectedManifest = this.archive ? ARCHIVE_MANIFEST : ACTIVE_MANIFEST;
         const entries = readdirSync(this.path, { withFileTypes: true });
         const names = new Set(entries.map((entry) => entry.name.toLowerCase()));
-        if (names.size !== entries.length) throw invalid2("CASE_COLLISION", `${this.path} contains case-insensitive name collisions`);
+        if (names.size !== entries.length) throw invalid("CASE_COLLISION", `${this.path} contains case-insensitive name collisions`);
         const manifestEntry = entries.find((entry) => entry.name === ".store.json");
-        if (!manifestEntry || !manifestEntry.isFile() || manifestEntry.isSymbolicLink()) throw invalid2("INVALID_MANIFEST", `${this.path}/.store.json must be a regular file`);
+        if (!manifestEntry || !manifestEntry.isFile() || manifestEntry.isSymbolicLink()) throw invalid("INVALID_MANIFEST", `${this.path}/.store.json must be a regular file`);
         let manifest;
         try {
           manifest = JSON.parse(readFileSync3(join3(this.path, ".store.json"), "utf8"));
         } catch (error) {
-          throw invalid2("INVALID_MANIFEST", `invalid store manifest: ${error.message}`);
+          throw invalid("INVALID_MANIFEST", `invalid store manifest: ${error.message}`);
         }
         if (canonicalJson(manifest) !== canonicalJson(expectedManifest)) {
           const hint = Number.isInteger(manifest?.version) && manifest.version > 1 ? "upgrade @adlc/tickets to read this store" : "expected format version 1";
-          throw invalid2("UNSUPPORTED_STORE_FORMAT", `unsupported ticket store manifest (${hint})`, manifest);
+          throw invalid("UNSUPPORTED_STORE_FORMAT", `unsupported ticket store manifest (${hint})`, manifest);
         }
         const tickets = [];
         for (const entry of entries) {
           if (entry.name === ".store.json") continue;
           if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith(".json")) {
-            throw invalid2("UNRECOGNIZED_STORE_ENTRY", `unrecognized or unsafe ticket store entry: ${entry.name}`);
+            throw invalid("UNRECOGNIZED_STORE_ENTRY", `unrecognized or unsafe ticket store entry: ${entry.name}`);
           }
           const fullPath = join3(this.path, entry.name);
           const stat = lstatSync2(fullPath);
-          if (!stat.isFile() || stat.isSymbolicLink()) throw invalid2("UNSAFE_SHARD", `${entry.name} must be a regular file`);
+          if (!stat.isFile() || stat.isSymbolicLink()) throw invalid("UNSAFE_SHARD", `${entry.name} must be a regular file`);
           let ticket;
           try {
             ticket = JSON.parse(readFileSync3(fullPath, "utf8"));
           } catch (error) {
-            throw invalid2("INVALID_JSON", `invalid JSON in ${entry.name}: ${error.message}`);
+            throw invalid("INVALID_JSON", `invalid JSON in ${entry.name}: ${error.message}`);
           }
           if (!ticket || typeof ticket !== "object" || Array.isArray(ticket) || typeof ticket.id !== "string") {
-            throw invalid2("INVALID_SHARD", `${entry.name} must contain one ticket object`);
+            throw invalid("INVALID_SHARD", `${entry.name} must contain one ticket object`);
           }
           const expected = ticketFilename(ticket.id);
-          if (entry.name !== expected) throw invalid2("FILENAME_MISMATCH", `${entry.name} does not match ticket id ${ticket.id}; expected ${expected}`);
+          if (entry.name !== expected) throw invalid("FILENAME_MISMATCH", `${entry.name} does not match ticket id ${ticket.id}; expected ${expected}`);
           tickets.push(ticket);
         }
         validateTickets(tickets, { archive: this.archive, validateGraph: !this.archive });
         return new TicketSnapshot({ backend: "directory", formatVersion: 1, tickets });
+      }
+      loadOne(id) {
+        if (typeof id !== "string" || id.length === 0) return null;
+        assertRealDirectory(this.path);
+        const expectedManifest = this.archive ? ARCHIVE_MANIFEST : ACTIVE_MANIFEST;
+        const manifestPath = join3(this.path, ".store.json");
+        let manifestStat;
+        try {
+          manifestStat = lstatSync2(manifestPath);
+        } catch {
+          throw invalid("INVALID_MANIFEST", `${this.path}/.store.json must be a regular file`);
+        }
+        if (!manifestStat.isFile() || manifestStat.isSymbolicLink()) {
+          throw invalid("INVALID_MANIFEST", `${this.path}/.store.json must be a regular file`);
+        }
+        let manifest;
+        try {
+          manifest = JSON.parse(readFileSync3(manifestPath, "utf8"));
+        } catch (error) {
+          throw invalid("INVALID_MANIFEST", `invalid store manifest: ${error.message}`);
+        }
+        if (canonicalJson(manifest) !== canonicalJson(expectedManifest)) {
+          const hint = Number.isInteger(manifest?.version) && manifest.version > 1 ? "upgrade @adlc/tickets to read this store" : "expected format version 1";
+          throw invalid("UNSUPPORTED_STORE_FORMAT", `unsupported ticket store manifest (${hint})`, manifest);
+        }
+        const name = ticketFilename(id);
+        const fullPath = join3(this.path, name);
+        let stat;
+        try {
+          stat = lstatSync2(fullPath);
+        } catch (error) {
+          if (error.code === "ENOENT") return null;
+          throw operational("STORE_READ_FAILED", `cannot inspect ${fullPath}: ${error.message}`);
+        }
+        if (!stat.isFile() || stat.isSymbolicLink()) throw invalid("UNSAFE_SHARD", `${name} must be a regular file`);
+        let ticket;
+        try {
+          ticket = JSON.parse(readFileSync3(fullPath, "utf8"));
+        } catch (error) {
+          throw invalid("INVALID_JSON", `invalid JSON in ${name}: ${error.message}`);
+        }
+        if (!ticket || typeof ticket !== "object" || Array.isArray(ticket) || ticket.id !== id) {
+          throw invalid("FILENAME_MISMATCH", `${name} does not match ticket id ${id}`);
+        }
+        return Object.freeze(ticket);
       }
       resolvedPath() {
         return resolve(this.path);
@@ -1127,18 +1176,58 @@ var init_directory = __esm({
 import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync4, rmSync, writeFileSync as writeFileSync2 } from "node:fs";
 import { hostname as hostname2 } from "node:os";
 import { dirname as dirname4, join as join4 } from "node:path";
+function defaultPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err?.code === "EPERM";
+  }
+}
+function defaultProcStartTimeOf(pid) {
+  if (!Number.isInteger(pid) || pid <= 0 || process.platform !== "linux") return null;
+  try {
+    const stat = readFileSync4(`/proc/${pid}/stat`, "utf8");
+    const closeParen = stat.lastIndexOf(")");
+    if (closeParen < 0) return null;
+    const fields = stat.slice(closeParen + 2).trim().split(/\s+/);
+    return fields[19] ?? null;
+  } catch {
+    return null;
+  }
+}
+function isStaleTicketLock(owner, { staleMs, now, isPidAlive, procStartTime, host }) {
+  if (!owner || staleMs === void 0) return false;
+  const startedAtMs = Date.parse(owner.startedAt);
+  if (!Number.isFinite(startedAtMs) || now() - startedAtMs <= staleMs) return false;
+  if (owner.hostname === host) {
+    if (!isPidAlive(owner.pid)) return true;
+    if (owner.pidStartTime != null) {
+      const liveStart = procStartTime(owner.pid);
+      if (liveStart != null && String(liveStart) !== String(owner.pidStartTime)) return true;
+    }
+    return false;
+  }
+  return true;
+}
 function acquireTicketLock(root = ".", {
   retries = 50,
   delayMs = 20,
   command = process.argv.join(" "),
   transactionId = null,
+  staleMs,
+  now = Date.now,
+  isPidAlive = defaultPidAlive,
+  procStartTime = defaultProcStartTimeOf,
+  host = hostname2(),
   writeOwner = writeFileSync2,
   removeLock = rmSync,
   makeLockDirectory = mkdirSync2
 } = {}) {
   const path = join4(root, LOCK_DIRECTORY);
   if (!isLockMetadata({ version: 1, pid: process.pid, hostname: "", startedAt: "", command, transactionId })) {
-    throw invalid2(
+    throw invalid(
       "INVALID_LOCK_OPTIONS",
       "acquireTicketLock requires a string command and a string-or-null transactionId; a lock written from other values could not be released by its own owner."
     );
@@ -1147,7 +1236,16 @@ function acquireTicketLock(root = ".", {
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     let created = false;
     try {
-      const metadata = { version: 1, pid: process.pid, hostname: hostname2(), startedAt: (/* @__PURE__ */ new Date()).toISOString(), command, transactionId };
+      const pidStartTime = procStartTime(process.pid);
+      const metadata = {
+        version: 1,
+        pid: process.pid,
+        ...pidStartTime != null ? { pidStartTime } : {},
+        hostname: host,
+        startedAt: new Date(now()).toISOString(),
+        command,
+        transactionId
+      };
       const serialized = `${JSON.stringify(metadata, null, 2)}
 `;
       makeLockDirectory(path);
@@ -1166,10 +1264,20 @@ function acquireTicketLock(root = ".", {
         }
       }
       if (error.code !== "EEXIST") throw operational("LOCK_FAILED", `cannot acquire ticket lock: ${error.message}`);
+      if (staleMs !== void 0) {
+        const currentOwner = readLockMetadata(join4(path, "owner.json"));
+        if (isStaleTicketLock(currentOwner, { staleMs, now, isPidAlive, procStartTime, host })) {
+          try {
+            removeLock(path, { recursive: true, force: true });
+          } catch {
+          }
+          continue;
+        }
+      }
       if (attempt < retries) sleep(delayMs);
     }
   }
-  throw conflict2("LOCK_TIMEOUT", `could not acquire ${LOCK_DIRECTORY}; another ticket writer is running`, readTicketLock(root));
+  throw conflict("LOCK_TIMEOUT", `could not acquire ${LOCK_DIRECTORY}; another ticket writer is running`, readTicketLock(root));
 }
 function isLockMetadata(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -1223,10 +1331,12 @@ import {
   copyFileSync,
   existsSync as existsSync4,
   fsyncSync as fsyncSync2,
+  lstatSync as lstatSync3,
   mkdirSync as mkdirSync3,
   openSync as openSync3,
   renameSync,
   rmSync as rmSync2,
+  unlinkSync as unlinkSync2,
   writeFileSync as writeFileSync3
 } from "node:fs";
 import { dirname as dirname5, resolve as resolve2 } from "node:path";
@@ -1268,6 +1378,15 @@ function durableMkdir(path) {
   }
 }
 function durableWrite(path, content) {
+  let st = null;
+  try {
+    st = lstatSync3(path);
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+  if (st && st.isSymbolicLink()) {
+    throw new Error("refusing to write through symlink: " + path);
+  }
   const descriptor = openSync3(path, "w");
   try {
     writeFileSync3(descriptor, content);
@@ -1303,14 +1422,14 @@ var init_durability = __esm({
 // packages/tickets/lib/manifest-primitives.mjs
 import {
   existsSync as existsSync5,
-  lstatSync as lstatSync3,
+  lstatSync as lstatSync4,
   readdirSync as readdirSync2,
   readFileSync as readFileSync5,
   writeFileSync as writeFileSync4,
   openSync as openSync4,
   readSync as readSync2,
   closeSync as closeSync4,
-  unlinkSync as unlinkSync2,
+  unlinkSync as unlinkSync3,
   mkdirSync as mkdirSync4,
   constants as fsConstants2
 } from "node:fs";
@@ -1342,7 +1461,7 @@ function looksLikeGenuineLedgerLock(path, size) {
 function isSymlinkOrOtherNonRegular(path) {
   let st;
   try {
-    st = lstatSync3(path);
+    st = lstatSync4(path);
   } catch {
     return false;
   }
@@ -1351,7 +1470,7 @@ function isSymlinkOrOtherNonRegular(path) {
 function readBoundedJsonNoFollow(path) {
   let st;
   try {
-    st = lstatSync3(path);
+    st = lstatSync4(path);
   } catch {
     return null;
   }
@@ -1402,7 +1521,7 @@ function discoverSegments(dir = ".adlc") {
   const segDir = segmentDirPath(dir);
   let dirStat;
   try {
-    dirStat = lstatSync3(segDir);
+    dirStat = lstatSync4(segDir);
   } catch {
     return { valid: [], invalid: [] };
   }
@@ -1426,7 +1545,7 @@ function discoverSegments(dir = ".adlc") {
     const full = join5(segDir, name);
     let st;
     try {
-      st = lstatSync3(full);
+      st = lstatSync4(full);
     } catch (err) {
       invalid4.push({ name, reason: `cannot stat: ${err.message}` });
       continue;
@@ -1508,7 +1627,7 @@ function readLineageToken(dir = ".adlc") {
 function writeLineageToken(dir = ".adlc", token) {
   mkdirSync4(segmentDirPath(dir), { recursive: true });
   const p = lineagePath(dir);
-  if (isSymlinkOrOtherNonRegular(p)) unlinkSync2(p);
+  if (isSymlinkOrOtherNonRegular(p)) unlinkSync3(p);
   const fd = openSync4(p, fsConstants2.O_WRONLY | fsConstants2.O_CREAT | fsConstants2.O_TRUNC | fsConstants2.O_NOFOLLOW);
   try {
     writeFileSync4(fd, JSON.stringify(token));
@@ -1678,7 +1797,7 @@ function resolveAnchor(anchor, chainsBySeq, rootExists) {
   if (!target) return { ok: false, reason: `dangling anchor: no such segment '${segment}' in the forest` };
   const rawLine = target.get(seq);
   if (rawLine === void 0) return { ok: false, reason: `dangling anchor: segment '${segment}' has no entry with seq ${seq}` };
-  if (sha2562(rawLine) !== lineHash) return { ok: false, reason: `anchor lineHash mismatch for '${segment}' seq ${seq}` };
+  if (sha256(rawLine) !== lineHash) return { ok: false, reason: `anchor lineHash mismatch for '${segment}' seq ${seq}` };
   return { ok: true };
 }
 function detectAnchorCycle(anchorBySegment) {
@@ -1733,7 +1852,7 @@ function validateForestMarker(dir = ".adlc") {
   const path = markerPath(dir);
   let st;
   try {
-    st = lstatSync3(path);
+    st = lstatSync4(path);
   } catch (err) {
     if (err?.code === "ENOENT") return { ok: true, present: false, auth: null };
     return { ok: false, reason: `cannot stat .store.json: ${err.message}` };
@@ -1826,7 +1945,7 @@ function verifyChain(nonEmpty, { key, requireSignatures, anchorOnFirst }) {
         return fail3(0, { seq: entry.seq, lineNo, reason: "first entry prev must be null" }, `chain broken at seq ${entry.seq} (line ${lineNo}): first entry prev must be null`);
       }
     } else {
-      const expected = sha2562(prevRawLine);
+      const expected = sha256(prevRawLine);
       if (entry.prev !== expected) {
         return fail3(lineNo - 1, { seq: entry.seq, lineNo, reason: "prev hash mismatch" }, `chain broken at seq ${entry.seq} (line ${lineNo}): prev hash mismatch`);
       }
@@ -2074,7 +2193,7 @@ function resolveOpenSegment(dir = ".adlc", opts = {}) {
       lastEntry = JSON.parse(rootLast);
     } catch {
     }
-    if (lastEntry) anchor = { segment: "root", seq: lastEntry.seq, lineHash: sha2562(rootLast) };
+    if (lastEntry) anchor = { segment: "root", seq: lastEntry.seq, lineHash: sha256(rootLast) };
   }
   const ulid = generateSegmentUlid();
   const slug = deriveSlug(branch ?? "");
@@ -2151,7 +2270,7 @@ var init_key_contract = __esm({
 });
 
 // packages/tickets/lib/evidence.mjs
-import { closeSync as closeSync5, existsSync as existsSync7, fsyncSync as fsyncSync3, mkdirSync as mkdirSync5, openSync as openSync5, readFileSync as readFileSync7, unlinkSync as unlinkSync3, writeFileSync as writeFileSync5 } from "node:fs";
+import { closeSync as closeSync5, existsSync as existsSync7, fsyncSync as fsyncSync3, mkdirSync as mkdirSync5, openSync as openSync5, readFileSync as readFileSync7, unlinkSync as unlinkSync4, writeFileSync as writeFileSync5 } from "node:fs";
 import { createHmac as createHmac2, randomUUID as randomUUID2 } from "node:crypto";
 import { hostname as hostname3 } from "node:os";
 import { dirname as dirname7, join as join7 } from "node:path";
@@ -2180,12 +2299,12 @@ function withManifestLock(path, fn, { retries = 400, delayMs = 5 } = {}) {
     } finally {
       try {
         const current = JSON.parse(readFileSync7(lockPath2, "utf8"));
-        if (current.token === owner.token) unlinkSync3(lockPath2);
+        if (current.token === owner.token) unlinkSync4(lockPath2);
       } catch {
       }
     }
   }
-  throw conflict2("MANIFEST_LOCK_TIMEOUT", `could not acquire manifest lock: ${lockPath2}`);
+  throw conflict("MANIFEST_LOCK_TIMEOUT", `could not acquire manifest lock: ${lockPath2}`);
 }
 function lastLine(content) {
   return content.split("\n").reverse().find((line) => line.trim()) ?? null;
@@ -2214,7 +2333,7 @@ function findMatchingEvidence(entries, { gate, data, operation, action, ticketId
     if (entry?.data?.transactionId === transactionId && entry?.data?.action === action) {
       if (key !== null && !entrySigValid(key, entry)) continue;
       const matches = entry.gate === gate && (entry.ticket ?? null) === ticketId && entry.data.operation === operation && (entry.data.ticketHash ?? null) === ticketHash2 && entry.data.storeHash === storeHash2 && (entry.data.archiveHash ?? null) === archiveHash && entry.data.bindingScope === (ticketId ? "ticket" : "store") && auditFieldsMatch(entry, data, acceptLegacyMatch);
-      if (!matches) throw conflict2("EVIDENCE_IDEMPOTENCY_CONFLICT", `transaction ${transactionId}/${action} already has different evidence`);
+      if (!matches) throw conflict("EVIDENCE_IDEMPOTENCY_CONFLICT", `transaction ${transactionId}/${action} already has different evidence`);
       return entry;
     }
   }
@@ -2223,7 +2342,7 @@ function findMatchingEvidence(entries, { gate, data, operation, action, ticketId
 function recordSegmentedTicketEvidence(dir, { gate, data, transactionId, operation, action, ticketId, ticketHash: ticketHash2, storeHash: storeHash2, archiveHash, key, acceptLegacyMatch = false }) {
   return withManifestLock(lineagePath(dir), () => {
     if (!forestChainsIntact(dir, { key })) {
-      throw conflict2("INVALID_MANIFEST", "manifest forest is invalid: a segment or root chain is broken, or an entry is unsigned/forged \u2014 refusing to append or trust the idempotency scan");
+      throw conflict("INVALID_MANIFEST", "manifest forest is invalid: a segment or root chain is broken, or an entry is unsigned/forged \u2014 refusing to append or trust the idempotency scan");
     }
     const existing = findMatchingEvidence(readForestEntries(dir), { gate, data, transactionId, operation, action, ticketId, ticketHash: ticketHash2, storeHash: storeHash2, archiveHash, key, acceptLegacyMatch });
     if (existing) return existing;
@@ -2234,17 +2353,17 @@ function recordSegmentedTicketEvidence(dir, { gate, data, transactionId, operati
       const content = existsSync7(targetPath) ? readFileSync7(targetPath, "utf8") : "";
       const rawLines = content.split("\n").filter((line) => line.trim() !== "");
       if (resolved.isNew && rawLines.length > 0) {
-        throw conflict2("INVALID_MANIFEST", `segment ${resolved.name} was expected to be new but already has content`);
+        throw conflict("INVALID_MANIFEST", `segment ${resolved.name} was expected to be new but already has content`);
       }
       if (!resolved.isNew && rawLines.length === 0) {
-        throw conflict2("INVALID_MANIFEST", `segment ${resolved.name} was expected to already be open with content but is empty or missing`);
+        throw conflict("INVALID_MANIFEST", `segment ${resolved.name} was expected to already be open with content but is empty or missing`);
       }
       let previous = null;
       for (const line of rawLines) {
         try {
           previous = JSON.parse(line);
         } catch {
-          throw conflict2("INVALID_MANIFEST", `segment ${resolved.name} contains malformed JSON`);
+          throw conflict("INVALID_MANIFEST", `segment ${resolved.name} contains malformed JSON`);
         }
       }
       const prevRawLine = rawLines.at(-1) ?? null;
@@ -2260,7 +2379,7 @@ function recordSegmentedTicketEvidence(dir, { gate, data, transactionId, operati
         ...ticketId ? { ticket: ticketId } : {},
         data,
         files: {},
-        prev: prevRawLine === null ? null : sha2562(prevRawLine)
+        prev: prevRawLine === null ? null : sha256(prevRawLine)
       };
       if (key) {
         entry.sigVersion = 2;
@@ -2325,7 +2444,7 @@ function recordTicketEvidence(root, {
     const content = existsSync7(path) ? readFileSync7(path, "utf8") : "";
     const lines = content.split("\n").filter((line) => line.trim());
     if (isSegmentedRepo(dir)) {
-      throw conflict2("MANIFEST_FROZEN", "manifest chain is frozen; this repo uses .adlc/manifest.d/ \u2014 upgrade adlc if you are seeing this locally");
+      throw conflict("MANIFEST_FROZEN", "manifest chain is frozen; this repo uses .adlc/manifest.d/ \u2014 upgrade adlc if you are seeing this locally");
     }
     for (const line of lines) {
       try {
@@ -2333,12 +2452,12 @@ function recordTicketEvidence(root, {
         if (entry2.data?.transactionId === transactionId && entry2.data?.action === action) {
           if (signingKey !== null && !entrySigValid(signingKey, entry2)) continue;
           const matches = entry2.gate === gate && (entry2.ticket ?? null) === ticketId && entry2.data.operation === operation && (entry2.data.ticketHash ?? null) === ticketHash2 && entry2.data.storeHash === storeHash2 && (entry2.data.archiveHash ?? null) === archiveHash && entry2.data.bindingScope === (ticketId ? "ticket" : "store") && auditFieldsMatch(entry2, data, acceptLegacyMatch);
-          if (!matches) throw conflict2("EVIDENCE_IDEMPOTENCY_CONFLICT", `transaction ${transactionId}/${action} already has different evidence`);
+          if (!matches) throw conflict("EVIDENCE_IDEMPOTENCY_CONFLICT", `transaction ${transactionId}/${action} already has different evidence`);
           return entry2;
         }
       } catch (error) {
         if (error?.code === "EVIDENCE_IDEMPOTENCY_CONFLICT") throw error;
-        throw conflict2("INVALID_MANIFEST", "cannot append ticket evidence to a malformed manifest");
+        throw conflict("INVALID_MANIFEST", "cannot append ticket evidence to a malformed manifest");
       }
     }
     if (lines.length === 0) {
@@ -2349,7 +2468,7 @@ function recordTicketEvidence(root, {
         hasExistingSegments = false;
       }
       if (hasExistingSegments) {
-        throw conflict2("MANIFEST_FROZEN", "refusing to create the root manifest: manifest.d/ already holds segment(s) anchored to nothing (anchor: null), legal only in a rootless forest \u2014 this usually means the activation marker (.adlc/manifest.d/.store.json) was lost or corrupted");
+        throw conflict("MANIFEST_FROZEN", "refusing to create the root manifest: manifest.d/ already holds segment(s) anchored to nothing (anchor: null), legal only in a rootless forest \u2014 this usually means the activation marker (.adlc/manifest.d/.store.json) was lost or corrupted");
       }
     }
     const previous = lastLine(content);
@@ -2361,7 +2480,7 @@ function recordTicketEvidence(root, {
       ...ticketId ? { ticket: ticketId } : {},
       data,
       files: {},
-      prev: previous ? sha2562(previous) : null
+      prev: previous ? sha256(previous) : null
     };
     if (signingKey) entry.sig = sign(signingKey, entry);
     const descriptor = openSync5(path, "a");
@@ -2391,18 +2510,18 @@ var init_evidence = __esm({
 });
 
 // packages/tickets/lib/trust-root.mjs
-import { existsSync as existsSync8, lstatSync as lstatSync4, readFileSync as readFileSync8, readdirSync as readdirSync3 } from "node:fs";
+import { existsSync as existsSync8, lstatSync as lstatSync5, readFileSync as readFileSync8, readdirSync as readdirSync3 } from "node:fs";
 import { join as join8 } from "node:path";
 function assertNotSymlink(path) {
   let stat;
   try {
-    stat = lstatSync4(path);
+    stat = lstatSync5(path);
   } catch (error) {
     if (error?.code === "ENOENT") return;
     throw operational("TRUST_ROOT_PATH_UNREADABLE", `cannot determine whether ${path} holds trust-root evidence: ${error.message}`);
   }
   if (stat.isSymbolicLink()) {
-    throw invalid2("UNSAFE_STORE_PATH", `${path} must be a real path, not a symlink \u2014 trust-root evidence read through a link is not this repo's own`);
+    throw invalid("UNSAFE_STORE_PATH", `${path} must be a real path, not a symlink \u2014 trust-root evidence read through a link is not this repo's own`);
   }
 }
 function storeDeclaresRails(tickets) {
@@ -2561,7 +2680,7 @@ function applyLegacyTransaction(store, tickets, { expectedSnapshotHash, operatio
   const transactionRoot = join9(root, TRANSACTION_DIRECTORY, transactionId);
   try {
     const before = store.load();
-    if (expectedSnapshotHash && before.hash !== expectedSnapshotHash) throw conflict2("STALE_SNAPSHOT", `expected ${expectedSnapshotHash}, found ${before.hash}`);
+    if (expectedSnapshotHash && before.hash !== expectedSnapshotHash) throw conflict("STALE_SNAPSHOT", `expected ${expectedSnapshotHash}, found ${before.hash}`);
     const bypassAudit = transactionChangesAnything(before, tickets, []) ? bypassAuditPlan(before, { operation, evidenceRequired, key, allowUnsigned, root }) : null;
     const target = resolve4(store.path);
     const recordedTarget = journalPath(root, target);
@@ -2604,7 +2723,7 @@ function applyLegacyTransaction(store, tickets, { expectedSnapshotHash, operatio
     durableRename(temporary, target);
     faultInjector?.("operation-applied:1", { transactionId, operation: journal.operations[0] });
     const after = store.load();
-    if (after.hash !== afterHash) throw invalid2("TRANSACTION_VERIFY_FAILED", `transaction produced ${after.hash}, expected ${afterHash}`);
+    if (after.hash !== afterHash) throw invalid("TRANSACTION_VERIFY_FAILED", `transaction produced ${after.hash}, expected ${afterHash}`);
     if (evidenceRequired || bypassAudit) recordTicketEvidence(root, {
       key,
       transactionId,
@@ -2640,12 +2759,12 @@ var init_transaction = __esm({
     init_durability();
     init_key_contract();
     init_trust_root();
-    fileHash = (path) => sha2562(readFileSync9(path));
+    fileHash = (path) => sha256(readFileSync9(path));
   }
 });
 
 // packages/tickets/lib/stores/legacy.mjs
-import { existsSync as existsSync10, lstatSync as lstatSync5, readFileSync as readFileSync10 } from "node:fs";
+import { existsSync as existsSync10, lstatSync as lstatSync6, readFileSync as readFileSync10 } from "node:fs";
 import { basename as basename2, dirname as dirname9 } from "node:path";
 function repositoryRootFor(path, explicit) {
   if (explicit !== null && explicit !== void 0) return explicit;
@@ -2653,7 +2772,7 @@ function repositoryRootFor(path, explicit) {
   if (basename2(path) === basename2(LEGACY_FILE) && basename2(parent) === dirname9(LEGACY_FILE)) {
     return dirname9(parent);
   }
-  throw invalid2(
+  throw invalid(
     "AMBIGUOUS_STORE_ROOT",
     `cannot infer which repository governs ${path}: it is not the canonical <root>/${LEGACY_FILE} layout, so the trust-root evidence (archive, manifest, recorded overrides) would be read from the wrong directory and a frozen store could be written keylessly. Pass an explicit { root }.`
   );
@@ -2691,18 +2810,18 @@ var init_legacy = __esm({
       }
       load() {
         if (!this.exists()) throw operational("STORE_NOT_FOUND", `tickets file not found: ${this.path}`);
-        const stat = lstatSync5(this.path);
-        if (stat.isSymbolicLink() || !stat.isFile()) throw invalid2("UNSAFE_STORE_PATH", `${this.path} must be a regular file`);
-        const parentStat = lstatSync5(dirname9(this.path));
-        if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) throw invalid2("UNSAFE_STORE_PATH", `${dirname9(this.path)} must be a real directory`);
+        const stat = lstatSync6(this.path);
+        if (stat.isSymbolicLink() || !stat.isFile()) throw invalid("UNSAFE_STORE_PATH", `${this.path} must be a regular file`);
+        const parentStat = lstatSync6(dirname9(this.path));
+        if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) throw invalid("UNSAFE_STORE_PATH", `${dirname9(this.path)} must be a real directory`);
         let parsed;
         try {
           parsed = JSON.parse(readFileSync10(this.path, "utf8"));
         } catch (error) {
-          throw invalid2("INVALID_JSON", `invalid JSON in ${this.path}: ${error.message}`);
+          throw invalid("INVALID_JSON", `invalid JSON in ${this.path}: ${error.message}`);
         }
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || !Array.isArray(parsed.tickets)) {
-          throw invalid2("INVALID_ENVELOPE", `${this.path} must contain { "tickets": [...] }`);
+          throw invalid("INVALID_ENVELOPE", `${this.path} must contain { "tickets": [...] }`);
         }
         validateTickets(parsed.tickets);
         return new TicketSnapshot({ backend: "legacy", formatVersion: 0, tickets: parsed.tickets });
@@ -2712,20 +2831,20 @@ var init_legacy = __esm({
 });
 
 // packages/tickets/lib/store.mjs
-import { existsSync as existsSync11, lstatSync as lstatSync6, readdirSync as readdirSync4 } from "node:fs";
+import { existsSync as existsSync11, lstatSync as lstatSync7, readdirSync as readdirSync4 } from "node:fs";
 import { isAbsolute as isAbsolute3, join as join10, resolve as resolve5 } from "node:path";
 function pendingTransactions(root = ".") {
   const path = join10(root, TRANSACTION_DIRECTORY);
   if (!existsSync11(path)) return [];
-  const stat = lstatSync6(path);
-  if (stat.isSymbolicLink() || !stat.isDirectory()) throw conflict2("RECOVERY_REQUIRED", `${path} is not a safe transaction directory`);
+  const stat = lstatSync7(path);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw conflict("RECOVERY_REQUIRED", `${path} is not a safe transaction directory`);
   return readdirSync4(path).filter((entry) => !entry.startsWith(".")).sort();
 }
 function resolveStoreOverride({ root = ".", ticketStore, legacyTickets, env = process.env } = {}) {
   const modern = ticketStore ?? env.ADLC_TICKET_STORE;
   const legacy = legacyTickets ?? env.ADLC_TICKETS;
   if (modern && legacy && resolve5(rooted(root, modern)) !== resolve5(rooted(root, legacy))) {
-    throw conflict2("CONFLICTING_STORE_OVERRIDE", "ADLC_TICKET_STORE/--ticket-store conflicts with ADLC_TICKETS/--tickets");
+    throw conflict("CONFLICTING_STORE_OVERRIDE", "ADLC_TICKET_STORE/--ticket-store conflicts with ADLC_TICKETS/--tickets");
   }
   return modern ?? legacy ?? null;
 }
@@ -2733,7 +2852,7 @@ function detectTicketStore(options = {}) {
   const { root = ".", allowRecovery = false } = options;
   if (!allowRecovery) {
     const pending = pendingTransactions(root);
-    if (pending.length) throw conflict2("RECOVERY_REQUIRED", `unfinished ticket transaction(s): ${pending.join(", ")}`);
+    if (pending.length) throw conflict("RECOVERY_REQUIRED", `unfinished ticket transaction(s): ${pending.join(", ")}`);
   }
   const override = resolveStoreOverride(options);
   if (override) {
@@ -2743,7 +2862,7 @@ function detectTicketStore(options = {}) {
   }
   const legacy = new LegacyTicketStore(join10(root, LEGACY_FILE));
   const directory = new DirectoryTicketStore(join10(root, ACTIVE_DIRECTORY));
-  if (legacy.exists() && directory.exists()) throw conflict2("AMBIGUOUS_STORE", "both .adlc/tickets.json and .adlc/tickets/ exist; complete or roll back migration");
+  if (legacy.exists() && directory.exists()) throw conflict("AMBIGUOUS_STORE", "both .adlc/tickets.json and .adlc/tickets/ exist; complete or roll back migration");
   if (directory.exists()) return directory;
   if (legacy.exists()) return legacy;
   throw operational("STORE_NOT_FOUND", `no ticket store found under ${resolve5(root)}`);
@@ -2985,7 +3104,7 @@ var init_glob = __esm({
 });
 
 // packages/core/lib/tickets.mjs
-import { existsSync as existsSync12, lstatSync as lstatSync7 } from "node:fs";
+import { existsSync as existsSync12, lstatSync as lstatSync8 } from "node:fs";
 import { dirname as dirname10, isAbsolute as isAbsolute4, join as join11 } from "node:path";
 function ticketStoreExists(root = ".", override = null) {
   if (override) return existsSync12(isAbsolute4(override) ? override : join11(root, override));
@@ -2994,7 +3113,7 @@ function ticketStoreExists(root = ".", override = null) {
 function loadTickets(path = TICKETS_PATH) {
   try {
     const directoryPath = join11(dirname10(path), "tickets");
-    const store = existsSync12(path) ? lstatSync7(path).isDirectory() ? new DirectoryTicketStore(path) : new LegacyTicketStore(path) : existsSync12(directoryPath) ? new DirectoryTicketStore(directoryPath) : null;
+    const store = existsSync12(path) ? lstatSync8(path).isDirectory() ? new DirectoryTicketStore(path) : new LegacyTicketStore(path) : existsSync12(directoryPath) ? new DirectoryTicketStore(directoryPath) : null;
     if (!store) return { tickets: [], snapshot: null, errors: [`tickets file not found: ${path}`] };
     const snapshot = store.load();
     return { tickets: snapshot.mutableTickets(), snapshot, errors: [] };
@@ -3157,7 +3276,7 @@ var init_shell = __esm({
 });
 
 // packages/core/lib/railpath.mjs
-import { lstatSync as lstatSync8, readlinkSync, realpathSync } from "node:fs";
+import { lstatSync as lstatSync9, readlinkSync, realpathSync } from "node:fs";
 import { isAbsolute as isAbsolute5, join as join12, parse, relative as relative3 } from "node:path";
 function realpathOr(p) {
   try {
@@ -3171,7 +3290,7 @@ function segmentsOf(p) {
 }
 function lstatOrNull(p) {
   try {
-    return lstatSync8(p);
+    return lstatSync9(p);
   } catch {
     return null;
   }
@@ -3250,6 +3369,7 @@ var init_primitives = __esm({
     init_cli();
     init_proc();
     init_secret_shapes();
+    init_durability();
     SECRET_REDACT_RULES = SECRET_PATTERNS.map(([pattern]) => [
       new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`),
       pattern === INLINE_ASSIGNMENT ? "$1[REDACTED]" : "[REDACTED]"
@@ -3451,12 +3571,12 @@ var init_diff_mask = __esm({
 });
 
 // packages/core/lib/workspace-root.mjs
-import { existsSync as existsSync13, lstatSync as lstatSync9, readFileSync as readFileSync11, readlinkSync as readlinkSync2, realpathSync as realpathSync2, statSync } from "node:fs";
+import { existsSync as existsSync13, lstatSync as lstatSync10, readFileSync as readFileSync11, readlinkSync as readlinkSync2, realpathSync as realpathSync2, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename as basename3, dirname as dirname11, isAbsolute as isAbsolute6, join as join13, relative as relative4, resolve as resolve6 } from "node:path";
 function readSmallRegularFile(filePath) {
   try {
-    const st = lstatSync9(filePath);
+    const st = lstatSync10(filePath);
     if (!st.isFile() || st.size > GITDIR_POINTER_MAX_BYTES) return null;
     return readFileSync11(filePath, "utf8");
   } catch {
@@ -3476,7 +3596,7 @@ function canonicalizePath(targetPath) {
       if (seen.has(cur)) return abs;
       seen.add(cur);
       try {
-        if (lstatSync9(cur).isSymbolicLink()) {
+        if (lstatSync10(cur).isSymbolicLink()) {
           cur = resolve6(dirname11(cur), readlinkSync2(cur));
           continue;
         }
@@ -3501,7 +3621,7 @@ function inspectGitCheckout(dir) {
   const gitEntry = join13(dir, ".git");
   let stats;
   try {
-    stats = lstatSync9(gitEntry);
+    stats = lstatSync10(gitEntry);
   } catch {
     return null;
   }
@@ -3585,7 +3705,7 @@ function findInnermostCheckoutRoot(startPath, options = {}) {
     if (!isDir) {
       let isSym = false;
       try {
-        isSym = lstatSync9(startLexical).isSymbolicLink();
+        isSym = lstatSync10(startLexical).isSymbolicLink();
       } catch {
         isSym = false;
       }
@@ -4361,7 +4481,7 @@ function appendLockedEntry(payload, resolved, targetPath, signatureVersion, key)
     // doc). Omitted (not `anchor`-style `null`) when resolveOpenSegment minted
     // this segment from a detached HEAD, which has no branch identity.
     ...resolved.isNew ? { anchor: resolved.anchor, ...resolved.branch !== void 0 ? { branch: resolved.branch } : {} } : {},
-    prev: prevRawLine === null ? null : sha256(prevRawLine)
+    prev: prevRawLine === null ? null : sha2562(prevRawLine)
   };
   const effectiveSignatureVersion = resolved.isNew ? 2 : signatureVersion;
   if (key) {
@@ -4445,7 +4565,7 @@ function appendManifestEntry(payload, dir = ADLC_DIR, { signatureVersion = 2, cw
     const chained = {
       seq: previous ? previous.seq + 1 : 1,
       ...normalized,
-      prev: state.lastRawLine === null ? null : sha256(state.lastRawLine)
+      prev: state.lastRawLine === null ? null : sha2562(state.lastRawLine)
     };
     if (signingKey) {
       if (signatureVersion === 2) chained.sigVersion = 2;
@@ -4550,7 +4670,7 @@ import { isAbsolute as isAbsolute7, join as join15, relative as relative5 } from
 
 // plugins/adlc-cursor/generated-active-ticket.mjs
 init_define_ADLC_MCP_BUILD_METADATA();
-import { lstatSync as lstatSync10, openSync as openSync6, fstatSync as fstatSync2, readSync as readSync3, closeSync as closeSync6, constants as fsConstants3 } from "node:fs";
+import { lstatSync as lstatSync11, openSync as openSync6, fstatSync as fstatSync2, readSync as readSync3, closeSync as closeSync6, constants as fsConstants3 } from "node:fs";
 import { dirname as dirname12, join as join14 } from "node:path";
 var CURRENT_TICKET_FILE2 = ".adlc/current-ticket.json";
 var MAX_POINTER_BYTES2 = 64 * 1024;
@@ -4558,14 +4678,14 @@ var ABSENT2 = /* @__PURE__ */ Symbol("pointer-absent");
 function readPointerFileBounded2(path) {
   let parentLst;
   try {
-    parentLst = lstatSync10(dirname12(path));
+    parentLst = lstatSync11(dirname12(path));
   } catch (err) {
     return err && err.code === "ENOENT" ? ABSENT2 : null;
   }
   if (!parentLst.isDirectory()) return null;
   let lst;
   try {
-    lst = lstatSync10(path);
+    lst = lstatSync11(path);
   } catch (err) {
     return err && err.code === "ENOENT" ? ABSENT2 : null;
   }
@@ -4870,7 +4990,7 @@ import {
   mkdirSync as mkdirSync6,
   readFileSync as readFileSync12,
   renameSync as renameSync2,
-  unlinkSync as unlinkSync4,
+  unlinkSync as unlinkSync5,
   writeFileSync as writeFileSync6
 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
@@ -4878,7 +4998,7 @@ import { dirname as dirname13, join as join16 } from "node:path";
 
 // plugins/adlc-cursor/lib/session-identity.mjs
 init_define_ADLC_MCP_BUILD_METADATA();
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash2 } from "node:crypto";
 var SESSION_ENV_KEY = "ADLC_CURSOR_SESSION_ID";
 var PAYLOAD_SESSION_KEYS = Object.freeze(["session_id", "sessionId", "conversation_id", "conversationId"]);
 var REJECTED_AS_SESSION_KEYS = Object.freeze(["thread_id", "threadId", "generation_id", "generationId"]);
@@ -4909,7 +5029,7 @@ function resolveSessionIdentity(payload = {}, env = process.env) {
   return { ok: true, sessionId: null, source: "anonymous" };
 }
 function sessionSafeId(sessionId) {
-  return createHash3("sha256").update(String(sessionId), "utf8").digest("hex");
+  return createHash2("sha256").update(String(sessionId), "utf8").digest("hex");
 }
 function trimmed3(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -4991,7 +5111,7 @@ function withStateLock(lockPath2, fn, {
         const cur = readJson(lockPath2);
         if (cur?.leaseUntil && cur.leaseUntil < now) {
           try {
-            unlinkSync4(lockPath2);
+            unlinkSync5(lockPath2);
           } catch {
           }
         }
@@ -5007,7 +5127,7 @@ function withStateLock(lockPath2, fn, {
         const cur = readJson(lockPath2);
         if (cur?.owner === owner) {
           try {
-            unlinkSync4(lockPath2);
+            unlinkSync5(lockPath2);
           } catch {
           }
         }

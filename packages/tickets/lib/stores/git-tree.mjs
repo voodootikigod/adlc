@@ -11,13 +11,62 @@ const GIT_TIMEOUT_MS = 60_000;
 const MAX_BUFFER = 64 * 1024 * 1024;
 
 function runGit(cwd, args, opts = {}) {
-  const { allowFailure, spawnFn } = opts;
-  const result = spawnFn('git', args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, maxBuffer: MAX_BUFFER });
+  const { allowFailure, spawnFn, encoding = 'utf8', input } = opts;
+  const spawnOpts = { cwd, encoding, timeout: GIT_TIMEOUT_MS, maxBuffer: MAX_BUFFER };
+  if (input !== undefined) spawnOpts.input = input;
+  const result = spawnFn('git', args, spawnOpts);
   if (result.status === 0) return result.stdout;
   if (result.error) throw operational('GIT_READ_FAILED', `git ${args[0]} failed: ${result.error.message}`);
   if (result.signal) throw operational('GIT_READ_FAILED', `git ${args[0]} timed out or was killed by ${result.signal}`);
   if (allowFailure) return null;
   throw operational('GIT_READ_FAILED', `git ${args[0]} failed: ${result.stderr?.trim() || `exit ${result.status}`}`);
+}
+
+function splitNulUtf8(raw, revision) {
+  const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(String(raw ?? ''), 'utf8');
+  const records = [];
+  let start = 0;
+  for (let i = 0; i <= buf.length; i += 1) {
+    if (i === buf.length || buf[i] === 0) {
+      if (i > start) {
+        const slice = buf.subarray(start, i);
+        const decoded = slice.toString('utf8');
+        if (!Buffer.from(decoded, 'utf8').equals(slice)) {
+          throw invalid('UNSAFE_GIT_PATH', `non-UTF-8 Git tree path at ${revision}`);
+        }
+        records.push(decoded);
+      }
+      start = i + 1;
+    }
+  }
+  return records;
+}
+
+function parseCatFileBatch(raw, expectedCount, revision) {
+  const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(String(raw ?? ''), 'utf8');
+  const blobs = [];
+  let offset = 0;
+  for (let idx = 0; idx < expectedCount; idx += 1) {
+    const nl = buf.indexOf(0x0a, offset);
+    if (nl < 0) throw operational('GIT_READ_FAILED', `truncated git cat-file --batch header at ${revision}`);
+    const header = buf.subarray(offset, nl).toString('utf8');
+    const parts = header.split(' ');
+    if (parts.length !== 3 || parts[1] !== 'blob') {
+      throw operational('GIT_PATH_MISSING', `unexpected git cat-file --batch header at ${revision}: ${header}`);
+    }
+    const size = Number(parts[2]);
+    if (!Number.isInteger(size) || size < 0) {
+      throw operational('GIT_READ_FAILED', `invalid git cat-file --batch size at ${revision}: ${header}`);
+    }
+    const bodyStart = nl + 1;
+    const bodyEnd = bodyStart + size;
+    if (bodyEnd + 1 > buf.length || buf[bodyEnd] !== 0x0a) {
+      throw operational('GIT_READ_FAILED', `truncated git cat-file --batch body at ${revision}`);
+    }
+    blobs.push(buf.subarray(bodyStart, bodyEnd).toString('utf8'));
+    offset = bodyEnd + 1;
+  }
+  return blobs;
 }
 
 export class GitTreeTicketStore {
@@ -41,13 +90,20 @@ export class GitTreeTicketStore {
   }
 
   #entries(path) {
-    const listing = runGit(this.cwd, ['ls-tree', '-r', '-z', this.exactRevision, '--', path], { spawnFn: this.spawnFn });
-    return listing.split('\0').filter(Boolean).map((record) => {
+    const listing = runGit(this.cwd, ['ls-tree', '-r', '-z', this.exactRevision, '--', path], { encoding: null, spawnFn: this.spawnFn });
+    return splitNulUtf8(listing, this.revision).map((record) => {
       const separator = record.indexOf('\t');
       if (separator < 0) throw invalid('INVALID_GIT_TREE', `cannot parse Git tree entry at ${this.revision}`);
       const [mode, type, object] = record.slice(0, separator).split(' ');
       return { mode, type, object, path: record.slice(separator + 1) };
     });
+  }
+
+  #catFileBatch(objects) {
+    if (objects.length === 0) return [];
+    const input = `${objects.join('\n')}\n`;
+    const raw = runGit(this.cwd, ['cat-file', '--batch'], { encoding: null, input, spawnFn: this.spawnFn });
+    return parseCatFileBatch(raw, objects.length, this.revision);
   }
 
   #regularBlob(path) {
@@ -87,7 +143,7 @@ export class GitTreeTicketStore {
     if (canonicalJson(manifest) !== canonicalJson(ACTIVE_MANIFEST)) throw invalid('UNSUPPORTED_STORE_FORMAT', `unsupported directory store at ${this.revision}`);
     const entries = this.#entries(this.storePath);
     const expectedPrefix = `${this.storePath}/`;
-    const tickets = [];
+    const shardEntries = [];
     const seenLower = new Set();
     for (const entry of entries) {
       const { path } = entry;
@@ -101,8 +157,14 @@ export class GitTreeTicketStore {
       if (entry.type !== 'blob' || entry.mode !== '100644') throw invalid('UNSAFE_GIT_MODE', `${path} must be a non-executable regular file`);
       if (seenLower.has(relative.toLowerCase())) throw invalid('CASE_COLLISION', `case-insensitive collision at ${relative}`);
       seenLower.add(relative.toLowerCase());
+      shardEntries.push({ relative, object: entry.object });
+    }
+    const blobs = this.#catFileBatch(shardEntries.map((item) => item.object));
+    const tickets = [];
+    for (let i = 0; i < shardEntries.length; i += 1) {
+      const { relative } = shardEntries[i];
       let ticket;
-      try { ticket = JSON.parse(this.#show(path)); } catch (error) { throw invalid('INVALID_JSON', `invalid shard ${relative}: ${error.message}`); }
+      try { ticket = JSON.parse(blobs[i]); } catch (error) { throw invalid('INVALID_JSON', `invalid shard ${relative}: ${error.message}`); }
       if (!ticket || typeof ticket.id !== 'string' || relative !== ticketFilename(ticket.id)) throw invalid('FILENAME_MISMATCH', `${relative} does not match its ticket id`);
       tickets.push(ticket);
     }
