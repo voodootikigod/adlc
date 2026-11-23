@@ -31,12 +31,13 @@ export class LockHeldError extends Error {
 export const ownerPath = (lockDir) => join(lockDir, OWNER_FILE);
 
 function writeAtomic(path, data, fsx = LOCK_FS) {
+  const payload = `${JSON.stringify(data, null, '  ')}\n`;
   if (fsx === LOCK_FS) {
-    writeFileAtomic(path, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 });
+    writeFileAtomic(path, payload, { mode: 0o600 });
     return;
   }
   const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`;
-  fsx.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n');
+  fsx.writeFileSync(tmp, payload);
   fsx.renameSync(tmp, path);
 }
 

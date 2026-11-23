@@ -4,6 +4,7 @@ import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
 import { normalizeChecks, EXPECTED_MATRIX_COUNTS, watchCi } from '../lib/ci.mjs';
+import { continueRun } from '../lib/run.mjs';
 import { withMutation } from '../lib/mutations.mjs';
 import { lockfileCacheKey, cloneCachedNodeModules } from '../lib/deps.mjs';
 
@@ -100,6 +101,27 @@ test('R4: watchCi invokes ctx.lock.heartbeat() on every poll iteration', async (
   });
   assert.equal(res.outcome, 'done');
   assert.equal(beats, 2, 'heartbeat called once per poll iteration');
+});
+
+test('R4: continueRun runs periodic lock.heartbeat() via setInterval and clears it on exit', async () => {
+  let beats = 0;
+  const ctx = {
+    config: { autopilot: { maxRounds: 1, wallClockMinutes: 5, ciWatchMinutes: 5 } },
+    lock: { heartbeat: () => { beats++; return true; }, heartbeatMs: 10 },
+    records: { load: () => ({ issue: 9, ticketId: 'T-01K00000000000000000000001' }), update: () => ({}) },
+  };
+  const deps = {
+    mirror: {
+      createWorkerMirror: async () => {
+        await new Promise((r) => setTimeout(r, 45));
+        throw Object.assign(new Error('stop'), { code: 'init-failed' });
+      },
+    },
+    deps: { buildWorkerDeps: async () => '/deps' },
+  };
+  const out = await continueRun({ ctx, deps, issue: 9, ticket: {}, from: 'rounds' });
+  assert.equal(out.state, 'failed');
+  assert.ok(beats >= 2, `expected periodic heartbeat >= 2, got ${beats}`);
 });
 
 test('P4: lockfileCacheKey hashes package-lock.json and cloneCachedNodeModules clones cached trees', (t) => {

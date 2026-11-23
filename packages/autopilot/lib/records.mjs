@@ -35,7 +35,7 @@ export const TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export function writeAtomicJson(path, data) {
   mkdirSync(dirname(path), { recursive: true });
-  writeFileAtomic(path, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 });
+  writeFileAtomic(path, `${JSON.stringify(data, null, '  ')}\n`, { mode: 0o600 });
   return data;
 }
 

@@ -12,7 +12,8 @@ import { NODE_TOOL_TREE_RE } from '../lib/extensions.mjs';
 test('R1: SYSTEM_ROOTS includes /bin and macOS roots on darwin; classifyReadOnlyEntry recognizes all platform roots', () => {
   assert.ok(BASE_SYSTEM_ROOTS.includes('/bin'));
   assert.ok(SYSTEM_ROOTS.includes('/bin'));
-  for (const r of MACOS_SYSTEM_ROOTS) {
+  assert.deepEqual([...MACOS_SYSTEM_ROOTS], ['/System', '/Library', '/private/etc']);
+  for (const r of ['/System', '/Library', '/private/etc']) {
     assert.equal(classifyReadOnlyEntry(r, { isFile: () => false }), 'system-root');
   }
   assert.equal(classifyReadOnlyEntry('/bin', { isFile: () => false }), 'system-root');

@@ -129,7 +129,9 @@ export async function continueRun({ ctx, deps, issue, ticket, revision = null, a
   const record = () => ctx.records.load(n);
   const beat = () => { try { ctx.lock?.heartbeat?.(); } catch {} };
   beat();
-  const heartbeatTimer = typeof ctx.lock?.heartbeat === 'function' ? setInterval(beat, HEARTBEAT_MS) : null;
+  const heartbeatTimer = typeof ctx.lock?.heartbeat === 'function'
+    ? setInterval(beat, ctx.lock.heartbeatMs ?? HEARTBEAT_MS)
+    : null;
   heartbeatTimer?.unref?.();
   try {
     return await continueRunBody({ ctx, deps, issue: n, cfg, record, ticket, revision, authorization, from });
