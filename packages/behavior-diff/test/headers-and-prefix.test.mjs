@@ -10,9 +10,11 @@ test('normalizeResponseHeaders lowercases, sorts, and omits volatile headers', (
     Date: 'Mon, 01 Jan 2026 00:00:00 GMT',
     ETag: '"abc"',
     'X-Request-Id': 'req-123',
+    'Set-Cookie': 'session=secret; HttpOnly',
   });
   const norm = normalizeResponseHeaders(headers);
   assert.deepEqual(Object.keys(norm), ['cache-control', 'x-custom']);
+  assert.equal(Object.hasOwn(norm, 'set-cookie'), false);
   assert.equal(norm['x-custom'], 'val');
   assert.equal(norm['cache-control'], 'no-store');
 });

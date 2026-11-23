@@ -8,11 +8,12 @@ import { generateMutants, maskStringLiterals, OPERATORS } from '../lib/mutate.mj
 import { createTypeScriptSyntaxWorker } from '../lib/syntax.mjs';
 
 test('maskStringLiterals blanks quoted and template contents while preserving length', () => {
-  const line = `const s = "a === b && true"; const t = \`x ?? y\`; if (a === b) return true;`;
+  const line = `const s = "a === b && true"; const t = \`x ?? y \${a === b}\`; if (a === b) return true;`;
   const masked = maskStringLiterals(line);
   assert.equal(masked.length, line.length);
   assert.ok(!masked.includes('true";'));
   assert.ok(!masked.includes('??'));
+  assert.ok(masked.includes('${a === b}'), 'executable template interpolation remains visible for mutation');
   assert.ok(masked.includes('if (a === b) return true;'));
 });
 

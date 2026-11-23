@@ -177,8 +177,15 @@ export function maskStringLiterals(line) {
   let out = '';
   let quote = null;
   let escaped = false;
+  let exprDepth = 0;
   for (let i = 0; i < line.length; i++) {
     const ch = line[i];
+    if (exprDepth > 0) {
+      if (ch === '{') exprDepth++;
+      else if (ch === '}') exprDepth--;
+      out += ch;
+      continue;
+    }
     if (quote) {
       if (escaped) {
         out += ' ';
@@ -188,6 +195,12 @@ export function maskStringLiterals(line) {
       if (ch === '\\') {
         out += ' ';
         escaped = true;
+        continue;
+      }
+      if (quote === '`' && ch === '$' && line[i + 1] === '{') {
+        out += '${';
+        i++;
+        exprDepth = 1;
         continue;
       }
       if (ch === quote) {

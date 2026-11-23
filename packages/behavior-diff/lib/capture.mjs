@@ -6,16 +6,19 @@ import { openSync, closeSync, writeFileSync, renameSync } from 'node:fs';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 export const MAX_BODY_BYTES = 1024 * 1024;
-const VOLATILE_HEADERS = new Set(['date', 'etag', 'x-request-id', 'x-trace-id', 'keep-alive', 'connection', 'transfer-encoding']);
+const OMITTED_HEADERS = new Set([
+  'date', 'etag', 'x-request-id', 'x-trace-id', 'keep-alive', 'connection', 'transfer-encoding',
+  'set-cookie', 'www-authenticate', 'proxy-authenticate', 'authorization', 'proxy-authorization',
+]);
 
-/** Normalize response headers into a sorted lowercase map, omitting volatile transport headers. */
+/** Normalize response headers into a sorted lowercase map, omitting volatile transport and credential headers. */
 export function normalizeResponseHeaders(headers) {
   const out = {};
   if (!headers || typeof headers.forEach !== 'function') return out;
   const pairs = [];
   headers.forEach((value, key) => {
     const k = String(key).toLowerCase();
-    if (VOLATILE_HEADERS.has(k)) return;
+    if (OMITTED_HEADERS.has(k)) return;
     pairs.push([k, String(value).trim()]);
   });
   pairs.sort(([a], [b]) => a.localeCompare(b));
