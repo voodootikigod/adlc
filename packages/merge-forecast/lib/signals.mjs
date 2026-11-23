@@ -15,6 +15,17 @@ import { createScopeIndex } from './scope-index.mjs';
 
 // ─── Signal 1: Declared scope overlap ────────────────────────────────────────
 
+const fileSetCache = new WeakMap();
+
+function getFileSet(files) {
+  let set = fileSetCache.get(files);
+  if (!set) {
+    set = new Set(files);
+    fileSetCache.set(files, set);
+  }
+  return set;
+}
+
 /**
  * Returns 1.0 if the two tickets' declared scopes overlap (hard veto),
  * either syntactically or on any concrete file in the scope index, else 0.
@@ -24,7 +35,7 @@ export function signalScopeOverlap(a, b, index = null) {
   if (index) {
     const aFiles = index.files(a.scope);
     const bFiles = index.files(b.scope);
-    const aSet = new Set(aFiles);
+    const aSet = getFileSet(aFiles);
     for (const f of bFiles) {
       if (aSet.has(f)) return 1.0;
     }
