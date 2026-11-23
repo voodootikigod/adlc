@@ -1,0 +1,42 @@
+{
+  "acceptance": [
+    "scripts/run-tests.mjs runs segments in a bounded async worker pool (ADLC_TEST_CONCURRENCY default Math.min(os.availableParallelism(), 6)) with isolated per-child TMPDIR, deterministic buffered output, and excludes packages/autopilot/test/spec-coverage.test.mjs from pass 1 so it executes once inside autopilot AC gate.",
+    "packages/hollow-test/lib/gate-plan.mjs maps all scripts/*.mjs files, includes plugins/<name>/hooks/test on plugin root changes, and guarantees >= 1 mutant quota per file; hollow-test/lib/runner.mjs scrubs ADLC_MANIFEST_KEY via sanitizeCandidateEnv.",
+    "hollow-test generates mutants before baseline execution (0-mutant comment/doc diffs exit fast), supports --skip-baseline (passed by mutation-gate.mjs after its single measured baseline), runs per-file mapped test commands when provided, and reuses a persistent syntax-check-typescript stdio worker per run.",
+    "packages/core/lib/mutate.mjs masks string/template literals before regex mutation, adds ?? and if (!expr) -> if (expr) operators, and replaces single offset spans instead of /g.",
+    "packages/behavior-diff captures normalized HTTP headers and bounded bodies and performs full shared-prefix array diffs.",
+    "scripts/preflight-fast.mjs runs sub-second static gates (rails-guard-ci, scan-findings-ledger, guard-findings-ledger-append-only, check-reviewer-directed-comments) before run-tests.mjs and mutation-gate.mjs."
+  ],
+  "body": "Execute Wave 2 T-P16 (R6 + P1) from .adlc/specs/enhancement-resolution-plan.md across scripts/run-tests.mjs, scripts/mutation-gate.mjs, scripts/preflight-fast.mjs, packages/hollow-test, packages/core/lib/{mutate,syntax,syntax-check-typescript}.mjs, packages/behavior-diff, and rebuilt Cursor bundles while keeping all frozen rails untouched.",
+  "id": "t-wave2-perf-mutation-gate",
+  "scope": [
+    "scripts/run-tests.mjs",
+    "scripts/mutation-gate.mjs",
+    "scripts/preflight-fast.mjs",
+    "scripts/test/run-tests-parallel.test.mjs",
+    "packages/hollow-test/bin/hollow-test.mjs",
+    "packages/hollow-test/lib/gate-plan.mjs",
+    "packages/hollow-test/lib/runner.mjs",
+    "packages/hollow-test/test/script-map-complete.test.mjs",
+    "packages/core/lib/mutate.mjs",
+    "packages/core/lib/syntax.mjs",
+    "packages/core/lib/syntax-check-typescript.mjs",
+    "packages/core/test/mutate-operators.test.mjs",
+    "packages/behavior-diff/lib/capture.mjs",
+    "packages/behavior-diff/lib/diff.mjs",
+    "packages/behavior-diff/test/headers-and-prefix.test.mjs",
+    "plugins/adlc-cursor/hooks/adlc-session-start.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-pretool.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-audit.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-shell-advisory.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-precompact.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-subagent.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-stop.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-preflight.bundle.mjs",
+    "plugins/adlc-cursor/lib/mcp-build-metadata.mjs",
+    "plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs"
+  ],
+  "tier": "trust-root",
+  "title": "Wave 2 T-P16: bounded-parallel run-tests, fast zero-mutant & single-baseline hollow-test, strengthened mutate.mjs, behavior-diff, and preflight-fast",
+  "verification": "npm run build:cursor-mcp && node --test scripts/test/run-tests.test.mjs scripts/test/run-tests-completeness.test.mjs scripts/test/run-tests-parallel.test.mjs scripts/test/mutation-gate.test.mjs packages/core/test/syntax.test.mjs packages/core/test/mutate-operators.test.mjs packages/hollow-test/test/script-map-complete.test.mjs packages/behavior-diff/test/headers-and-prefix.test.mjs scripts/test/ticket-store-boundary.test.mjs"
+}

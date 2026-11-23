@@ -81,6 +81,7 @@ import {
   testTargetFor,
   mutableChangedFiles,
   classify,
+  fileTestCmdsFor,
   mutantBudget,
 } from '../packages/hollow-test/lib/gate-plan.mjs';
 
@@ -96,6 +97,7 @@ export {
   testTargetFor,
   mutableChangedFiles,
   classify,
+  fileTestCmdsFor,
   mutantBudget,
 } from '../packages/hollow-test/lib/gate-plan.mjs';
 
@@ -243,6 +245,12 @@ export function main() {
   }
 
   const bin = join(ROOT, 'packages', 'hollow-test', 'bin', 'hollow-test.mjs');
+  const fastExtraArgs = decision.kind === 'fast'
+    ? [
+      '--skip-baseline',
+      '--file-test-map', JSON.stringify(fileTestCmdsFor(decision.files, ROOT)),
+    ]
+    : [];
   const result = spawnSync(process.execPath, [
     bin,
     '--base', base,
@@ -253,6 +261,7 @@ export function main() {
     // the cap was printed above; the run is bounded either way.
     '--max', String(budget.draw),
     '--timeout-ms', String(decision.kind === 'fast' ? FAST_RUN_TIMEOUT_MS : SLOW_RUN_TIMEOUT_MS),
+    ...fastExtraArgs,
     ...declarationArgs(),
   ], { stdio: 'inherit', cwd: ROOT, timeout: HOLLOW_WINDOW_MS + 60_000 });
 

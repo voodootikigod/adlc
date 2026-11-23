@@ -5,6 +5,58 @@ import { createHash, randomUUID } from 'node:crypto';
 import { openSync, closeSync, writeFileSync, renameSync } from 'node:fs';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+export const MAX_BODY_BYTES = 1024 * 1024;
+const VOLATILE_HEADERS = new Set(['date', 'etag', 'x-request-id', 'x-trace-id', 'keep-alive', 'connection', 'transfer-encoding']);
+
+/** Normalize response headers into a sorted lowercase map, omitting volatile transport headers. */
+export function normalizeResponseHeaders(headers) {
+  const out = {};
+  if (!headers || typeof headers.forEach !== 'function') return out;
+  const pairs = [];
+  headers.forEach((value, key) => {
+    const k = String(key).toLowerCase();
+    if (VOLATILE_HEADERS.has(k)) return;
+    pairs.push([k, String(value).trim()]);
+  });
+  pairs.sort(([a], [b]) => a.localeCompare(b));
+  for (const [k, v] of pairs) out[k] = v;
+  return out;
+}
+
+/** Read a fetch Response body up to `maxBytes` without buffering unbounded responses in memory. */
+export async function readBoundedBody(res, maxBytes = MAX_BODY_BYTES) {
+  if (!res.body || typeof res.body.getReader !== 'function') {
+    const text = await res.text();
+    const buf = Buffer.from(text, 'utf8');
+    if (buf.length > maxBytes) {
+      return { text: buf.subarray(0, maxBytes).toString('utf8'), bytes: buf.length, truncated: true };
+    }
+    return { text, bytes: buf.length, truncated: false };
+  }
+  const reader = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  let truncated = false;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const buf = Buffer.from(value);
+      total += buf.length;
+      if (total > maxBytes) {
+        const remaining = maxBytes - (total - buf.length);
+        if (remaining > 0) chunks.push(buf.subarray(0, remaining));
+        truncated = true;
+        try { await reader.cancel(); } catch {}
+        break;
+      }
+      chunks.push(buf);
+    }
+  } finally {
+    try { reader.releaseLock(); } catch {}
+  }
+  return { text: Buffer.concat(chunks).toString('utf8'), bytes: total, truncated };
+}
 
 function routePathHasDotDot(p) {
   return p.split('/').includes('..');
@@ -119,22 +171,22 @@ async function captureRoute(baseUrl, route, timeoutMs) {
     const res = await fetch(url, init);
     const status = res.status;
     const contentType = res.headers.get('content-type') ?? '';
+    const responseHeaders = normalizeResponseHeaders(res.headers);
+    const { text, bytes, truncated } = await readBoundedBody(res, MAX_BODY_BYTES);
 
     let parsedBody;
-    if (contentType.includes('application/json') || contentType.includes('+json')) {
-      const text = await res.text();
+    if (!truncated && (contentType.includes('application/json') || contentType.includes('+json'))) {
       try {
         parsedBody = JSON.parse(text);
       } catch {
         // Fall back to text hash if body isn't valid JSON despite content-type
-        parsedBody = { textHash: sha256hex(text), bytes: Buffer.byteLength(text, 'utf8') };
+        parsedBody = { textHash: sha256hex(text), bytes };
       }
     } else {
-      const text = await res.text();
-      parsedBody = { textHash: sha256hex(text), bytes: Buffer.byteLength(text, 'utf8') };
+      parsedBody = { textHash: sha256hex(text), bytes, ...(truncated ? { truncated: true } : {}) };
     }
 
-    return { method: method.toUpperCase(), path, status, contentType, body: parsedBody };
+    return { method: method.toUpperCase(), path, status, contentType, headers: responseHeaders, body: parsedBody };
   } catch (err) {
     const message = err.name === 'AbortError' ? `timeout after ${timeoutMs}ms` : err.message;
     return { method: method.toUpperCase(), path, error: message };

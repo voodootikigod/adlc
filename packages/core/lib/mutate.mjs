@@ -169,14 +169,61 @@ const ZERO_VALUE_RE = /^-?0+$/;
 
 const blank = (s) => ' '.repeat(s.length);
 
-// Blank out closed block comments and tuning assignments, PRESERVING LENGTH so an
-// index into the masked line addresses the same character in the original.
+/**
+ * Blank out single-quoted, double-quoted, and template string literal contents
+ * while preserving exact string length so match indices address the original line.
+ */
+export function maskStringLiterals(line) {
+  let out = '';
+  let quote = null;
+  let escaped = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quote) {
+      if (escaped) {
+        out += ' ';
+        escaped = false;
+        continue;
+      }
+      if (ch === '\\') {
+        out += ' ';
+        escaped = true;
+        continue;
+      }
+      if (ch === quote) {
+        out += ch;
+        quote = null;
+        continue;
+      }
+      out += ' ';
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      quote = ch;
+      out += ch;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+function spliceFirstMatch(line, masked, re, replacement) {
+  const m = masked.match(re);
+  if (!m) return null;
+  return line.slice(0, m.index) + replacement + line.slice(m.index + m[0].length);
+}
+
+// Blank out closed block comments, string literals, and tuning assignments,
+// PRESERVING LENGTH so an index into the masked line addresses the same character
+// in the original.
 function maskTuningAssignments(line) {
   const withoutComments = line.replace(BLOCK_COMMENT_RE, blank);
-  return withoutComments.replace(ASSIGNMENT_RE, (match, _quote, key, value) => {
+  const withoutTuning = withoutComments.replace(ASSIGNMENT_RE, (match, _quote, key, value) => {
     if (!isTuningIdentifier(key)) return match;
     return ZERO_VALUE_RE.test(value.trim()) ? match : blank(match);
   });
+  return maskStringLiterals(withoutTuning);
 }
 
 // A simple array literal of 2+ quoted-string / bare-word elements, e.g.
@@ -285,13 +332,15 @@ export const OPERATORS = [
   {
     name: 'invert-comparison',
     apply(line) {
+      const masked = maskStringLiterals(line);
       const swaps = [
-        [/===/g, '!=='], [/!==/g, '==='],
-        [/<=/g, '>'], [/>=/g, '<'],
-        [/(?<![<>=!])<(?![=<])/g, '>='], [/(?<![<>=!-])>(?![=>])/g, '<='],
+        [/===/, '!=='], [/!==/, '==='],
+        [/<=/, '>'], [/>=/, '<'],
+        [/(?<![<>=!])<(?![=<])/, '>='], [/(?<![<>=!-])>(?![=>])/, '<='],
       ];
       for (const [re, replacement] of swaps) {
-        if (re.test(line)) return line.replace(re, replacement);
+        const next = spliceFirstMatch(line, masked, re, replacement);
+        if (next !== null) return next;
       }
       return null;
     },
@@ -299,9 +348,9 @@ export const OPERATORS = [
   {
     name: 'bool-flip',
     apply(line) {
-      if (/\btrue\b/.test(line)) return line.replace(/\btrue\b/, 'false');
-      if (/\bfalse\b/.test(line)) return line.replace(/\bfalse\b/, 'true');
-      return null;
+      const masked = maskStringLiterals(line);
+      return spliceFirstMatch(line, masked, /\btrue\b/, 'false')
+        ?? spliceFirstMatch(line, masked, /\bfalse\b/, 'true');
     },
   },
   {
@@ -332,36 +381,38 @@ export const OPERATORS = [
   {
     name: 'logic-swap',
     apply(line) {
-      if (/&&/.test(line)) return line.replace(/&&/, '||');
-      if (/\|\|/.test(line)) return line.replace(/\|\|/, '&&');
-      return null;
+      const masked = maskStringLiterals(line);
+      return spliceFirstMatch(line, masked, /&&/, '||')
+        ?? spliceFirstMatch(line, masked, /\|\|/, '&&')
+        ?? spliceFirstMatch(line, masked, /\?\?/, '&&');
     },
   },
   {
     // Negates one recognized guard sub-clause independently of the rest of
     // the condition on the line: an Array.isArray(...) call, a bare
-    // identifier used for truthiness (`if (value)`), or a loose (`==`/`!=`)
-    // null check. logic-swap only flips the combinator (&&/||) between
-    // sub-clauses; this operator flips a sub-clause itself.
+    // identifier used for truthiness (`if (value)` / `if (!value)`), or a
+    // loose (`==`/`!=`) null check. logic-swap only flips the combinator
+    // (&&/||/??) between sub-clauses; this operator flips a sub-clause itself.
     name: 'negate-guard-subclause',
     apply(line) {
-      if (/!Array\.isArray\(/.test(line)) {
-        return line.replace(/!Array\.isArray\(/, 'Array.isArray(');
+      const masked = maskStringLiterals(line);
+      const unnegArr = spliceFirstMatch(line, masked, /!Array\.isArray\(/, 'Array.isArray(');
+      if (unnegArr !== null) return unnegArr;
+      const negArr = spliceFirstMatch(line, masked, /\bArray\.isArray\(/, '!Array.isArray(');
+      if (negArr !== null) return negArr;
+      const negatedIf = masked.match(/\bif\s*\(\s*!([A-Za-z_$][\w$.]*)\s*\)/);
+      if (negatedIf) {
+        const inner = line.slice(negatedIf.index, negatedIf.index + negatedIf[0].length);
+        const stripped = inner.replace(/!\s*/, '');
+        return line.slice(0, negatedIf.index) + stripped + line.slice(negatedIf.index + negatedIf[0].length);
       }
-      if (/\bArray\.isArray\(/.test(line)) {
-        return line.replace(/\bArray\.isArray\(/, '!Array.isArray(');
-      }
-      const bareIf = line.match(/\bif\s*\(\s*([A-Za-z_$][\w$]*)\s*\)/);
+      const bareIf = masked.match(/\bif\s*\(\s*([A-Za-z_$][\w$]*)\s*\)/);
       if (bareIf) {
-        return line.replace(bareIf[0], `if (!${bareIf[1]})`);
+        const ident = line.slice(bareIf.index, bareIf.index + bareIf[0].length).match(/\(\s*([A-Za-z_$][\w$]*)\s*\)/)[1];
+        return line.slice(0, bareIf.index) + `if (!${ident})` + line.slice(bareIf.index + bareIf[0].length);
       }
-      if (LOOSE_EQ_NULL_RE.test(line)) {
-        return line.replace(LOOSE_EQ_NULL_RE, '!= null');
-      }
-      if (LOOSE_NEQ_NULL_RE.test(line)) {
-        return line.replace(LOOSE_NEQ_NULL_RE, '== null');
-      }
-      return null;
+      return spliceFirstMatch(line, masked, LOOSE_EQ_NULL_RE, '!= null')
+        ?? spliceFirstMatch(line, masked, LOOSE_NEQ_NULL_RE, '== null');
     },
   },
   {

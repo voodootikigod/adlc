@@ -8,7 +8,7 @@ import { readFileSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { checkSyntax, checkSyntaxDetail } from '@adlc/core';
+import { checkSyntax, checkSyntaxDetail, sanitizeCandidateEnv, syntaxLanguage } from '@adlc/core';
 import { writeFileAtomic } from './inflight.mjs';
 
 export { checkSyntax };
@@ -183,9 +183,23 @@ export function runTest(testCmd, timeoutMs, cwd) {
  * watchdog's report folded into stderr and the cap this runner set (if any)
  * on `hollowCap`, for the hint.
  */
+export function buildTrialEnv(sourceEnv = process.env) {
+  const scrubbed = sanitizeCandidateEnv(sourceEnv);
+  if (sourceEnv.HOLLOW_TEST_MAX_OLD_SPACE_MB !== undefined) {
+    scrubbed.HOLLOW_TEST_MAX_OLD_SPACE_MB = sourceEnv.HOLLOW_TEST_MAX_OLD_SPACE_MB;
+  }
+  if (sourceEnv.NODE_OPTIONS !== undefined) {
+    scrubbed.NODE_OPTIONS = sourceEnv.NODE_OPTIONS;
+  }
+  if (sourceEnv.ADLC_MANIFEST_KEY === '') {
+    scrubbed.ADLC_MANIFEST_KEY = '';
+  }
+  return scrubbed;
+}
+
 export function spawnTrial(testCmd, { cwd, timeoutMs, maxBuffer = MAX_TEST_OUTPUT_BYTES }) {
   const [command, args] = launchFor(testCmd);
-  const base = { ...process.env };
+  const base = buildTrialEnv(process.env);
   const env = withHeapCap(base);
   // The hint is for a cap THIS runner set; an operator's own flag is theirs.
   const hollowCap = (env.NODE_OPTIONS ?? '') !== (base.NODE_OPTIONS ?? '')
@@ -352,6 +366,51 @@ export function runMutant(filePath, original, mutated, testCmd, timeoutMs, cwd) 
 
   const killed = trial.timedOut || (trial.status !== 0);
 
+  return {
+    killed,
+    invalid: false,
+    undetermined: false,
+    reason: null,
+    timedOut: trial.timedOut,
+    exitCode: trial.status,
+  };
+}
+
+/**
+ * Async variant of runMutant that reuses a persistent TypeScript syntax worker
+ * when mutating TypeScript files, avoiding per-mutant ts module startup.
+ */
+export async function runMutantWithWorker(filePath, original, mutated, testCmd, timeoutMs, cwd, { tsWorker = null } = {}) {
+  if (!tsWorker || syntaxLanguage(filePath) !== 'typescript') {
+    return runMutant(filePath, original, mutated, testCmd, timeoutMs, cwd);
+  }
+  let trial;
+  let invalid;
+  let syntax;
+  try {
+    writeFileAtomic(filePath, mutated);
+    syntax = await tsWorker.check(filePath);
+    invalid = syntax.verdict === 'invalid';
+    if (syntax.verdict === 'valid') trial = runTest(testCmd, timeoutMs, cwd);
+  } finally {
+    writeFileAtomic(filePath, original);
+  }
+  if (syntax.verdict === 'unknown') {
+    return {
+      killed: false, invalid: false, undetermined: true,
+      reason: `syntax check did not run (${syntax.detail})`, timedOut: false, exitCode: null,
+    };
+  }
+  if (invalid) {
+    return { killed: false, invalid: true, undetermined: false, reason: null, timedOut: false, exitCode: null };
+  }
+  if (trial.spawnFailed) {
+    return {
+      killed: false, invalid: false, undetermined: true,
+      reason: `test command did not run (${trial.reason})`, timedOut: false, exitCode: null,
+    };
+  }
+  const killed = trial.timedOut || (trial.status !== 0);
   return {
     killed,
     invalid: false,
