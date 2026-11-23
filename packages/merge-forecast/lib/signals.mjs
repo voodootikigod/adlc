@@ -24,10 +24,9 @@ export function signalScopeOverlap(a, b, index = null) {
   if (index) {
     const aFiles = index.files(a.scope);
     const bFiles = index.files(b.scope);
-    const [smaller, larger] = aFiles.length <= bFiles.length ? [aFiles, bFiles] : [bFiles, aFiles];
-    const set = new Set(smaller);
-    for (const f of larger) {
-      if (set.has(f)) return 1.0;
+    const aSet = new Set(aFiles);
+    for (const f of bFiles) {
+      if (aSet.has(f)) return 1.0;
     }
   }
   return 0;
@@ -426,12 +425,11 @@ export function signalGraphCoupling(a, b, graphCouplingData, repoFiles, index = 
     const { scores, matchFiles } = indexEdges(edges);
     const aMatches = matchFiles(aFiles);
     const bMatches = matchFiles(bFiles);
-    const [smaller, larger] = aMatches.size <= bMatches.size ? [aMatches, bMatches] : [bMatches, aMatches];
     let maxCoupling = 0;
-    for (const [id, maskSmall] of smaller) {
-      const maskLarge = larger.get(id);
-      if (!maskLarge) continue;
-      if (((maskSmall & 1) && (maskLarge & 2)) || ((maskSmall & 2) && (maskLarge & 1))) {
+    for (const [id, maskA] of aMatches) {
+      const maskB = bMatches.get(id);
+      if (!maskB) continue;
+      if (((maskA & 1) && (maskB & 2)) || ((maskA & 2) && (maskB & 1))) {
         const score = scores[id];
         if (score > maxCoupling) maxCoupling = score;
       }
