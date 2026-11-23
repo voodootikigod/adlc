@@ -185,9 +185,6 @@ export function runTest(testCmd, timeoutMs, cwd) {
  */
 export function buildTrialEnv(sourceEnv = process.env) {
   const scrubbed = sanitizeCandidateEnv(sourceEnv);
-  if (sourceEnv.HOLLOW_TEST_MAX_OLD_SPACE_MB !== undefined) {
-    scrubbed.HOLLOW_TEST_MAX_OLD_SPACE_MB = sourceEnv.HOLLOW_TEST_MAX_OLD_SPACE_MB;
-  }
   if (sourceEnv.NODE_OPTIONS !== undefined) {
     scrubbed.NODE_OPTIONS = sourceEnv.NODE_OPTIONS;
   }

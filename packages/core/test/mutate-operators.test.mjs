@@ -8,11 +8,12 @@ import { generateMutants, maskStringLiterals, OPERATORS } from '../lib/mutate.mj
 import { createTypeScriptSyntaxWorker } from '../lib/syntax.mjs';
 
 test('maskStringLiterals blanks quoted and template contents while preserving length', () => {
-  const line = `const s = "a === b && true"; const t = \`x ?? y \${a === b}\`; if (a === b) return true;`;
+  const line = `const s = "a === b && true"; const empty = ""; const t = \`x ?? y \${a === b}\`; if (a === b) return true;`;
   const masked = maskStringLiterals(line);
   assert.equal(masked.length, line.length);
   assert.ok(!masked.includes('true";'));
   assert.ok(!masked.includes('??'));
+  assert.ok(masked.includes('const empty = "";'), 'empty string closes immediately and does not swallow following code');
   assert.ok(masked.includes('${a === b}'), 'executable template interpolation remains visible for mutation');
   assert.ok(masked.includes('if (a === b) return true;'));
 });
@@ -55,9 +56,9 @@ test('createTypeScriptSyntaxWorker checks multiple TypeScript files over one per
     const repoTs = fileURLToPath(new URL('../../../plugins/adlc-pi/index.ts', import.meta.url));
     const r1 = await worker.check(repoTs);
     assert.equal(r1.verdict, 'valid');
-    // Unresolvable TS from /tmp returns unknown cleanly
+    // Unresolvable TS from /tmp must NOT collide with repoTs in worker cache
     const r2 = await worker.check(validFile);
-    assert.ok(['valid', 'unknown'].includes(r2.verdict));
+    assert.equal(r2.verdict, 'unknown');
   } finally {
     worker.close();
   }

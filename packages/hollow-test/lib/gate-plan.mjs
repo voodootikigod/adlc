@@ -263,6 +263,26 @@ export function fileTestCmdsFor(files, root = ROOT) {
   return out;
 }
 
+/** Assemble the CLI arguments passed to `hollow-test.mjs` for a classified diff. */
+export function hollowTestArgsFor(decision, { base, budget, root = ROOT, extraArgs = [] }) {
+  const bin = join(root, 'packages', 'hollow-test', 'bin', 'hollow-test.mjs');
+  const fastExtraArgs = decision.kind === 'fast'
+    ? [
+      '--skip-baseline',
+      '--file-test-map', JSON.stringify(fileTestCmdsFor(decision.files, root)),
+    ]
+    : [];
+  return [
+    bin,
+    '--base', base,
+    '--test-cmd', decision.testCmd,
+    '--max', String(budget.draw),
+    '--timeout-ms', String(decision.kind === 'fast' ? FAST_RUN_TIMEOUT_MS : SLOW_RUN_TIMEOUT_MS),
+    ...fastExtraArgs,
+    ...extraArgs,
+  ];
+}
+
 /**
  * Mutants to ask hollow-test for, given a classification (#531).
  *

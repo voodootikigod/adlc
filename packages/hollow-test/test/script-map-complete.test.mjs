@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { tmp } from '@adlc/core/test-kit';
 import { testTargetFor, classify, fileTestCmdsFor, ROOT } from '../lib/gate-plan.mjs';
 import { buildTrialEnv } from '../lib/runner.mjs';
+import { hollowTestArgsFor } from '../../../scripts/mutation-gate.mjs';
 
 const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'hollow-test.mjs');
 
@@ -26,6 +27,17 @@ test('gate-plan maps scripts/* exact entries and includes hooks/test on plugin r
   const perFile = fileTestCmdsFor(fast.files, ROOT);
   assert.equal(perFile['packages/core/lib/mutate.mjs'], 'node --test packages/core/test/*.test.mjs');
   assert.equal(perFile['scripts/preflight-fast.mjs'], 'node --test scripts/test/run-tests-parallel.test.mjs');
+
+  // hollowTestArgsFor passes --skip-baseline and --file-test-map ONLY on fast path
+  const fastArgs = hollowTestArgsFor(fast, { base: 'origin/main', budget: { draw: 12 }, root: ROOT });
+  assert.ok(fastArgs.includes('--skip-baseline'));
+  assert.ok(fastArgs.includes('--file-test-map'));
+  const slowArgs = hollowTestArgsFor(
+    { kind: 'slow', testCmd: 'node scripts/run-tests.mjs', max: 3, uncovered: ['x.mjs'], skipped: [] },
+    { base: 'origin/main', budget: { draw: 3 }, root: ROOT },
+  );
+  assert.equal(slowArgs.includes('--skip-baseline'), false);
+  assert.equal(slowArgs.includes('--file-test-map'), false);
 });
 
 test('buildTrialEnv scrubs ADLC_MANIFEST_KEY and secrets while preserving empty key and heap knob', () => {

@@ -82,6 +82,7 @@ import {
   mutableChangedFiles,
   classify,
   fileTestCmdsFor,
+  hollowTestArgsFor,
   mutantBudget,
 } from '../packages/hollow-test/lib/gate-plan.mjs';
 
@@ -98,6 +99,7 @@ export {
   mutableChangedFiles,
   classify,
   fileTestCmdsFor,
+  hollowTestArgsFor,
   mutantBudget,
 } from '../packages/hollow-test/lib/gate-plan.mjs';
 
@@ -244,26 +246,11 @@ export function main() {
     budget = mutantBudget(decision);
   }
 
-  const bin = join(ROOT, 'packages', 'hollow-test', 'bin', 'hollow-test.mjs');
-  const fastExtraArgs = decision.kind === 'fast'
-    ? [
-      '--skip-baseline',
-      '--file-test-map', JSON.stringify(fileTestCmdsFor(decision.files, ROOT)),
-    ]
-    : [];
-  const result = spawnSync(process.execPath, [
-    bin,
-    '--base', base,
-    '--test-cmd', decision.testCmd,
-    // The draw: every changed file gets more than one draw when that fits the window — see
-    // mutantBudget: a single draw can be spent on an unparseable mutant, which leaves that
-    // file unprosecuted while the run still reports zero survivors. When it does not fit,
-    // the cap was printed above; the run is bounded either way.
-    '--max', String(budget.draw),
-    '--timeout-ms', String(decision.kind === 'fast' ? FAST_RUN_TIMEOUT_MS : SLOW_RUN_TIMEOUT_MS),
-    ...fastExtraArgs,
-    ...declarationArgs(),
-  ], { stdio: 'inherit', cwd: ROOT, timeout: HOLLOW_WINDOW_MS + 60_000 });
+  const result = spawnSync(
+    process.execPath,
+    hollowTestArgsFor(decision, { base, budget, root: ROOT, extraArgs: declarationArgs() }),
+    { stdio: 'inherit', cwd: ROOT, timeout: HOLLOW_WINDOW_MS + 60_000 },
+  );
 
   if (result.error) fail(`could not run hollow-test: ${result.error.message}`);
   if (result.signal) fail(`hollow-test timed out or was killed by ${result.signal}`);
