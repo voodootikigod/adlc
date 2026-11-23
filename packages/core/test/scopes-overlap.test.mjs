@@ -70,4 +70,12 @@ describe('scopesOverlap', () => {
       assert.equal(scopesOverlap(b, a), expected, `${sb} vs ${sa} (symmetric)`);
     }
   });
+
+  test('fails closed without unbounded allocation on oversized distinct patterns', () => {
+    const hugeA = `a/${'x'.repeat(200000)}/**`;
+    const hugeB = `b/${'y'.repeat(200000)}/**`;
+    const [a, b] = pair([hugeA], [hugeB]);
+    assert.equal(scopesOverlap(a, b), true);
+    assert.equal(scopesOverlap(b, a), true);
+  });
 });

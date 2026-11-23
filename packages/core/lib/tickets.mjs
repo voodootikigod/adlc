@@ -139,6 +139,10 @@ export function inScope(ticket, path) {
 }
 
 const GLOB_TOKEN_SPLIT = /(\*\*\/|\*\*|\*)/;
+// Hard byte budget for the Uint8Array product-state table in globsOverlap.
+// compileGlobNfa produces at most pattern.length + 1 states, so bounding
+// (ga.length + 1) * (gb.length + 1) guarantees bounded time and memory.
+const MAX_GLOB_PRODUCT_BYTES = 65536;
 
 function compileGlobNfa(pattern) {
   const tokens = pattern.split(GLOB_TOKEN_SPLIT).filter((p) => p !== '');
@@ -189,6 +193,7 @@ function edgesCompatible(eA, eB) {
 /** Exact glob-language intersection: true iff some path matches both ga and gb. */
 function globsOverlap(ga, gb) {
   if (ga === gb) return true;
+  if ((ga.length + 1) * (gb.length + 1) > MAX_GLOB_PRODUCT_BYTES) return true;
   const nfaA = compileGlobNfa(ga);
   const nfaB = compileGlobNfa(gb);
   const nB = nfaB.states.length;
