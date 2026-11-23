@@ -12,8 +12,10 @@
       "default": "./index.mjs"
     },
     "./package.json": "./package.json",
+    "./lib/canonical.mjs": "./lib/canonical.mjs",
     "./lib/key-contract.mjs": "./lib/key-contract.mjs",
     "./lib/durability.mjs": "./lib/durability.mjs",
+    "./lib/lock.mjs": "./lib/lock.mjs",
     "./lib/manifest-primitives.mjs": "./lib/manifest-primitives.mjs"
   },
   "bin": {

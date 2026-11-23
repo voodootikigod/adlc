@@ -7,8 +7,10 @@ const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url),
 test('the public surface is declared', () => {
   assert.deepEqual(Object.keys(pkg.exports).sort(), [
     '.',
+    './lib/canonical.mjs',
     './lib/durability.mjs',
     './lib/key-contract.mjs',
+    './lib/lock.mjs',
     './lib/manifest-primitives.mjs',
     './package.json',
   ]);

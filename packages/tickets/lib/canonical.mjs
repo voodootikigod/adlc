@@ -33,9 +33,11 @@ export const prettyCanonicalJson = (value) => `${JSON.stringify(normalize(value)
 export const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 export const ticketHash = (ticket) => sha256(TICKET_HASH_DOMAIN + canonicalJson(ticket));
 
+export function storeHashFromPairs(pairs) {
+  const sorted = [...pairs].sort(([left], [right]) => compareTicketIds(left, right));
+  return sha256(STORE_HASH_DOMAIN + canonicalJson(sorted));
+}
+
 export function storeHash(tickets) {
-  const pairs = tickets
-    .map((ticket) => [ticket.id, ticketHash(ticket)])
-    .sort(([left], [right]) => compareTicketIds(left, right));
-  return sha256(STORE_HASH_DOMAIN + canonicalJson(pairs));
+  return storeHashFromPairs(tickets.map((ticket) => [ticket.id, ticketHash(ticket)]));
 }

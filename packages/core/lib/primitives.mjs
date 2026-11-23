@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import { opError, readStdin } from './cli.mjs';
 import { pidAlive, procStartTimeOf, thisHost } from './proc.mjs';
 import { INLINE_ASSIGNMENT, SECRET_PATTERNS } from './secret-shapes.mjs';
+import { writeFileAtomic as ticketsWriteFileAtomic } from '@adlc/tickets/lib/durability.mjs';
 
 const SECRET_REDACT_RULES = SECRET_PATTERNS.map(([pattern]) => [
   new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`),
@@ -42,35 +43,7 @@ function sleepSync(ms) {
  * @param {{ mode?: number }} [options]
  */
 export function writeFileAtomic(filePath, content, options = {}) {
-  let st = null;
-  try {
-    st = lstatSync(filePath);
-  } catch {}
-  if (st && st.isSymbolicLink()) {
-    throw new Error('refusing to write through symlink: ' + filePath);
-  }
-  const mode = options.mode ?? (st ? (st.mode & 0o777) : 0o600);
-  const tmpPath = `${filePath}.tmp-${process.pid}-${randomUUID()}`;
-  let fd = null;
-  let closed = false;
-  try {
-    fd = openSync(tmpPath, 'wx', mode);
-    writeFileSync(fd, content);
-    fsyncSync(fd);
-    closeSync(fd);
-    closed = true;
-    renameSync(tmpPath, filePath);
-  } catch (err) {
-    if (fd !== null && !closed) {
-      try {
-        closeSync(fd);
-      } catch {}
-    }
-    try {
-      unlinkSync(tmpPath);
-    } catch {}
-    throw err;
-  }
+  return ticketsWriteFileAtomic(filePath, content, options);
 }
 
 /**

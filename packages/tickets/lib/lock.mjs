@@ -1,10 +1,49 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { LOCK_DIRECTORY } from './constants.mjs';
 import { conflict, invalid, operational } from './errors.mjs';
 
 const sleep = (milliseconds) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+
+function defaultPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err?.code === 'EPERM';
+  }
+}
+
+function defaultProcStartTimeOf(pid) {
+  if (!Number.isInteger(pid) || pid <= 0 || process.platform !== 'linux') return null;
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const closeParen = stat.lastIndexOf(')');
+    if (closeParen < 0) return null;
+    const fields = stat.slice(closeParen + 2).trim().split(/\s+/);
+    return fields[19] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function isStaleTicketLock(owner, { staleMs, now, isPidAlive, procStartTime, host }) {
+  if (!owner || staleMs === undefined) return false;
+  const startedAtMs = Date.parse(owner.startedAt);
+  if (!Number.isFinite(startedAtMs) || now() - startedAtMs <= staleMs) return false;
+  if (owner.hostname === host) {
+    if (!isPidAlive(owner.pid)) return true;
+    if (owner.pidStartTime != null) {
+      const liveStart = procStartTime(owner.pid);
+      if (liveStart != null && String(liveStart) !== String(owner.pidStartTime)) return true;
+    }
+    return false;
+  }
+  return true;
+}
 
 /**
  * `writeOwner` and `removeLock` are fault-injection seams defaulting to
@@ -31,6 +70,7 @@ const sleep = (milliseconds) => Atomics.wait(new Int32Array(new SharedArrayBuffe
  */
 export function acquireTicketLock(root = '.', {
   retries = 50, delayMs = 20, command = process.argv.join(' '), transactionId = null,
+  staleMs, now = Date.now, isPidAlive = defaultPidAlive, procStartTime = defaultProcStartTimeOf, host = hostname(),
   writeOwner = writeFileSync, removeLock = rmSync, makeLockDirectory = mkdirSync,
 } = {}) {
   const path = join(root, LOCK_DIRECTORY);
@@ -53,7 +93,16 @@ export function acquireTicketLock(root = '.', {
     try {
       // Build and serialize the owner BEFORE mkdir: a hostname() or JSON failure
       // must not leave a directory behind, and there is nothing to undo yet.
-      const metadata = { version: 1, pid: process.pid, hostname: hostname(), startedAt: new Date().toISOString(), command, transactionId };
+      const pidStartTime = procStartTime(process.pid);
+      const metadata = {
+        version: 1,
+        pid: process.pid,
+        ...(pidStartTime != null ? { pidStartTime } : {}),
+        hostname: host,
+        startedAt: new Date(now()).toISOString(),
+        command,
+        transactionId,
+      };
       const serialized = `${JSON.stringify(metadata, null, 2)}\n`;
       makeLockDirectory(path);
       created = true;
@@ -83,6 +132,28 @@ export function acquireTicketLock(root = '.', {
         }
       }
       if (error.code !== 'EEXIST') throw operational('LOCK_FAILED', `cannot acquire ticket lock: ${error.message}`);
+      if (staleMs !== undefined) {
+        const currentOwner = readLockMetadata(join(path, 'owner.json'));
+        if (isStaleTicketLock(currentOwner, { staleMs, now, isPidAlive, procStartTime, host })) {
+          const staleDir = `${path}.stale-${process.pid}-${randomUUID()}`;
+          try {
+            renameSync(path, staleDir);
+            const movedOwner = readLockMetadata(join(staleDir, 'owner.json'));
+            const sameOwner = currentOwner === null
+              ? movedOwner === null
+              : (movedOwner !== null
+                && movedOwner.pid === currentOwner.pid
+                && movedOwner.startedAt === currentOwner.startedAt
+                && movedOwner.hostname === currentOwner.hostname);
+            if (!sameOwner) {
+              try { renameSync(staleDir, path); } catch {}
+            } else {
+              removeLock(staleDir, { recursive: true, force: true });
+            }
+          } catch {}
+          continue;
+        }
+      }
       if (attempt < retries) sleep(delayMs);
     }
   }

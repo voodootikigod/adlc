@@ -77,6 +77,53 @@ export class DirectoryTicketStore {
     return new TicketSnapshot({ backend: 'directory', formatVersion: 1, tickets });
   }
 
+  loadOne(id) {
+    if (typeof id !== 'string' || id.length === 0) return null;
+    assertRealDirectory(this.path);
+    const expectedManifest = this.archive ? ARCHIVE_MANIFEST : ACTIVE_MANIFEST;
+    const manifestPath = join(this.path, '.store.json');
+    let manifestStat;
+    try {
+      manifestStat = lstatSync(manifestPath);
+    } catch {
+      throw invalid('INVALID_MANIFEST', `${this.path}/.store.json must be a regular file`);
+    }
+    if (!manifestStat.isFile() || manifestStat.isSymbolicLink()) {
+      throw invalid('INVALID_MANIFEST', `${this.path}/.store.json must be a regular file`);
+    }
+    let manifest;
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    } catch (error) {
+      throw invalid('INVALID_MANIFEST', `invalid store manifest: ${error.message}`);
+    }
+    if (canonicalJson(manifest) !== canonicalJson(expectedManifest)) {
+      const hint = Number.isInteger(manifest?.version) && manifest.version > 1 ? 'upgrade @adlc/tickets to read this store' : 'expected format version 1';
+      throw invalid('UNSUPPORTED_STORE_FORMAT', `unsupported ticket store manifest (${hint})`, manifest);
+    }
+    const name = ticketFilename(id);
+    const fullPath = join(this.path, name);
+    let stat;
+    try {
+      stat = lstatSync(fullPath);
+    } catch (error) {
+      if (error.code === 'ENOENT') return null;
+      throw operational('STORE_READ_FAILED', `cannot inspect ${fullPath}: ${error.message}`);
+    }
+    if (!stat.isFile() || stat.isSymbolicLink()) throw invalid('UNSAFE_SHARD', `${name} must be a regular file`);
+    let ticket;
+    try {
+      ticket = JSON.parse(readFileSync(fullPath, 'utf8'));
+    } catch (error) {
+      throw invalid('INVALID_JSON', `invalid JSON in ${name}: ${error.message}`);
+    }
+    if (!ticket || typeof ticket !== 'object' || Array.isArray(ticket) || ticket.id !== id) {
+      throw invalid('FILENAME_MISMATCH', `${name} does not match ticket id ${id}`);
+    }
+    validateTickets([ticket], { archive: this.archive, validateGraph: false });
+    return new TicketSnapshot({ backend: 'directory', formatVersion: 1, tickets: [ticket] }).get(id);
+  }
+
   resolvedPath() {
     return resolve(this.path);
   }

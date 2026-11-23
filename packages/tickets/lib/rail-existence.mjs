@@ -13,13 +13,26 @@ const GIT_MAX_BUFFER = 256 * 1024 * 1024;
  */
 export function repositoryFiles(root, { spawn = spawnSync } = {}) {
   const result = spawn('git', ['-C', root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
-    encoding: 'utf8',
+    encoding: null,
     timeout: GIT_TIMEOUT_MS,
     maxBuffer: GIT_MAX_BUFFER,
     stdio: ['ignore', 'pipe', 'ignore'],
   });
   if (result.error || result.status !== 0) return null;
-  return result.stdout.split('\0').filter(Boolean);
+  const buf = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(String(result.stdout ?? ''), 'utf8');
+  const files = [];
+  let start = 0;
+  for (let i = 0; i <= buf.length; i += 1) {
+    if (i === buf.length || buf[i] === 0) {
+      if (i > start) {
+        const slice = buf.subarray(start, i);
+        const decoded = slice.toString('utf8');
+        if (Buffer.from(decoded, 'utf8').equals(slice)) files.push(decoded);
+      }
+      start = i + 1;
+    }
+  }
+  return files;
 }
 
 /** The rails in `rails` that match none of `files`. */

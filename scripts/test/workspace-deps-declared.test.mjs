@@ -70,3 +70,42 @@ test('every packages/* member declares the @adlc/* packages its shipped code imp
   }
   assert.deepEqual(offenders, [], `undeclared @adlc/* dependencies:\n  ${offenders.join('\n  ')}`);
 });
+
+test('workspace @adlc/* dependency graph across packages/* is strictly acyclic', () => {
+  const graph = new Map();
+  for (const entry of readdirSync(PACKAGES, { withFileTypes: true })) {
+    const dir = join(PACKAGES, entry.name);
+    const pkgPath = join(dir, 'package.json');
+    if (!entry.isDirectory() || !existsSync(pkgPath)) continue;
+    const manifest = JSON.parse(readFileSync(pkgPath, 'utf8'));
+    const deps = new Set([
+      ...Object.keys(manifest.dependencies ?? {}),
+      ...Object.keys(manifest.peerDependencies ?? {}),
+    ].filter((name) => name.startsWith('@adlc/') && name !== manifest.name));
+    graph.set(manifest.name, [...deps].sort());
+  }
+
+  const state = new Map(); // 0/undefined = unvisited, 1 = visiting, 2 = done
+  const cyclePath = [];
+
+  function dfs(node, stack) {
+    state.set(node, 1);
+    stack.push(node);
+    for (const next of graph.get(node) ?? []) {
+      if (state.get(next) === 1) {
+        const idx = stack.indexOf(next);
+        cyclePath.push(...stack.slice(idx), next);
+        return true;
+      }
+      if (!state.has(next) && dfs(next, stack)) return true;
+    }
+    stack.pop();
+    state.set(node, 2);
+    return false;
+  }
+
+  for (const pkg of [...graph.keys()].sort()) {
+    if (!state.has(pkg) && dfs(pkg, [])) break;
+  }
+  assert.deepEqual(cyclePath, [], `cyclic @adlc/* workspace dependency detected: ${cyclePath.join(' -> ')}`);
+});

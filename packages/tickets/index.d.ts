@@ -42,11 +42,12 @@ export class TicketSnapshot {
  * repository.
  */
 export class LegacyTicketStore { constructor(path?: string); path: string; exists(): boolean; load(): TicketSnapshot; write(tickets: Ticket[], options?: { key?: string | null; allowUnsigned?: boolean; root?: string }): TicketSnapshot }
-export class DirectoryTicketStore { constructor(path?: string, options?: { archive?: boolean }); path: string; archive: boolean; exists(): boolean; load(): TicketSnapshot }
+export class DirectoryTicketStore { constructor(path?: string, options?: { archive?: boolean }); path: string; archive: boolean; exists(): boolean; load(): TicketSnapshot; loadOne(id: string): Readonly<Ticket> | null }
 export class GitTreeTicketStore { constructor(options: { cwd?: string; revision: string; storePath?: string }); load(): TicketSnapshot }
 export class TicketService {
   constructor(store: LegacyTicketStore | DirectoryTicketStore, options?: { root?: string; protectedIds?: string[]; key?: string | null; allowUnsigned?: boolean });
   snapshot(): TicketSnapshot;
+  loadOne(id: string): Readonly<Ticket> | null;
   planCreate(input?: Partial<Ticket>): TicketPlan;
   planUpdate(id: string, input: Ticket, options?: { expect?: string; authorized?: boolean }): TicketPlan;
   planDiscard(id: string): TicketPlan;
@@ -281,7 +282,9 @@ export function currentBranch(cwd?: string): string | null;
 export function fsyncFile(path: string): void;
 export function fsyncDirectory(path: string): boolean;
 export function durableMkdir(path: string): void;
+export function storeHashFromPairs(pairs: ReadonlyArray<readonly [string, string]>): string;
 export function durableWrite(path: string, content: string | Uint8Array): void;
+export function writeFileAtomic(filePath: string, content: string | Uint8Array, options?: { mode?: number }): void;
 export function durableCopy(source: string, target: string): void;
 export function durableRename(source: string, target: string): void;
 export function durableRemove(path: string, options?: Record<string, unknown>): void;
