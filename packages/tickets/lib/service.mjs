@@ -280,30 +280,27 @@ export class TicketService {
       const beforeById = new Map(tickets.map((ticket) => [ticket.id, ticket]));
       const beforeIds = new Set(beforeById.keys());
       const afterIds = new Set(desired.map((ticket) => ticket.id));
-      // Mandatory manifest evidence is reserved for the PRIVILEGED case: a
-      // reconciliation that MUTATES an existing (same-id) ticket in place — the
-      // sensitive change that could, e.g., narrow rails. A routine sync that only
-      // ADDS tickets, or RENAMES a local ticket to its remote id (a delete+add of
-      // distinct ids, as `push` does after reassignId), touches no existing ticket
-      // in place and grants no privilege: rails-guard-ci already accepts a purely
-      // additive tickets diff and independently denies removal/contract-change of a
-      // committed base ticket, and reassignment re-attests its own evidence via
-      // migrateManifestEvidence (a no-op when the ticket carried none). This mirrors
-      // planUpdate's "evidence only when sensitive" contract and honours the T40
-      // invariant that an evidence-less sync must not emit an .adlc/manifest.jsonl
-      // entry (which rails-guard-ci rejects outside a migration/ceremony).
+      for (const ticket of desired) {
+        const before = beforeById.get(ticket.id);
+        const priorRails = new Set(before?.rails ?? []);
+        const addedRails = (ticket.rails ?? []).filter((rail) => !priorRails.has(rail));
+        this.#assertNoManifestRails(addedRails);
+        this.#assertRailsExist(addedRails);
+      }
+      const deletedIds = [...beforeIds].filter((id) => !afterIds.has(id));
       const mutatesExisting = desired.some((ticket) => {
         const before = beforeById.get(ticket.id);
         return before && ticketHash(before) !== ticketHash(ticket);
       });
+      const deletesExisting = deletedIds.length > 0;
       tickets.splice(0, tickets.length, ...desired);
       return {
         fileOperations: [
           ...[...afterIds].filter((id) => !beforeIds.has(id)).map((id) => ({ action: 'create', id })),
-          ...[...beforeIds].filter((id) => !afterIds.has(id)).map((id) => ({ action: 'delete', id })),
+          ...deletedIds.map((id) => ({ action: 'delete', id })),
         ],
         graphEffects: [{ reconciledTickets: desired.length }],
-        evidenceRequired: mutatesExisting,
+        evidenceRequired: mutatesExisting || deletesExisting,
       };
     }, { sensitive: ['remote-reconciliation'], expectedSnapshotHash });
   }

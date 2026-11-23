@@ -251,7 +251,8 @@ describe('recordTicketEvidence routes to the segment writer once segmented', () 
   // SPECIFIC candidate entry to carry a valid signature before trusting it.
   it('refuses to trust a match found in a wholly-UNSIGNED forged segment, even though its chain passes on its own', (t) => {
     const { root, dir } = repo(t);
-    activate(dir);
+    mkdirSync(join(dir, 'manifest.d'), { recursive: true });
+    writeFileSync(join(dir, 'manifest.d', '.store.json'), JSON.stringify({ format: 'adlc-manifest-segments', version: 1, auth: 'keyless' }));
     recordTicketEvidence(root, baseEvidence({ transactionId: 'tx-1', key: 'forge-test-key-2' })); // real, signed, own segment
 
     // A BRAND NEW segment, entirely unsigned end-to-end — never touches the
@@ -648,9 +649,13 @@ describe('recoverOpenSegment (lineage-durability finding)', () => {
     recordTicketEvidence(root, baseEvidence({ key: KEY }));
     const slug = deriveSlug('feat/ambiguous-write');
     const secondName = `${slug}-${generateSegmentUlid(Date.now() + 1000)}.jsonl`;
+    const secondEntry = {
+      seq: 1, gate: 'evidence', ts: new Date().toISOString(), data: {}, files: {}, prev: null, anchor: null, branch: 'feat/ambiguous-write', sigVersion: 2,
+    };
+    secondEntry.sig = createHmac('sha256', KEY).update(canonicalEntryBytes(secondEntry)).digest('hex');
     writeFileSync(
       segmentPath(dir, secondName),
-      `${JSON.stringify({ seq: 1, gate: 'evidence', ts: new Date().toISOString(), data: {}, files: {}, prev: null, anchor: null, branch: 'feat/ambiguous-write' })}\n`,
+      `${JSON.stringify(secondEntry)}\n`,
     );
     execFileSync('git', ['add', `.adlc/manifest.d/${secondName}`], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
     execFileSync('git', ['commit', '-q', '-m', 'second ambiguous segment'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] });
@@ -991,7 +996,7 @@ describe('readOwnChains: allowRecovery is opt-in, defaults to strict token-only 
     // branch match and hash-chain-from-genesis are both perfectly valid.
     const forged = {
       seq: 1, gate: 'prosecution', ts: '2026-01-01T00:00:00.000Z', ticket: 'A',
-      data: { verdict: 'clear' }, files: {}, prev: null, branch: 'feat/laundered-prefix',
+      data: { verdict: 'clear' }, files: {}, prev: null, anchor: null, branch: 'feat/laundered-prefix',
     };
     const forgedLine = JSON.stringify(forged);
     // Later, a real key holder appends a genuine, validly-signed entry —

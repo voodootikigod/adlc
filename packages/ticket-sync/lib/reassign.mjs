@@ -110,7 +110,7 @@ function signEntry(key, entry) {
 // segment). `firstAnchor`, when provided, marks this as a brand-new segment's
 // first entry: it carries `anchor` (and `firstBranch`, when the mint had a
 // resolvable branch identity) and is forced to sign at v2.
-function buildReattestationEntries(sources, { oldId, newId, now, key, startSeq, startPrev, firstAnchor, firstBranch }) {
+function buildReattestationEntries(sources, { oldId, newId, now, key, startSeq, startPrev, firstAnchor, firstBranch, segmented = false }) {
   let prev = startPrev;
   let seq = startSeq;
   const additions = [];
@@ -131,9 +131,8 @@ function buildReattestationEntries(sources, { oldId, newId, now, key, startSeq, 
       files: src.files ?? {},
       prev,
     };
-    // An anchor-carrying first entry signs at v2: v1's fixed field set never
-    // covers `anchor`.
-    const unsigned = key && carriesAnchor ? { ...entry, sigVersion: 2 } : entry;
+    // All newly written segment entries (seq >= 1) sign at v2; root-chain entries stay v1.
+    const unsigned = key && (carriesAnchor || segmented) ? { ...entry, sigVersion: 2 } : entry;
     const signed = key ? { ...unsigned, sig: signEntry(key, unsigned) } : unsigned;
     additions.push(signed);
     prev = sha256(JSON.stringify(signed));
@@ -211,6 +210,7 @@ function migrateSegmentedSet(adlcDir, oldId, newId, { now, key, cwd }) {
         startPrev: prevRawLine === null ? null : sha256(prevRawLine),
         firstAnchor: resolved.isNew ? resolved.anchor : undefined,
         firstBranch: resolved.isNew ? resolved.branch : undefined,
+        segmented: true,
       });
       const lines = additions.map((entry) => `${JSON.stringify(entry)}\n`).join('');
       const fd = openSync(targetPath, 'a');

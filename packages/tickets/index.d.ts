@@ -249,6 +249,31 @@ export function entrySigValid(key: string, entry: Record<string, unknown>): bool
 export function canonicalEntryBytes(entry: Record<string, unknown>): string;
 export function segmentPath(dir: string, name: string): string;
 export function lineagePath(dir: string): string;
+export function verifyChain(
+  nonEmpty: ReadonlyArray<{ line: string; lineNo: number }>,
+  opts: { key: string | null; requireSignatures: boolean; anchorOnFirst: boolean }
+): {
+  valid: boolean;
+  message: string;
+  count: number;
+  signed: boolean;
+  break: { seq: number | null; lineNo: number | null; reason: string } | null;
+  lastRawLine: string | null;
+  firstAnchor: Record<string, unknown> | null | undefined;
+  sawSignedEntry: boolean;
+  firstUnsigned: { seq: number; lineNo: number } | null;
+};
+export function verifyManifestForest(
+  dir?: string,
+  opts?: { requireSignatures?: boolean; requireEntries?: boolean; key?: string | null }
+): {
+  valid: boolean;
+  message: string;
+  count: number;
+  segments: number;
+  signed: boolean;
+  break: { seq: number | null; lineNo: number | null; reason: string; segment: string } | null;
+};
 export function normalizeManifestDirAndCwd(dir?: string, opts?: { cwd?: string | null; [key: string]: unknown }): { dir: string; cwd: string };
 export function deriveSlug(branchName: string): string;
 export function generateSegmentUlid(now?: number, entropy?: NodeBuffer): string;
