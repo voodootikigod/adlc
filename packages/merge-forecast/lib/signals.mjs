@@ -15,23 +15,43 @@ import { createScopeIndex } from './scope-index.mjs';
 
 // ─── Signal 1: Declared scope overlap ────────────────────────────────────────
 
+const fileSetCache = new WeakMap();
+
+function getFileSet(files) {
+  let set = fileSetCache.get(files);
+  if (!set) {
+    set = new Set(files);
+    fileSetCache.set(files, set);
+  }
+  return set;
+}
+
 /**
  * Returns 1.0 if the two tickets' declared scopes overlap (hard veto),
- * else 0.
+ * either syntactically or on any concrete file in the scope index, else 0.
  */
-export function signalScopeOverlap(a, b) {
-  return scopesOverlap(a, b) ? 1.0 : 0;
+export function signalScopeOverlap(a, b, index = null) {
+  if (scopesOverlap(a, b)) return 1.0;
+  if (index) {
+    const aFiles = index.files(a.scope);
+    const bFiles = index.files(b.scope);
+    const aSet = getFileSet(aFiles);
+    for (const f of bFiles) {
+      if (aSet.has(f)) return 1.0;
+    }
+  }
+  return 0;
 }
 
 // ─── File-tree walker ─────────────────────────────────────────────────────────
 
 /**
  * Walk a directory tree and return all file paths relative to root,
- * skipping node_modules and .git.
+ * skipping node_modules, .git, .worktrees, and .claude.
  */
 export function walkTree(root) {
   const results = [];
-  const skipDirs = new Set(['node_modules', '.git']);
+  const skipDirs = new Set(['node_modules', '.git', '.worktrees', '.claude']);
   function walk(dir, relDir) {
     let entries;
     try {
@@ -97,9 +117,50 @@ export function resolveSpecifier(specifier, importingFile, root) {
     : null;
 }
 
+// Pre-indexed resolved import candidates per (scopeIndex, rootNorm) so each
+// repo file is read and parsed at most once across all O(T^2) ticket pairs.
+const importCandidatesByIndex = new WeakMap();
+
+function getImportCache(index, rootNorm) {
+  let byRoot = importCandidatesByIndex.get(index);
+  if (!byRoot) {
+    byRoot = new Map();
+    importCandidatesByIndex.set(index, byRoot);
+  }
+  let cache = byRoot.get(rootNorm);
+  if (!cache) {
+    cache = new Map();
+    byRoot.set(rootNorm, cache);
+  }
+  return cache;
+}
+
+function resolvedImportCandidates(afNorm, rootNorm, cache) {
+  let candidates = cache.get(afNorm);
+  if (candidates !== undefined) return candidates;
+  const specifiers = extractImports(join(rootNorm, afNorm));
+  candidates = [];
+  for (const spec of specifiers) {
+    const resolved = resolveSpecifier(spec, afNorm, rootNorm);
+    if (resolved === null) continue;
+    // Also try with extensions
+    candidates.push(
+      resolved,
+      resolved + '.js',
+      resolved + '.mjs',
+      resolved + '.ts',
+      resolved + '/index.js',
+      resolved + '/index.mjs',
+      resolved + '/index.ts',
+    );
+  }
+  cache.set(afNorm, candidates);
+  return candidates;
+}
+
 /**
  * For all files in the repo matching ticket a's scope globs, scan their
- * imports and resolve them. Return a Set of resolved paths that match
+ * imports and resolve them. Return true if any resolved candidate matches
  * ticket b's scope.
  */
 function importRadiusIntersects(a, b, repoFiles, root, index) {
@@ -107,25 +168,12 @@ function importRadiusIntersects(a, b, repoFiles, root, index) {
   // Resolved once, not per candidate: building it serialises the whole scope.
   const inB = index.matcher(b.scope);
   const rootNorm = root.replace(/\\/g, '/').replace(/\/+$/, '');
+  const cache = getImportCache(index, rootNorm);
   for (const af of aFiles) {
     const afNorm = af.replace(/\\/g, '/');
-    const specifiers = extractImports(join(rootNorm, afNorm));
-    for (const spec of specifiers) {
-      const resolved = resolveSpecifier(spec, afNorm, rootNorm);
-      if (resolved === null) continue;
-      // Also try with extensions
-      const candidates = [
-        resolved,
-        resolved + '.js',
-        resolved + '.mjs',
-        resolved + '.ts',
-        resolved + '/index.js',
-        resolved + '/index.mjs',
-        resolved + '/index.ts',
-      ];
-      for (const candidate of candidates) {
-        if (inB(candidate)) return true;
-      }
+    const candidates = resolvedImportCandidates(afNorm, rootNorm, cache);
+    for (const candidate of candidates) {
+      if (inB(candidate)) return true;
     }
   }
   return false;
@@ -264,6 +312,97 @@ export function signalNamespace(a, b, repoFiles, index = createScopeIndex(repoFi
 
 // ─── Signal 5: Semantic Graph Coupling ───────────────────────────────────────
 
+// Pre-indexed CodeGraph edges scoped to (scopeIndex, edges) so O(|E|) indexing
+// happens once per forecast run without caching stale edges across separate runs.
+const edgeIndexByScope = new WeakMap();
+
+function addEndpoint(map, key, entry) {
+  let list = map.get(key);
+  if (!list) {
+    list = [];
+    map.set(key, list);
+  }
+  list.push(entry);
+}
+
+function indexEdges(index, edges) {
+  let byEdges = edgeIndexByScope.get(index);
+  if (!byEdges) {
+    byEdges = new WeakMap();
+    edgeIndexByScope.set(index, byEdges);
+  }
+  let cached = byEdges.get(edges);
+  if (cached) return cached;
+
+  const scores = [];
+  const exactMap = new Map();
+  const suffixMap = new Map();
+
+  for (const edge of edges) {
+    const src = edge.from ?? edge.source ?? edge.callerFile ?? edge.fromFile;
+    const dst = edge.to ?? edge.target ?? edge.calleeFile ?? edge.toFile;
+    if (!src || !dst) continue;
+    const id = scores.length;
+    const weight = typeof edge.weight === 'number' ? Math.min(1.0, edge.weight) : 1.0;
+    scores.push(weight * 0.7);
+
+    const srcEntry = [id, 1];
+    const dstEntry = [id, 2];
+    addEndpoint(exactMap, src, srcEntry);
+    addEndpoint(exactMap, dst, dstEntry);
+    addEndpoint(suffixMap, src, srcEntry);
+    addEndpoint(suffixMap, dst, dstEntry);
+
+    let pos = src.indexOf('/');
+    while (pos !== -1) {
+      const suf = src.slice(pos + 1);
+      if (suf) addEndpoint(suffixMap, suf, srcEntry);
+      pos = src.indexOf('/', pos + 1);
+    }
+    pos = dst.indexOf('/');
+    while (pos !== -1) {
+      const suf = dst.slice(pos + 1);
+      if (suf) addEndpoint(suffixMap, suf, dstEntry);
+      pos = dst.indexOf('/', pos + 1);
+    }
+  }
+
+  const matchesByFiles = new WeakMap();
+
+  function matchFiles(files) {
+    let matched = matchesByFiles.get(files);
+    if (matched) return matched;
+    matched = new Map();
+    for (const f of files) {
+      const hit1 = suffixMap.get(f);
+      if (hit1) {
+        for (const [id, bit] of hit1) {
+          matched.set(id, (matched.get(id) ?? 0) | bit);
+        }
+      }
+      let pos = f.indexOf('/');
+      while (pos !== -1) {
+        const suf = f.slice(pos + 1);
+        if (suf) {
+          const hit2 = exactMap.get(suf);
+          if (hit2) {
+            for (const [id, bit] of hit2) {
+              matched.set(id, (matched.get(id) ?? 0) | bit);
+            }
+          }
+        }
+        pos = f.indexOf('/', pos + 1);
+      }
+    }
+    matchesByFiles.set(files, matched);
+    return matched;
+  }
+
+  cached = { scores, matchFiles };
+  byEdges.set(edges, cached);
+  return cached;
+}
+
 /**
  * Returns graph coupling signal in [0, 0.7].
  * Detects semantic cross-ticket dependencies via pre-computed symbol/call graph
@@ -299,19 +438,15 @@ export function signalGraphCoupling(a, b, graphCouplingData, repoFiles, index = 
     : null;
 
   if (edges) {
+    const { scores, matchFiles } = indexEdges(index, edges);
+    const aMatches = matchFiles(aFiles);
+    const bMatches = matchFiles(bFiles);
     let maxCoupling = 0;
-    for (const edge of edges) {
-      const src = edge.from ?? edge.source ?? edge.callerFile ?? edge.fromFile;
-      const dst = edge.to ?? edge.target ?? edge.calleeFile ?? edge.toFile;
-      if (!src || !dst) continue;
-      const aMatchesSrc = aFiles.some((f) => f === src || f.endsWith('/' + src) || src.endsWith('/' + f));
-      const bMatchesDst = bFiles.some((f) => f === dst || f.endsWith('/' + dst) || dst.endsWith('/' + f));
-      const bMatchesSrc = bFiles.some((f) => f === src || f.endsWith('/' + src) || src.endsWith('/' + f));
-      const aMatchesDst = aFiles.some((f) => f === dst || f.endsWith('/' + dst) || dst.endsWith('/' + f));
-
-      if ((aMatchesSrc && bMatchesDst) || (bMatchesSrc && aMatchesDst)) {
-        const weight = typeof edge.weight === 'number' ? Math.min(1.0, edge.weight) : 1.0;
-        const score = weight * 0.7;
+    for (const [id, maskA] of aMatches) {
+      const maskB = bMatches.get(id);
+      if (!maskB) continue;
+      if (((maskA & 1) && (maskB & 2)) || ((maskA & 2) && (maskB & 1))) {
+        const score = scores[id];
         if (score > maxCoupling) maxCoupling = score;
       }
     }
@@ -338,7 +473,7 @@ export function pairScore(a, b, opts = {}) {
     scopeIndex = createScopeIndex(repoFiles),
   } = opts;
 
-  const s1 = signalScopeOverlap(a, b);
+  const s1 = signalScopeOverlap(a, b, scopeIndex);
   if (s1 >= 1.0) return { score: 1.0, signal: 'scope-overlap', hardVeto: true };
 
   const s4 = signalNamespace(a, b, repoFiles, scopeIndex);

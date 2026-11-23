@@ -138,18 +138,103 @@ export function inScope(ticket, path) {
   return (ticket.scope ?? []).some((g) => globMatch(g, path));
 }
 
+const GLOB_TOKEN_SPLIT = /(\*\*\/|\*\*|\*)/;
+// Hard byte budget for the Uint8Array product-state table in globsOverlap.
+// compileGlobNfa produces at most pattern.length + 1 states, so bounding
+// (ga.length + 1) * (gb.length + 1) guarantees bounded time and memory.
+const MAX_GLOB_PRODUCT_BYTES = 65536;
+
+function compileGlobNfa(pattern) {
+  const tokens = pattern.split(GLOB_TOKEN_SPLIT).filter((p) => p !== '');
+  const states = [{ eps: [], edges: [] }];
+  const addState = () => {
+    const id = states.length;
+    states.push({ eps: [], edges: [] });
+    return id;
+  };
+
+  let cur = 0;
+  for (const token of tokens) {
+    if (token === '**') {
+      const next = addState();
+      states[cur].edges.push({ kind: 'any', to: cur });
+      states[cur].eps.push(next);
+      cur = next;
+    } else if (token === '**/') {
+      const loop = addState();
+      const next = addState();
+      states[cur].eps.push(next, loop);
+      states[loop].edges.push({ kind: 'any', to: loop });
+      states[loop].edges.push({ kind: 'char', ch: '/', to: next });
+      cur = next;
+    } else if (token === '*') {
+      const next = addState();
+      states[cur].edges.push({ kind: 'nonSlash', to: cur });
+      states[cur].eps.push(next);
+      cur = next;
+    } else {
+      for (let i = 0; i < token.length; i++) {
+        const next = addState();
+        states[cur].edges.push({ kind: 'char', ch: token[i], to: next });
+        cur = next;
+      }
+    }
+  }
+  return { states, accept: cur };
+}
+
+function edgesCompatible(eA, eB) {
+  if (eA.kind === 'char' && eB.kind === 'char') return eA.ch === eB.ch;
+  if (eA.kind === 'char') return eB.kind === 'any' || eA.ch !== '/';
+  if (eB.kind === 'char') return eA.kind === 'any' || eB.ch !== '/';
+  return true;
+}
+
+/** Exact glob-language intersection: true iff some path matches both ga and gb. */
+function globsOverlap(ga, gb) {
+  if (ga === gb) return true;
+  if ((ga.length + 1) * (gb.length + 1) > MAX_GLOB_PRODUCT_BYTES) return true;
+  const nfaA = compileGlobNfa(ga);
+  const nfaB = compileGlobNfa(gb);
+  const nB = nfaB.states.length;
+  const visited = new Uint8Array(nfaA.states.length * nB);
+  const queue = [0];
+  visited[0] = 1;
+
+  const enqueue = (a, b) => {
+    const key = a * nB + b;
+    if (!visited[key]) {
+      visited[key] = 1;
+      queue.push(key);
+    }
+  };
+
+  for (let head = 0; head < queue.length; head++) {
+    const key = queue[head];
+    const a = Math.floor(key / nB);
+    const b = key - a * nB;
+    if (a === nfaA.accept && b === nfaB.accept) return true;
+
+    const stA = nfaA.states[a];
+    const stB = nfaB.states[b];
+    for (const nextA of stA.eps) enqueue(nextA, b);
+    for (const nextB of stB.eps) enqueue(a, nextB);
+    for (const eA of stA.edges) {
+      for (const eB of stB.edges) {
+        if (edgesCompatible(eA, eB)) enqueue(eA.to, eB.to);
+      }
+    }
+  }
+  return false;
+}
+
 /** Do two tickets' declared scopes overlap (shared glob territory)? */
 export function scopesOverlap(a, b) {
   const as = a.scope ?? [];
   const bs = b.scope ?? [];
-  // Conservative: overlap if any glob from one matches the other's glob
-  // treated as a literal-ish path, or globs are identical prefixes.
   for (const ga of as) {
     for (const gb of bs) {
-      if (ga === gb) return true;
-      const aBase = ga.split('*')[0];
-      const bBase = gb.split('*')[0];
-      if (aBase && bBase && (aBase.startsWith(bBase) || bBase.startsWith(aBase))) return true;
+      if (globsOverlap(ga, gb)) return true;
     }
   }
   return false;

@@ -1,0 +1,28 @@
+{
+  "body": "Implement Wave 2 T-P17 from .adlc/specs/enhancement-resolution-plan.md:\n\n1. Fix scopesOverlap in packages/core/lib/tickets.mjs to:\n   - Handle leading **/ and * globs (e.g. **/*.mjs vs packages/core/** or concrete paths).\n   - Enforce / segment boundaries on prefixes (e.g. packages/cli vs packages/cli-utils must not overlap; literal paths only overlap a glob if globMatch(glob, literal) is true).\n   - Check direct globMatch both ways and suffix compatibility for wildcard-to-wildcard pairs.\n   - Rebuild Cursor bundles via npm run build:cursor-mcp.\n\n2. Fix and optimize packages/merge-forecast/lib/signals.mjs:\n   - Add .worktrees and .claude to skipDirs in walkTree.\n   - Pre-index file imports per (scopeIndex, root) in O(|F|) so importRadiusIntersects reads each repo file at most once across all O(T^2) ticket pairs.\n   - Pre-index CodeGraph edges once in O(|E|) so signalGraphCoupling evaluates pairs without O(T^2 * |E| * |F|) scans.\n   - Treat any non-empty index.files(a.scope) intersect index.files(b.scope) concrete-file intersection as hardVeto (score 1.0, signal 'scope-overlap', never PARALLEL).\n\n3. Add unit/perf tests in packages/core/test/scopes-overlap.test.mjs and packages/merge-forecast/test/scope-index-perf.test.mjs, and update packages/merge-forecast/test/scope-index-wiring.test.mjs for the concrete-overlap lookup through scopeIndex.\n\nVerification:\nnpm run build:cursor-mcp && node --test packages/core/test/scopes-overlap.test.mjs packages/core/test/core.test.mjs packages/merge-forecast/test scripts/test/ticket-store-boundary.test.mjs",
+  "category": "feature",
+  "duration": 1,
+  "edges": [],
+  "id": "t-wave2-scopes-merge-forecast",
+  "rails": [
+    "packages/merge-forecast/test/forecast-unchanged.test.mjs"
+  ],
+  "scope": [
+    "packages/core/lib/tickets.mjs",
+    "packages/core/test/scopes-overlap.test.mjs",
+    "packages/merge-forecast/lib/signals.mjs",
+    "packages/merge-forecast/test/scope-index-perf.test.mjs",
+    "packages/merge-forecast/test/scope-index-wiring.test.mjs",
+    "plugins/adlc-cursor/hooks/adlc-session-start.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-pretool.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-audit.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-shell-advisory.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-precompact.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-subagent.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-stop.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-preflight.bundle.mjs",
+    "plugins/adlc-cursor/lib/mcp-build-metadata.mjs",
+    "plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs"
+  ],
+  "title": "Wave 2 T-P17 (R3 + P2): Accurate scopesOverlap leading-wildcard/boundary matching & O(|F|+|E|) pre-indexed merge-forecast"
+}
