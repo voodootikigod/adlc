@@ -2,19 +2,16 @@
 // primitives so ticket-prune interoperates on .adlc/tickets.lock with zero duplication.
 
 import { rmSync, readFileSync, existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { acquireTicketLock, releaseTicketLock } from '@adlc/tickets/lib/lock.mjs';
 import { durableWrite, durableRename } from '@adlc/tickets/lib/durability.mjs';
 
 const LOCK_DIR = '.adlc/tickets.lock';
-const heldLocks = new Map();
 
 /** Acquire the shared ticket lock at `.adlc/tickets.lock`. */
 export function acquireLock(dir = '.', options = {}) {
-  const key = resolve(dir);
   try {
-    const lock = acquireTicketLock(dir, { ...options, command: 'ticket-prune' });
-    heldLocks.set(key, lock);
+    acquireTicketLock(dir, { ...options, command: 'ticket-prune' });
     return true;
   } catch (err) {
     if (err?.code === 'LOCK_TIMEOUT') return false;
@@ -23,15 +20,11 @@ export function acquireLock(dir = '.', options = {}) {
 }
 
 export function releaseLock(dir = '.') {
-  const key = resolve(dir);
-  const lock = heldLocks.get(key);
-  if (lock) {
-    heldLocks.delete(key);
-    releaseTicketLock(lock);
-    return;
-  }
+  const lockPath = join(dir, LOCK_DIR);
+  const res = releaseTicketLock({ path: lockPath, metadata: { pid: process.pid } });
+  if (res.released) return;
   try {
-    rmSync(join(dir, LOCK_DIR), { recursive: true, force: true });
+    rmSync(lockPath, { recursive: true, force: true });
   } catch {
     /* already released */
   }
