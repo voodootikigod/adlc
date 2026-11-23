@@ -99,6 +99,10 @@ test('DirectoryTicketStore.loadOne and TicketService.loadOne read a single shard
   assert.equal(Object.isFrozen(found), true);
   assert.equal(service.loadOne('MISSING'), null);
   assert.equal(store.loadOne(''), null);
+
+  // Malformed ticket shard must be rejected by loadOne just like load()
+  writeFileSync(join(store.path, ticketFilename('T-BAD')), JSON.stringify({ id: 'T-BAD' }), 'utf8');
+  assert.throws(() => store.loadOne('T-BAD'), /ticket store validation failed/);
 });
 
 test('durableWrite and writeFileAtomic refuse writing through symlinks', (t) => {

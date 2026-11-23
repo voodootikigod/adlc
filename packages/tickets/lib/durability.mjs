@@ -1,5 +1,6 @@
 import {
   closeSync,
+  constants,
   copyFileSync,
   existsSync,
   fsyncSync,
@@ -63,7 +64,14 @@ export function durableWrite(path, content) {
   if (st && st.isSymbolicLink()) {
     throw new Error('refusing to write through symlink: ' + path);
   }
-  const descriptor = openSync(path, 'w');
+  const openFlags = constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0);
+  let descriptor;
+  try {
+    descriptor = openSync(path, openFlags, 0o666);
+  } catch (err) {
+    if (err?.code === 'ELOOP') throw new Error('refusing to write through symlink: ' + path);
+    throw err;
+  }
   try {
     writeFileSync(descriptor, content);
     fsyncSync(descriptor);

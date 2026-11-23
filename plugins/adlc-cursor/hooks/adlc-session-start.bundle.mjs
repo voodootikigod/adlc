@@ -518,7 +518,8 @@ var DirectoryTicketStore = class {
     if (!ticket || typeof ticket !== "object" || Array.isArray(ticket) || ticket.id !== id) {
       throw invalid("FILENAME_MISMATCH", `${name} does not match ticket id ${id}`);
     }
-    return Object.freeze(ticket);
+    validateTickets([ticket], { archive: this.archive, validateGraph: false });
+    return new TicketSnapshot({ backend: "directory", formatVersion: 1, tickets: [ticket] }).get(id);
   }
   resolvedPath() {
     return resolve(this.path);
@@ -634,7 +635,16 @@ function acquireTicketLock(root = ".", {
           const staleDir = `${path}.stale-${process.pid}-${randomUUID()}`;
           try {
             renameSync(path, staleDir);
-            removeLock(staleDir, { recursive: true, force: true });
+            const movedOwner = readLockMetadata(join2(staleDir, "owner.json"));
+            const sameOwner = currentOwner === null ? movedOwner === null : movedOwner !== null && movedOwner.pid === currentOwner.pid && movedOwner.startedAt === currentOwner.startedAt && movedOwner.hostname === currentOwner.hostname;
+            if (!sameOwner) {
+              try {
+                renameSync(staleDir, path);
+              } catch {
+              }
+            } else {
+              removeLock(staleDir, { recursive: true, force: true });
+            }
           } catch {
           }
           continue;
@@ -691,6 +701,7 @@ import { dirname as dirname5, join as join5 } from "node:path";
 // packages/tickets/lib/durability.mjs
 import {
   closeSync,
+  constants,
   copyFileSync,
   existsSync as existsSync3,
   fsyncSync,
@@ -750,7 +761,14 @@ function durableWrite(path, content) {
   if (st && st.isSymbolicLink()) {
     throw new Error("refusing to write through symlink: " + path);
   }
-  const descriptor = openSync(path, "w");
+  const openFlags = constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0);
+  let descriptor;
+  try {
+    descriptor = openSync(path, openFlags, 438);
+  } catch (err) {
+    if (err?.code === "ELOOP") throw new Error("refusing to write through symlink: " + path);
+    throw err;
+  }
   try {
     writeFileSync2(descriptor, content);
     fsyncSync(descriptor);

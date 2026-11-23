@@ -138,7 +138,18 @@ export function acquireTicketLock(root = '.', {
           const staleDir = `${path}.stale-${process.pid}-${randomUUID()}`;
           try {
             renameSync(path, staleDir);
-            removeLock(staleDir, { recursive: true, force: true });
+            const movedOwner = readLockMetadata(join(staleDir, 'owner.json'));
+            const sameOwner = currentOwner === null
+              ? movedOwner === null
+              : (movedOwner !== null
+                && movedOwner.pid === currentOwner.pid
+                && movedOwner.startedAt === currentOwner.startedAt
+                && movedOwner.hostname === currentOwner.hostname);
+            if (!sameOwner) {
+              try { renameSync(staleDir, path); } catch {}
+            } else {
+              removeLock(staleDir, { recursive: true, force: true });
+            }
           } catch {}
           continue;
         }

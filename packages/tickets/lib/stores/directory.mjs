@@ -120,7 +120,8 @@ export class DirectoryTicketStore {
     if (!ticket || typeof ticket !== 'object' || Array.isArray(ticket) || ticket.id !== id) {
       throw invalid('FILENAME_MISMATCH', `${name} does not match ticket id ${id}`);
     }
-    return Object.freeze(ticket);
+    validateTickets([ticket], { archive: this.archive, validateGraph: false });
+    return new TicketSnapshot({ backend: 'directory', formatVersion: 1, tickets: [ticket] }).get(id);
   }
 
   resolvedPath() {
