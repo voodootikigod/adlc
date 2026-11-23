@@ -283,7 +283,9 @@ async function main() {
   console.log(`\n═══ ${segments.length - failed.length}/${segments.length} segments passed`);
   if (failed.length) {
     for (const f of failed) console.log(`  FAILED  ${f.name}${f.signal ? ` (${f.signal})` : ` (exit ${f.status})`}`);
-    process.exit(1);
+    // Use exitCode instead of process.exit(1) so buffered stdout drains completely on CI pipes.
+    process.exitCode = 1;
+    return;
   }
   console.log('  all green');
 }
