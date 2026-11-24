@@ -277,6 +277,22 @@ describe('checkTestCmd', () => {
     const timeoutRes = await checkTestCmd('sleep 5', dir, { timeoutMs: 80 });
     assert.equal(timeoutRes.status, 'fail');
     assert.match(timeoutRes.detail, /command timed out after 80ms/);
+
+    if (process.platform !== 'win32') {
+      const pidFile = join(dir, 'child.pid');
+      const treeRes = await checkTestCmd(`sleep 10 & echo $! > "${pidFile}"; wait`, dir, { timeoutMs: 120 });
+      assert.equal(treeRes.status, 'fail');
+      assert.match(treeRes.detail, /command timed out after 120ms/);
+      const childPid = Number(execFileSync('cat', [pidFile], { encoding: 'utf8' }).trim());
+      assert.ok(Number.isInteger(childPid) && childPid > 0);
+      await new Promise((r) => setTimeout(r, 50));
+      let alive = true;
+      try { process.kill(childPid, 0); } catch { alive = false; }
+      if (alive) {
+        try { process.kill(childPid, 'SIGKILL'); } catch {}
+      }
+      assert.equal(alive, false, 'descendant process in timed-out test-cmd must be killed with its process group');
+    }
   });
 
   it('includes tail of output on failure', async () => {
