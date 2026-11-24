@@ -7,6 +7,33 @@
 // score 1.0. Pure aggregation; the hard semantic call is delegated to `judge`.
 
 const DEFAULT_TOLERANCE = 3;
+export const DEFAULT_LLM_CONCURRENCY = 4;
+
+async function mapWithConcurrency(items, concurrency, fn) {
+  const limit = Number.isInteger(concurrency) && concurrency >= 1
+    ? concurrency
+    : DEFAULT_LLM_CONCURRENCY;
+  const out = new Array(items.length);
+  let nextIdx = 0;
+  let firstError = null;
+
+  async function worker() {
+    while (firstError === null && nextIdx < items.length) {
+      const idx = nextIdx++;
+      try {
+        out[idx] = await fn(items[idx], idx);
+      } catch (err) {
+        if (firstError === null) firstError = err;
+        return;
+      }
+    }
+  }
+
+  const workerCount = Math.min(limit, items.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  if (firstError !== null) throw firstError;
+  return out;
+}
 
 function normalizeRelPath(p) {
   return String(p ?? '').replace(/\\/g, '/').replace(/^\.\//, '');
@@ -69,11 +96,9 @@ export async function findIdentifying(plant, located, deps) {
  * @returns {Promise<Array<object>>}
  */
 export async function identifyingFindings(plant, located, deps) {
-  const hits = [];
-  for (const f of located) {
-    if (await identifies(plant, f, deps)) hits.push(f);
-  }
-  return hits;
+  const concurrency = deps?.concurrency ?? DEFAULT_LLM_CONCURRENCY;
+  const verdicts = await mapWithConcurrency(located, concurrency, (f) => identifies(plant, f, deps));
+  return located.filter((_, i) => verdicts[i]);
 }
 
 /**
@@ -85,6 +110,7 @@ export async function identifyingFindings(plant, located, deps) {
  * @param {(plant,finding)=>(boolean|Promise<boolean>)} deps.judge   REQUIRED
  * @param {(plant,finding)=>(boolean|Promise<boolean>)} [deps.verifyRepro]
  * @param {number} [deps.tolerance]
+ * @param {number} [deps.concurrency]
  * @returns {Promise<{
  *   recall, caught, total,
  *   precision, truePositives, falsePositives, unsubstantiated,
@@ -96,16 +122,37 @@ export async function scorePlants(plants, findings, deps) {
     throw new Error('scorePlants requires a judge function — refusing to fall back to string matching');
   }
   const tolerance = deps.tolerance ?? DEFAULT_TOLERANCE;
+  const concurrency = deps.concurrency ?? DEFAULT_LLM_CONCURRENCY;
   const perCategory = {};
   const results = [];
   let caught = 0;
   const locatedSome = new Set();
   const identifiedSome = new Set();
 
-  for (const plant of plants) {
+  // Flatten all (plantIndex, finding) judgments through a single bounded pool
+  // so total in-flight LLM calls never exceed `concurrency`.
+  const locatedByPlant = plants.map((plant) => locatingFindings(plant, findings, tolerance));
+  const pairs = [];
+  for (let pi = 0; pi < plants.length; pi++) {
+    for (const f of locatedByPlant[pi]) {
+      pairs.push({ pi, plant: plants[pi], finding: f });
+    }
+  }
+  const pairVerdicts = await mapWithConcurrency(
+    pairs,
+    concurrency,
+    ({ plant, finding }) => identifies(plant, finding, deps),
+  );
+  const hitsByPlant = plants.map(() => []);
+  for (let i = 0; i < pairs.length; i++) {
+    if (pairVerdicts[i]) hitsByPlant[pairs[i].pi].push(pairs[i].finding);
+  }
+
+  for (let pi = 0; pi < plants.length; pi++) {
+    const plant = plants[pi];
     const cat = plant.category ?? plant.operator ?? 'unknown';
-    const located = locatingFindings(plant, findings, tolerance);
-    const hits = located.length ? await identifyingFindings(plant, located, deps) : [];
+    const located = locatedByPlant[pi];
+    const hits = hitsByPlant[pi];
     for (const f of located) locatedSome.add(f);
     for (const f of hits) identifiedSome.add(f);
     const wasCaught = hits.length > 0;

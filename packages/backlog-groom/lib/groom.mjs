@@ -13,7 +13,7 @@
 
 import { fetchIssues } from './fetch.mjs';
 import { classifyIssue } from './classify.mjs';
-import { verifyIssue, headCommit } from './verify.mjs';
+import { verifyIssue, headCommit, createRevisionIndex } from './verify.mjs';
 import { contentHash } from './content-hash.mjs';
 import { cacheGet, cachePut } from './cache.mjs';
 import { clusterIssues, unitsForIssue } from './cluster.mjs';
@@ -61,15 +61,28 @@ export function groom({ profile, cache = null, judge = null, io = {}, relationTh
     return { ok: false, unconsultable: 'could not resolve a git revision to verify against', set: null };
   }
   const revision = describedCommit;
-  // `revision` is spread LAST so an injected io cannot silently unpin the
-  // snapshot every read in this run is supposed to share.
-  const readIo = { ...io, revision };
   const { issues, unconsultable, truncated } = io.fetchIssues ? io.fetchIssues() : fetchIssues(io);
   if (unconsultable) {
     // An unconsultable fetch is not an empty backlog. Returning a normal-looking
     // set with zero issues would claim a clean backlog that was never read.
     return { ok: false, unconsultable, set: null };
   }
+
+  // Pre-index git object types and commit history once per run (2 git spawns
+  // instead of up to 3 per citation) whenever the caller did not inject all
+  // three lookup seams. `...io` overrides the index for any partially injected
+  // seam, and `revision` is spread LAST so the snapshot stays pinned.
+  const needsIndex = issues.length > 0 && (!io.pathKind || !io.lastCommitFor || !io.everExisted);
+  const revIndex = needsIndex ? createRevisionIndex(revision, io.run) : null;
+  const readIo = {
+    ...(revIndex ? {
+      pathKind: revIndex.pathKind,
+      lastCommitFor: revIndex.lastCommitFor,
+      everExisted: revIndex.everExisted,
+    } : {}),
+    ...io,
+    revision,
+  };
 
   let referenceBudget = MAX_TOTAL_REFERENCES;
   let budgetExhausted = false;

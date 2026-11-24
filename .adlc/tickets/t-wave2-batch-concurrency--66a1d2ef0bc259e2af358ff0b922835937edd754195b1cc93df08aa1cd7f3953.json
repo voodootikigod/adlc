@@ -1,0 +1,29 @@
+{
+  "body": "Execute Wave 2 T-P20 from .adlc/specs/enhancement-resolution-plan.md:\n\n1. backlog-groom batch git revision index (packages/backlog-groom/lib/verify.mjs, packages/backlog-groom/lib/groom.mjs):\n- Add createRevisionIndex(revision, run) in verify.mjs that pre-indexes object kinds via one `git ls-tree -r -t -z <rev>` call and commit history touches (lastCommitFor + everExisted, including ancestor directories) via one `git log --format=%x1e%h --name-only -z <rev>` call, falling back cleanly if either command fails.\n- Wire createRevisionIndex once per groom() run in groom.mjs when issues exist and any of pathKind/lastCommitFor/everExisted is not injected.\n- Unit test pure parsers and real-git 2-spawn indexing in packages/backlog-groom/test/batch-git-index.test.mjs.\n\n2. rejection-mining batched GraphQL fetch (packages/rejection-mining/lib/gh.mjs, packages/rejection-mining/lib/mine.mjs):\n- Add fetchPRsGraphQL(limit, ghRunner, { repo }) in gh.mjs to fetch up to `limit` PRs with reviews and comments in paginated `gh api graphql` queries (1 call for <=100 PRs).\n- Use fetchPRsGraphQL first in fetchSignals() in mine.mjs, falling back to fetchPRList + fetchPRDetail if GraphQL is unavailable/unsupported so existing CLI/fixture contracts continue working.\n- Unit test single-call GraphQL, multi-page pagination, --repo owner/name pinning, and GraphQL error fallback.\n\n3. Single-pass coldstart manifest cache & bounded LLM concurrency (concurrency = 4, configurable):\n- Add indexManifestByTicket() in packages/coldstart/lib/cache.mjs and load the manifest forest once per checkAll() call in packages/coldstart/lib/gate.mjs when loadCacheEntriesFn is not injected (O(T + M) instead of O(T * M)).\n- Execute independent LLM calls through a bounded concurrency pool (DEFAULT_LLM_CONCURRENCY = 4, configurable via opts.concurrency) preserving deterministic output order in:\n  - packages/coldstart/lib/gate.mjs (checkAll)\n  - packages/rejection-mining/lib/llm.mjs (refineClusters)\n  - packages/lesson-foundry/lib/llm.mjs (refineClusters)\n  - packages/review-calibration/lib/scorer.mjs (identifyingFindings, scorePlants) and packages/review-calibration/lib/judge.mjs (calibrateJudge)\n- Add unit tests proving single-pass manifest loading (1 load across N tickets) and bounded concurrency (in-flight never exceeds limit, order preserved, error semantics preserved) in packages/coldstart/test/batch-manifest-cache.test.mjs, packages/rejection-mining/test/concurrency.test.mjs, packages/lesson-foundry/test/concurrency.test.mjs, and packages/review-calibration/test/concurrency.test.mjs.\n\nAcceptance criteria:\n- `node --test packages/backlog-groom/test packages/rejection-mining/test packages/coldstart/test packages/lesson-foundry/test packages/review-calibration/test` passes.\n- `npm run preflight` passes (tests, rails-guard-ci, mutation-gate).",
+  "id": "t-wave2-batch-concurrency",
+  "rails": [
+    "packages/backlog-groom/test/verify-citation-kind.test.mjs",
+    "packages/coldstart/test/checkall-cache.test.mjs",
+    "packages/rejection-mining/test/skipped-prs-threshold.test.mjs",
+    "packages/review-calibration/test/invalid-plants.test.mjs"
+  ],
+  "scope": [
+    "packages/backlog-groom/lib/groom.mjs",
+    "packages/backlog-groom/lib/verify.mjs",
+    "packages/backlog-groom/test/batch-git-index.test.mjs",
+    "packages/rejection-mining/lib/gh.mjs",
+    "packages/rejection-mining/lib/mine.mjs",
+    "packages/rejection-mining/lib/llm.mjs",
+    "packages/rejection-mining/test/mine.test.mjs",
+    "packages/rejection-mining/test/concurrency.test.mjs",
+    "packages/coldstart/lib/cache.mjs",
+    "packages/coldstart/lib/gate.mjs",
+    "packages/coldstart/test/batch-manifest-cache.test.mjs",
+    "packages/lesson-foundry/lib/llm.mjs",
+    "packages/lesson-foundry/test/concurrency.test.mjs",
+    "packages/review-calibration/lib/scorer.mjs",
+    "packages/review-calibration/lib/judge.mjs",
+    "packages/review-calibration/test/concurrency.test.mjs"
+  ],
+  "title": "Wave 2 T-P20: Batch git/gh queries, single-pass coldstart cache, and bounded LLM concurrency"
+}

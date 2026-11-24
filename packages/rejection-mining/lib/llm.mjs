@@ -72,31 +72,50 @@ export async function refineCluster(slug, signals, tier = 'mid') {
   return toRefinement(extractJson(raw));
 }
 
+export const DEFAULT_LLM_CONCURRENCY = 4;
+
 /**
- * Refine multiple clusters (one call each).
+ * Refine multiple clusters (one call each) through a bounded concurrency pool.
  * Returns Map<clusterIndex, {title, charter}>.
  * Failures are logged but do not throw.
  *
  * @param {Array<{slug: string, indices: number[]}>} clusters
  * @param {Array<{body: string}>} signals
  * @param {string} [tier]
+ * @param {object} [opts]
+ * @param {number} [opts.concurrency]
+ * @param {Function} [opts.refineClusterFn]
  * @returns {Promise<Map<number, {title: string, charter: string}>>}
  */
-export async function refineClusters(clusters, signals, tier = 'mid') {
+export async function refineClusters(clusters, signals, tier = 'mid', opts = {}) {
+  const {
+    concurrency = DEFAULT_LLM_CONCURRENCY,
+    refineClusterFn = refineCluster,
+  } = opts;
+  const limit = Number.isInteger(concurrency) && concurrency >= 1
+    ? concurrency
+    : DEFAULT_LLM_CONCURRENCY;
   const results = new Map();
+  let nextIdx = 0;
 
-  for (const [idx, cluster] of clusters.entries()) {
-    const clusterSignals = cluster.indices.map((i) => signals[i]);
-    try {
-      const refined = await refineCluster(cluster.slug, clusterSignals, tier);
-      if (refined) results.set(idx, refined);
-    } catch (err) {
-      console.error(
-        `rejection-mining: LLM refinement failed for cluster "${cluster.slug}": ${err.message}`
-      );
+  async function worker() {
+    while (nextIdx < clusters.length) {
+      const idx = nextIdx++;
+      const cluster = clusters[idx];
+      const clusterSignals = cluster.indices.map((i) => signals[i]);
+      try {
+        const refined = await refineClusterFn(cluster.slug, clusterSignals, tier);
+        if (refined) results.set(idx, refined);
+      } catch (err) {
+        console.error(
+          `rejection-mining: LLM refinement failed for cluster "${cluster.slug}": ${err.message}`
+        );
+      }
     }
   }
 
+  const workerCount = Math.min(limit, clusters.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
   return results;
 }
 

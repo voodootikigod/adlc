@@ -125,6 +125,8 @@ export function defectTokens(plant) {
   )];
 }
 
+export const DEFAULT_LLM_CONCURRENCY = 4;
+
 /**
  * Calibrate a judge against a labeled fixture of (plant, finding, expected)
  * triples. Returns agreement with the labels so the recall number can carry
@@ -133,13 +135,39 @@ export function defectTokens(plant) {
  *
  * @param {Array<{plant:object, finding:object, expected:boolean}>} fixture
  * @param {(plant, finding) => (boolean|Promise<boolean>)} judge
+ * @param {{ concurrency?: number }} [opts]
  * @returns {Promise<{agreement:number, n:number, disagreements:Array}>}
  */
-export async function calibrateJudge(fixture, judge) {
+export async function calibrateJudge(fixture, judge, { concurrency = DEFAULT_LLM_CONCURRENCY } = {}) {
+  const limit = Number.isInteger(concurrency) && concurrency >= 1
+    ? concurrency
+    : DEFAULT_LLM_CONCURRENCY;
+  const verdicts = new Array(fixture.length);
+  let nextIdx = 0;
+  let firstError = null;
+
+  async function worker() {
+    while (firstError === null && nextIdx < fixture.length) {
+      const idx = nextIdx++;
+      const { plant, finding } = fixture[idx];
+      try {
+        verdicts[idx] = await judge(plant, finding);
+      } catch (err) {
+        if (firstError === null) firstError = err;
+        return;
+      }
+    }
+  }
+
+  const workerCount = Math.min(limit, fixture.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  if (firstError !== null) throw firstError;
+
   let agree = 0;
   const disagreements = [];
-  for (const { plant, finding, expected } of fixture) {
-    const got = await judge(plant, finding);
+  for (let i = 0; i < fixture.length; i++) {
+    const { plant, finding, expected } = fixture[i];
+    const got = verdicts[i];
     if (got === expected) agree++;
     else disagreements.push({ plant: plant.file, finding: finding.file, expected, got });
   }

@@ -47,6 +47,30 @@ export function trustedCacheEntries(entries, { key = null } = {}) {
 }
 
 /**
+ * Group manifest entries by ticket id in a single O(M) pass so multi-ticket
+ * runs (`checkAll`) look up each ticket's history in O(1) instead of rescanning
+ * the manifest forest per ticket (O(T * M) -> O(T + M)).
+ *
+ * @param {object[]} entries
+ * @returns {Map<string, object[]>}
+ */
+export function indexManifestByTicket(entries) {
+  const byTicket = new Map();
+  for (const entry of entries ?? []) {
+    if (!entry || entry.gate !== GATE_NAME || typeof entry.ticket !== 'string' || entry.ticket.length === 0) {
+      continue;
+    }
+    let list = byTicket.get(entry.ticket);
+    if (!list) {
+      list = [];
+      byTicket.set(entry.ticket, list);
+    }
+    list.push(entry);
+  }
+  return byTicket;
+}
+
+/**
  * Build the `data.cache` shape recorded into a gate-manifest entry for one
  * audited ticket.
  *
