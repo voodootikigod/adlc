@@ -264,11 +264,15 @@ describe('checkTestCmd', () => {
     assert.match(result.detail, /exited 1/);
   });
 
-  it('enforces timeoutMs and forwards env to test-cmd', async () => {
+  it('enforces timeoutMs, captures stderr, and forwards env to test-cmd', async () => {
     const envRes = await checkTestCmd('test "$PREFLIGHT_CUSTOM_VAR" = "hello"', dir, {
       env: { ...process.env, PREFLIGHT_CUSTOM_VAR: 'hello' },
     });
     assert.equal(envRes.status, 'pass');
+
+    const stderrRes = await checkTestCmd('echo preflight-stderr-boom >&2; exit 1', dir);
+    assert.equal(stderrRes.status, 'fail');
+    assert.match(stderrRes.detail, /preflight-stderr-boom/);
 
     const timeoutRes = await checkTestCmd('sleep 5', dir, { timeoutMs: 80 });
     assert.equal(timeoutRes.status, 'fail');

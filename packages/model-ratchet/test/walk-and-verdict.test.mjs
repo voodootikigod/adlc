@@ -13,8 +13,10 @@ describe('model-ratchet T-P19: walkSourceFiles and URL-safe finding parser', () 
     try {
       mkdirSync(join(root, 'src'), { recursive: true });
       mkdirSync(join(root, '.worktrees/lane/src'), { recursive: true });
+      mkdirSync(join(root, '__pycache__'), { recursive: true });
       writeFileSync(join(root, 'src/real.mjs'), 'export const a = 1;\n');
       writeFileSync(join(root, '.worktrees/lane/src/dup.mjs'), 'export const b = 2;\n');
+      writeFileSync(join(root, '__pycache__/cached.py'), 'x = 1\n');
       // Symlink loop pointing back to root — statSync would recurse infinitely
       symlinkSync(root, join(root, 'src/loop-link'));
 
