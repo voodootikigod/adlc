@@ -600,22 +600,13 @@ export function evaluateHandoffPreToolUse({
       manifestVerifyFailed: false,
     });
     const baseGate = evaluateMutationGate(baseGateInput);
-    const bashReadOnlyProbe =
-      isBash &&
-      typeof bashCommand === 'string' &&
-      bashCommand.trim().length > 0 &&
-      (() => {
-        const cls = classifyShellCommand(bashCommand);
-        return cls.readOnly && !cls.writeOption;
-      })();
     // Claim the one-shot bypass grant ONLY when a deny would actually fire AND
-    // the call is not already blocked by a non-bypassable reason or a read-only
-    // probe (preserving the grant on disk across clean/read-only probes).
+    // the call is not already blocked by a non-bypassable reason (preserving
+    // the grant on disk when no deny is active).
     const bypassActive =
       bypassVerified &&
       reasons.length === 0 &&
       baseGate.deny &&
-      !bashReadOnlyProbe &&
       removeBypassGrant(root, sessionId) === true;
     if (bypassVerified && reasons.length > 0) {
       reasons.push('bypass_grant_withheld:non_bypassable_reason');
