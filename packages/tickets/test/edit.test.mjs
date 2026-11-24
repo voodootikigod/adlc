@@ -8,6 +8,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { DirectoryTicketStore, TicketService, planEditSession } from '../index.mjs';
+import { splitEditorCommand, spawnEditor } from '../lib/edit.mjs';
 import { writeDirectory, ticket } from './helpers.mjs';
 
 function withStore(fn) {
@@ -224,4 +225,26 @@ test('an unset editor leaves no temp directory and claims no preserved edit', ()
     const after = readdirSync(tmpdir()).filter((n) => n.startsWith('adlc-ticket-edit-')).length;
     assert.equal(after, before, 'and no temp directory may be left behind');
   });
+});
+
+test('splitEditorCommand splits $EDITOR command and flags with quote and escape support (T-P19)', () => {
+  assert.deepEqual(splitEditorCommand('code --wait'), ['code', '--wait']);
+  assert.deepEqual(splitEditorCommand("'/Applications/My App/ed' -w --reuse"), ['/Applications/My App/ed', '-w', '--reuse']);
+  assert.deepEqual(splitEditorCommand('"C:/Program Files/vim" -u "NONE" --cmd "set \\"x\\""'), [
+    'C:/Program Files/vim',
+    '-u',
+    'NONE',
+    '--cmd',
+    'set "x"',
+  ]);
+  assert.deepEqual(splitEditorCommand('/usr/bin/my\\ editor -f'), ['/usr/bin/my editor', '-f']);
+  assert.deepEqual(splitEditorCommand('   '), []);
+  assert.throws(
+    () => splitEditorCommand("'unterminated --wait"),
+    (err) => err.code === 'INVALID_EDITOR',
+  );
+  assert.throws(
+    () => spawnEditor('   ', '/tmp/ticket.json'),
+    (err) => err.code === 'EDITOR_NOT_SET',
+  );
 });

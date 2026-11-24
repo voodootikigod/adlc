@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fetchSignals, buildClusters } from '../lib/mine.mjs';
-import { runGh } from '../lib/gh.mjs';
+import { runGh, fetchPRList, fetchPRDetail } from '../lib/gh.mjs';
 
 // ---------------------------------------------------------------------------
 // Fixture data
@@ -217,4 +217,28 @@ test('runGh: enforces 64 MiB maxBuffer, 60s timeout, and SIGKILL on execFileSync
   assert.strictEqual(seenOpts.maxBuffer, 64 * 1024 * 1024);
   assert.strictEqual(seenOpts.timeout, 60_000);
   assert.strictEqual(seenOpts.killSignal, 'SIGKILL');
+});
+
+test('runGh / fetchPRList / fetchPRDetail pin --repo on pr commands without duplicating (T-P19)', () => {
+  const calls = [];
+  const fakeExec = (_bin, args) => {
+    calls.push(args);
+    return args[1] === 'list' ? '[]' : '{"reviews":[],"comments":[]}';
+  };
+  runGh(['pr', 'list'], fakeExec, { repo: 'acme/app' });
+  runGh(['--version'], fakeExec, { repo: 'acme/app' });
+  runGh(['pr', 'list', '--repo', 'other/repo'], fakeExec, { repo: 'acme/app' });
+  assert.deepStrictEqual(calls[0], ['pr', 'list', '--repo', 'acme/app']);
+  assert.deepStrictEqual(calls[1], ['--version']);
+  assert.deepStrictEqual(calls[2], ['pr', 'list', '--repo', 'other/repo']);
+
+  const runnerCalls = [];
+  const runner = (args) => {
+    runnerCalls.push(args);
+    return args[1] === 'list' ? '[]' : '{"reviews":[],"comments":[]}';
+  };
+  fetchPRList(5, runner, { repo: 'acme/app' });
+  fetchPRDetail(42, runner, { repo: 'acme/app' });
+  assert.ok(runnerCalls[0].includes('--repo') && runnerCalls[0].includes('acme/app'));
+  assert.ok(runnerCalls[1].includes('--repo') && runnerCalls[1].includes('acme/app'));
 });

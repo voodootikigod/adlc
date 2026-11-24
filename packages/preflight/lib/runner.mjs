@@ -68,34 +68,34 @@ export async function runChecks(opts = {}) {
   // ── REQUIRED checks ─────────────────────────────────────────────────────────
   // Run sequentially so failures in one don't mask others, and cleanup is safe.
 
-  const bash = await checkBash();
+  const bash = await checkBash(env);
   results.push({ ...bash, required: true });
 
-  const gitCheck = await checkGit(cwd);
+  const gitCheck = await checkGit(cwd, { env });
   results.push({ ...gitCheck, required: true });
 
   const writeCheck = await checkWrite(cwd, { dir, env });
   results.push({ ...writeCheck, required: true });
 
-  const branchCheck = await checkBranch(cwd);
+  const branchCheck = await checkBranch(cwd, { env });
   results.push({ ...branchCheck, required: true });
 
   // ── OPTIONAL checks ──────────────────────────────────────────────────────────
 
   if (opts.worktrees) {
-    const wt = await checkWorktrees(cwd);
+    const wt = await checkWorktrees(cwd, { env });
     results.push({ ...wt, required: true }); // required because explicitly requested
   }
 
   // Presence, not truthiness: a blank value was already rejected above, so any
   // defined value here is a real command that the caller explicitly asked to run.
   if (opts.testCmd !== undefined) {
-    const tc = await checkTestCmd(opts.testCmd, cwd);
+    const tc = await checkTestCmd(opts.testCmd, cwd, { env, timeoutMs: opts.timeoutMs });
     results.push({ ...tc, required: true }); // required because explicitly requested
   }
 
   if (opts.gh) {
-    const gh = await checkGh();
+    const gh = await checkGh(env, { timeoutMs: opts.timeoutMs });
     results.push({ ...gh, required: true }); // required because explicitly requested
   }
 

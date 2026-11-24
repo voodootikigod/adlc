@@ -6,15 +6,26 @@
 // changed line" shortcut: that is exactly what let a line-echoing reviewer
 // score 1.0. Pure aggregation; the hard semantic call is delegated to `judge`.
 
-import { basename } from 'node:path';
-
 const DEFAULT_TOLERANCE = 3;
 
-/** Findings whose file basename matches and line is within tolerance of the plant. */
+function normalizeRelPath(p) {
+  return String(p ?? '').replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function pathsMatch(plantFile, findingFile) {
+  const pf = normalizeRelPath(plantFile);
+  const ff = normalizeRelPath(findingFile);
+  if (!pf || !ff) return false;
+  if (pf === ff) return true;
+  if (!ff.includes('/')) return pf.endsWith('/' + ff);
+  const isAbs = ff.startsWith('/') || /^[a-zA-Z]:\//.test(ff);
+  return isAbs && ff.endsWith('/' + pf);
+}
+
+/** Findings whose normalized repo-relative path matches and line is within tolerance of the plant. */
 export function locatingFindings(plant, findings, tolerance = DEFAULT_TOLERANCE) {
-  const base = basename(plant.file);
   return findings.filter(
-    (f) => basename(f.file) === base && Math.abs(f.line - plant.line) <= tolerance
+    (f) => pathsMatch(plant.file, f.file) && Math.abs(f.line - plant.line) <= tolerance
   );
 }
 
@@ -149,9 +160,8 @@ export async function scorePlants(plants, findings, deps) {
 export function countFalsePositives(findings, plants, tolerance = DEFAULT_TOLERANCE) {
   let fp = 0;
   for (const f of findings) {
-    const fBase = basename(f.file);
     const matches = plants.some(
-      (p) => basename(p.file) === fBase && Math.abs(p.line - f.line) <= tolerance
+      (p) => pathsMatch(p.file, f.file) && Math.abs(p.line - f.line) <= tolerance
     );
     if (!matches) fp++;
   }

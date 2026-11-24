@@ -4,25 +4,46 @@
 // All checks guarantee cleanup in finally blocks.
 
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { mkdir, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { detectProvider, git, ADLC_DIR } from '@adlc/core';
 
+const DEFAULT_CMD_TIMEOUT_MS = 60_000;
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 /**
- * Run a command and return { exitCode, stdout, stderr }.
- * Never throws — failures are captured in the result.
+ * Run a command with a hard timeout and return { exitCode, stdout, stderr }.
+ * Never throws — failures and timeouts are captured in the result.
  */
 async function runCmd(cmd, args = [], opts = {}) {
+  const { timeoutMs = DEFAULT_CMD_TIMEOUT_MS, ...spawnOpts } = opts;
   return new Promise((resolve) => {
-    const proc = spawn(cmd, args, { ...opts, stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(cmd, args, { ...spawnOpts, stdio: ['ignore', 'pipe', 'pipe'] });
     const stdout = [];
     const stderr = [];
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      try { proc.kill('SIGKILL'); } catch {}
+      finish({
+        exitCode: -1,
+        stdout: Buffer.concat(stdout).toString('utf8'),
+        stderr: `command timed out after ${timeoutMs}ms`,
+        timedOut: true,
+      });
+    }, timeoutMs);
+    timer.unref?.();
     proc.stdout.on('data', (d) => stdout.push(d));
     proc.stderr.on('data', (d) => stderr.push(d));
-    proc.on('error', (err) => resolve({ exitCode: -1, stdout: '', stderr: err.message }));
-    proc.on('close', (code) => resolve({
+    proc.on('error', (err) => finish({ exitCode: -1, stdout: '', stderr: err.message }));
+    proc.on('close', (code) => finish({
       exitCode: code ?? -1,
       stdout: Buffer.concat(stdout).toString('utf8'),
       stderr: Buffer.concat(stderr).toString('utf8'),
@@ -55,10 +76,10 @@ export async function checkBash(env = process.env) {
 }
 
 /** REQUIRED: git — git status in cwd (must be a git repo). */
-export async function checkGit(cwd = process.cwd()) {
+export async function checkGit(cwd = process.cwd(), { env } = {}) {
   const name = 'git';
   try {
-    git(['status'], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    git(['status'], { cwd, stdio: ['ignore', 'pipe', 'pipe'], ...(env ? { env } : {}) });
     return { name, status: 'pass', detail: 'git status succeeded' };
   } catch (err) {
     const msg = String(err.message ?? err);
@@ -97,24 +118,25 @@ export async function checkWrite(cwd = process.cwd(), options = {}) {
   }
 }
 
-/** REQUIRED: branch — create and delete a test branch (reaps stale branch and verifies cleanup). */
-export async function checkBranch(cwd = process.cwd(), { gitFn = git } = {}) {
+/** REQUIRED: branch — create and delete a randomized ephemeral branch (reaps stale branch and verifies cleanup). */
+export async function checkBranch(cwd = process.cwd(), { gitFn = git, env, branchName } = {}) {
   const name = 'branch';
-  const branchName = 'preflight-test-branch';
+  const targetBranch = branchName ?? `preflight-check-${process.pid}-${randomBytes(4).toString('hex')}`;
+  const gitOpts = { cwd, stdio: ['ignore', 'pipe', 'pipe'], ...(env ? { env } : {}) };
   try {
-    gitFn(['branch', '-D', branchName], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    gitFn(['branch', '-D', targetBranch], gitOpts);
   } catch {
     // no leftover branch to reap
   }
   try {
-    gitFn(['branch', branchName], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    gitFn(['branch', targetBranch], gitOpts);
   } catch (err) {
     const msg = String(err.message ?? err);
     if (msg.includes(`already exists`)) {
       return {
         name,
         status: 'fail',
-        detail: `branch '${branchName}' already exists — likely left by a prior crashed run; delete it manually: git branch -D ${branchName}`,
+        detail: `branch '${targetBranch}' already exists — likely left by a prior crashed run; delete it manually: git branch -D ${targetBranch}`,
       };
     }
     // Preserve the full fatal message (may span multiple lines) up to 3 lines for readability
@@ -124,8 +146,8 @@ export async function checkBranch(cwd = process.cwd(), { gitFn = git } = {}) {
   let cleanupErr;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      gitFn(['branch', '-D', branchName], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
-      return { name, status: 'pass', detail: `branch '${branchName}' created and removed` };
+      gitFn(['branch', '-D', targetBranch], gitOpts);
+      return { name, status: 'pass', detail: `branch '${targetBranch}' created and removed` };
     } catch (err) {
       cleanupErr = err;
     }
@@ -134,25 +156,26 @@ export async function checkBranch(cwd = process.cwd(), { gitFn = git } = {}) {
   return {
     name,
     status: 'fail',
-    detail: `branch '${branchName}' created; cleanup failed: ${msg}`,
+    detail: `branch '${targetBranch}' created; cleanup failed: ${msg}`,
   };
 }
 
 // ── optional checks ──────────────────────────────────────────────────────────
 
 /** OPTIONAL (--worktrees): add/remove a detached worktree (reaps stale worktree and verifies cleanup). */
-export async function checkWorktrees(cwd = process.cwd(), { gitFn = git } = {}) {
+export async function checkWorktrees(cwd = process.cwd(), { gitFn = git, env } = {}) {
   const name = 'worktrees';
   const worktreePath = join(cwd, '.worktrees', 'preflight-test');
+  const gitOpts = { cwd, stdio: ['ignore', 'pipe', 'pipe'], ...(env ? { env } : {}) };
   try {
-    gitFn(['worktree', 'remove', '--force', worktreePath], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    gitFn(['worktree', 'remove', '--force', worktreePath], gitOpts);
   } catch {
     // no leftover worktree to reap
   }
   try {
     gitFn(
       ['-c', 'core.hooksPath=/dev/null', 'worktree', 'add', '--detach', worktreePath],
-      { cwd, stdio: ['ignore', 'pipe', 'pipe'] }
+      gitOpts
     );
   } catch (err) {
     return { name, status: 'fail', detail: String(err.message ?? err).split('\n')[0] };
@@ -162,7 +185,7 @@ export async function checkWorktrees(cwd = process.cwd(), { gitFn = git } = {}) 
     try {
       gitFn(
         ['worktree', 'remove', '--force', worktreePath],
-        { cwd, stdio: ['ignore', 'pipe', 'pipe'] }
+        gitOpts
       );
       return { name, status: 'pass', detail: 'worktree add/remove succeeded' };
     } catch (err) {
@@ -174,12 +197,16 @@ export async function checkWorktrees(cwd = process.cwd(), { gitFn = git } = {}) 
 }
 
 /** OPTIONAL (--test-cmd "..."): run the given command and expect exit 0. */
-export async function checkTestCmd(cmd, cwd = process.cwd()) {
+export async function checkTestCmd(cmd, cwd = process.cwd(), { env, timeoutMs } = {}) {
   const name = 'test-cmd';
   try {
     // Parse simple shell string into argv (no shell injection — just whitespace split)
     // For commands with shell features, delegate to sh -c
-    const { exitCode, stdout, stderr } = await runCmd('sh', ['-c', cmd], { cwd });
+    const { exitCode, stdout, stderr } = await runCmd('sh', ['-c', cmd], {
+      cwd,
+      ...(env ? { env } : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    });
     const output = (stdout + stderr).trim();
     const tail = tailLines(output, 10);
     if (exitCode !== 0) {
@@ -196,10 +223,13 @@ export async function checkTestCmd(cmd, cwd = process.cwd()) {
 }
 
 /** OPTIONAL (--gh): gh auth status exits 0. */
-export async function checkGh() {
+export async function checkGh(env = process.env, { timeoutMs } = {}) {
   const name = 'gh';
   try {
-    const { exitCode, stderr } = await runCmd('gh', ['auth', 'status']);
+    const { exitCode, stderr } = await runCmd('gh', ['auth', 'status'], {
+      env,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    });
     if (exitCode !== 0) {
       return { name, status: 'fail', detail: `gh auth status exited ${exitCode}: ${stderr.trim()}` };
     }

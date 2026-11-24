@@ -1,0 +1,41 @@
+{
+  "body": "Implement Wave 2 T-P19 from .adlc/specs/enhancement-resolution-plan.md:\n\n1. model-ratchet:\n   - Use lstatSync and skip .worktrees in packages/model-ratchet/lib/walk.mjs.\n   - Pass result.stdout (not stderr-polluted combinedOutput) into parseFindingsFromOutput in packages/model-ratchet/bin/model-ratchet.mjs.\n   - Exclude https?:// URL schemes from finding-line matching and location parsing in packages/model-ratchet/lib/run-review.mjs.\n   - Update packages/model-ratchet/test/integration.test.mjs and add packages/model-ratchet/test/walk-and-verdict.test.mjs.\n\n2. review-calibration:\n   - Normalize repo-relative paths instead of basename() in packages/review-calibration/lib/scorer.mjs (while preserving bare-filename matching).\n   - Add OpenAI o1/o3/o4 model-family prefixes in packages/review-calibration/lib/judge.mjs.\n\n3. @adlc/preflight:\n   - Randomize ephemeral branch names (preflight-check-<pid>-<hex>), enforce command timeouts in runCmd, and forward opts.env across checks in packages/preflight/lib/{checks,runner}.mjs.\n   - Update packages/preflight/test/unit.test.mjs.\n\n4. core / rejection-mining / tickets:\n   - Use StringDecoder('utf8') for streaming stdout/stderr chunks in packages/core/lib/llm.mjs.\n   - Pin --repo in packages/rejection-mining/lib/gh.mjs.\n   - Split $EDITOR command + flags via a zero-dependency quote-aware helper inside packages/tickets/lib/edit.mjs.\n   - Rebuild Cursor bundles via npm run build:cursor-mcp.\n\nVerification:\nnpm run build:cursor-mcp && node --test packages/model-ratchet/test/*.test.mjs packages/review-calibration/test/*.test.mjs packages/preflight/test/*.test.mjs packages/rejection-mining/test/*.test.mjs packages/tickets/test/edit.test.mjs scripts/test/ticket-store-boundary.test.mjs",
+  "category": "feature",
+  "duration": 1,
+  "edges": [],
+  "id": "t-wave2-calibration-preflight-llm",
+  "rails": [
+    "packages/review-calibration/test/invalid-plants.test.mjs"
+  ],
+  "scope": [
+    "packages/model-ratchet/lib/walk.mjs",
+    "packages/model-ratchet/lib/run-review.mjs",
+    "packages/model-ratchet/bin/model-ratchet.mjs",
+    "packages/model-ratchet/test/walk-and-verdict.test.mjs",
+    "packages/model-ratchet/test/integration.test.mjs",
+    "packages/review-calibration/lib/scorer.mjs",
+    "packages/review-calibration/lib/judge.mjs",
+    "packages/review-calibration/test/scorer.test.mjs",
+    "packages/review-calibration/test/judge.test.mjs",
+    "packages/preflight/lib/checks.mjs",
+    "packages/preflight/lib/runner.mjs",
+    "packages/preflight/test/unit.test.mjs",
+    "packages/core/lib/llm.mjs",
+    "packages/core/test/llm-agy-stdin.test.mjs",
+    "packages/rejection-mining/lib/gh.mjs",
+    "packages/rejection-mining/test/mine.test.mjs",
+    "packages/tickets/lib/edit.mjs",
+    "packages/tickets/test/edit.test.mjs",
+    "plugins/adlc-cursor/hooks/adlc-session-start.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-pretool.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-audit.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-shell-advisory.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-precompact.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-subagent.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-stop.bundle.mjs",
+    "plugins/adlc-cursor/hooks/adlc-preflight.bundle.mjs",
+    "plugins/adlc-cursor/lib/mcp-build-metadata.mjs",
+    "plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs"
+  ],
+  "title": "Wave 2 T-P19 (R7): Fix model-ratchet, review-calibration scorer/judge, @adlc/preflight isolation, and core/ticket/gh utilities"
+}

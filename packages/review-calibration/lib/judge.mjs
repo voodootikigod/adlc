@@ -197,6 +197,7 @@ const MODEL_FAMILY_PATTERNS = [
   [/claude/, 'anthropic'],
   [/gemini/, 'gemini'],
   [/gpt/, 'openai'],
+  [/(?:^|\/)o[134](?:$|[-.])/, 'openai'],
 ];
 
 /**

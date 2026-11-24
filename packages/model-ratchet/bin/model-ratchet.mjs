@@ -220,8 +220,7 @@ for (const row of selected) {
     continue;
   }
 
-  const combinedOutput = result.stderr !== "" ? `${result.stdout}\n${result.stderr}` : result.stdout;
-  const parsed = parseFindingsFromOutput(combinedOutput, row.file);
+  const parsed = parseFindingsFromOutput(result.stdout, row.file);
 
   // Append each finding, but only COUNT the ones that actually landed. A finding the
   // ledger boundary rejects (a secret, a raw dump — now that the ledger is tracked and

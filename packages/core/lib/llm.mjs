@@ -14,6 +14,7 @@
 //   ADLC_AGY_SANDBOX   set to 1 to pass --sandbox
 
 import { spawn } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 
 // agy's timeout marker is its ENTIRE output on failure. Matching it as a
 // bare substring would false-trip whenever a model quotes the phrase in a
@@ -72,8 +73,10 @@ function agySend({ apiKey, model, system, prompt, timeoutMs }, env = process.env
       reject(new Error('agy: timed out waiting for response'));
     }, hostTimeoutMs);
     timer.unref?.();
-    p.stdout.on('data', (d) => (out += d));
-    p.stderr.on('data', (d) => (err += d));
+    const outDecoder = new StringDecoder('utf8');
+    const errDecoder = new StringDecoder('utf8');
+    p.stdout.on('data', (d) => (out += outDecoder.write(d)));
+    p.stderr.on('data', (d) => (err += errDecoder.write(d)));
     p.on('error', (e) => {
       if (settled) return;
       settled = true;
@@ -90,6 +93,8 @@ function agySend({ apiKey, model, system, prompt, timeoutMs }, env = process.env
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      out += outDecoder.end();
+      err += errDecoder.end();
       // agy exits 0 even on print-timeout; the error surfaces in the output.
       if (code !== 0) return reject(new Error(`agy exit ${code}: ${(err || out).slice(-400)}`));
       // A clean exit that never read the whole prompt answered something else.
