@@ -9,6 +9,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, renameSync, statSync, readdirSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { writeFileAtomic } from '@adlc/core';
 
 import { parseProfile } from './profile.mjs';
 
@@ -63,7 +64,7 @@ export function serialiseJson(value) {
  */
 export function saveCache(path, cache, io = {}) {
   if (!cache) return null;
-  const { write = writeFileSync } = io;
+  const { write = writeFileAtomic } = io;
   try {
     write(path, serialiseJson(cache));
     return null;
@@ -118,7 +119,7 @@ export function resolveRemoteBaseSha({ run = defaultGitRun } = {}) {
     .map((line) => line.trim().split(/\s+/))
     .filter((parts) => parts.length >= 2 && parts[1] === 'HEAD')
     .map((parts) => parts[0])
-    .find((candidate) => /^[0-9a-f]{40}$/.test(candidate));
+    .find((candidate) => /^[0-9a-f]{40,64}$/.test(candidate));
   if (!sha) return null;
 
   // THE SHA MUST BE IN THE LOCAL OBJECT DATABASE, or `merge-base` cannot use it.
@@ -304,7 +305,7 @@ export function loadLedger(path, io = {}) {
  * against authorization nothing can later prove was spent.
  */
 export function saveLedger(path, ledger, io = {}) {
-  const { write = writeFileSync } = io;
+  const { write = writeFileAtomic } = io;
   try {
     write(path, serialiseJson(ledger));
   } catch (err) {

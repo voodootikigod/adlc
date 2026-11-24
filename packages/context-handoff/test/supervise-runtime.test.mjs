@@ -336,3 +336,36 @@ test('statTranscriptFile reports the mtime it finds and null for a file that is 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('nodeSpawner kills the negative process group on POSIX (T-P18)', LOOP_TEST, async () => {
+  if (process.platform === 'win32') return;
+  const dir = mkdtempSync(join(tmpdir(), 'supervise-pg-'));
+  try {
+    const { chmodSync, readFileSync, existsSync } = await import('node:fs');
+    const pidFile = join(dir, 'descendant.pid');
+    const helper = join(dir, 'spawn-child.sh');
+    writeFileSync(helper, `#!/bin/sh\nsleep 10 &\necho $! > "${pidFile}"\nwait\n`);
+    chmodSync(helper, 0o755);
+    const spawn = nodeSpawner({
+      command: helper,
+      args: [],
+      cwd: dir,
+      env: process.env,
+    });
+    const handle = spawn({ sessionId: 'sess-pg', prompt: null });
+    for (let i = 0; i < 40 && !existsSync(pidFile); i++) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    const childPid = Number(readFileSync(pidFile, 'utf8').trim());
+    assert.ok(Number.isInteger(childPid) && childPid > 0);
+    assert.equal(handle.kill('SIGKILL'), true);
+    await handle.exited;
+    await new Promise((r) => setTimeout(r, 50));
+    let alive = true;
+    try { process.kill(childPid, 0); } catch { alive = false; }
+    if (alive) { try { process.kill(childPid, 'SIGKILL'); } catch {} }
+    assert.equal(alive, false, 'descendant must be terminated with process group');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

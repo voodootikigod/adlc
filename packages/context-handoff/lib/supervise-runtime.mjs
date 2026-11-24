@@ -81,11 +81,13 @@ export function childArgv({ sessionId, prompt, args = [] }) {
  * spawn can forget.
  */
 export function nodeSpawner({ command, args = [], cwd, env, spawnFn = nodeSpawn, onSpawn = null }) {
+  const detached = process.platform !== 'win32';
   return ({ sessionId, prompt }) => {
     const child = spawnFn(command, childArgv({ sessionId, prompt, args }), {
       cwd,
       env: superviseChildEnv(env),
       stdio: 'inherit',
+      ...(detached ? { detached: true } : {}),
     });
     const handle = {
       pid: child.pid,
@@ -97,6 +99,14 @@ export function nodeSpawner({ command, args = [], cwd, env, spawnFn = nodeSpawn,
       // made that guard permanently unreachable in production while a stub
       // returning false kept its unit test green.
       kill: (signal) => {
+        if (detached && typeof child.pid === 'number' && child.pid > 0) {
+          try {
+            process.kill(-child.pid, signal);
+            return true;
+          } catch {
+            // Fall through to direct child.kill if group is already gone.
+          }
+        }
         try {
           return child.kill(signal);
         } catch {

@@ -6,8 +6,9 @@
 // editing in place (repo coding-style rule), which keeps the scheduler's
 // state transitions easy to reason about and test.
 
-import { writeFileSync, readFileSync, existsSync, renameSync, mkdirSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { writeFileAtomic } from '@adlc/core';
 
 export const STATUS_FILE = 'fleet-status.json';
 
@@ -60,13 +61,10 @@ export function loadStatus(dir) {
   return JSON.parse(readFileSync(p, 'utf8'));
 }
 
-/** Atomically persist the status object (temp file + rename). */
+/** Atomically persist the status object via @adlc/core writeFileAtomic. */
 export function saveStatus(dir, status) {
   mkdirSync(dir, { recursive: true });
-  const p = statusPath(dir);
-  const tmp = `${p}.tmp-${status.runId ?? 'run'}`;
-  writeFileSync(tmp, JSON.stringify(status, null, 2) + '\n');
-  renameSync(tmp, p);
+  writeFileAtomic(statusPath(dir), JSON.stringify(status, null, '  ') + '\n');
   return status;
 }
 

@@ -507,6 +507,8 @@ export function abnormalSelfExit(exit) {
  * @param {{ isStopped: () => boolean }} [deps.interrupt] SIGINT state owned by the caller
  * @returns {Promise<{ reason: string, sessions: string[], continuations: number }>}
  */
+export const DEFAULT_MAX_CONTINUATIONS = 20;
+
 export async function superviseLoop({
   mintSessionId,
   spawn,
@@ -522,6 +524,7 @@ export async function superviseLoop({
   pollMs = SUPERVISE_DENY_POLL_MS,
   quiescenceMs = SUPERVISE_QUIESCENCE_MS,
   graceMs = SUPERVISE_TERMINATE_GRACE_MS,
+  maxContinuations = DEFAULT_MAX_CONTINUATIONS,
 }) {
   const stopped = () => interrupt?.isStopped() === true;
   let sessionId = mintSessionId();
@@ -569,6 +572,12 @@ export async function superviseLoop({
         log(`adlc handoff supervise: ${describeOutcome({ reason, continuations, childExit })}`);
       }
       return { reason, sessions, continuations, childExit, abnormalExits };
+    }
+
+    if (typeof maxContinuations === 'number' && continuations >= maxContinuations) {
+      degradeNow(`continuation cap reached (${maxContinuations})`);
+      const exit = await waitForExit(tracked, { sleep, pollMs });
+      return { reason: 'degraded', sessions, continuations, childExit: describeExit(exit), abnormalExits };
     }
 
     log(`adlc handoff supervise: session ${sessionId} hit a handoff deny — waiting for it to finish writing.`);

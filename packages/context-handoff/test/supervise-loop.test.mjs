@@ -980,3 +980,34 @@ test('parseContinuePayload accepts the real envelope and rejects what it should'
   assert.equal(parseContinuePayload({ ...envelope, content_hash: HASH.toUpperCase() }).ok, false);
   assert.equal(parseContinuePayload({ ...envelope, content_path: '' }).ok, false);
 });
+
+test('superviseLoop enforces maxContinuations cap and exports DEFAULT_MAX_CONTINUATIONS = 20 (T-P18)', LOOP_TEST, async () => {
+  const { DEFAULT_MAX_CONTINUATIONS } = await import('../lib/supervise.mjs');
+  assert.equal(DEFAULT_MAX_CONTINUATIONS, 20);
+  const logs = [];
+  let spawns = 0;
+  const result = await superviseLoop({
+    mintSessionId: () => 'sess-cap-0',
+    spawn: () => {
+      spawns += 1;
+      const child = fakeChild();
+      setTimeout(() => child.end(0, null), 10);
+      return child;
+    },
+    readOpenDeny: () => ({ status: 'open' }),
+    transcriptPath: () => null,
+    statTranscript: () => null,
+    runContinue: async () => { throw new Error('must not call runContinue past maxContinuations'); },
+    verifyCapture: () => ({ ok: true }),
+    log: (line) => logs.push(line),
+    sleep: () => new Promise((r) => setTimeout(r, 5)),
+    pollMs: 1,
+    quiescenceMs: 1,
+    graceMs: 10,
+    maxContinuations: 0,
+  });
+  assert.equal(spawns, 1);
+  assert.equal(result.reason, 'degraded');
+  assert.equal(result.continuations, 0);
+  assert.ok(logs.some((l) => l.includes('continuation cap reached (0)')));
+});

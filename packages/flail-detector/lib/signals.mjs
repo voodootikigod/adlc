@@ -1,6 +1,7 @@
 // signals.mjs — signal detection logic for flail-detector.
 // All functions are pure and deterministic.
 
+import { isAbsolute, relative, resolve } from 'node:path';
 import { globMatch } from '@adlc/core';
 
 // ---------------------------------------------------------------------------
@@ -121,20 +122,37 @@ export function detectRepeatedErrors(steps, maxRepeat) {
 }
 
 /**
+ * Normalize an extracted file path to repo-relative POSIX form when `cwd` is
+ * supplied and `rawPath` is absolute inside `cwd`. Strips leading `./`.
+ */
+export function normalizeScopePath(rawPath, cwd = null) {
+  let p = String(rawPath ?? '').replace(/\\/g, '/');
+  if (cwd && (isAbsolute(p) || /^[a-zA-Z]:\//.test(p))) {
+    const rel = relative(resolve(cwd), resolve(p)).replace(/\\/g, '/');
+    if (rel && !rel.startsWith('..') && !isAbsolute(rel)) {
+      p = rel;
+    }
+  }
+  return p.replace(/^\.\//, '');
+}
+
+/**
  * Signal 2: scope violation
  * File paths extracted from the log that do NOT match any scope glob.
  * Only active when scopes are provided.
  *
  * @param {string[]} lines
  * @param {string[]} scopes - glob patterns from --scope flags
+ * @param {{ cwd?: string|null }} [opts]
  * @returns {{ path: string, line: string }[]}
  */
-export function detectScopeViolations(lines, scopes) {
+export function detectScopeViolations(lines, scopes, { cwd = null } = {}) {
   if (!scopes || scopes.length === 0) return [];
   const violations = [];
   for (const line of lines) {
-    const path = extractPath(line);
-    if (!path) continue;
+    const rawPath = extractPath(line);
+    if (!rawPath) continue;
+    const path = normalizeScopePath(rawPath, cwd);
     const inScope = scopes.some((g) => globMatch(g, path));
     if (!inScope) {
       violations.push({ path, line: line.trimEnd() });
@@ -148,13 +166,15 @@ export function detectScopeViolations(lines, scopes) {
  * File paths appearing in >= 3 write/edit log lines.
  *
  * @param {string[]} lines
+ * @param {{ cwd?: string|null }} [opts]
  * @returns {{ path: string, count: number }[]}
  */
-export function detectEditChurn(lines) {
+export function detectEditChurn(lines, { cwd = null } = {}) {
   const counts = new Map();
   for (const line of lines) {
-    const path = extractPath(line);
-    if (!path) continue;
+    const rawPath = extractPath(line);
+    if (!rawPath) continue;
+    const path = normalizeScopePath(rawPath, cwd);
     counts.set(path, (counts.get(path) ?? 0) + 1);
   }
   const results = [];

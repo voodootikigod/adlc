@@ -14,7 +14,14 @@ import assert from 'node:assert/strict';
 import { writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
-import { runCommand, shellInvocation, validateCandidate, runConsensusFix } from '../lib/runner.mjs';
+import {
+  DEFAULT_COMMAND_TIMEOUT_MS,
+  DEFAULT_MAX_BUFFER_BYTES,
+  runCommand,
+  shellInvocation,
+  validateCandidate,
+  runConsensusFix,
+} from '../lib/runner.mjs';
 
 /** One full-line-replace hunk, for single-line fixture files. */
 function replaceLine1(replacement) {
@@ -721,4 +728,30 @@ test('#604: runConsensusFix returns effective fanWidth for both --n and --provid
   });
   assert.equal(res.fanWidth, 2);
   assert.equal(res.allDivergent, false);
+});
+
+test('runCommand enforces timeoutMs and maxBuffer bounds (T-P18)', async () => {
+  assert.equal(DEFAULT_COMMAND_TIMEOUT_MS, 300_000);
+  assert.equal(DEFAULT_MAX_BUFFER_BYTES, 16 * 1024 * 1024);
+
+  const timed = await runCommand('sleep 5', { timeoutMs: 80 });
+  assert.equal(timed.exitCode, 124);
+  assert.equal(timed.timedOut, true);
+
+  const bounded = await runCommand('node -e "process.stdout.write(\'x\'.repeat(2000))"', { maxBuffer: 64 });
+  assert.equal(bounded.exitCode, 0);
+  assert.equal(bounded.truncated, true);
+  assert.equal(Buffer.byteLength(bounded.output, 'utf8'), 64);
+
+  await assert.rejects(
+    () => runConsensusFix({
+      testCmd: 'npm test',
+      files: [],
+      n: 1,
+      tier: 'cheap',
+      completeFn: async () => '{}',
+      runCommandFn: async () => ({ exitCode: 124, output: '', timedOut: true }),
+    }),
+    (err) => err.isOpError === true && /timed out/.test(err.message),
+  );
 });
