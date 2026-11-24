@@ -54,7 +54,7 @@ function agySend({ apiKey, model, system, prompt, timeoutMs }, env = process.env
 
 ${prompt}` : prompt;
   const hostTimeoutMs = typeof timeoutMs === "number" && timeoutMs > 0 ? timeoutMs : parseAgyTimeoutMs(timeoutSpec) + 5e3;
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     const p = spawn(bin, args, { stdio: ["pipe", "pipe", "pipe"] });
     let out = "";
     let err = "";
@@ -95,7 +95,7 @@ ${prompt}` : prompt;
       if (isAgyTimeout(out)) {
         return reject(new Error("agy: timed out waiting for response"));
       }
-      resolve8({ text: out.replace(/\s+$/, ""), usage: null });
+      resolve9({ text: out.replace(/\s+$/, ""), usage: null });
     });
   });
 }
@@ -3538,8 +3538,10 @@ __export(signals_exports, {
   detectScopeViolations: () => detectScopeViolations,
   detectSizeExceeded: () => detectSizeExceeded,
   extractPath: () => extractPath,
-  normalizeError: () => normalizeError
+  normalizeError: () => normalizeError,
+  normalizeScopePath: () => normalizeScopePath
 });
+import { isAbsolute as isAbsolute9, relative as relative7, resolve as resolve8 } from "node:path";
 function normalizeError(line) {
   return line.toLowerCase().replace(/0x[0-9a-f]+/gi, "").replace(/"[^"]*"/g, "").replace(/'[^']*'/g, "").replace(/(?:\/[^\s/][^\s]*|[A-Za-z]:\\[^\s]*)/g, "").replace(/\d+/g, "").replace(/\s+/g, " ").trim();
 }
@@ -3579,12 +3581,23 @@ function detectRepeatedErrors(steps, maxRepeat) {
   }
   return results;
 }
-function detectScopeViolations(lines, scopes) {
+function normalizeScopePath(rawPath, cwd = null) {
+  let p = String(rawPath ?? "").replace(/\\/g, "/");
+  if (cwd && (isAbsolute9(p) || /^[a-zA-Z]:\//.test(p))) {
+    const rel = relative7(resolve8(cwd), resolve8(p)).replace(/\\/g, "/");
+    if (rel && !rel.startsWith("..") && !isAbsolute9(rel)) {
+      p = rel;
+    }
+  }
+  return p.replace(/^\.\//, "");
+}
+function detectScopeViolations(lines, scopes, { cwd = null } = {}) {
   if (!scopes || scopes.length === 0) return [];
   const violations = [];
   for (const line of lines) {
-    const path = extractPath(line);
-    if (!path) continue;
+    const rawPath = extractPath(line);
+    if (!rawPath) continue;
+    const path = normalizeScopePath(rawPath, cwd);
     const inScope = scopes.some((g) => globMatch2(g, path));
     if (!inScope) {
       violations.push({ path, line: line.trimEnd() });
@@ -3592,11 +3605,12 @@ function detectScopeViolations(lines, scopes) {
   }
   return violations;
 }
-function detectEditChurn(lines) {
+function detectEditChurn(lines, { cwd = null } = {}) {
   const counts = /* @__PURE__ */ new Map();
   for (const line of lines) {
-    const path = extractPath(line);
-    if (!path) continue;
+    const rawPath = extractPath(line);
+    if (!rawPath) continue;
+    const path = normalizeScopePath(rawPath, cwd);
     counts.set(path, (counts.get(path) ?? 0) + 1);
   }
   const results = [];

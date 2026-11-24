@@ -12,9 +12,12 @@ import { extractJson } from '@adlc/core';
 
 /** How long an aborted command's process group gets after SIGTERM before SIGKILL. */
 export const ABORT_GRACE_MS = 2000;
+export const DEFAULT_COMMAND_TIMEOUT_MS = 300_000;
+export const DEFAULT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
 /** Exit code reported for a command that was aborted, or never started because of an abort (128 + SIGINT). */
 const ABORTED_EXIT_CODE = 130;
+const TIMED_OUT_EXIT_CODE = 124;
 
 function killGroup(pid, signal) {
   try {
@@ -43,7 +46,16 @@ export function shellInvocation(cmd, platform = process.platform) {
   return { file: 'sh', args: ['-c', cmd] };
 }
 
-export function runCommand(cmd, { signal, platform = process.platform, spawnFn = spawn } = {}) {
+export function runCommand(
+  cmd,
+  {
+    signal,
+    platform = process.platform,
+    spawnFn = spawn,
+    timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS,
+    maxBuffer = DEFAULT_MAX_BUFFER_BYTES,
+  } = {},
+) {
   if (signal?.aborted) {
     return Promise.resolve({ exitCode: ABORTED_EXIT_CODE, output: 'aborted before start' });
   }
@@ -51,26 +63,53 @@ export function runCommand(cmd, { signal, platform = process.platform, spawnFn =
   return new Promise((resolvePromise) => {
     const child = spawnFn(file, args, { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
+    let truncated = false;
+    let timedOut = false;
     let spawnError = null;
     let escalation = null;
-    child.stdout.on('data', (chunk) => { output += chunk; });
-    child.stderr.on('data', (chunk) => { output += chunk; });
-    const onAbort = () => {
+    const appendChunk = (chunk) => {
+      if (truncated) return;
+      const text = String(chunk);
+      if (output.length + text.length > maxBuffer) {
+        output += text.slice(0, Math.max(0, maxBuffer - output.length));
+        truncated = true;
+      } else {
+        output += text;
+      }
+    };
+    child.stdout.on('data', appendChunk);
+    child.stderr.on('data', appendChunk);
+    const terminateGroup = () => {
       killGroup(child.pid, 'SIGTERM');
       escalation = setTimeout(() => killGroup(child.pid, 'SIGKILL'), ABORT_GRACE_MS);
+      escalation.unref?.();
     };
+    const onAbort = () => terminateGroup();
     signal?.addEventListener('abort', onAbort, { once: true });
+    let timer = null;
+    if (typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        terminateGroup();
+      }, timeoutMs);
+      timer.unref?.();
+    }
     let settled = false;
     const finish = (exitCode) => {
       if (settled) return;
       settled = true;
       signal?.removeEventListener('abort', onAbort);
+      if (timer) clearTimeout(timer);
       if (escalation) clearTimeout(escalation);
-      resolvePromise(spawnError ? { exitCode, output, spawnError } : { exitCode, output });
+      const res = { exitCode, output };
+      if (spawnError) res.spawnError = spawnError;
+      if (timedOut) res.timedOut = true;
+      if (truncated) res.truncated = true;
+      resolvePromise(res);
     };
     child.on('error', (err) => {
       spawnError = err.code || err.message;
-      output += err.message;
+      appendChunk(err.message);
       finish(127);
     });
     child.on('close', (code) => {
@@ -78,6 +117,11 @@ export function runCommand(cmd, { signal, platform = process.platform, spawnFn =
         // A group member may still hold a candidate file open; make sure none survive.
         killGroup(child.pid, 'SIGKILL');
         finish(ABORTED_EXIT_CODE);
+        return;
+      }
+      if (timedOut) {
+        killGroup(child.pid, 'SIGKILL');
+        finish(TIMED_OUT_EXIT_CODE);
         return;
       }
       finish(code ?? 1);

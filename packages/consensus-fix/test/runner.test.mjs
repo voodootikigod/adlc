@@ -722,3 +722,14 @@ test('#604: runConsensusFix returns effective fanWidth for both --n and --provid
   assert.equal(res.fanWidth, 2);
   assert.equal(res.allDivergent, false);
 });
+
+test('runCommand enforces timeoutMs and maxBuffer bounds (T-P18)', async () => {
+  const timed = await runCommand('sleep 5', { timeoutMs: 80 });
+  assert.equal(timed.exitCode, 124);
+  assert.equal(timed.timedOut, true);
+
+  const bounded = await runCommand('node -e "process.stdout.write(\'x\'.repeat(2000))"', { maxBuffer: 64 });
+  assert.equal(bounded.exitCode, 0);
+  assert.equal(bounded.truncated, true);
+  assert.equal(bounded.output.length, 64);
+});

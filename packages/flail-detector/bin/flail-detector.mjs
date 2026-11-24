@@ -2,7 +2,7 @@
 // flail-detector — ADLC C6 session-log flail analysis (mechanical two-strike rule).
 // Thin CLI: parse args, call lib, exit with the correct code.
 
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync, openSync, fstatSync, readSync, closeSync } from 'node:fs';
 import { relative, resolve, isAbsolute } from 'node:path';
 import { parseArgs, opError, printJson, sha256, reasonList } from '@adlc/core';
 import { appendManifestEntry } from '@adlc/gate-manifest';
@@ -153,14 +153,32 @@ if (values.record) {
 // Read and analyze
 // ---------------------------------------------------------------------------
 
+const MAX_LOG_READ_BYTES = 16 * 1024 * 1024;
 let raw;
+let totalBytes;
 try {
-  raw = readFileSync(logFile, 'utf8');
+  const fd = openSync(logFile, 'r');
+  try {
+    totalBytes = fstatSync(fd).size;
+    const toRead = Math.min(totalBytes, MAX_LOG_READ_BYTES);
+    const start = totalBytes - toRead;
+    const buf = Buffer.alloc(toRead);
+    let offset = 0;
+    while (offset < toRead) {
+      const n = readSync(fd, buf, offset, toRead - offset, start + offset);
+      if (n <= 0) break;
+      offset += n;
+    }
+    raw = buf.subarray(0, offset).toString('utf8');
+  } finally {
+    closeSync(fd);
+  }
 } catch (err) {
   opError(`could not read log file: ${err.message}`);
 }
 
-const { lines, bytes } = parseLog(raw);
+const { lines } = parseLog(raw);
+const bytes = totalBytes;
 
 // ---------------------------------------------------------------------------
 // Refuse to "analyze" nothing (issue #622)
@@ -179,7 +197,7 @@ if (!analyzability.ok) {
   process.exit(1);
 }
 
-const result = analyze({ lines, bytes, scopes, maxRepeat, maxBytes, spentTokens, budget });
+const result = analyze({ lines, bytes, scopes, maxRepeat, maxBytes, spentTokens, budget, cwd: process.cwd() });
 
 // ---------------------------------------------------------------------------
 // Record on clean verdict (before printing, so a ledger failure never prints CLEAN)

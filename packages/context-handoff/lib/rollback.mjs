@@ -23,6 +23,7 @@
 
 import { existsSync, readFileSync, unlinkSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { writeFileAtomic } from '@adlc/core';
 
 /** Current bytes at `path`, or null when it does not exist / cannot be read. */
 export function currentBytes(path, { fs = { existsSync, readFileSync } } = {}) {
@@ -67,7 +68,11 @@ export function restoreIfOurs({ path, wroteBytes, priorBytes, label }, io = {}) 
       if (now !== null) fs.unlinkSync(path);
     } else {
       fs.mkdirSync(dirname(path), { recursive: true });
-      fs.writeFileSync(path, priorBytes, 'utf8');
+      if (io.fs?.writeFileSync) {
+        fs.writeFileSync(path, priorBytes, 'utf8');
+      } else {
+        writeFileAtomic(path, priorBytes);
+      }
     }
     return { restored: true, conflict: false, label };
   } catch {

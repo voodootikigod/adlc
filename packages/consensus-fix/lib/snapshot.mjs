@@ -56,13 +56,17 @@ export function restoreSnapshot(snapshot) {
  * @returns {{ok:true} | {ok:false, error:string}}
  */
 export function applyChanges(changes, snapshot) {
+  const prepared = [];
   for (const { file, hunks } of changes) {
     if (!(file in snapshot)) {
       throw new Error(`candidate referenced file not in provided list: ${file}`);
     }
     const result = applyHunks(snapshot[file], hunks);
     if (!result.ok) return { ok: false, error: `${file}: ${result.error}` };
-    writeFileAtomic(file, result.content);
+    prepared.push({ file, content: result.content });
+  }
+  for (const { file, content } of prepared) {
+    writeFileAtomic(file, content);
   }
   return { ok: true };
 }

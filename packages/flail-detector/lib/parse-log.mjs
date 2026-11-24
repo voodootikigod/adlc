@@ -51,6 +51,18 @@ function extractStrings(obj) {
  * Returns an array of file-path strings (one entry per occurrence, so a path
  * edited twice yields two entries — preserving churn counts).
  */
+const READ_ONLY_TOOLS = new Set([
+  'read',
+  'read_file',
+  'view_file',
+  'grep',
+  'grep_search',
+  'glob',
+  'find_by_name',
+  'ls',
+  'list_dir',
+]);
+
 function extractFileTargets(obj) {
   const results = [];
 
@@ -60,6 +72,19 @@ function extractFileTargets(obj) {
       return;
     }
     if (!node || typeof node !== 'object') return;
+
+    // Skip read-only tool calls (Read, Grep, Glob, LS, etc.) so reading files
+    // never triggers edit-churn or write scope-violation signals.
+    const toolName = typeof node.name === 'string'
+      ? node.name
+      : typeof node.tool_name === 'string'
+        ? node.tool_name
+        : typeof node.tool === 'string'
+          ? node.tool
+          : null;
+    if (toolName && READ_ONLY_TOOLS.has(toolName.toLowerCase())) {
+      return;
+    }
 
     // Collect a bare `file_path` at THIS node regardless of the parent key —
     // the documented defensive fallback, now the primary mechanism.
@@ -105,8 +130,31 @@ function tryParseJson(line) {
  * @param {string} content - Raw file content
  * @returns {{ lines: string[], bytes: number }}
  */
+function appendEventLines(obj, lines) {
+  for (const fp of extractFileTargets(obj)) {
+    lines.push(`Writing ${fp}`);
+  }
+  lines.push(...extractStrings(obj));
+}
+
 export function parseLog(content) {
   const bytes = Buffer.byteLength(content, 'utf8');
+  const trimmed = content.trim();
+  if (trimmed.startsWith('[')) {
+    const arr = tryParseJson(trimmed);
+    if (Array.isArray(arr)) {
+      const lines = [];
+      for (const item of arr) {
+        if (item && typeof item === 'object') {
+          appendEventLines(item, lines);
+        } else if (typeof item === 'string') {
+          lines.push(item);
+        }
+      }
+      return { lines, bytes };
+    }
+  }
+
   const rawLines = content.split('\n');
   const nonEmpty = rawLines.filter((l) => l.trim().length > 0);
 
@@ -121,16 +169,7 @@ export function parseLog(content) {
     for (let i = 0; i < nonEmpty.length; i++) {
       const obj = parsed[i];
       if (obj !== null) {
-        // Structured tool-use file targets (real Claude Code transcripts):
-        // emit a synthetic "Writing <path>" line so the existing extractPath
-        // patterns — and therefore the scope-violation and edit-churn signals —
-        // recognize the file without any change to the signal detectors.
-        for (const fp of extractFileTargets(obj)) {
-          lines.push(`Writing ${fp}`);
-        }
-        // Prose / "file_path" substring heuristics (legacy fixtures): keep as
-        // a fallback so older log formats still work.
-        lines.push(...extractStrings(obj));
+        appendEventLines(obj, lines);
       } else {
         lines.push(nonEmpty[i]);
       }

@@ -186,3 +186,11 @@ test('isAllDivergent returns false when any group has 2+ members', () => {
   const groups = groupByChangeset(candidates);
   assert.equal(isAllDivergent(groups, 3), false);
 });
+
+test('isAllDivergent returns false when a single passing candidate survives (T-P18)', () => {
+  const candidates = [
+    { index: 0, changes: [{ file: 'a.mjs', hunks: hunk('only-winner') }], changedLines: 1, passed: true },
+  ];
+  const groups = groupByChangeset(candidates);
+  assert.equal(isAllDivergent(groups, 3), false);
+});

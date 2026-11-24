@@ -102,6 +102,7 @@ export function selectWinner(groups) {
  */
 export function isAllDivergent(groups, n) {
   if (n < 3) return false;
+  if (groups.size === 1) return false;
   for (const group of groups.values()) {
     if (group.length > 1) return false;
   }

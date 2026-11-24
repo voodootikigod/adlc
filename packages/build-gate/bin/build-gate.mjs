@@ -9,7 +9,7 @@
 // the caller (a hook, CI wrapper, or any Path-A harness) supplies the signal
 // via --depth/--session-bytes, or a --transcript file to derive it from.
 
-import { readFileSync, existsSync, openSync, fstatSync, readSync, closeSync } from 'node:fs';
+import { constants, existsSync, openSync, fstatSync, readSync, closeSync } from 'node:fs';
 import { parseArgs, opError, printJson, loadTickets, ADLC_DIR } from '@adlc/core';
 import { MAX_ACTIVE_CONTEXT_BYTES } from '@adlc/context-handoff';
 import { computeRiskTier } from '../lib/risk.mjs';
@@ -20,13 +20,11 @@ import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
 
 /**
  * The CLI's own `--bytes-threshold` default. `../lib/depth-signal.mjs`'s
- * own DEFAULT_BYTES_THRESHOLD currently equals HARD_BYTES (256 KiB); a raw
- * byte count alone does not indicate tool-call depth, so a threshold that
- * low classifies an ordinary session with zero tool calls as degraded. This
- * override is scoped to the flag default only — `isDegraded` itself takes
- * an explicit `bytesThreshold`, so nothing about the library's own contract
- * or behavior changes; only what this binary asks for when the caller
- * doesn't say otherwise.
+ * own DEFAULT_BYTES_THRESHOLD equals HARD_BYTES; a raw byte count alone does
+ * not indicate tool-call depth, so this CLI default is scoped to the flag
+ * default only — `isDegraded` itself takes an explicit `bytesThreshold`, so
+ * nothing about the library's own contract or behavior changes; only what this
+ * binary asks for when the caller doesn't say otherwise.
  */
 const CLI_DEFAULT_BYTES_THRESHOLD = 8 * 1024 * 1024;
 
@@ -136,17 +134,24 @@ if (values.transcript !== undefined) {
   let text;
   let totalBytes;
   try {
-    const fd = openSync(values.transcript, 'r');
+    const openFlags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
+    const fd = openSync(values.transcript, openFlags);
     try {
-      totalBytes = fstatSync(fd).size;
-      if (totalBytes > MAX_ACTIVE_CONTEXT_BYTES) {
-        const start = totalBytes - MAX_ACTIVE_CONTEXT_BYTES;
-        const buf = Buffer.alloc(MAX_ACTIVE_CONTEXT_BYTES);
-        readSync(fd, buf, 0, MAX_ACTIVE_CONTEXT_BYTES, start);
-        text = buf.toString('utf8');
-      } else {
-        text = readFileSync(values.transcript, 'utf8');
+      const stat = fstatSync(fd);
+      if (!stat.isFile()) {
+        throw new Error(`transcript must be a regular file: ${values.transcript}`);
       }
+      totalBytes = stat.size;
+      const toRead = Math.min(totalBytes, MAX_ACTIVE_CONTEXT_BYTES);
+      const start = totalBytes - toRead;
+      const buf = Buffer.alloc(toRead);
+      let offset = 0;
+      while (offset < toRead) {
+        const n = readSync(fd, buf, offset, toRead - offset, start + offset);
+        if (n <= 0) break;
+        offset += n;
+      }
+      text = buf.subarray(0, offset).toString('utf8');
     } finally {
       closeSync(fd);
     }

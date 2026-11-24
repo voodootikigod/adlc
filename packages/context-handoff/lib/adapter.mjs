@@ -592,7 +592,31 @@ export function evaluateHandoffPreToolUse({
     // below) is a narrower, disclosed residual: an active grant for a Bash
     // call that ALSO touches a protected path is already a suspicious
     // combination, not the ordinary recovery flow this mechanism exists for.
-    const bypassActive = bypassVerified && reasons.length === 0 && removeBypassGrant(root, sessionId) === true;
+    const baseGateInput = mutationGateInputFromLoad(loadedAfter, {
+      currentSessionId: sessionId,
+      processStickyDeny,
+      resumeAuth,
+      bypassForSession: false,
+      manifestVerifyFailed: false,
+    });
+    const baseGate = evaluateMutationGate(baseGateInput);
+    const bashReadOnlyProbe =
+      isBash &&
+      typeof bashCommand === 'string' &&
+      bashCommand.trim().length > 0 &&
+      (() => {
+        const cls = classifyShellCommand(bashCommand);
+        return cls.readOnly && !cls.writeOption;
+      })();
+    // Claim the one-shot bypass grant ONLY when a deny would actually fire AND
+    // the call is not already blocked by a non-bypassable reason or a read-only
+    // probe (preserving the grant on disk across clean/read-only probes).
+    const bypassActive =
+      bypassVerified &&
+      reasons.length === 0 &&
+      baseGate.deny &&
+      !bashReadOnlyProbe &&
+      removeBypassGrant(root, sessionId) === true;
     if (bypassVerified && reasons.length > 0) {
       reasons.push('bypass_grant_withheld:non_bypassable_reason');
     }
@@ -601,14 +625,17 @@ export function evaluateHandoffPreToolUse({
         ? { sessionId, unboundReason: bypassGrant.unbound_reason }
         : { sessionId }
       : false;
-    const gateInput = mutationGateInputFromLoad(loadedAfter, {
-      currentSessionId: sessionId,
-      processStickyDeny,
-      resumeAuth,
-      bypassForSession,
-      manifestVerifyFailed: false,
-    });
-    const gate = evaluateMutationGate(gateInput);
+    const gate = bypassActive
+      ? evaluateMutationGate(
+          mutationGateInputFromLoad(loadedAfter, {
+            currentSessionId: sessionId,
+            processStickyDeny,
+            resumeAuth,
+            bypassForSession,
+            manifestVerifyFailed: false,
+          }),
+        )
+      : baseGate;
     if (gate.deny) {
       mutationDenied = true;
       for (const r of gate.reasons) reasons.push(r);

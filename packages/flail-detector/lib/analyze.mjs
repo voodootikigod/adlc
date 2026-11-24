@@ -21,10 +21,10 @@ import {
  * @param {number|null} [opts.budget] - the ticket's declared token budget, or null
  * @returns {AnalysisResult}
  */
-export function analyze({ lines, bytes, scopes, maxRepeat, maxBytes, spentTokens = null, budget = null }) {
+export function analyze({ lines, bytes, scopes, maxRepeat, maxBytes, spentTokens = null, budget = null, cwd = null }) {
   const repeatedErrors = detectRepeatedErrors(lines, maxRepeat);
-  const scopeViolations = detectScopeViolations(lines, scopes);
-  const editChurn = detectEditChurn(lines);
+  const scopeViolations = detectScopeViolations(lines, scopes, { cwd });
+  const editChurn = detectEditChurn(lines, { cwd });
   const sizeExceeded = detectSizeExceeded(bytes, maxBytes);
   const budgetExceeded = detectBudgetExceeded(spentTokens, budget);
 

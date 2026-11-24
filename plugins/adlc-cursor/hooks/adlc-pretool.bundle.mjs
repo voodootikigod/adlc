@@ -3898,12 +3898,13 @@ var risk_exports = {};
 __export(risk_exports, {
   HIGH_RISK_CATEGORIES: () => HIGH_RISK_CATEGORIES,
   MANIFEST_PATH: () => MANIFEST_PATH,
+  MANIFEST_PATHS: () => MANIFEST_PATHS,
   TRUST_ROOT_PATHS: () => TRUST_ROOT_PATHS,
   computeRiskTier: () => computeRiskTier,
   deriveRiskSignals: () => deriveRiskSignals
 });
 function touchesAny(globs, paths) {
-  return (globs ?? []).some((g) => paths.some((p) => g === p || globMatch2(g, p)));
+  return (globs ?? []).some((g) => paths.some((p) => g === p || globMatch2(g, p) || globMatch2(p, g)));
 }
 function deriveRiskSignals(ticket) {
   const t = ticket ?? {};
@@ -3917,7 +3918,7 @@ function deriveRiskSignals(ticket) {
     ...Array.isArray(t.scope) ? t.scope : [],
     ...Array.isArray(t.rails) ? t.rails : []
   ];
-  if (touchesAny(combinedGlobs, [MANIFEST_PATH])) signals.push("mutates-manifest");
+  if (touchesAny(combinedGlobs, MANIFEST_PATHS)) signals.push("mutates-manifest");
   if (touchesAny(combinedGlobs, TRUST_ROOT_PATHS)) signals.push("touches-trust-root");
   if (HIGH_RISK_CATEGORIES.has(t.category)) signals.push(`high-risk-category:${t.category}`);
   return signals;
@@ -3926,13 +3927,14 @@ function computeRiskTier(ticket) {
   const signals = deriveRiskSignals(ticket);
   return { tier: signals.length > 0 ? "high" : "normal", signals };
 }
-var TRUST_ROOT_PATHS, MANIFEST_PATH, HIGH_RISK_CATEGORIES;
+var TRUST_ROOT_PATHS, MANIFEST_PATH, MANIFEST_PATHS, HIGH_RISK_CATEGORIES;
 var init_risk = __esm({
   "packages/build-gate/lib/risk.mjs"() {
     init_define_ADLC_MCP_BUILD_METADATA();
     init_tickets2();
     TRUST_ROOT_PATHS = [".adlc/tickets.json", ".adlc/tickets/**", ".adlc/current-ticket.json"];
     MANIFEST_PATH = ".adlc/manifest.jsonl";
+    MANIFEST_PATHS = [MANIFEST_PATH, ".adlc/manifest.d/**"];
     HIGH_RISK_CATEGORIES = /* @__PURE__ */ new Set(["contract", "architecture"]);
   }
 });
@@ -4208,6 +4210,7 @@ var init_transcript_extract = __esm({
 var init_rollback = __esm({
   "packages/context-handoff/lib/rollback.mjs"() {
     init_define_ADLC_MCP_BUILD_METADATA();
+    init_core();
   }
 });
 

@@ -22,8 +22,9 @@ import { globMatch } from '@adlc/core/tickets';
  */
 export const TRUST_ROOT_PATHS = ['.adlc/tickets.json', '.adlc/tickets/**', '.adlc/current-ticket.json'];
 
-/** The manifest ledger is checked separately so its signal name is specific. */
+/** The manifest ledger (monolithic and segmented forest) is checked separately so its signal name is specific. */
 export const MANIFEST_PATH = '.adlc/manifest.jsonl';
+export const MANIFEST_PATHS = [MANIFEST_PATH, '.adlc/manifest.d/**'];
 
 /**
  * Ticket categories that model-router already treats as requiring frontier
@@ -34,9 +35,9 @@ export const MANIFEST_PATH = '.adlc/manifest.jsonl';
  */
 export const HIGH_RISK_CATEGORIES = new Set(['contract', 'architecture']);
 
-/** True if any glob in `globs` matches (or literally equals) any of `paths`. */
+/** True if any glob in `globs` matches (either direction) or literally equals any of `paths`. */
 function touchesAny(globs, paths) {
-  return (globs ?? []).some((g) => paths.some((p) => g === p || globMatch(g, p)));
+  return (globs ?? []).some((g) => paths.some((p) => g === p || globMatch(g, p) || globMatch(p, g)));
 }
 
 /**
@@ -75,7 +76,7 @@ export function deriveRiskSignals(ticket) {
     ...(Array.isArray(t.rails) ? t.rails : []),
   ];
 
-  if (touchesAny(combinedGlobs, [MANIFEST_PATH])) signals.push('mutates-manifest');
+  if (touchesAny(combinedGlobs, MANIFEST_PATHS)) signals.push('mutates-manifest');
   if (touchesAny(combinedGlobs, TRUST_ROOT_PATHS)) signals.push('touches-trust-root');
 
   if (HIGH_RISK_CATEGORIES.has(t.category)) signals.push(`high-risk-category:${t.category}`);
