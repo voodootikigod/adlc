@@ -19,8 +19,9 @@ const DEFAULT_CMD_TIMEOUT_MS = 60_000;
  */
 async function runCmd(cmd, args = [], opts = {}) {
   const { timeoutMs = DEFAULT_CMD_TIMEOUT_MS, ...spawnOpts } = opts;
+  const detached = process.platform !== 'win32';
   return new Promise((resolve) => {
-    const proc = spawn(cmd, args, { ...spawnOpts, stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(cmd, args, { ...spawnOpts, detached, stdio: ['ignore', 'pipe', 'pipe'] });
     const stdout = [];
     const stderr = [];
     let settled = false;
@@ -31,6 +32,9 @@ async function runCmd(cmd, args = [], opts = {}) {
       resolve(result);
     };
     const timer = setTimeout(() => {
+      if (detached && proc.pid) {
+        try { process.kill(-proc.pid, 'SIGKILL'); } catch {}
+      }
       try { proc.kill('SIGKILL'); } catch {}
       finish({
         exitCode: -1,
@@ -162,10 +166,11 @@ export async function checkBranch(cwd = process.cwd(), { gitFn = git, env, branc
 
 // ── optional checks ──────────────────────────────────────────────────────────
 
-/** OPTIONAL (--worktrees): add/remove a detached worktree (reaps stale worktree and verifies cleanup). */
-export async function checkWorktrees(cwd = process.cwd(), { gitFn = git, env } = {}) {
+/** OPTIONAL (--worktrees): add/remove a randomized detached worktree (reaps stale worktree and verifies cleanup). */
+export async function checkWorktrees(cwd = process.cwd(), { gitFn = git, env, worktreeName } = {}) {
   const name = 'worktrees';
-  const worktreePath = join(cwd, '.worktrees', 'preflight-test');
+  const targetName = worktreeName ?? `preflight-check-${process.pid}-${randomBytes(4).toString('hex')}`;
+  const worktreePath = join(cwd, '.worktrees', targetName);
   const gitOpts = { cwd, stdio: ['ignore', 'pipe', 'pipe'], ...(env ? { env } : {}) };
   try {
     gitFn(['worktree', 'remove', '--force', worktreePath], gitOpts);

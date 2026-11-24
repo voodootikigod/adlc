@@ -196,12 +196,12 @@ describe('checkWorktrees', () => {
     assert.equal(existsSync(worktreePath), false, 'worktree dir must be cleaned up');
   });
 
-  it('reaps a pre-existing .worktrees/preflight-test and passes (#496)', async () => {
+  it('reaps a pre-existing worktree and passes (#496)', async () => {
     const worktreePath = join(dir, '.worktrees', 'preflight-test');
     execFileSync('git', ['-c', 'core.hooksPath=/dev/null', 'worktree', 'add', '--detach', worktreePath], {
       cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
     });
-    const result = await checkWorktrees(dir);
+    const result = await checkWorktrees(dir, { worktreeName: 'preflight-test' });
     assert.equal(result.status, 'pass');
     assert.equal(existsSync(worktreePath), false);
   });
