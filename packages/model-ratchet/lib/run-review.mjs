@@ -25,8 +25,9 @@ export function substituteToken(tokens, placeholder, value) {
 }
 
 // A finding line is either:
-//   - matches /\S+:\d+/ anywhere  (e.g. "src/foo.js:42: something wrong")
-//   - starts with '- '            (bullet item)
+//   - matches /\S+:\d+/ anywhere outside http(s):// URLs (e.g. "src/foo.js:42: something wrong")
+//   - starts with '- '                                   (bullet item)
+const URL_TOKEN_RE = /https?:\/\/\S+/gi;
 const FINDING_LINE_RE = /\S+:\d+/;
 
 /**
@@ -37,8 +38,7 @@ export function isFindingLine(line) {
   const trimmed = line.trim();
   if (!trimmed) return false;
   if (trimmed.startsWith('- ')) return true;
-  if (FINDING_LINE_RE.test(trimmed)) return true;
-  return false;
+  return FINDING_LINE_RE.test(trimmed.replace(URL_TOKEN_RE, ''));
 }
 
 /**
@@ -53,17 +53,19 @@ export function isFindingLine(line) {
  */
 export function parseFindingLine(line, _file) {
   const trimmed = line.trim();
-  // Try to extract file:lineNo from start of line
-  const locMatch = trimmed.match(/^(\S+):(\d+)(?::.*)?$/);
-  if (locMatch) {
-    return {
-      location: `${locMatch[1]}:${locMatch[2]}`,
-      parsedLine: parseInt(locMatch[2], 10),
-      desc: trimmed,
-    };
+  // Try to extract file:lineNo from start of line (excluding URL schemes)
+  if (!/^https?:\/\//i.test(trimmed)) {
+    const locMatch = trimmed.match(/^(\S+):(\d+)(?::.*)?$/);
+    if (locMatch) {
+      return {
+        location: `${locMatch[1]}:${locMatch[2]}`,
+        parsedLine: parseInt(locMatch[2], 10),
+        desc: trimmed,
+      };
+    }
   }
-  // Inline reference (not at start)
-  const inlineMatch = trimmed.match(/\S+:\d+/);
+  // Inline reference (not at start, excluding URL schemes)
+  const inlineMatch = trimmed.replace(URL_TOKEN_RE, '').match(/\S+:\d+/);
   if (inlineMatch) {
     return {
       location: inlineMatch[0],

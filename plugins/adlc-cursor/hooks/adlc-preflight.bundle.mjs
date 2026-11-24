@@ -20,6 +20,7 @@ import { isAbsolute as isAbsolute6, join as join12, relative as relative5 } from
 
 // packages/core/lib/llm.mjs
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 function isAgyTimeout(out) {
   const lines = out.split("\n").map((l) => l.trim()).filter(Boolean);
   const last = lines.at(-1) ?? "";
@@ -67,8 +68,10 @@ ${prompt}` : prompt;
       reject(new Error("agy: timed out waiting for response"));
     }, hostTimeoutMs);
     timer.unref?.();
-    p.stdout.on("data", (d) => out += d);
-    p.stderr.on("data", (d) => err += d);
+    const outDecoder = new StringDecoder("utf8");
+    const errDecoder = new StringDecoder("utf8");
+    p.stdout.on("data", (d) => out += outDecoder.write(d));
+    p.stderr.on("data", (d) => err += errDecoder.write(d));
     p.on("error", (e) => {
       if (settled) return;
       settled = true;
@@ -84,6 +87,8 @@ ${prompt}` : prompt;
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      out += outDecoder.end();
+      err += errDecoder.end();
       if (code !== 0) return reject(new Error(`agy exit ${code}: ${(err || out).slice(-400)}`));
       if (stdinError) return reject(new Error(`agy did not read the full prompt: ${stdinError.message}`));
       if (isAgyTimeout(out)) {

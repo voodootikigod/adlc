@@ -9,8 +9,61 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { TicketStoreError } from './errors.mjs';
 
-/** Default runner: hand the temp file to $EDITOR and wait. */
-export const spawnEditor = (editor, path) => execFileSync(editor, [path], { stdio: 'inherit' });
+/**
+ * Split an $EDITOR / $VISUAL command string into [command, ...flags] with
+ * single-quote, double-quote, and backslash-escape support (zero dependencies).
+ */
+export function splitEditorCommand(editor) {
+  const input = String(editor ?? '');
+  const tokens = [];
+  let current = '';
+  let inToken = false;
+  let quote = null;
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (quote) {
+      if (ch === '\\' && quote === '"' && i + 1 < input.length && (input[i + 1] === '"' || input[i + 1] === '\\')) {
+        current += input[++i];
+      } else if (ch === quote) {
+        quote = null;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      inToken = true;
+    } else if (ch === '\\' && i + 1 < input.length && /[\s'"]/.test(input[i + 1])) {
+      current += input[++i];
+      inToken = true;
+    } else if (/\s/.test(ch)) {
+      if (inToken) {
+        tokens.push(current);
+        current = '';
+        inToken = false;
+      }
+    } else {
+      current += ch;
+      inToken = true;
+    }
+  }
+  if (quote) {
+    throw new TicketStoreError('invalid', 'INVALID_EDITOR', `unterminated ${quote} quote in $EDITOR`);
+  }
+  if (inToken) tokens.push(current);
+  return tokens;
+}
+
+/** Default runner: hand the temp file to $EDITOR (with any flags) and wait. */
+export const spawnEditor = (editor, path) => {
+  const tokens = splitEditorCommand(editor);
+  if (tokens.length === 0) {
+    throw new TicketStoreError('operational', 'EDITOR_NOT_SET', 'set $EDITOR or $VISUAL');
+  }
+  return execFileSync(tokens[0], [...tokens.slice(1), path], { stdio: 'inherit' });
+};
 
 /**
  * Plan an editor session as an update. Returns { plan, draftPath }: the draft

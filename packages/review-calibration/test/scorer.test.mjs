@@ -125,9 +125,17 @@ describe('findIdentifying', () => {
 describe('locatingFindings', () => {
   const plant = { file: 'src/a.mjs', line: 10 };
 
-  it('matches by basename, ignoring directory differences', () => {
-    const findings = [{ file: 'a.mjs', line: 10 }, { file: 'other/a.mjs', line: 10 }];
-    assert.equal(locatingFindings(plant, findings).length, 2);
+  it('normalizes repo-relative paths and rejects different-directory basename collisions (T-P19)', () => {
+    const findings = [
+      { file: 'a.mjs', line: 10 },           // bare filename allowed
+      { file: './src/a.mjs', line: 10 },     // ./ prefix normalized
+      { file: 'src\\a.mjs', line: 10 },      // Windows separator normalized
+      { file: '/repo/src/a.mjs', line: 10 }, // absolute path ending in repo-relative path
+      { file: 'other/a.mjs', line: 10 },     // different directory — MUST NOT collide
+    ];
+    const matched = locatingFindings(plant, findings);
+    assert.equal(matched.length, 4);
+    assert.ok(!matched.some((f) => f.file === 'other/a.mjs'));
   });
 
   it('respects the default tolerance of ±3 lines', () => {

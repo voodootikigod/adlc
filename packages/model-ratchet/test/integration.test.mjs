@@ -392,10 +392,14 @@ describe('integration: stderr findings and ENOENT error reporting (#695)', () =>
   });
   after(() => rmSync(tmp, { recursive: true, force: true }));
 
-  it('parses findings written to stderr when review-cmd exits 0 or 2', () => {
+  it('ignores stderr noise and parses findings from stdout only (T-P19)', () => {
     const bin = resolve(__dirname, '../bin/model-ratchet.mjs');
     const script = join(tmp, 'stderr-reviewer.mjs');
-    writeFileSync(script, 'process.stderr.write(process.argv[2] + ":9: stderr finding here\\n"); process.exit(2);\n');
+    writeFileSync(
+      script,
+      'process.stderr.write("warning: http://localhost:3000\\n" + process.argv[2] + ":9: stderr noise\\n");' +
+      'process.stdout.write(process.argv[2] + ":4: stdout finding\\n"); process.exit(2);\n',
+    );
     const result = spawnSync('node', [bin, '--top', '1', '--review-cmd', `node ${script} {file}`, '--json'], {
       cwd: tmp,
       encoding: 'utf8',
@@ -403,8 +407,8 @@ describe('integration: stderr findings and ENOENT error reporting (#695)', () =>
     assert.equal(result.status, 0, `stderr: ${result.stderr}`);
     const out = JSON.parse(result.stdout);
     assert.equal(out.totalFindings, 1);
-    assert.equal(out.results[0].findings[0].line, 9);
-    assert.match(out.results[0].findings[0].desc, /stderr finding here/);
+    assert.equal(out.results[0].findings[0].line, 4);
+    assert.match(out.results[0].findings[0].desc, /stdout finding/);
   });
 
   it('surfaces ENOENT spawn failure instead of generic exited with code 1', () => {

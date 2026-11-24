@@ -208,4 +208,11 @@ describe('resolveEffectiveProvider', () => {
   it('falls back to the static table when no override env is set', () => {
     assert.equal(resolveEffectiveProvider(agyProvider, 'mid', {}), 'anthropic');
   });
+
+  it('recognizes OpenAI o1/o3/o4 model prefixes (T-P19)', () => {
+    for (const model of ['o1', 'o1-preview', 'o3', 'o3-mini', 'o4-mini', 'openai/o3-mini']) {
+      assert.equal(resolveEffectiveProvider(agyProvider, 'mid', { ADLC_MODEL_MID: model }), 'openai', model);
+    }
+    assert.equal(resolveEffectiveProvider(agyProvider, 'mid', { ADLC_MODEL_MID: 'foo1-custom' }), 'agy');
+  });
 });

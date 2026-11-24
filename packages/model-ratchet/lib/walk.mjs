@@ -1,7 +1,7 @@
 // walk.mjs — Enumerate source files and build import graph for hot-score.
 // Pure functions, no side effects outside filesystem reads.
 
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { join, extname, dirname, resolve, relative } from 'node:path';
 
 // ---------------------------------------------------------------------------
@@ -20,7 +20,7 @@ export const SOURCE_EXTS = new Set([
   '.jsx',
 ]);
 
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.next', '__pycache__']);
+const SKIP_DIRS = new Set(['node_modules', '.git', '.worktrees', 'dist', '.next', '__pycache__']);
 
 // ---------------------------------------------------------------------------
 // Exclusion predicates
@@ -74,7 +74,7 @@ export function walkSourceFiles(root, { _relative = relative } = {}) {
       const full = join(dir, entry);
       let stat;
       try {
-        stat = statSync(full);
+        stat = lstatSync(full);
       } catch {
         continue;
       }

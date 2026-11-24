@@ -101,16 +101,20 @@ describe('checkBranch', () => {
     dir = initRepo(t);
   });
 
-  it('passes and cleans up the branch', async () => {
-    const result = await checkBranch(dir);
-    assert.equal(result.status, 'pass');
+  it('passes with a randomized ephemeral branch name and cleans it up', async () => {
+    const result1 = await checkBranch(dir);
+    const result2 = await checkBranch(dir);
+    assert.equal(result1.status, 'pass');
+    assert.equal(result2.status, 'pass');
+    assert.match(result1.detail, /^branch 'preflight-check-\d+-[0-9a-f]{8}' created and removed$/);
+    assert.notEqual(result1.detail, result2.detail, 'each checkBranch run should use a distinct branch name');
     const branchList = execFileSync('git', ['branch'], {
       cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
     });
     assert.equal(
-      branchList.includes('preflight-test-branch'),
+      branchList.includes('preflight-check-'),
       false,
-      'preflight-test-branch must be absent after check'
+      'ephemeral preflight-check branch must be absent after check'
     );
   });
 
@@ -120,11 +124,11 @@ describe('checkBranch', () => {
     assert.equal(result.status, 'fail');
   });
 
-  it('reaps a pre-existing preflight-test-branch and passes (#496)', async () => {
+  it('reaps a pre-existing branch and passes (#496)', async () => {
     execFileSync('git', ['branch', 'preflight-test-branch'], {
       cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
     });
-    const result = await checkBranch(dir);
+    const result = await checkBranch(dir, { branchName: 'preflight-test-branch' });
     assert.equal(result.status, 'pass');
     assert.equal(result.detail, "branch 'preflight-test-branch' created and removed");
     const branchList = execFileSync('git', ['branch'], {
@@ -157,7 +161,7 @@ describe('checkBranch', () => {
       }
       return execFileSync('git', args, opts);
     };
-    const result = await checkBranch(dir, { gitFn });
+    const result = await checkBranch(dir, { gitFn, branchName: 'preflight-test-branch' });
     assert.equal(result.status, 'fail');
     assert.equal(deleteCalls, 3);
     assert.match(result.detail, /branch 'preflight-test-branch' created; cleanup failed: unable to lock packed-refs/);
@@ -169,7 +173,7 @@ describe('checkBranch', () => {
       if (args[0] === 'branch' && args[1] === '-D') throw new Error('reap blocked');
       throw new Error("fatal: a branch named 'preflight-test-branch' already exists");
     };
-    const result = await checkBranch(dir, { gitFn });
+    const result = await checkBranch(dir, { gitFn, branchName: 'preflight-test-branch' });
     assert.equal(result.status, 'fail');
     assert.match(result.detail, /already exists — likely left by a prior crashed run; delete it manually: git branch -D preflight-test-branch/);
   });
@@ -192,12 +196,12 @@ describe('checkWorktrees', () => {
     assert.equal(existsSync(worktreePath), false, 'worktree dir must be cleaned up');
   });
 
-  it('reaps a pre-existing .worktrees/preflight-test and passes (#496)', async () => {
+  it('reaps a pre-existing worktree and passes (#496)', async () => {
     const worktreePath = join(dir, '.worktrees', 'preflight-test');
     execFileSync('git', ['-c', 'core.hooksPath=/dev/null', 'worktree', 'add', '--detach', worktreePath], {
       cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
     });
-    const result = await checkWorktrees(dir);
+    const result = await checkWorktrees(dir, { worktreeName: 'preflight-test' });
     assert.equal(result.status, 'pass');
     assert.equal(existsSync(worktreePath), false);
   });
@@ -258,6 +262,37 @@ describe('checkTestCmd', () => {
     const result = await checkTestCmd('exit 1', dir);
     assert.equal(result.status, 'fail');
     assert.match(result.detail, /exited 1/);
+  });
+
+  it('enforces timeoutMs, captures stderr, and forwards env to test-cmd', async () => {
+    const envRes = await checkTestCmd('test "$PREFLIGHT_CUSTOM_VAR" = "hello"', dir, {
+      env: { ...process.env, PREFLIGHT_CUSTOM_VAR: 'hello' },
+    });
+    assert.equal(envRes.status, 'pass');
+
+    const stderrRes = await checkTestCmd('echo preflight-stderr-boom >&2; exit 1', dir);
+    assert.equal(stderrRes.status, 'fail');
+    assert.match(stderrRes.detail, /preflight-stderr-boom/);
+
+    const timeoutRes = await checkTestCmd('sleep 5', dir, { timeoutMs: 80 });
+    assert.equal(timeoutRes.status, 'fail');
+    assert.match(timeoutRes.detail, /command timed out after 80ms/);
+
+    if (process.platform !== 'win32') {
+      const pidFile = join(dir, 'child.pid');
+      const treeRes = await checkTestCmd(`sleep 10 & echo $! > "${pidFile}"; wait`, dir, { timeoutMs: 120 });
+      assert.equal(treeRes.status, 'fail');
+      assert.match(treeRes.detail, /command timed out after 120ms/);
+      const childPid = Number(execFileSync('cat', [pidFile], { encoding: 'utf8' }).trim());
+      assert.ok(Number.isInteger(childPid) && childPid > 0);
+      await new Promise((r) => setTimeout(r, 50));
+      let alive = true;
+      try { process.kill(childPid, 0); } catch { alive = false; }
+      if (alive) {
+        try { process.kill(childPid, 'SIGKILL'); } catch {}
+      }
+      assert.equal(alive, false, 'descendant process in timed-out test-cmd must be killed with its process group');
+    }
   });
 
   it('includes tail of output on failure', async () => {

@@ -81,3 +81,24 @@ test('agy that hangs past timeoutMs is killed and rejected by host-side timer', 
     /agy: timed out waiting for response/
   );
 });
+
+test('agy stdout decodes multi-byte UTF-8 split across chunks without corruption (T-P19)', async (t) => {
+  const dir = tmp(t, 'adlc-agy-utf8-');
+  const fake = join(dir, 'fake-agy');
+  // Emit a 4-byte UTF-8 rocket emoji split into two separate 2-byte writes
+  writeFileSync(
+    fake,
+    `#!${process.execPath}\n` +
+      'process.stdin.resume();\n' +
+      'process.stdin.on("end", () => {\n' +
+      '  const buf = Buffer.from("ok 🚀 done", "utf8");\n' +
+      '  const split = buf.indexOf(0xf0) + 2;\n' +
+      '  process.stdout.write(buf.subarray(0, split));\n' +
+      '  setTimeout(() => { process.stdout.write(buf.subarray(split)); process.exit(0); }, 20);\n' +
+      '});\n',
+  );
+  chmodSync(fake, 0o755);
+  const { complete } = await import('../lib/llm.mjs');
+  const res = await complete({ tier: 'cheap', prompt: 'hi' }, { ADLC_PROVIDER: 'agy', ADLC_AGY: fake });
+  assert.equal(typeof res === 'string' ? res : res.text, 'ok 🚀 done');
+});
