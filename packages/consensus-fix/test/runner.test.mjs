@@ -741,5 +741,17 @@ test('runCommand enforces timeoutMs and maxBuffer bounds (T-P18)', async () => {
   const bounded = await runCommand('node -e "process.stdout.write(\'x\'.repeat(2000))"', { maxBuffer: 64 });
   assert.equal(bounded.exitCode, 0);
   assert.equal(bounded.truncated, true);
-  assert.equal(bounded.output.length, 64);
+  assert.equal(Buffer.byteLength(bounded.output, 'utf8'), 64);
+
+  await assert.rejects(
+    () => runConsensusFix({
+      testCmd: 'npm test',
+      files: [],
+      n: 1,
+      tier: 'cheap',
+      completeFn: async () => '{}',
+      runCommandFn: async () => ({ exitCode: 124, output: '', timedOut: true }),
+    }),
+    (err) => err.isOpError === true && /timed out/.test(err.message),
+  );
 });

@@ -62,19 +62,23 @@ export function runCommand(
   const { file, args } = shellInvocation(cmd, platform);
   return new Promise((resolvePromise) => {
     const child = spawnFn(file, args, { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    let output = '';
+    const chunks = [];
+    let byteLen = 0;
     let truncated = false;
     let timedOut = false;
     let spawnError = null;
     let escalation = null;
     const appendChunk = (chunk) => {
       if (truncated) return;
-      const text = String(chunk);
-      if (output.length + text.length > maxBuffer) {
-        output += text.slice(0, Math.max(0, maxBuffer - output.length));
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8');
+      if (byteLen + buf.length > maxBuffer) {
+        const remaining = Math.max(0, maxBuffer - byteLen);
+        if (remaining > 0) chunks.push(buf.subarray(0, remaining));
+        byteLen = maxBuffer;
         truncated = true;
       } else {
-        output += text;
+        chunks.push(buf);
+        byteLen += buf.length;
       }
     };
     child.stdout.on('data', appendChunk);
@@ -101,6 +105,7 @@ export function runCommand(
       signal?.removeEventListener('abort', onAbort);
       if (timer) clearTimeout(timer);
       if (escalation) clearTimeout(escalation);
+      const output = Buffer.concat(chunks).toString('utf8');
       const res = { exitCode, output };
       if (spawnError) res.spawnError = spawnError;
       if (timedOut) res.timedOut = true;
@@ -277,6 +282,12 @@ export async function runConsensusFix({
   if (initialRun.spawnError) {
     throw Object.assign(
       new Error(`failed to run test command: ${initialRun.output || initialRun.spawnError}`),
+      { isOpError: true }
+    );
+  }
+  if (initialRun.timedOut) {
+    throw Object.assign(
+      new Error(`test command timed out before confirming failure`),
       { isOpError: true }
     );
   }
