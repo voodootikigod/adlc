@@ -187,6 +187,7 @@ export function resolveActiveTicketAgainst(
 export function writeActiveTicket(root: string, pointer: { id: string; ticketHash: string }): string;
 
 export type EditorRunner = (editor: string, path: string) => void;
+export function splitEditorCommand(editor: unknown): string[];
 export const spawnEditor: EditorRunner;
 export type EditSession = { plan: TicketPlan; draftPath: string };
 /** The draft at `draftPath` outlives this call: a dry run must not destroy the
