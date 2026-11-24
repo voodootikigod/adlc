@@ -81,7 +81,7 @@ export function childArgv({ sessionId, prompt, args = [] }) {
  * spawn can forget.
  */
 export function nodeSpawner({ command, args = [], cwd, env, spawnFn = nodeSpawn, onSpawn = null }) {
-  const detached = process.platform !== 'win32' && spawnFn === nodeSpawn;
+  const detached = process.platform !== 'win32';
   return ({ sessionId, prompt }) => {
     const child = spawnFn(command, childArgv({ sessionId, prompt, args }), {
       cwd,

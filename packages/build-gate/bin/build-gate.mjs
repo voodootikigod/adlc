@@ -134,7 +134,9 @@ if (values.transcript !== undefined) {
   let text;
   let totalBytes;
   try {
-    const openFlags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
+    let openFlags = constants.O_RDONLY;
+    if (constants.O_NOFOLLOW) openFlags |= constants.O_NOFOLLOW;
+    if (constants.O_NONBLOCK) openFlags |= constants.O_NONBLOCK;
     const fd = openSync(values.transcript, openFlags);
     try {
       const stat = fstatSync(fd);

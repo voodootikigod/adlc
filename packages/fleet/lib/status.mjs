@@ -64,7 +64,7 @@ export function loadStatus(dir) {
 /** Atomically persist the status object via @adlc/core writeFileAtomic. */
 export function saveStatus(dir, status) {
   mkdirSync(dir, { recursive: true });
-  writeFileAtomic(statusPath(dir), JSON.stringify(status, null, 2) + '\n');
+  writeFileAtomic(statusPath(dir), JSON.stringify(status, null, '  ') + '\n');
   return status;
 }
 

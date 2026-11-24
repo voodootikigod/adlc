@@ -14,7 +14,14 @@ import assert from 'node:assert/strict';
 import { writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
-import { runCommand, shellInvocation, validateCandidate, runConsensusFix } from '../lib/runner.mjs';
+import {
+  DEFAULT_COMMAND_TIMEOUT_MS,
+  DEFAULT_MAX_BUFFER_BYTES,
+  runCommand,
+  shellInvocation,
+  validateCandidate,
+  runConsensusFix,
+} from '../lib/runner.mjs';
 
 /** One full-line-replace hunk, for single-line fixture files. */
 function replaceLine1(replacement) {
@@ -724,6 +731,9 @@ test('#604: runConsensusFix returns effective fanWidth for both --n and --provid
 });
 
 test('runCommand enforces timeoutMs and maxBuffer bounds (T-P18)', async () => {
+  assert.equal(DEFAULT_COMMAND_TIMEOUT_MS, 300_000);
+  assert.equal(DEFAULT_MAX_BUFFER_BYTES, 16 * 1024 * 1024);
+
   const timed = await runCommand('sleep 5', { timeoutMs: 80 });
   assert.equal(timed.exitCode, 124);
   assert.equal(timed.timedOut, true);
