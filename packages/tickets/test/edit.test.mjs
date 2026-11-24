@@ -238,6 +238,14 @@ test('splitEditorCommand splits $EDITOR command and flags with quote and escape 
     'set "x"',
   ]);
   assert.deepEqual(splitEditorCommand('/usr/bin/my\\ editor -f'), ['/usr/bin/my editor', '-f']);
+  assert.deepEqual(
+    splitEditorCommand('C:\\hostedtoolcache\\windows\\node\\20.20.2\\x64\\node.exe --wait'),
+    ['C:\\hostedtoolcache\\windows\\node\\20.20.2\\x64\\node.exe', '--wait'],
+  );
+  assert.deepEqual(
+    splitEditorCommand('"C:\\Program Files\\VS Code\\code.exe" --wait'),
+    ['C:\\Program Files\\VS Code\\code.exe', '--wait'],
+  );
   assert.deepEqual(splitEditorCommand('   '), []);
   assert.throws(
     () => splitEditorCommand("'unterminated --wait"),

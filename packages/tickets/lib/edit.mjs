@@ -23,7 +23,7 @@ export function splitEditorCommand(editor) {
   for (let i = 0; i < input.length; i++) {
     const ch = input[i];
     if (quote) {
-      if (ch === '\\' && quote === '"' && i + 1 < input.length) {
+      if (ch === '\\' && quote === '"' && i + 1 < input.length && (input[i + 1] === '"' || input[i + 1] === '\\')) {
         current += input[++i];
       } else if (ch === quote) {
         quote = null;
@@ -35,7 +35,7 @@ export function splitEditorCommand(editor) {
     if (ch === "'" || ch === '"') {
       quote = ch;
       inToken = true;
-    } else if (ch === '\\' && i + 1 < input.length) {
+    } else if (ch === '\\' && i + 1 < input.length && /[\s'"]/.test(input[i + 1])) {
       current += input[++i];
       inToken = true;
     } else if (/\s/.test(ch)) {
