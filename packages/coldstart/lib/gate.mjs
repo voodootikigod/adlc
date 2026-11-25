@@ -5,7 +5,7 @@ import { complete as coreComplete, extractJson as coreExtractJson, detectProvide
 import { ticketHash } from '@adlc/tickets';
 import { loadFiltered } from '@adlc/gate-manifest/lib/show.mjs';
 import { buildPrompt, SYSTEM_PROMPT, TICKET_TEXT_MAX_CHARS, ticketToText } from './prompt.mjs';
-import { findCachedVerdict, trustedCacheEntries } from './cache.mjs';
+import { findCachedVerdict, trustedCacheEntries, indexManifestByTicket, GATE_NAME } from './cache.mjs';
 import { normalizeGaps, UNREADABLE_VERDICT_PREFIX } from './normalize-gaps.mjs';
 
 /**
@@ -153,6 +153,8 @@ export function resolveExpectedModel(tier, env = process.env) {
  * @returns {Promise<Array<{id:string, gaps:object[], usage:object|null, cached:boolean, cacheSkipped:number}>>}
  *   `cacheSkipped` is the number of unreadable ledger lines the cache read reported for that ticket (0 when the cache was not consulted)
  */
+export const DEFAULT_LLM_CONCURRENCY = 4;
+
 export async function checkAll(tickets, tier = 'cheap', opts = {}) {
   const {
     force = false,
@@ -160,8 +162,10 @@ export async function checkAll(tickets, tier = 'cheap', opts = {}) {
     now = Date.now(),
     dir,
     key = null,
+    concurrency = DEFAULT_LLM_CONCURRENCY,
     checkTicketFn = (ticket) => checkTicket(ticket, tier),
-    loadCacheEntriesFn = (ticketId) => defaultLoadCacheEntries(ticketId, dir),
+    loadCacheEntriesFn,
+    loadAllCacheEntriesFn = () => loadFiltered({ dir }),
     resolveModelFn = () => resolveExpectedModel(tier),
   } = opts;
 
@@ -169,33 +173,79 @@ export async function checkAll(tickets, tier = 'cheap', opts = {}) {
   const model = (force || mockSeamActive) ? null : resolveModelFn();
   const lookup = cacheLookupState({ force, model, key, mockSeamActive }) === 'enabled';
 
-  const results = [];
-  for (const ticket of tickets) {
+  const results = new Array(tickets.length);
+  const auditQueue = [];
+
+  // Load the manifest forest once per checkAll() invocation (O(T + M)) when
+  // no per-ticket loader was injected, and at least one ticket is auditable.
+  let batchByTicket = null;
+  let batchSkippedCount = 0;
+
+  for (let i = 0; i < tickets.length; i++) {
+    const ticket = tickets[i];
     // Decided before the cache and before any audit path (real, injected, or
     // the mock seam): a ticket the auditor cannot see whole has no valid
     // cached verdict and gets no model call. `oversize` tells buildRecordPlan
     // this is a refusal to audit, not an audit — nothing to record.
     const oversize = oversizeGap(ticket);
     if (oversize) {
-      results.push({ id: ticket.id, gaps: [oversize], usage: null, cached: false, oversize: true, cacheSkipped: 0 });
+      results[i] = { id: ticket.id, gaps: [oversize], usage: null, cached: false, oversize: true, cacheSkipped: 0 };
       continue;
     }
     if (lookup) {
       const hash = ticketHash(ticket);
-      const { entries, skipped } = loadedCacheShape(loadCacheEntriesFn(ticket.id));
-      const trusted = trustedCacheEntries(entries, { key });
+      let trusted;
+      let skippedCount;
+      if (loadCacheEntriesFn) {
+        const { entries, skipped } = loadedCacheShape(loadCacheEntriesFn(ticket.id));
+        trusted = trustedCacheEntries(entries, { key });
+        skippedCount = skipped.length;
+      } else {
+        if (batchByTicket === null) {
+          const { entries, skipped } = loadedCacheShape(loadAllCacheEntriesFn());
+          const coldstartEntries = entries.filter((e) => e && e.gate === GATE_NAME);
+          batchByTicket = indexManifestByTicket(trustedCacheEntries(coldstartEntries, { key }));
+          batchSkippedCount = skipped.length;
+        }
+        trusted = batchByTicket.get(ticket.id) ?? [];
+        skippedCount = batchSkippedCount;
+      }
       const cached = findCachedVerdict(trusted, { ticketHash: hash, model, textChars: ticketToText(ticket).length, maxAgeMs, now });
       if (cached) {
-        results.push({ id: ticket.id, gaps: cached.gaps, usage: null, cached: true, cacheSkipped: skipped.length });
+        results[i] = { id: ticket.id, gaps: cached.gaps, usage: null, cached: true, cacheSkipped: skippedCount };
         continue;
       }
-      const result = await checkTicketFn(ticket);
-      results.push({ ...result, cached: false, cacheSkipped: skipped.length });
+      auditQueue.push({ index: i, ticket, cacheSkipped: skippedCount });
       continue;
     }
-    const result = await checkTicketFn(ticket);
-    results.push({ ...result, cached: false, cacheSkipped: 0 });
+    auditQueue.push({ index: i, ticket, cacheSkipped: 0 });
   }
+
+  if (auditQueue.length > 0) {
+    const limit = Number.isInteger(concurrency) && concurrency >= 1
+      ? concurrency
+      : DEFAULT_LLM_CONCURRENCY;
+    let nextIdx = 0;
+    let firstError = null;
+
+    async function worker() {
+      while (firstError === null && nextIdx < auditQueue.length) {
+        const item = auditQueue[nextIdx++];
+        try {
+          const result = await checkTicketFn(item.ticket);
+          results[item.index] = { ...result, cached: false, cacheSkipped: item.cacheSkipped };
+        } catch (err) {
+          if (firstError === null) firstError = err;
+          return;
+        }
+      }
+    }
+
+    const workerCount = Math.min(limit, auditQueue.length);
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    if (firstError !== null) throw firstError;
+  }
+
   return results;
 }
 
@@ -245,11 +295,6 @@ function loadedCacheShape(loaded) {
     throw new Error('coldstart: cache loader must return { entries, skipped } (gate-manifest loadFiltered shape)');
   }
   return loaded;
-}
-
-function defaultLoadCacheEntries(ticketId, dir) {
-  const { entries, skipped } = loadFiltered({ ticket: ticketId, dir });
-  return { entries, skipped };
 }
 
 /**

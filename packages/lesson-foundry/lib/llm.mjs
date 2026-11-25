@@ -64,25 +64,48 @@ export async function refineCluster(clusterName, findings, tier = 'mid') {
   return toRefinement(extractJson(raw));
 }
 
+export const DEFAULT_LLM_CONCURRENCY = 4;
+
 /**
- * Refine multiple clusters, one call each.
+ * Refine multiple clusters, one call each, through a bounded concurrency pool.
  * Returns Map<clusterIndex, {name, description, rule}>.
  * Failures are logged but do not throw.
+ *
+ * @param {Array<{name: string, indices: number[]}>} clusters
+ * @param {Array<object>} allFindings
+ * @param {string} [tier='mid']
+ * @param {object} [opts]
+ * @param {number} [opts.concurrency]
+ * @param {Function} [opts.refineClusterFn]
  */
-export async function refineClusters(clusters, allFindings, tier = 'mid') {
+export async function refineClusters(clusters, allFindings, tier = 'mid', opts = {}) {
+  const {
+    concurrency = DEFAULT_LLM_CONCURRENCY,
+    refineClusterFn = refineCluster,
+  } = opts;
+  const limit = Number.isInteger(concurrency) && concurrency >= 1
+    ? concurrency
+    : DEFAULT_LLM_CONCURRENCY;
   const results = new Map();
+  let nextIdx = 0;
 
-  for (const [idx, cluster] of clusters.entries()) {
-    const findings = cluster.indices.map((i) => allFindings[i]);
-    try {
-      const refined = await refineCluster(cluster.name, findings, tier);
-      if (refined) results.set(idx, refined);
-    } catch (err) {
-      // Non-fatal — cluster proceeds with unrefined wording
-      console.error(`lesson-foundry: LLM refinement failed for cluster "${cluster.name}": ${err.message}`);
+  async function worker() {
+    while (nextIdx < clusters.length) {
+      const idx = nextIdx++;
+      const cluster = clusters[idx];
+      const findings = cluster.indices.map((i) => allFindings[i]);
+      try {
+        const refined = await refineClusterFn(cluster.name, findings, tier);
+        if (refined) results.set(idx, refined);
+      } catch (err) {
+        // Non-fatal — cluster proceeds with unrefined wording
+        console.error(`lesson-foundry: LLM refinement failed for cluster "${cluster.name}": ${err.message}`);
+      }
     }
   }
 
+  const workerCount = Math.min(limit, clusters.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
   return results;
 }
 

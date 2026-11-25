@@ -195,6 +195,99 @@ function defaultEverExisted(path, rev = 'HEAD', run = execFileSync) {
 }
 
 /**
+ * Parse `git ls-tree -r -t -z <rev>` output into a Map<path, objectType>.
+ * @param {string} output
+ * @returns {Map<string, string>}
+ */
+export function parseLsTreeZ(output) {
+  const kinds = new Map();
+  for (const record of String(output ?? '').split('\0')) {
+    if (!record) continue;
+    const tabIdx = record.indexOf('\t');
+    if (tabIdx <= 0) continue;
+    const type = record.slice(0, tabIdx).split(' ')[1];
+    const path = record.slice(tabIdx + 1);
+    if (type && path) kinds.set(path, type);
+  }
+  return kinds;
+}
+
+/**
+ * Parse `git log --format=%x1e%h --name-only -z <rev>` output into:
+ * - `lastCommitByPath`: Map<path, shortSha> (newest commit touching each file)
+ * - `everExistedPaths`: Set<path> (every file and ancestor directory ever tracked)
+ * @param {string} output
+ * @returns {{ lastCommitByPath: Map<string, string>, everExistedPaths: Set<string> }}
+ */
+export function parseLogNameOnlyZ(output) {
+  const lastCommitByPath = new Map();
+  const everExistedPaths = new Set();
+  let currentSha = null;
+  for (const raw of String(output ?? '').split('\0')) {
+    const token = raw.replace(/^\n+/, '');
+    if (!token) continue;
+    if (token.startsWith('\x1e')) {
+      currentSha = token.slice(1).trim() || null;
+      continue;
+    }
+    if (!currentSha) continue;
+    if (!lastCommitByPath.has(token)) {
+      lastCommitByPath.set(token, currentSha);
+    }
+    if (!everExistedPaths.has(token)) {
+      everExistedPaths.add(token);
+      let slash = token.lastIndexOf('/');
+      while (slash > 0) {
+        const dir = token.slice(0, slash);
+        if (everExistedPaths.has(dir)) break;
+        everExistedPaths.add(dir);
+        slash = dir.lastIndexOf('/');
+      }
+    }
+  }
+  return { lastCommitByPath, everExistedPaths };
+}
+
+/**
+ * Pre-index object types at `revision` and commit touches in `revision`'s
+ * history with two git invocations (`ls-tree -r -t -z` and `log --name-only -z`),
+ * replacing up to 3*N per-citation git subprocesses across a groom sweep.
+ * Falls back cleanly to per-path git queries if either batch query fails.
+ *
+ * @param {string} [revision='HEAD']
+ * @param {typeof execFileSync} [run=execFileSync]
+ * @returns {{ pathKind: (p: string) => string|null, lastCommitFor: (p: string) => string|null, everExisted: (p: string) => boolean }}
+ */
+export function createRevisionIndex(revision = 'HEAD', run = execFileSync) {
+  let kinds = null;
+  try {
+    kinds = parseLsTreeZ(gitRead(['ls-tree', '-r', '-t', '-z', revision], run));
+  } catch {
+    kinds = null;
+  }
+
+  let history = null;
+  try {
+    history = parseLogNameOnlyZ(gitRead(['log', '--format=%x1e%h', '--name-only', '-z', revision], run));
+  } catch {
+    history = null;
+  }
+
+  const normalizePath = (p) => String(p ?? '').replace(/\/+$/, '');
+  return {
+    pathKind: kinds
+      ? (p) => kinds.get(normalizePath(p)) ?? null
+      : (p) => pathKindAtRevision(p, revision, run),
+    lastCommitFor: history
+      ? (p) => history.lastCommitByPath.get(normalizePath(p)) ?? null
+      : (p) => defaultLastCommitFor(p, revision, run),
+    everExisted: history
+      ? (p) => history.everExistedPaths.has(normalizePath(p))
+      : (p) => defaultEverExisted(p, revision, run),
+  };
+}
+
+/**
  * Verify one classified issue.
  *
  * @param {{number:number, route:string, references:object[]}} classified
