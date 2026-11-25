@@ -1,6 +1,6 @@
 ---
 name: adlc-doctrine
-description: Core operating rules for agents working inside an ADLC-orchestrated run (Antigravity Booster). Use whenever executing a ticket, reviewing a diff, or acting as part of an agb fleet. Encodes quota discipline, evidence rules, and scope discipline.
+description: Core operating rules for agents working inside an ADLC-orchestrated run (Antigravity Booster). Use when executing or reviewing an ADLC ticket with declared scope and rails, or acting as part of an agb fleet. Encodes quota discipline, evidence rules, and scope discipline. Don't use for ordinary issue-tracker tickets or code review outside an ADLC run.
 ---
 
 # ADLC Doctrine (fleet operating rules)
