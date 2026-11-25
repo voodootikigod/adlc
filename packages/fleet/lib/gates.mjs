@@ -10,7 +10,9 @@
 //   unverifiable signal must not cut a build's normal retry short.
 
 import { execFileSync } from 'node:child_process';
-import { inScope } from '@adlc/core';
+import { inScope, redactSecrets } from '@adlc/core';
+import { parseLog } from '@adlc/flail-detector/lib/parse-log.mjs';
+import { analyze as analyzeFlailLog } from '@adlc/flail-detector/lib/analyze.mjs';
 
 /**
  * Run one gate command inside the sandbox. Returns { ok, output }. A non-zero
@@ -158,7 +160,110 @@ export function checkFlail(logFile, scope, { adlcBin = 'adlc', exec = defaultExe
   // `signals` gets the same strictness as `verdict`: the return shape is
   // documented as an array, so a drifted non-array is drift, not a value.
   if (parsed.signals !== undefined && !Array.isArray(parsed.signals)) return failOpen('unrecognized-verdict');
-  return { flail: parsed.verdict === 'flail', signals: parsed.signals ?? [] };
+  const signals = parsed.signals ?? [];
+  const isFlail = parsed.verdict === 'flail';
+  if (isFlail && signals.length > 0) {
+    if (signals.some((s) => !s || typeof s !== 'object' || typeof s.type !== 'string')) {
+      return failOpen('unrecognized-verdict');
+    }
+    return {
+      flail: true,
+      signals,
+      brief: formatAntiFlailBrief(signals),
+      action: classifyFlailAction(signals),
+    };
+  }
+  return { flail: isFlail, signals };
+}
+
+/**
+ * Decide whether fired flail signals warrant an immediate abort (`size`/`budget`
+ * resource ceilings) or an anti-flail corrective brief for Strike 2
+ * (`repeated-error`, `scope-violation`, `edit-churn`).
+ *
+ * @param {Array<{ type: string }>} signals
+ * @returns {'abort' | 'corrective-brief'}
+ */
+export function classifyFlailAction(signals) {
+  const hardCeiling = (signals ?? []).some((s) => s?.type === 'size' || s?.type === 'budget');
+  return hardCeiling ? 'abort' : 'corrective-brief';
+}
+
+/**
+ * Format fired `@adlc/flail-detector` signals into a concise, secret-redacted
+ * corrective brief for the next build strike.
+ *
+ * @param {Array<object>} signals
+ * @returns {string}
+ */
+export function formatAntiFlailBrief(signals) {
+  const lines = ['Flail-detector intercepted the previous strike. Change strategy before retrying:'];
+  for (const sig of signals ?? []) {
+    if (!sig || typeof sig !== 'object') continue;
+    const entries = Array.isArray(sig.entries) ? sig.entries.filter((e) => e != null) : [];
+    if (sig.type === 'repeated-error') {
+      const items = entries
+        .filter((e) => typeof e === 'object' && typeof e.signature === 'string')
+        .map((e) => `${e.signature} (${e.count ?? '?'}x)`)
+        .slice(0, 5);
+      lines.push(`- repeated-error: do not repeat failing pattern(s): ${items.join('; ') || 'see prior error output'}`);
+    } else if (sig.type === 'scope-violation') {
+      const paths = entries
+        .map((e) => (typeof e === 'object' ? e.path : e))
+        .filter((p) => typeof p === 'string' && p.length > 0)
+        .slice(0, 8);
+      lines.push(`- scope-violation: stay strictly within declared ticket scope; avoid touching: ${paths.join(', ') || 'out-of-scope files'}`);
+    } else if (sig.type === 'edit-churn') {
+      const paths = entries
+        .filter((e) => typeof e === 'object' && typeof e.path === 'string')
+        .map((e) => `${e.path} (${e.count ?? '?'} edits)`)
+        .slice(0, 5);
+      lines.push(`- edit-churn: stop thrashing on the same file(s): ${paths.join(', ') || 'repeatedly edited files'}`);
+    } else if (sig.type === 'size') {
+      lines.push(`- size: transcript exceeded ${sig.maxBytes ?? 'configured'} byte ceiling`);
+    } else if (sig.type === 'budget') {
+      lines.push(`- budget: token spend (${sig.spentTokens ?? '?'}) exceeded ticket budget (${sig.budget ?? '?'})`);
+    }
+  }
+  return redactSecrets(lines.join('\n'));
+}
+
+/**
+ * Analyze a normalized JSONL strike transcript directly via `@adlc/flail-detector`.
+ *
+ * @param {string} rawTranscript
+ * @param {string[]} scope
+ * @param {{ maxRepeat?: number, maxBytes?: number | null, spentTokens?: number | null, budget?: number | null, cwd?: string | null }} [opts]
+ * @returns {{ flail: boolean, signals: Array<object>, action: 'abort' | 'corrective-brief' | null, brief: string | null }}
+ */
+export function analyzeFlailTranscript(rawTranscript, scope = [], opts = {}) {
+  const {
+    maxRepeat = 2,
+    maxBytes = null,
+    spentTokens = null,
+    budget = null,
+    cwd = null,
+  } = opts;
+  const parsed = parseLog(String(rawTranscript ?? ''));
+  const result = analyzeFlailLog({
+    lines: parsed.lines,
+    bytes: parsed.bytes,
+    scopes: scope ?? [],
+    maxRepeat,
+    maxBytes,
+    spentTokens,
+    budget,
+    cwd,
+  });
+  if (result.verdict !== 'flail') {
+    return { flail: false, signals: [], action: null, brief: null };
+  }
+  return {
+    flail: true,
+    signals: result.signals,
+    action: classifyFlailAction(result.signals),
+    brief: formatAntiFlailBrief(result.signals),
+  };
 }
 
 // The detector's document embeds per-signal detail drawn from the session log,

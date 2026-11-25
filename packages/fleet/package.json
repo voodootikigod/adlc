@@ -29,6 +29,7 @@
   ],
   "dependencies": {
     "@adlc/core": "1.13.0",
+    "@adlc/flail-detector": "1.13.0",
     "@adlc/gate-manifest": "1.13.0",
     "@adlc/model-router": "1.13.0",
     "@adlc/quartermaster": "1.13.0",

@@ -43,3 +43,62 @@ export function mapResult(res) {
 
 /** Prefixed to a truncated worker's output so the transcript says why the strike failed. */
 export const TRUNCATED_NOTE = '[fleet] worker output exceeded the byte cap and was truncated; the result is not trusted\n';
+
+/**
+ * Serialize a strike's output and optional structured tool events into
+ * normalized JSONL records consumable by `@adlc/flail-detector`'s `parseLog`.
+ *
+ * @param {object} opts
+ * @param {string} opts.ticketId
+ * @param {number} opts.strike
+ * @param {string} [opts.adapter]
+ * @param {string} [opts.output]
+ * @param {number | null} [opts.exitCode]
+ * @param {boolean} [opts.timedOut]
+ * @param {Array<object>} [opts.toolEvents]
+ * @returns {string}
+ */
+export function serializeStrikeTranscriptJsonl({
+  ticketId,
+  strike,
+  adapter = 'unknown',
+  output = '',
+  exitCode = null,
+  timedOut = false,
+  toolEvents = [],
+} = {}) {
+  const records = [
+    JSON.stringify({
+      type: 'strike_meta',
+      ticketId: String(ticketId ?? ''),
+      strike: Number(strike) || 1,
+      adapter: String(adapter ?? 'unknown'),
+      exitCode,
+      timedOut: Boolean(timedOut),
+    }),
+  ];
+
+  if (Array.isArray(toolEvents)) {
+    for (const ev of toolEvents) {
+      if (!ev || typeof ev !== 'object') continue;
+      records.push(JSON.stringify({
+        type: ev.type ?? 'tool_use',
+        ticketId: String(ticketId ?? ''),
+        strike: Number(strike) || 1,
+        ...ev,
+      }));
+    }
+  }
+
+  for (const line of String(output ?? '').split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    records.push(JSON.stringify({
+      type: 'output',
+      ticketId: String(ticketId ?? ''),
+      strike: Number(strike) || 1,
+      text: line,
+    }));
+  }
+
+  return `${records.join('\n')}\n`;
+}

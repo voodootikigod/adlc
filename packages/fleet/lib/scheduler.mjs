@@ -110,10 +110,15 @@ export async function advanceTicket(ticket, effects, {
    * "this session is clean".
    */
   const consultFlail = async () => {
-    const r = await effects.flail({ ticket });
+    const r = await effects.flail({ ticket, strike: strikes });
     if (r?.failedOpen) {
       log(`${ticket.id} WARNING: flail consultation failed open (${r.reason ?? 'unknown'}) — ` +
           'the supervision signal is unavailable, not clean; the build keeps its normal retry');
+    }
+    if (r?.flail === true && r?.action === 'corrective-brief' && typeof r.brief === 'string' && r.brief.trim()) {
+      deadEnds.push(fence('FLAIL_BRIEF', r.brief, DEAD_END_MAX_CHARS));
+      log(`${ticket.id} strike ${strikes}: flail-detector injected anti-flail corrective brief for next strike`);
+      return false;
     }
     return r?.flail === true;
   };
