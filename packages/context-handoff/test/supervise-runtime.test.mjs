@@ -340,11 +340,20 @@ test('statTranscriptFile reports the mtime it finds and null for a file that is 
 test('nodeSpawner kills the negative process group on POSIX (T-P18)', LOOP_TEST, async () => {
   if (process.platform === 'win32') return;
   const dir = mkdtempSync(join(tmpdir(), 'supervise-pg-'));
+  let handle = null;
+  let childPid = 0;
+  let alive = true;
   try {
     const { chmodSync, readFileSync, existsSync } = await import('node:fs');
     const pidFile = join(dir, 'descendant.pid');
     const helper = join(dir, 'spawn-child.sh');
-    writeFileSync(helper, `#!/bin/sh\nsleep 10 &\necho $! > "${pidFile}"\nwait\n`);
+    // Publish via temp file + mv: shell `>` truncates/creates a 0-byte target
+    // before `echo` writes `$!`, so an `existsSync` poll can otherwise read ""
+    // (`Number("") === 0`) under CI load.
+    writeFileSync(
+      helper,
+      `#!/bin/sh\nsleep 10 &\npid=$!\necho "$pid" > "${pidFile}.tmp"\nmv "${pidFile}.tmp" "${pidFile}"\nwait\n`,
+    );
     chmodSync(helper, 0o755);
     const spawn = nodeSpawner({
       command: helper,
@@ -352,20 +361,37 @@ test('nodeSpawner kills the negative process group on POSIX (T-P18)', LOOP_TEST,
       cwd: dir,
       env: process.env,
     });
-    const handle = spawn({ sessionId: 'sess-pg', prompt: null });
-    for (let i = 0; i < 40 && !existsSync(pidFile); i++) {
+    handle = spawn({ sessionId: 'sess-pg', prompt: null });
+    for (let i = 0; i < 200; i++) {
+      if (existsSync(pidFile)) {
+        const parsed = Number(readFileSync(pidFile, 'utf8').trim());
+        if (Number.isInteger(parsed) && parsed > 0) {
+          childPid = parsed;
+          break;
+        }
+      }
       await new Promise((r) => setTimeout(r, 25));
     }
-    const childPid = Number(readFileSync(pidFile, 'utf8').trim());
     assert.ok(Number.isInteger(childPid) && childPid > 0);
     assert.equal(handle.kill('SIGKILL'), true);
     await handle.exited;
-    await new Promise((r) => setTimeout(r, 50));
-    let alive = true;
-    try { process.kill(childPid, 0); } catch { alive = false; }
-    if (alive) { try { process.kill(childPid, 'SIGKILL'); } catch {} }
+    for (let i = 0; i < 40 && alive; i++) {
+      try {
+        process.kill(childPid, 0);
+        await new Promise((r) => setTimeout(r, 25));
+      } catch {
+        alive = false;
+      }
+    }
     assert.equal(alive, false, 'descendant must be terminated with process group');
   } finally {
+    if (handle) {
+      try { handle.kill('SIGKILL'); } catch {}
+      await handle.exited.catch(() => {});
+    }
+    if (childPid > 0 && alive) {
+      try { process.kill(childPid, 'SIGKILL'); } catch {}
+    }
     rmSync(dir, { recursive: true, force: true });
   }
 });
