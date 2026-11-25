@@ -12,8 +12,9 @@ import {
   evaluatePreTool,
 } from '../lib/pretool.mjs';
 
-function makeAdlcRepo(prefix = 'adlc-he-pretool-') {
+function makeAdlcRepo(t, prefix = 'adlc-he-pretool-') {
   const dir = mkdtempSync(join(tmpdir(), prefix));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
   mkdirSync(join(dir, '.git'), { recursive: true });
   writeFileSync(join(dir, '.git', 'HEAD'), 'ref: refs/heads/main\n');
   mkdirSync(join(dir, '.adlc'), { recursive: true });
@@ -58,36 +59,32 @@ test('isAncestorDirOfRail detects ancestor directories of literal, nested, and w
   assert.equal(isAncestorDirOfRail('src', ''), false);
 });
 
-test('railHit resolves symlinks to frozen rails and enforces ancestor-directory deletion protection', () => {
-  const repo = makeAdlcRepo();
-  try {
-    // Symlink inside src/ pointing to frozen test/auth.test.mjs
-    const linkPath = join(repo, 'src', 'sneaky-link.mjs');
-    symlinkSync(join(repo, 'test', 'auth.test.mjs'), linkPath);
+test('railHit resolves symlinks to frozen rails and enforces ancestor-directory deletion protection', (t) => {
+  const repo = makeAdlcRepo(t);
+  // Symlink inside src/ pointing to frozen test/auth.test.mjs
+  const linkPath = join(repo, 'src', 'sneaky-link.mjs');
+  symlinkSync(join(repo, 'test', 'auth.test.mjs'), linkPath);
 
-    const symHit = railHit('src/sneaky-link.mjs', repo, ['test/auth.test.mjs']);
-    assert.equal(symHit.hit, true);
-    assert.equal(symHit.rail, 'test/auth.test.mjs');
-    assert.equal(symHit.resolvedPath, 'test/auth.test.mjs');
-    assert.equal(symHit.ancestorDir, false);
+  const symHit = railHit('src/sneaky-link.mjs', repo, ['test/auth.test.mjs']);
+  assert.equal(symHit.hit, true);
+  assert.equal(symHit.rail, 'test/auth.test.mjs');
+  assert.equal(symHit.resolvedPath, 'test/auth.test.mjs');
+  assert.equal(symHit.ancestorDir, false);
 
-    // Ancestor dir without checkAncestorDir is not a direct file hit; with checkAncestorDir it IS a hit.
-    assert.equal(railHit('test', repo, ['test/auth.test.mjs'], { checkAncestorDir: false }).hit, false);
-    const ancHit = railHit('test', repo, ['test/auth.test.mjs'], { checkAncestorDir: true });
-    assert.equal(ancHit.hit, true);
-    assert.equal(ancHit.ancestorDir, true);
+  // Ancestor dir without checkAncestorDir is not a direct file hit; with checkAncestorDir it IS a hit.
+  assert.equal(railHit('test', repo, ['test/auth.test.mjs'], { checkAncestorDir: false }).hit, false);
+  const ancHit = railHit('test', repo, ['test/auth.test.mjs'], { checkAncestorDir: true });
+  assert.equal(ancHit.hit, true);
+  assert.equal(ancHit.ancestorDir, true);
 
-    // Non-rail file is allowed.
-    assert.equal(railHit('src/app.mjs', repo, ['test/auth.test.mjs']).hit, false);
+  // Non-rail file is allowed.
+  assert.equal(railHit('src/app.mjs', repo, ['test/auth.test.mjs']).hit, false);
 
-    // Valid in-root filename starting with `..` (e.g. `..secret`) is NOT treated as outside root.
-    writeFileSync(join(repo, '..secret'), 'top-secret\n');
-    const dotdotHit = railHit('..secret', repo, ['..secret']);
-    assert.equal(dotdotHit.hit, true);
-    assert.equal(dotdotHit.resolvedPath, '..secret');
-  } finally {
-    rmSync(repo, { recursive: true, force: true });
-  }
+  // Valid in-root filename starting with `..` (e.g. `..secret`) is NOT treated as outside root.
+  writeFileSync(join(repo, '..secret'), 'top-secret\n');
+  const dotdotHit = railHit('..secret', repo, ['..secret']);
+  assert.equal(dotdotHit.hit, true);
+  assert.equal(dotdotHit.resolvedPath, '..secret');
 });
 
 test('isDirectoryDeletionCommand identifies rm, rmdir, mv, unlink, git rm, git clean, find -delete, and absolute-path/wrapped commands', () => {
@@ -103,27 +100,23 @@ test('isDirectoryDeletionCommand identifies rm, rmdir, mv, unlink, git rm, git c
   assert.equal(isDirectoryDeletionCommand('echo hi > src/app.mjs'), false);
 });
 
-test('enclosingAdlcRoot and readActiveTicketRails load active ticket rails from store', () => {
-  const repo = makeAdlcRepo();
+test('enclosingAdlcRoot and readActiveTicketRails load active ticket rails from store', (t) => {
+  const repo = makeAdlcRepo(t);
   const gitOnly = mkdtempSync(join(tmpdir(), 'adlc-he-gitonly-'));
+  t.after(() => rmSync(gitOnly, { recursive: true, force: true }));
   mkdirSync(join(gitOnly, '.git'), { recursive: true });
   writeFileSync(join(gitOnly, '.git', 'HEAD'), 'ref: refs/heads/main\n');
-  try {
-    const root = enclosingAdlcRoot(join(repo, 'src'));
-    assert.ok(root);
-    const { activeTicket, rails } = readActiveTicketRails(root);
-    assert.equal(activeTicket.id, 'T-1');
-    assert.deepEqual(rails.sort(), ['packages/core/test/**', 'test/auth.test.mjs']);
-    // requireStore defaults to true: a plain git repo with no .adlc store returns null.
-    assert.equal(enclosingAdlcRoot(gitOnly), null);
-  } finally {
-    rmSync(repo, { recursive: true, force: true });
-    rmSync(gitOnly, { recursive: true, force: true });
-  }
+  const root = enclosingAdlcRoot(join(repo, 'src'));
+  assert.ok(root);
+  const { activeTicket, rails } = readActiveTicketRails(root);
+  assert.equal(activeTicket.id, 'T-1');
+  assert.deepEqual(rails.sort(), ['packages/core/test/**', 'test/auth.test.mjs']);
+  // requireStore defaults to true: a plain git repo with no .adlc store returns null.
+  assert.equal(enclosingAdlcRoot(gitOnly), null);
 });
 
-test('evaluatePreTool enforces rails across file tools, patch tools, shell commands, and conflicting workdirs', () => {
-  const repo = makeAdlcRepo();
+test('evaluatePreTool enforces rails across file tools, patch tools, shell commands, and conflicting workdirs', (t) => {
+  const repo = makeAdlcRepo(t);
   try {
     // Conflicting working directory arguments fail closed.
     const conflict = evaluatePreTool({

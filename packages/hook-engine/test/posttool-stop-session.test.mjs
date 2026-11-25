@@ -10,8 +10,9 @@ import { evaluateSessionStart } from '../lib/session-start.mjs';
 
 const TEST_KEY = 'hook-engine-stop-test-key';
 
-function makeRepo(prefix = 'adlc-he-stop-') {
+function makeRepo(t, prefix = 'adlc-he-stop-') {
   const dir = mkdtempSync(join(tmpdir(), prefix));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
   mkdirSync(join(dir, '.git'), { recursive: true });
   writeFileSync(join(dir, '.git', 'HEAD'), 'ref: refs/heads/main\n');
   mkdirSync(join(dir, '.adlc', 'manifest.d'), { recursive: true });
@@ -54,8 +55,8 @@ test('evaluatePostTool reports ok on clean lines and warns on repeated errors / 
   assert.match(flail.advisory, /scope-violation/);
 });
 
-test('hasManifestEvidence and evaluateStop require HMAC-signed evidence and bound file reads', () => {
-  const repo = makeRepo();
+test('hasManifestEvidence and evaluateStop require HMAC-signed evidence and bound file reads', (t) => {
+  const repo = makeRepo(t);
   try {
     // Missing key fails closed when evidence is required.
     const noKey = evaluateStop({ cwd: repo, requiredGate: 'prosecute', requireEvidence: true, key: '' });
@@ -134,23 +135,19 @@ test('hasManifestEvidence and evaluateStop require HMAC-signed evidence and boun
   }
 });
 
-test('evaluateSessionStart injects active ticket, risk tier, and frozen rails', () => {
-  const repo = makeRepo('adlc-he-session-');
+test('evaluateSessionStart injects active ticket, risk tier, and frozen rails', (t) => {
+  const repo = makeRepo(t, 'adlc-he-session-');
   const plain = mkdtempSync(join(tmpdir(), 'adlc-he-plain-'));
-  try {
-    const res = evaluateSessionStart({ cwd: repo });
-    assert.ok(res.root);
-    assert.equal(res.activeTicket.id, 'T-HIGH');
-    assert.equal(res.risk.tier, 'high');
-    assert.deepEqual(res.rails, ['test/frozen.test.mjs']);
-    assert.match(res.additionalContext, /T-HIGH/);
-    assert.match(res.additionalContext, /test\/frozen\.test\.mjs/);
+  t.after(() => rmSync(plain, { recursive: true, force: true }));
+  const res = evaluateSessionStart({ cwd: repo });
+  assert.ok(res.root);
+  assert.equal(res.activeTicket.id, 'T-HIGH');
+  assert.equal(res.risk.tier, 'high');
+  assert.deepEqual(res.rails, ['test/frozen.test.mjs']);
+  assert.match(res.additionalContext, /T-HIGH/);
+  assert.match(res.additionalContext, /test\/frozen\.test\.mjs/);
 
-    const empty = evaluateSessionStart({ cwd: plain });
-    assert.equal(empty.root, null);
-    assert.equal(empty.additionalContext, '');
-  } finally {
-    rmSync(repo, { recursive: true, force: true });
-    rmSync(plain, { recursive: true, force: true });
-  }
+  const empty = evaluateSessionStart({ cwd: plain });
+  assert.equal(empty.root, null);
+  assert.equal(empty.additionalContext, '');
 });

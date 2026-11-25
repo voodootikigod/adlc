@@ -31,7 +31,6 @@
   ],
   "files": [
     "index.mjs",
-    "dist/",
     "lib/",
     "README.md",
     "LICENSE"

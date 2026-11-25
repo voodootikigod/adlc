@@ -11,10 +11,14 @@ import {
   DEFAULT_HOOK_TARGETS,
 } from '../build-hooks.mjs';
 
-test('DEFAULT_HOOK_TARGETS is non-empty and passes drift check against committed bundle', () => {
-  assert.ok(DEFAULT_HOOK_TARGETS.length >= 1, 'DEFAULT_HOOK_TARGETS must compile at least one real bundle');
-  const check = buildHooks({ check: true, write: false });
-  assert.equal(check.ok, true, `default hook bundle(s) drifted: ${check.drifted.join(', ')}`);
+test('default buildHooks smoke-compiles hook-engine in memory for both ESM and CJS without writing inside packages/', () => {
+  assert.ok(Array.isArray(DEFAULT_HOOK_TARGETS));
+  const esm = buildHooks({ check: true, write: false });
+  assert.equal(esm.ok, true);
+  assert.ok(esm.bundles['hook-engine.bundle.mjs']?.length > 1000);
+  const cjs = buildHooks({ check: true, write: false, formatOverride: 'cjs' });
+  assert.equal(cjs.ok, true);
+  assert.ok(cjs.bundles['hook-engine.bundle.cjs']?.length > 1000);
 });
 
 test('assertEsbuildLockstep passes for repo esbuild version and throws on mismatch', () => {

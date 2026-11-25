@@ -18,14 +18,15 @@ export const SUPPORTED_FORMATS = Object.freeze(['esm', 'cjs']);
  *
  * @type {readonly Array<{ name: string, entry: string, output: string, format?: 'esm' | 'cjs' }>}
  */
-export const DEFAULT_HOOK_TARGETS = Object.freeze([
-  Object.freeze({
-    name: 'hook-engine',
-    entry: 'packages/hook-engine/index.mjs',
-    output: 'packages/hook-engine/dist/hook-engine.bundle.mjs',
-    format: 'esm',
-  }),
-]);
+/**
+ * Default plugin hook bundle targets compiled when `buildHooks()` is invoked
+ * without explicit `targets` (populated when the 7 plugins migrate in T-P21b).
+ * When empty, `buildHooks()` still smoke-compiles `packages/hook-engine/index.mjs`
+ * in memory so `node scripts/build-hooks.mjs [--check]` never silently no-ops.
+ *
+ * @type {readonly Array<{ name: string, entry: string, output: string, format?: 'esm' | 'cjs' }>}
+ */
+export const DEFAULT_HOOK_TARGETS = Object.freeze([]);
 
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, 'utf8'));
@@ -181,6 +182,25 @@ export function buildHooks({
   const bundles = {};
   const stagedEntries = [];
   const drifted = [];
+
+  if (targets.length === 0) {
+    const fmt = formatOverride ?? 'esm';
+    const ext = fmt === 'cjs' ? 'cjs' : 'mjs';
+    bundles[`hook-engine.bundle.${ext}`] = compileHookBundle({
+      entryPath: 'packages/hook-engine/index.mjs',
+      outputPath: `hook-engine.bundle.${ext}`,
+      format: fmt,
+      root,
+      label: 'hook-engine',
+      buildSyncImpl,
+    });
+    return {
+      ok: true,
+      drifted,
+      bundles,
+      esbuildVersion,
+    };
+  }
 
   for (const target of targets) {
     const fmt = formatOverride ?? target.format ?? 'esm';
