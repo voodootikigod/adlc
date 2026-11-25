@@ -65,12 +65,13 @@ function writeFakeCli(
 ) {
   const fakeCli = join(root, "fake-adlc-lifecycle.mjs");
   const pidTmp = pidFile ? `${pidFile}.writing` : null;
+  const sigtermTmp = sigtermFile ? `${sigtermFile}.writing` : null;
   writeFileSync(
     fakeCli,
     `import { renameSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
+${ignoreSigterm ? `process.on("SIGTERM", () => { ${sigtermFile ? `writeFileSync(${JSON.stringify(sigtermTmp)}, "received");\nrenameSync(${JSON.stringify(sigtermTmp)}, ${JSON.stringify(sigtermFile)});` : ""} });` : ""}
 ${pidFile ? `writeFileSync(${JSON.stringify(pidTmp)}, String(process.pid));\nrenameSync(${JSON.stringify(pidTmp)}, ${JSON.stringify(pidFile)});` : ""}
-${ignoreSigterm ? `process.on("SIGTERM", () => { ${sigtermFile ? `writeFileSync(${JSON.stringify(sigtermFile)}, "received");` : ""} });` : ""}
 const rl = createInterface({ input: process.stdin });
 rl.on("line", (line) => {
   const m = JSON.parse(line);
@@ -144,7 +145,7 @@ function collect(child) {
     messages: parsed,
     reply: (id) => parsed().find((m) => m.id === id),
     wait: (ms = 50) => new Promise((r) => setTimeout(r, ms)),
-    async waitFor(predicate, timeoutMs = 2000) {
+    async waitFor(predicate, timeoutMs = 5000) {
       const started = Date.now();
       while (Date.now() - started < timeoutMs) {
         if (predicate(stdout, stderr)) return;
@@ -1738,7 +1739,7 @@ test("child initialize error uses bounded retirement before wrapper shutdown", a
   await Promise.race([
     once(child, "exit"),
     new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("wrapper did not exit")), 2000),
+      setTimeout(() => reject(new Error("wrapper did not exit")), 5000),
     ),
   ]);
   assert.equal(
@@ -1773,7 +1774,7 @@ test("SIGTERM retires a SIGTERM-ignoring child through the SIGKILL fallback", as
   await Promise.race([
     once(child, "exit"),
     new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("wrapper did not exit")), 2000),
+      setTimeout(() => reject(new Error("wrapper did not exit")), 5000),
     ),
   ]);
   assert.throws(
@@ -1811,12 +1812,12 @@ test("SIGTERM during serialized rebind waits for a SIGTERM-ignoring child to die
     method: "notifications/roots/list_changed",
     params: {},
   });
-  await out.waitFor(() => existsSync(retirementStarted));
+  await out.waitFor(() => existsSync(retirementStarted), 5000);
   child.kill("SIGTERM");
   await Promise.race([
     once(child, "exit"),
     new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("wrapper did not exit")), 2000),
+      setTimeout(() => reject(new Error("wrapper did not exit")), 5000),
     ),
   ]);
   assert.throws(

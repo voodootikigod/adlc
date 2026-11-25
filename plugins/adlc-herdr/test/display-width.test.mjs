@@ -163,16 +163,21 @@ test('truncation is bounded work, not proportional to a huge untrusted field', (
   // Ticket titles are untrusted and have no length limit, and the board
   // re-renders every few seconds. Eagerly expanding a multi-megabyte title into
   // segment objects to keep 40 cells allocated hundreds of MB per redraw.
+  truncateToWidth('ab', 1);
+  tailToWidth('ab', 1);
   const huge = `${'ab'.repeat(2_000_000)}TAIL`;
-  const started = process.hrtime.bigint();
+  huge.charCodeAt(0);
+  const startedCpu = process.cpuUsage();
   assert.equal(truncateToWidth(huge, 10), 'ababababab');
   assert.equal(tailToWidth(huge, 4), 'TAIL');
-  const ms = Number(process.hrtime.bigint() - started) / 1e6;
-  // Measured on this input: lazy ~2ms, eager ~930ms (4,000,004 clusters
-  // materialized to keep ten). 200ms sits ~100x above the lazy path and ~5x
-  // below the eager one, so it separates the regimes without being tight.
-  // A 1000ms bound did NOT: reverting to eager still passed at 927ms.
-  assert.ok(ms < 200, `truncating a 4 MB field took ${ms.toFixed(0)}ms — is it still eager?`);
+  const cpu = process.cpuUsage(startedCpu);
+  const cpuMs = (cpu.user + cpu.system) / 1e3;
+  // Measure process CPU time rather than wall-clock hrtime so OS scheduler
+  // preemption under parallel test segments cannot trip a false failure.
+  // Verified against an eager-materialization mutant on this 4 MB input:
+  // warmed lazy path uses ~18ms CPU, whereas eager `[...clusters(text)]` burns
+  // ~650ms+ CPU and fails this 200ms bound deterministically.
+  assert.ok(cpuMs < 200, `truncating a 4 MB field used ${cpuMs.toFixed(0)}ms CPU — is it still eager?`);
 });
 
 test('bounding a field never strands a surrogate half', () => {
