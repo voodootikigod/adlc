@@ -14,8 +14,9 @@ import { SafeSandbox } from './safe-sandbox.mjs';
 import { modelPlaneFilesystem, allocateModelPlaneTmpDir } from './model-plane.mjs';
 import { repoCommandEnv, modelPlaneEnv } from './env-scrub.mjs';
 import { runGatePipeline } from './gate-pipeline.mjs';
-import { runGates, checkFlail, MAX_OUTPUT_BYTES } from './gates.mjs';
+import { runGates, checkFlail, analyzeFlailTranscript, MAX_OUTPUT_BYTES } from './gates.mjs';
 import { getAdapter } from './adapters/index.mjs';
+import { serializeStrikeTranscriptJsonl } from './adapters/_shared.mjs';
 import { usageEvidence } from './adapters/usage.mjs';
 import { transportCredential, transportEvidence } from './adapters/transport-credential.mjs';
 import { ladderAdapters, seatForAttempt } from './quartermaster.mjs';
@@ -120,6 +121,11 @@ export function flailExec(io, remaining = null, cwd = undefined) {
 /** Path of the accumulated worker transcript flail-detector analyzes. */
 export function fleetLogPath(statusDir, repo, ticketId) {
   return join(statusDir ?? join(repo, '.adlc'), 'fleet-logs', `${ticketId}.log`);
+}
+
+/** Path of the per-strike structured JSONL tool-event transcript (Wave 3 T-P22). */
+export function fleetTranscriptPath(statusDir, repo, ticketId, strike) {
+  return join(statusDir ?? join(repo, '.adlc'), 'tmp', 'fleet-transcripts', `${ticketId}-strike-${strike}.jsonl`);
 }
 
 export function defaultIo() {
@@ -672,6 +678,18 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
         : '';
       res = { ...res, deadlineTruncated };
       write(`=== ${ticket.id} strike ${strike}${where} ===\n${res.output ?? ''}\n`);
+      // Persist normalized JSONL tool-event transcript for structured flail analysis (T-P22).
+      const transcriptPath = fleetTranscriptPath(statusDir, repo, ticket.id, strike);
+      const transcriptJsonl = serializeStrikeTranscriptJsonl({
+        ticketId: ticket.id,
+        strike,
+        adapter: attempt?.adapter ?? adapter?.name ?? 'unknown',
+        output: res.output ?? '',
+        exitCode: res.exitCode,
+        timedOut: res.timedOut,
+        toolEvents: res.toolEvents ?? [],
+      });
+      io.appendLog(transcriptPath, transcriptJsonl, { reset: true });
       // Commit the worker's changes (orchestrator commits; §6.3 pathspec excludes control dirs).
       if (res.exitCode === 0 && !res.timedOut && !/TICKET-BLOCKED/.test(res.output)) {
         try {
@@ -794,11 +812,24 @@ export function buildLiveDeps({ repo, config, statusDir, sandboxSpec, reviewRunn
       return { ...r, review: { provider: r.review?.provider ?? effectiveProvider, verdict: verdictWord, revision } };
     },
 
-    flail: ({ ticket }) => checkFlail(
-      fleetLogPath(statusDir, repo, ticket.id),
-      ticket.scope,
-      { adlcBin, exec: flailExec(io, config.deadline != null ? () => Math.max(1, config.deadline - now()) : null, repo) },
-    ),
+    flail: ({ ticket, strike } = {}) => {
+      if (typeof strike === 'number') {
+        const transcriptPath = fleetTranscriptPath(statusDir, repo, ticket.id, strike);
+        if (io.exists(transcriptPath)) {
+          try {
+            const structured = analyzeFlailTranscript(io.readFile(transcriptPath), ticket.scope, { cwd: repo });
+            if (structured.flail) return structured;
+          } catch {
+            // Fall through to CLI checkFlail on accumulated log.
+          }
+        }
+      }
+      return checkFlail(
+        fleetLogPath(statusDir, repo, ticket.id),
+        ticket.scope,
+        { adlcBin, exec: flailExec(io, config.deadline != null ? () => Math.max(1, config.deadline - now()) : null, repo) },
+      );
+    },
 
     // Rebase inside the ticket's own worktree, merge inside the integration worktree —
     // no checkout switching anywhere, and the shared checkout is never involved.

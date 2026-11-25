@@ -1,0 +1,20 @@
+{
+  "body": "Execute Wave 3 T-P22 from .adlc/specs/enhancement-resolution-plan.md:\n\n1. Declare \"@adlc/flail-detector\": \"1.13.0\" in packages/fleet/package.json (+ package-lock.json) so scripts/test/workspace-deps-declared.test.mjs passes cleanly.\n\n2. Emit normalized JSONL tool-event transcripts per strike into `.adlc/tmp/fleet-transcripts/<ticketId>-strike-<n>.jsonl`:\n- Add `serializeStrikeTranscriptJsonl({ ticketId, strike, adapter, output, exitCode, timedOut, toolEvents })` in `packages/fleet/lib/adapters/_shared.mjs` (converting structured tool events or raw strike output into normalized JSONL records readable by `@adlc/flail-detector`).\n- Add `fleetTranscriptPath(statusDir, repo, ticketId, strike)` in `packages/fleet/lib/live-deps.mjs`, add `.adlc/tmp/` to `ensureLocalExclude`, and persist per-strike JSONL transcripts in `dispatch`.\n\n3. Wire structured flail analysis and Strike-2 anti-flail corrective briefs:\n- Add `analyzeFlailTranscript(content, scope, opts)` (using `@adlc/flail-detector/lib/parse-log.mjs` + `analyze.mjs`) and `formatAntiFlailBrief(signals)` (sanitized via `@adlc/core` `redactSecrets`) in `packages/fleet/lib/gates.mjs`, preserving `checkFlail`'s existing exit-code trust and fail-open contract while returning optional `brief` / `action`.\n- Update `consultFlail` in `packages/fleet/lib/scheduler.mjs` (keeping `scheduler.mjs` pure over `effects.flail`): pass `{ ticket, strike }` to `effects.flail`; when `r.flail === true && r.action === 'corrective-brief' && typeof r.brief === 'string'`, append `fence('FLAIL_BRIEF', r.brief, DEAD_END_MAX_CHARS)` to `deadEnds` so Strike 2 receives a sanitized anti-flail corrective brief; otherwise when `r.flail === true`, abort early with `REASON_CODES.FLAIL`.\n- Add comprehensive tests in `packages/fleet/test/flail-interception.test.mjs` covering JSONL transcript emission, `@adlc/flail-detector` signal analysis (`repeated-error`, `scope-violation`, `edit-churn`, `size`, `budget`), sanitized Strike-2 corrective brief injection, and early abort.\n\nAcceptance criteria:\n- `node --test packages/fleet/test/flail-interception.test.mjs packages/fleet/test/*.test.mjs scripts/test/workspace-deps-declared.test.mjs` passes.\n- `npm run preflight` and cross-model `codex` review + signed `tier-check` pass.",
+  "id": "t-wave3-fleet-flail",
+  "rails": [
+    "packages/fleet/test/gates.test.mjs",
+    "packages/fleet/test/failopen-observability.test.mjs",
+    "packages/fleet/test/scheduler-ext.test.mjs",
+    "scripts/test/workspace-deps-declared.test.mjs"
+  ],
+  "scope": [
+    "packages/fleet/package.json",
+    "package-lock.json",
+    "packages/fleet/lib/adapters/_shared.mjs",
+    "packages/fleet/lib/gates.mjs",
+    "packages/fleet/lib/live-deps.mjs",
+    "packages/fleet/lib/scheduler.mjs",
+    "packages/fleet/test/flail-interception.test.mjs"
+  ],
+  "title": "Wave 3 T-P22: Feed structured tool-event JSONL telemetry into checkFlail and Strike-2 corrective briefs"
+}

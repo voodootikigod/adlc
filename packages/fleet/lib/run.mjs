@@ -32,7 +32,7 @@ function buildEffects(ticket, wt, deps, integrationBranch, mergeMutex, runState,
     // every awaited phase is bounded by the advertised deadline, not just dispatch.
     gate: ({ remainingMs = null } = {}) => deps.gate({ ticket, worktree: gatePath, startSha: wt.startSha, remainingMs }),
     prosecute: ({ remainingMs = null } = {}) => deps.prosecute({ ticket, worktree: gatePath, startSha: wt.startSha, remainingMs }),
-    flail: () => deps.flail({ ticket, worktree: gatePath }),
+    flail: ({ strike } = {}) => deps.flail({ ticket, worktree: gatePath, strike }),
     // Best-effort evidence (spec §8.5): a recorder error must never abort the run.
     record: (phase, ok, data) => { try { deps.recordGate?.({ ticket, phase, ok, data }); } catch { /* evidence is best-effort */ } },
     // §8a: one usage carrier per DISPATCH, independent of any later verdict.
