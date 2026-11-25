@@ -1,0 +1,20 @@
+{
+  "body": "Execute Wave 3 T-P21a from .adlc/specs/enhancement-resolution-plan.md:\n\n1. Create packages/hook-engine (@adlc/hook-engine v1.13.0) with lib/{pretool,posttool,stop,session-start,protocol-adapters}.mjs and index.mjs:\n- pretool.mjs: enclosingAdlcRoot (via @adlc/core findInnermostCheckoutRoot/preferInnermostCheckout/hasConflictingToolWorkdirs), symlink-resolved railHit (with ancestor-directory deletion protection so rm/rmdir/mv of an ancestor dir containing a frozen rail is denied), @adlc/core globMatch & classifyShellCommand/collectPatchPaths, active ticket rail lookup via @adlc/tickets, and evaluatePreTool.\n- posttool.mjs: PostToolUse audit + @adlc/flail-detector analyze() signal evaluation (evaluatePostTool).\n- stop.mjs: Stop / P5 gate combining @adlc/build-gate computeRiskTier and segmented .adlc/manifest.d/*.jsonl + root .adlc/manifest.jsonl evidence detection (hasManifestEvidence, evaluateStop).\n- session-start.mjs: SessionStart context builder resolving active ticket, rails, and risk tier (evaluateSessionStart).\n- protocol-adapters.mjs: normalizeHookInput and formatHookOutput covering all 7 shipped harness wire protocols (claude-code, codex, copilot, cursor, gemini, opencode, pi).\n\n2. Create scripts/build-hooks.mjs:\n- Deterministic zero-dependency ESM and CJS bundle compiler via esbuild (lockstep-checked against root package.json devDependencies.esbuild) with atomic staged publish + rollback.\n- Exports compileHookBundle, buildHooks, DEFAULT_HOOK_TARGETS and supports CLI flags (--check, --format esm|cjs).\n- Verified in scripts/test/build-hooks.test.mjs inside a node_modules-free temp directory.\n\n3. Register @adlc/hook-engine in package-lock.json, apps/docs/lib/toolkit-packages.mjs, apps/docs/content/docs/toolkit/hook-engine.mdx, docs/package-reference.md, and README.md.\n\nAcceptance criteria:\n- `node scripts/build-hooks.mjs --check` and `node --test packages/hook-engine/test/*.test.mjs scripts/test/build-hooks.test.mjs scripts/test/workspace-deps-declared.test.mjs apps/docs/test/toolkit-packages.test.mjs scripts/test/package-reference-coverage.test.mjs` pass.\n- `npm run preflight` and cross-model `codex` review + signed `tier-check` pass.",
+  "id": "t-wave3-hook-engine",
+  "rails": [
+    "scripts/test/workspace-deps-declared.test.mjs",
+    "apps/docs/test/toolkit-packages.test.mjs",
+    "scripts/test/package-reference-coverage.test.mjs"
+  ],
+  "scope": [
+    "packages/hook-engine/**",
+    "scripts/build-hooks.mjs",
+    "scripts/test/build-hooks.test.mjs",
+    "package-lock.json",
+    "apps/docs/lib/toolkit-packages.mjs",
+    "apps/docs/content/docs/toolkit/hook-engine.mdx",
+    "docs/package-reference.md",
+    "README.md"
+  ],
+  "title": "Wave 3 T-P21a: Create shared @adlc/hook-engine core and scripts/build-hooks.mjs esbuild compiler"
+}
