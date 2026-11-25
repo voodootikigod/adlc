@@ -1,10 +1,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PassThrough } from 'node:stream';
 import { runStdioServer, DEFAULT_MAX_MCP_CONCURRENCY, DEFAULT_MAX_MCP_INFLIGHT } from '../lib/mcp-server.mjs';
+
+async function waitForCondition(predicate, timeoutMs = 5000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (predicate()) return;
+    await new Promise((r) => setTimeout(r, 15));
+  }
+  assert.fail(`condition not met within ${timeoutMs}ms`);
+}
 
 test('runStdioServer processes concurrent tools/call and tools/list requests asynchronously via handleRequestAsync without blocking the event loop', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'async-mcp-'));
@@ -15,7 +24,7 @@ test('runStdioServer processes concurrent tools/call and tools/list requests asy
     writeFileSync(fake, `import { appendFileSync } from 'node:fs';
 const log = ${JSON.stringify(logFile)};
 appendFileSync(log, \`start \${Date.now()}\\n\`);
-await new Promise((r) => setTimeout(r, 400));
+await new Promise((r) => setTimeout(r, 800));
 appendFileSync(log, \`end \${Date.now()}\\n\`);
 console.log(\`done:\${process.argv.slice(2).join(' ')}\`);
 `);
@@ -79,13 +88,17 @@ test('runStdioServer enforces maxConcurrency semaphore, maxInflight queue bound,
     const logFile = join(dir, 'events.log');
     writeFileSync(fake, `import { appendFileSync } from 'node:fs';
 const log = ${JSON.stringify(logFile)};
-const ms = process.argv.includes('--json') ? 3000 : 120;
+const ms = process.argv.includes('--json') ? 5000 : 120;
 appendFileSync(log, \`start \${Date.now()}\\n\`);
 await new Promise((r) => setTimeout(r, ms));
 appendFileSync(log, \`end \${Date.now()}\\n\`);
 console.log("ok");
 `);
     process.env.ADLC_CLI_BIN = fake;
+    const countStarts = () =>
+      existsSync(logFile)
+        ? readFileSync(logFile, 'utf8').trim().split('\n').filter((l) => l.startsWith('start ')).length
+        : 0;
 
     const input = new PassThrough();
     const output = new PassThrough();
@@ -107,14 +120,16 @@ console.log("ok");
     for (let id = 100; id < 150; id++) {
       input.write(`${JSON.stringify(call(id))}\n`);
     }
-    await new Promise((r) => setTimeout(r, 30));
+    await waitForCondition(() => responses.length >= 50);
     assert.equal(responses.length, 50, 'all 50 rejected requests emit -32000 immediately without accumulating on tail');
     for (let i = 0; i < 50; i++) {
       assert.equal(responses[i].id, 100 + i);
       assert.equal(responses[i].error.code, -32000);
       assert.match(responses[i].error.message, /Server busy/);
     }
-    await new Promise((r) => setTimeout(r, 320));
+    // Wait until both queued calls (1 and 2) actually drain rather than
+    // assuming two sequential Node child spawns complete within 320ms under CI load.
+    await waitForCondition(() => responses.length === 52);
     input.write(`${JSON.stringify(call(4))}\n`);
     input.end();
     await done;
@@ -135,26 +150,26 @@ console.log("ok");
     const ac = new AbortController();
     const in2 = new PassThrough();
     const out2 = new PassThrough();
-    const abortStart = Date.now();
     const abortDone = runStdioServer({ input: in2, output: out2, maxConcurrency: 1, maxInflight: 2, signal: ac.signal });
     const longCall = (id) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'adlc_prosecute', arguments: { input: 'a.json', ticket: 'T1' } } });
     in2.write(`${JSON.stringify(longCall(10))}\n`);
     in2.write(`${JSON.stringify(longCall(11))}\n`);
-    await new Promise((r) => setTimeout(r, 60));
+    await waitForCondition(() => countStarts() >= 4);
+    const abortStart = Date.now();
     ac.abort();
     await abortDone;
-    assert.ok(Date.now() - abortStart < 1500, 'abort must kill running child well before its 3s sleep');
+    assert.ok(Date.now() - abortStart < 3000, 'abort must kill running child well before its 5s sleep');
 
     // Process shutdown signals (SIGTERM/SIGINT/SIGHUP) also terminate active children when no AbortSignal is passed
     const in3 = new PassThrough();
     const out3 = new PassThrough();
-    const sigStart = Date.now();
     const sigDone = runStdioServer({ input: in3, output: out3, maxConcurrency: 1, maxInflight: 2 });
     in3.write(`${JSON.stringify(longCall(20))}\n`);
-    await new Promise((r) => setTimeout(r, 60));
+    await waitForCondition(() => countStarts() >= 5);
+    const sigStart = Date.now();
     process.emit('SIGHUP');
     await sigDone;
-    assert.ok(Date.now() - sigStart < 1500, 'process SIGHUP must kill running child well before its 3s sleep');
+    assert.ok(Date.now() - sigStart < 3000, 'process SIGHUP must kill running child well before its 5s sleep');
   } finally {
     if (prevBin === undefined) delete process.env.ADLC_CLI_BIN;
     else process.env.ADLC_CLI_BIN = prevBin;
