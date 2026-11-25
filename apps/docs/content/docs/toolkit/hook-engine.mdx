@@ -1,0 +1,22 @@
+---
+title: hook-engine
+description: Shared ADLC harness hook runtime consolidating PreToolUse rails, PostToolUse flail detection, Stop manifest/risk checks, SessionStart context, and wire-protocol adapters.
+---
+
+# hook-engine
+
+**ADLC phase: P4 Build & P5 Review** · **Role:** single shared runtime core compiled into standalone zero-dependency hook bundles for all 7 shipped harnesses.
+
+## What it consolidates
+
+- `pretool.mjs` — `enclosingAdlcRoot`, symlink-resolved `railHit` with ancestor-directory deletion protection, `@adlc/core` `globMatch` and `classifyShellCommand`, and active ticket rail lookup.
+- `posttool.mjs` — PostToolUse audit and `@adlc/flail-detector` signal detection.
+- `stop.mjs` — Stop / P5 checks combining `@adlc/build-gate` risk derivation and segmented `.adlc/manifest.d/*.jsonl` + `.adlc/manifest.jsonl` evidence detection.
+- `session-start.mjs` — SessionStart context injection for active tickets and frozen rails.
+- `protocol-adapters.mjs` — Wire-protocol input normalization and output formatting for `claude-code`, `codex`, `copilot`, `cursor`, `gemini`, `opencode`, and `pi`.
+
+## Compilation
+
+```sh
+node scripts/build-hooks.mjs
+```

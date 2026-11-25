@@ -1,0 +1,56 @@
+{
+  "name": "@adlc/hook-engine",
+  "version": "1.13.0",
+  "description": "Shared ADLC harness hook engine consolidating PreToolUse rail protection, PostToolUse flail detection, Stop build-gate/manifest checks, SessionStart context injection, and wire-protocol adapters across all 7 shipped harnesses.",
+  "type": "module",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./pretool": "./lib/pretool.mjs",
+    "./posttool": "./lib/posttool.mjs",
+    "./stop": "./lib/stop.mjs",
+    "./session-start": "./lib/session-start.mjs",
+    "./protocol-adapters": "./lib/protocol-adapters.mjs"
+  },
+  "license": "MIT",
+  "author": "Chris Williams (@voodootikigod)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voodootikigod/adlc.git",
+    "directory": "packages/hook-engine"
+  },
+  "homepage": "https://github.com/voodootikigod/adlc/tree/main/packages/hook-engine#readme",
+  "bugs": "https://github.com/voodootikigod/adlc/issues",
+  "keywords": [
+    "adlc",
+    "agentic",
+    "hooks",
+    "rails-guard",
+    "build-gate",
+    "flail-detector"
+  ],
+  "files": [
+    "index.mjs",
+    "dist/",
+    "lib/",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@adlc/build-gate": "1.13.0",
+    "@adlc/core": "1.13.0",
+    "@adlc/flail-detector": "1.13.0",
+    "@adlc/gate-manifest": "1.13.0",
+    "@adlc/tickets": "1.13.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

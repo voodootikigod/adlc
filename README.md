@@ -99,7 +99,7 @@ hooks, CI, and lifecycle docs should use the dispatcher.
 | **Execution supervision & rails** | [`preflight`](./packages/preflight) · [`model-router`](./packages/model-router) · [`merge-forecast`](./packages/merge-forecast) · [`rails-guard`](./packages/rails-guard) · [`build-gate`](./packages/build-gate) · [`flail-detector`](./packages/flail-detector) · [`consensus-fix`](./packages/consensus-fix) · [`context-handoff`](./packages/context-handoff) · [`fleet`](./packages/fleet) · [`autopilot`](./packages/autopilot) · [`runner`](./packages/runner) |
 | **Review evidence & calibration** | [`behavior-diff`](./packages/behavior-diff) · [`gate-manifest`](./packages/gate-manifest) · [`hollow-test`](./packages/hollow-test) · [`prosecute`](./packages/prosecute) · [`review-calibration`](./packages/review-calibration) · [`model-ratchet`](./packages/model-ratchet) · [`gate-fuzzing`](./packages/gate-fuzzing) · [`decision-layer`](./packages/decision-layer) |
 | **Compounding defenses** | [`lesson-foundry`](./packages/lesson-foundry) · [`rejection-mining`](./packages/rejection-mining) · [`skill-rot`](./packages/skill-rot) |
-| **Shared foundation** | [`@adlc/cli`](./packages/cli) · [`@adlc/core`](./packages/core) · [`init`](./packages/init) · [`quartermaster`](./packages/quartermaster) |
+| **Shared foundation** | [`@adlc/cli`](./packages/cli) · [`@adlc/core`](./packages/core) · [`@adlc/hook-engine`](./packages/hook-engine) · [`init`](./packages/init) · [`quartermaster`](./packages/quartermaster) |
 
 See [docs/package-reference.md](./docs/package-reference.md) for binaries, command forms,
 and per-package detail, and [docs/toolkit.md](./docs/toolkit.md) for how the packages fit
