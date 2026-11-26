@@ -97,6 +97,8 @@ export function diffJson(before, after) {
   return { changes: allChanges.slice(0, MAX_PATHS), capped, total };
 }
 
+export const diffBodies = diffJson;
+
 /**
  * Produce a per-route diff comparing a before-capture entry to an after-capture entry.
  * Returns one of:
@@ -186,5 +188,11 @@ function normalizeContentType(ct) {
 }
 
 export function routeKey(entry) {
-  return `${entry.method} ${entry.path}`;
+  const method = typeof entry.method === 'string' ? entry.method.toUpperCase() : entry.method;
+  const id = typeof entry.id === 'string' ? entry.id.trim() : '';
+  return id ? `${method} ${entry.path} [${id}]` : `${method} ${entry.path}`;
+}
+
+export function commandKey(entry) {
+  return `CMD ${typeof entry.id === 'string' ? entry.id.trim() : entry.id}`;
 }

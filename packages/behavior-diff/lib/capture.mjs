@@ -3,6 +3,8 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { openSync, closeSync, writeFileSync, renameSync } from 'node:fs';
+import { routeKey } from './diff.mjs';
+import { validateCommandsConfig, runCommandsCapture } from './cli-capture.mjs';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 export const MAX_BODY_BYTES = 1024 * 1024;
@@ -77,57 +79,72 @@ export function validateConfig(config) {
     return errors;
   }
 
+  const hasRoutes = config.routes !== undefined;
+  const hasCommands = config.commands !== undefined;
+
   let parsedBase = null;
-  if (!config.baseUrl || typeof config.baseUrl !== 'string') {
-    errors.push('config.baseUrl must be a non-empty string');
-  } else {
-    try {
-      parsedBase = new URL(config.baseUrl);
-      if (parsedBase.protocol !== 'http:' && parsedBase.protocol !== 'https:') {
-        errors.push(`config.baseUrl must use http: or https: scheme: ${config.baseUrl}`);
-        parsedBase = null;
+  if (hasRoutes || !hasCommands || config.baseUrl !== undefined) {
+    if (!config.baseUrl || typeof config.baseUrl !== 'string') {
+      errors.push('config.baseUrl must be a non-empty string');
+    } else {
+      try {
+        parsedBase = new URL(config.baseUrl);
+        if (parsedBase.protocol !== 'http:' && parsedBase.protocol !== 'https:') {
+          errors.push(`config.baseUrl must use http: or https: scheme: ${config.baseUrl}`);
+          parsedBase = null;
+        }
+      } catch {
+        errors.push(`config.baseUrl is not a valid URL: ${config.baseUrl}`);
       }
-    } catch {
-      errors.push(`config.baseUrl is not a valid URL: ${config.baseUrl}`);
     }
   }
 
-  if (!Array.isArray(config.routes) || config.routes.length === 0) {
-    errors.push('config.routes must be a non-empty array');
-  } else {
-    // Snapshots are compared by "METHOD path" alone (see compare.mjs), so two
-    // probes of the same route (e.g. different bodies) cannot both be observed —
-    // the later one silently replaces the earlier. Refuse the config up front
-    // rather than capture a snapshot compare will reject or, worse, collapse.
-    const seen = new Set();
-    for (const [i, route] of config.routes.entries()) {
-      if (!route || typeof route !== 'object') {
-        errors.push(`config.routes[${i}] must be an object`);
-        continue;
-      }
-      // trim() on both, matching loadSnapshot: a whitespace-only method or
-      // path would capture "successfully" into a snapshot compare then rejects.
-      if (typeof route.method !== 'string' || route.method.trim() === '') {
-        errors.push(`config.routes[${i}].method must be a non-empty string`);
-      }
-      if (typeof route.path !== 'string' || route.path.trim() === '') {
-        errors.push(`config.routes[${i}].path must be a non-empty string`);
-      } else if (!route.path.startsWith('/') || route.path.startsWith('//') || routePathHasDotDot(route.path)) {
-        errors.push(`config.routes[${i}].path must start with "/" and not contain "//" or "..": ${route.path}`);
-      } else if (parsedBase) {
-        const resolved = new URL(route.path, parsedBase);
-        if (resolved.origin !== parsedBase.origin) {
-          errors.push(`config.routes[${i}].path resolves outside baseUrl origin: ${route.path}`);
+  if (hasRoutes || !hasCommands) {
+    if (!Array.isArray(config.routes) || config.routes.length === 0) {
+      errors.push('config.routes must be a non-empty array');
+    } else {
+      // Snapshots are compared by routeKey(route) (see compare.mjs), so two
+      // probes of the same route without distinct scenario ids cannot both be observed —
+      // the later one silently replaces the earlier. Refuse the config up front
+      // rather than capture a snapshot compare will reject or, worse, collapse.
+      const seen = new Set();
+      for (const [i, route] of config.routes.entries()) {
+        if (!route || typeof route !== 'object') {
+          errors.push(`config.routes[${i}] must be an object`);
+          continue;
         }
-      }
-      if (typeof route.method === 'string' && typeof route.path === 'string') {
-        const key = `${route.method.toUpperCase()} ${route.path}`;
-        if (seen.has(key)) {
-          errors.push(`config.routes[${i}] duplicates an earlier "${key}" route — duplicate routes are compared by method+path only and would silently collapse`);
+        if (route.id !== undefined && (typeof route.id !== 'string' || route.id.trim() === '')) {
+          errors.push(`config.routes[${i}].id must be a non-empty string when provided`);
         }
-        seen.add(key);
+        // trim() on both, matching loadSnapshot: a whitespace-only method or
+        // path would capture "successfully" into a snapshot compare then rejects.
+        if (typeof route.method !== 'string' || route.method.trim() === '') {
+          errors.push(`config.routes[${i}].method must be a non-empty string`);
+        }
+        if (typeof route.path !== 'string' || route.path.trim() === '') {
+          errors.push(`config.routes[${i}].path must be a non-empty string`);
+        } else if (!route.path.startsWith('/') || route.path.startsWith('//') || routePathHasDotDot(route.path)) {
+          errors.push(`config.routes[${i}].path must start with "/" and not contain "//" or "..": ${route.path}`);
+        } else if (parsedBase) {
+          const resolved = new URL(route.path, parsedBase);
+          if (resolved.origin !== parsedBase.origin) {
+            errors.push(`config.routes[${i}].path resolves outside baseUrl origin: ${route.path}`);
+          }
+        }
+        const idValid = route.id === undefined || (typeof route.id === 'string' && route.id.trim() !== '');
+        if (typeof route.method === 'string' && typeof route.path === 'string' && idValid) {
+          const key = routeKey(route);
+          if (seen.has(key)) {
+            errors.push(`config.routes[${i}] duplicates an earlier "${key}" route — duplicate routes are compared by method+path only and would silently collapse`);
+          }
+          seen.add(key);
+        }
       }
     }
+  }
+
+  if (hasCommands) {
+    errors.push(...validateCommandsConfig(config.commands));
   }
 
   return errors;
@@ -138,6 +155,8 @@ export function validateConfig(config) {
  */
 async function captureRoute(baseUrl, route, timeoutMs) {
   const { method, path, body, headers } = route;
+  const id = typeof route.id === 'string' && route.id.trim() !== '' ? route.id.trim() : undefined;
+  const idField = id !== undefined ? { id } : {};
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -189,10 +208,10 @@ async function captureRoute(baseUrl, route, timeoutMs) {
       parsedBody = { textHash: sha256hex(text), bytes, ...(truncated ? { truncated: true } : {}) };
     }
 
-    return { method: method.toUpperCase(), path, status, contentType, headers: responseHeaders, body: parsedBody };
+    return { ...idField, method: method.toUpperCase(), path, status, contentType, headers: responseHeaders, body: parsedBody };
   } catch (err) {
     const message = err.name === 'AbortError' ? `timeout after ${timeoutMs}ms` : err.message;
-    return { method: method.toUpperCase(), path, error: message };
+    return { ...idField, method: method.toUpperCase(), path, error: message };
   } finally {
     clearTimeout(timer);
   }
@@ -200,29 +219,46 @@ async function captureRoute(baseUrl, route, timeoutMs) {
 
 /**
  * Run a full capture for the given config.
- * Returns { baseUrl, capturedAt, routes: [...] }
+ * Returns { baseUrl?, capturedAt, routes?: [...], commands?: [...] }
  */
 export async function runCapture(config, timeoutMs = DEFAULT_TIMEOUT_MS) {
-  const results = [];
-  for (const route of config.routes) {
-    const result = await captureRoute(config.baseUrl, route, timeoutMs);
-    results.push(result);
+  const snapshot = {};
+  if (config.baseUrl !== undefined) {
+    snapshot.baseUrl = config.baseUrl;
   }
-  return {
-    baseUrl: config.baseUrl,
-    capturedAt: new Date().toISOString(),
-    routes: results,
-  };
+  snapshot.capturedAt = new Date().toISOString();
+
+  if (Array.isArray(config.routes)) {
+    const results = [];
+    for (const route of config.routes) {
+      const result = await captureRoute(config.baseUrl, route, timeoutMs);
+      results.push(result);
+    }
+    snapshot.routes = results;
+  }
+
+  if (Array.isArray(config.commands)) {
+    snapshot.commands = await runCommandsCapture(config.commands, timeoutMs);
+  }
+
+  return snapshot;
 }
 
 /**
- * Count how many routes in a snapshot returned a real HTTP response
- * (i.e. were reachable — no transport/timeout error recorded).
- * A route is "reachable" iff it has no `.error` field.
+ * Count how many routes/commands in a snapshot returned a real observation
+ * (i.e. were reachable — no transport/spawn/timeout error recorded).
+ * An entry is "reachable" iff it has no `.error` field.
  */
 export function reachableCount(snapshot) {
-  if (!snapshot || !Array.isArray(snapshot.routes)) return 0;
-  return snapshot.routes.filter((r) => !r.error).length;
+  if (!snapshot || typeof snapshot !== 'object') return 0;
+  let count = 0;
+  if (Array.isArray(snapshot.routes)) {
+    count += snapshot.routes.filter((r) => !r.error).length;
+  }
+  if (Array.isArray(snapshot.commands)) {
+    count += snapshot.commands.filter((c) => !c.error).length;
+  }
+  return count;
 }
 
 /**

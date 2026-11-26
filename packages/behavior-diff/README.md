@@ -46,14 +46,19 @@ behavior-diff capture --config behavior.json --out before.json
   "routes": [
     { "method": "GET", "path": "/health" },
     { "method": "GET", "path": "/api/users" },
-    { "method": "POST", "path": "/api/items", "body": { "name": "test" } },
+    { "id": "admin-login", "method": "POST", "path": "/api/auth", "body": { "role": "admin" } },
+    { "id": "guest-login", "method": "POST", "path": "/api/auth", "body": { "role": "guest" } },
     { "method": "GET", "path": "/api/data", "headers": { "Accept": "application/json" } }
+  ],
+  "commands": [
+    { "id": "cli-version", "cmd": "node", "args": ["-e", "console.log(JSON.stringify({ok:true}))"] }
   ]
 }
 ```
 
-Each route: `{ method, path, body?, headers? }`. `body` is serialized as JSON with
-`Content-Type: application/json` automatically added.
+Each HTTP route: `{ id?, method, path, body?, headers? }`. Optional `id` allows multiple probes of the same `METHOD path` (e.g. different request bodies) to be keyed as `METHOD /path [id]` and compared independently. `body` is serialized as JSON with `Content-Type: application/json` automatically added.
+
+Each CLI command: `{ id, cmd, args?, stdin?, cwd?, timeoutMs? }`. Commands are executed with `shell: false` (shell binaries and `..` traversal in `cmd` or `cwd` escaping workspace root are rejected) and candidate environment variables scrubbed.
 
 **Per-route errors are recorded** (as `{ method, path, error }`) without aborting
 the run. The snapshot always contains an entry for every route in the config.
