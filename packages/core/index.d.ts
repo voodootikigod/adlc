@@ -40,6 +40,19 @@ export type Usage = {
   readonly model: string;
   readonly tier?: ModelTier | string;
 };
+export type AttestationMode = 'self-context' | 'headless-cli' | 'api';
+export type CompletionMeta = {
+  readonly provider: string;
+  readonly model: string;
+  readonly tier?: ModelTier | string;
+  readonly attestationMode: AttestationMode;
+  readonly executionWitnessed: true;
+  readonly usage: {
+    readonly inputTokens: number;
+    readonly outputTokens: number;
+    readonly cachedTokens: number;
+  } | null;
+};
 export type CompletionOptions = {
   readonly tier?: ModelTier | string;
   readonly model?: string;
@@ -60,6 +73,7 @@ export type CompletionOptions = {
    * it and behavior is unchanged.
    */
   readonly onUsage?: (usage: Usage) => void;
+  readonly onCompleteMeta?: (meta: CompletionMeta) => void;
   /**
    * Marks the system/prompt as a prompt-cache candidate on providers that
    * support explicit cache breakpoints (currently anthropic only). Only set
@@ -84,6 +98,15 @@ export type FanProvidersResult =
 
 /** Names of all known providers, in auto-detect priority order. */
 export const PROVIDER_NAMES: readonly string[];
+export const CLI_PROVIDER_NAMES: readonly string[];
+export const CLAUDE_CLI_MODELS: Readonly<Record<ModelTier, string>>;
+export const CODEX_CLI_MODELS: Readonly<Record<ModelTier, string>>;
+export const VALID_ATTESTATION_MODES: readonly AttestationMode[];
+export const STRUCTURAL_FALLBACK_OPERATORS: ReadonlyArray<{
+  readonly name: string;
+  readonly apply: (line: string) => string | null;
+}>;
+export function dropObjectArgKey(line: string): string | null;
 
 export function isAgyTimeout(output: string): boolean;
 export function parseAgyTimeoutMs(spec?: string): number;

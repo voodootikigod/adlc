@@ -487,6 +487,8 @@ test('recordPromptOnlyVerdict: delegates to recordFn if provided', () => {
   assert.equal(recordedArg.dir, '/custom/dir');
   assert.deepEqual(JSON.parse(recordedArg.rawData), {
     promptOnly: true,
+    executionWitnessed: false,
+    attestationMode: 'self-context',
     usageStatus: 'unreported',
     verdict: 'pass',
     confidence: 0.95,
