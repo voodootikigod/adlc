@@ -5,6 +5,7 @@ import { parseArgs, printJson, opError, recordFinding, git, repoRoot, changedFil
 import { readManifestForest } from '@adlc/gate-manifest/lib/forest.mjs';
 import { detectTicketStore, GitTreeTicketStore } from '@adlc/tickets';
 import { runProsecution, resolveProsecutionRevision, revisionIgnorePaths } from '../lib/run.mjs';
+import { verifyRepro } from '../lib/verify-repro.mjs';
 import { classifyTrustRootTier } from '../lib/tier.mjs';
 import { usageWarnings } from '../lib/schema.mjs';
 import { recordCrossModelReview, carryForwardCrossModelReview, hasCrossModelApproveForRevision, evaluateCrossModelRevision, manifestChainTrustworthy, manifestChainBreakReason, CROSS_MODEL_GATE } from '../lib/cross-model.mjs';
@@ -655,6 +656,9 @@ const { values, positionals } = parseArgs({
     severity: { type: 'string' },
     line: { type: 'string' },
     verdict: { type: 'string' },
+    cmd: { type: 'string' },
+    'expect-fail': { type: 'boolean', default: false },
+    'timeout-ms': { type: 'string' },
   },
 });
 
@@ -752,6 +756,29 @@ Exit codes:
      (with --attestation-store: also a rollback/truncation being detected)
 `);
   process.exit(0);
+}
+
+if (positionals[0] === 'verify-repro') {
+  if (!values.cmd) opError('verify-repro requires --cmd "<argv-command>"');
+  const timeoutMs = values['timeout-ms'] !== undefined ? parseInt(values['timeout-ms'], 10) : 30000;
+  if (isNaN(timeoutMs) || timeoutMs <= 0) opError('--timeout-ms must be a positive integer');
+  const repro = verifyRepro({
+    cmd: values.cmd,
+    expectFail: values['expect-fail'],
+    timeoutMs,
+  });
+  if (values.json) {
+    printJson(repro);
+  } else {
+    if (repro.reproduced) {
+      console.log(`verify-repro: repro succeeded (reproduced: true, status: ${repro.status})`);
+    } else if (repro.operationalError) {
+      console.error(`verify-repro: operational failure: ${repro.error || repro.stderr}`);
+    } else {
+      console.error(`verify-repro: repro refuted (reproduced: false, status: ${repro.status})`);
+    }
+  }
+  process.exit(repro.exitCode);
 }
 
 // --- record-cross-model subcommand (register a cross-model attestation) ---
@@ -920,6 +947,29 @@ if (positionals[0] === 'record-cross-model') {
   process.exit(0);
 }
 
+if (positionals[0] === 'verify-repro') {
+  if (!values.cmd) opError('verify-repro requires --cmd "<argv-command>"');
+  const timeoutMs = values['timeout-ms'] !== undefined ? parseInt(values['timeout-ms'], 10) : 30000;
+  if (isNaN(timeoutMs) || timeoutMs <= 0) opError('--timeout-ms must be a positive integer');
+  const repro = verifyRepro({
+    cmd: values.cmd,
+    expectFail: values['expect-fail'],
+    timeoutMs,
+  });
+  if (values.json) {
+    printJson(repro);
+  } else {
+    if (repro.reproduced) {
+      console.log(`verify-repro: repro succeeded (reproduced: true, status: ${repro.status})`);
+    } else if (repro.operationalError) {
+      console.error(`verify-repro: operational failure: ${repro.error || repro.stderr}`);
+    } else {
+      console.error(`verify-repro: repro refuted (reproduced: false, status: ${repro.status})`);
+    }
+  }
+  process.exit(repro.exitCode);
+}
+
 // --- mirror-attestations subcommand (#355: append newly-observed cross-model entries to
 // the protected-ref attestation store) ---
 // Called by the trusted workflow ONLY, BEFORE the gate step, against a base-controlled
@@ -965,6 +1015,29 @@ if (positionals[0] === 'mirror-attestations') {
     console.log(`mirror-attestations: appended ${appended} new cross-model attestation(s) to ${values['attestation-store']}`);
   }
   process.exit(0);
+}
+
+if (positionals[0] === 'verify-repro') {
+  if (!values.cmd) opError('verify-repro requires --cmd "<argv-command>"');
+  const timeoutMs = values['timeout-ms'] !== undefined ? parseInt(values['timeout-ms'], 10) : 30000;
+  if (isNaN(timeoutMs) || timeoutMs <= 0) opError('--timeout-ms must be a positive integer');
+  const repro = verifyRepro({
+    cmd: values.cmd,
+    expectFail: values['expect-fail'],
+    timeoutMs,
+  });
+  if (values.json) {
+    printJson(repro);
+  } else {
+    if (repro.reproduced) {
+      console.log(`verify-repro: repro succeeded (reproduced: true, status: ${repro.status})`);
+    } else if (repro.operationalError) {
+      console.error(`verify-repro: operational failure: ${repro.error || repro.stderr}`);
+    } else {
+      console.error(`verify-repro: repro refuted (reproduced: false, status: ${repro.status})`);
+    }
+  }
+  process.exit(repro.exitCode);
 }
 
 // --- tier-check subcommand (#326: the CI trust-root cross-model gate) ---

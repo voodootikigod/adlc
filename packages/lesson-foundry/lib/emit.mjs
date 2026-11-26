@@ -129,7 +129,8 @@ function resolveTrustedGrep(pathStr = process.env.PATH) {
           if ((st.mode & fileMask) !== 0) continue;
         }
         if (selfUid !== null && st.uid !== selfUid) {
-          if (linkSt.uid !== 0 || st.uid !== 0 || dirSt.uid !== 0) continue;
+          const isSystemUid = (u) => u === 0 || u === 65534;
+          if (!isSystemUid(linkSt.uid) || !isSystemUid(st.uid) || !isSystemUid(dirSt.uid)) continue;
         }
         return candidate;
       } catch {

@@ -36,6 +36,8 @@ Options:
                            exits 1 (writing nothing) when no cluster could be refined
   --tier <cheap|mid|frontier>  Model tier for --llm refinement (default: mid)
   --prompt-only            Print LLM prompts and exit 0 (works with zero API keys)
+  --verify-checks          Verify candidate lint check scripts against positive/negative synthetic checks and existing repo baseline before emission
+  --root <dir>             Repository root for baseline checks with --verify-checks (default: cwd)
   --json                   Machine-readable output (stdout JSON, errors to stderr)
 ```
 

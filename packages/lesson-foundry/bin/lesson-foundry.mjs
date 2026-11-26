@@ -18,6 +18,7 @@ import { planEmissions } from '../lib/emit.mjs';
 import { buildHumanReport, buildJsonResult } from '../lib/report.mjs';
 import { buildAllPrompts, refineClusters } from '../lib/llm.mjs';
 import { hasDefenseContent, readArtifact, writeFileAtomic } from '../lib/artifact-io.mjs';
+import { verifyLintClusters } from '../lib/verify-defense.mjs';
 
 const { values: flags } = parseArgs({
   options: {
@@ -33,6 +34,8 @@ const { values: flags } = parseArgs({
     tier:        { type: 'string',  default: 'mid' },
     'prompt-only': { type: 'boolean', default: false },
     json:        { type: 'boolean', default: false },
+    'verify-checks': { type: 'boolean', default: false },
+    root:        { type: 'string', default: process.cwd() },
   },
 });
 
@@ -81,6 +84,10 @@ try {
 // Build clusters
 const clusters = buildClusters(findings, minSize);
 
+if (flags['verify-checks']) {
+  verifyLintClusters(clusters, findings, { root: flags.root || process.cwd() });
+}
+
 // --prompt-only: print LLM prompts and exit 0 (after enforcing --gate if requested)
 if (flags['prompt-only']) {
   if (flags.gate && skipped > tolerateMalformed) {
@@ -127,7 +134,7 @@ const plan = planEmissions(clusters, findings, outDir, llmRefinements);
 // Gate check: which clusters have no existing defense file? Computed for --write too, so the
 // write path emits a spec-gap question for EXACTLY the clusters the gate deems unbanked — the
 // two can never disagree (see the template-append filter below).
-const unbanked = (flags.gate || flags.write)
+let unbanked = (flags.gate || flags.write)
   ? findUnbankedClusters(clusters, outDir, existsSync, undefined, undefined, minSize, findings, 0.5)
   : [];
 
@@ -244,6 +251,10 @@ if (flags.write) {
 }
 
 // Exit
+if (flags.gate && flags.write) {
+  unbanked = findUnbankedClusters(clusters, outDir, existsSync, undefined, undefined, minSize, findings, 0.5);
+}
+
 if (flags.gate && skipped > tolerateMalformed) {
   gateFail(
     `lesson-foundry: findings ledger contains ${skipped} malformed line(s)`,
