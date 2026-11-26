@@ -1616,6 +1616,7 @@ describe('CLI: no-args and --help', () => {
     assert.equal(result.status, 0);
     assert.ok(result.stdout.includes('hollow-test'));
     assert.ok(result.stdout.includes('--test-cmd'));
+    assert.ok(result.stdout.includes('--exclude-glob <glob>'));
   });
 
   it('documents every exit code it can return', () => {
