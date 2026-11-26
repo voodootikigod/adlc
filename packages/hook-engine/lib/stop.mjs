@@ -5,9 +5,11 @@
 import { closeSync, constants as fsConstants, fstatSync, openSync, readSync } from 'node:fs';
 import { join } from 'node:path';
 import { computeRiskTier } from '@adlc/build-gate/lib/risk.mjs';
+import { record } from '@adlc/gate-manifest/lib/record.mjs';
 import { verify as verifyManifest } from '@adlc/gate-manifest/lib/verify.mjs';
 import { discoverSegments, segmentPath } from '@adlc/tickets/lib/manifest-primitives.mjs';
 import { enclosingAdlcRoot, readActiveTicketRails } from './pretool.mjs';
+import { harvestTranscriptUsage } from './spend-harvest.mjs';
 
 export const MAX_MANIFEST_FILE_BYTES = 4 * 1024 * 1024;
 export const MAX_MANIFEST_SEGMENTS = 64;
@@ -184,7 +186,11 @@ export function hasManifestEvidence(
  * @param {string | null} [opts.ticketHash]
  * @param {boolean} [opts.requireEvidence]
  * @param {string | null} [opts.key]
- * @returns {{ decision: 'allow' | 'block', reason: string | null, risk: { tier: 'high' | 'normal', signals: string[] }, hasEvidence: boolean, manifestSegments: string[], root: string | null }}
+ * @param {string | null} [opts.transcriptPath]
+ * @param {boolean} [opts.recordSessionUsage]
+ * @param {string} [opts.phaseGate]
+ * @param {string | null} [opts.sessionId]
+ * @returns {{ decision: 'allow' | 'block', reason: string | null, risk: { tier: 'high' | 'normal', signals: string[] }, hasEvidence: boolean, manifestSegments: string[], root: string | null, harvestedUsage?: object | null }}
  */
 export function evaluateStop({
   cwd = process.cwd(),
@@ -195,6 +201,10 @@ export function evaluateStop({
   ticketHash = null,
   requireEvidence = false,
   key = process.env.ADLC_MANIFEST_KEY ?? null,
+  transcriptPath = null,
+  recordSessionUsage = false,
+  phaseGate = 'p4',
+  sessionId = null,
 } = {}) {
   const root = enclosingAdlcRoot(cwd, { outerRoot });
   const loaded = !ticket && root ? readActiveTicketRails(root) : null;
@@ -221,6 +231,45 @@ export function evaluateStop({
       })
     : { found: false, matchingEntries: [], manifestSegments: [], error: null };
 
+  let harvestedUsage = null;
+  if (transcriptPath) {
+    harvestedUsage = harvestTranscriptUsage(transcriptPath);
+    if (recordSessionUsage === true && root && harvestedUsage?.calls > 0) {
+      const adlcDir = join(root, '.adlc');
+      const rootManifest = join(adlcDir, 'manifest.jsonl');
+      const { valid: segments } = discoverSegments(adlcDir);
+      const filesToScan = [rootManifest, ...segments.map((seg) => segmentPath(adlcDir, seg))];
+      let alreadyRecorded = false;
+      for (const filePath of filesToScan) {
+        const parsed = parseStrictJsonl(filePath, { maxBytes: MAX_MANIFEST_FILE_BYTES, remainingLines: MAX_MANIFEST_LINES });
+        if (parsed.ok) {
+          for (const entry of parsed.entries) {
+            if (entry.data?.transcriptSha256 === harvestedUsage.transcriptSha256) {
+              alreadyRecorded = true;
+              break;
+            }
+          }
+        }
+        if (alreadyRecorded) break;
+      }
+
+      if (!alreadyRecorded) {
+        record({
+          gate: phaseGate ?? 'p4',
+          ticket: activeTicket?.id,
+          dir: adlcDir,
+          key: key ?? null,
+          rawData: JSON.stringify({
+            sessionId: sessionId ?? null,
+            transcriptSha256: harvestedUsage.transcriptSha256,
+            usage: harvestedUsage.usage,
+            usageStatus: 'reported',
+          }),
+        });
+      }
+    }
+  }
+
   if (requireEvidence && (evidence.error || !evidence.found)) {
     const label = requiredGate ? `gate "${requiredGate}"` : 'gate';
     const ticketLabel = activeTicket?.id ? ` for ticket "${activeTicket.id}"` : '';
@@ -234,6 +283,7 @@ export function evaluateStop({
       hasEvidence: false,
       manifestSegments: evidence.manifestSegments,
       root,
+      ...(transcriptPath ? { harvestedUsage } : {}),
     };
   }
 
@@ -244,5 +294,6 @@ export function evaluateStop({
     hasEvidence: evidence.found,
     manifestSegments: evidence.manifestSegments,
     root,
+    ...(transcriptPath ? { harvestedUsage } : {}),
   };
 }

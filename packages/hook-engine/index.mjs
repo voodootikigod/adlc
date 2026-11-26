@@ -4,3 +4,4 @@ export * from './lib/posttool.mjs';
 export * from './lib/stop.mjs';
 export * from './lib/session-start.mjs';
 export * from './lib/protocol-adapters.mjs';
+export * from './lib/spend-harvest.mjs';

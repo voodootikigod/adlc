@@ -122,8 +122,12 @@ export function normalizeHookInput(harness, rawPayload = {}) {
     (typeof p.session_id === 'string' ? p.session_id : null) ??
     (typeof p.sessionId === 'string' ? p.sessionId : null) ??
     null;
+  const transcriptPath =
+    (typeof p.transcript_path === 'string' && p.transcript_path.trim() ? p.transcript_path.trim() : null) ??
+    (typeof p.transcriptPath === 'string' && p.transcriptPath.trim() ? p.transcriptPath.trim() : null) ??
+    null;
 
-  return { harness: proto, event, toolName, toolInput, toolResult, cwd, outerRoot, sessionId };
+  return { harness: proto, event, toolName, toolInput, toolResult, cwd, outerRoot, sessionId, transcriptPath };
 }
 
 /**

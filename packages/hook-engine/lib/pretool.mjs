@@ -39,6 +39,14 @@ const READ_ONLY_TOOL_NAMES = new Set([
   'read_resource',
 ]);
 
+const NON_FS_UI_TOOL_NAMES = new Set([
+  'update_steps',
+  'todo_write',
+  'task_boundary',
+  'enter_plan_mode',
+  'exit_plan_mode',
+]);
+
 const SHELL_TOOL_NAMES = new Set([
   'bash',
   'shell',
@@ -189,13 +197,14 @@ export function isDirectoryDeletionCommand(command) {
  *
  * @param {string} root
  * @param {{ storeOverride?: string | null, env?: NodeJS.ProcessEnv }} [opts]
- * @returns {{ ok: boolean, tickets: object[], activeTicket: object | null, rails: string[], error: string | null }}
+ * @returns {{ ok: boolean, tickets: object[], activeTicket: object | null, rails: string[], boundTicket: boolean, error: string | null }}
  */
 export function readActiveTicketRails(root, { storeOverride = null, env = process.env } = {}) {
-  if (!root) return { ok: true, tickets: [], activeTicket: null, rails: [], error: null };
+  const cleanEnv = env.ADLC_TICKET ? { ...env } : env;
+  if (!root) return { ok: true, tickets: [], activeTicket: null, rails: [], boundTicket: false, error: null };
   let snapshot;
   try {
-    const store = detectTicketStore({ root, ticketStore: storeOverride ?? undefined, allowRecovery: true, env });
+    const store = detectTicketStore({ root, ticketStore: storeOverride ?? undefined, allowRecovery: true, env: cleanEnv });
     snapshot = store.load();
   } catch (err) {
     return {
@@ -203,19 +212,21 @@ export function readActiveTicketRails(root, { storeOverride = null, env = proces
       tickets: [],
       activeTicket: null,
       rails: [],
+      boundTicket: false,
       error: `ticket store unreadable: ${err?.message ?? String(err)}`,
     };
   }
 
   const tickets = snapshot.tickets ?? [];
   const active = activeTickets(tickets);
-  const resolved = resolveActiveTicketAgainst(snapshot, { root, env });
+  const resolved = resolveActiveTicketAgainst(snapshot, { root, env: cleanEnv });
   if (!resolved.ok) {
     return {
       ok: false,
       tickets: [],
       activeTicket: null,
       rails: [],
+      boundTicket: false,
       error: `invalid active ticket selection: ${resolved.message ?? 'conflict'}`,
     };
   }
@@ -228,13 +239,14 @@ export function readActiveTicketRails(root, { storeOverride = null, env = proces
         tickets: [],
         activeTicket: null,
         rails: [],
+        boundTicket: false,
         error: `active ticket "${selected.id}" is already completed`,
       };
     }
     const rails = Array.isArray(selected.rails)
       ? selected.rails.filter((r) => typeof r === 'string' && r.trim()).map((r) => r.trim())
       : [];
-    return { ok: true, tickets: active, activeTicket: selected, rails, error: null };
+    return { ok: true, tickets: active, activeTicket: selected, rails, boundTicket: true, error: null };
   }
 
   const activeTicket = active[0] ?? null;
@@ -246,7 +258,7 @@ export function readActiveTicketRails(root, { storeOverride = null, env = proces
       }
     }
   }
-  return { ok: true, tickets: active, activeTicket, rails: [...railSet], error: null };
+  return { ok: true, tickets: active, activeTicket, rails: [...railSet], boundTicket: false, error: null };
 }
 
 function extractFilePathsFromInput(toolInput) {
@@ -281,6 +293,7 @@ function extractFilePathsFromInput(toolInput) {
  * @param {string} [opts.cwd]
  * @param {string | null} [opts.outerRoot]
  * @param {string[] | null} [opts.rails]
+ * @param {boolean} [opts.boundTicket]
  * @param {string | null} [opts.storeOverride]
  * @param {NodeJS.ProcessEnv} [opts.env]
  * @returns {{ decision: 'allow' | 'deny', reason: string | null, matchedRail: string | null, resolvedPath: string | null, root: string | null }}
@@ -291,6 +304,7 @@ export function evaluatePreTool({
   cwd = process.cwd(),
   outerRoot = null,
   rails = null,
+  boundTicket = undefined,
   storeOverride = null,
   env = process.env,
 } = {}) {
@@ -309,8 +323,10 @@ export function evaluatePreTool({
   }
 
   let effectiveRails;
+  let isBoundTicket;
   if (Array.isArray(rails)) {
     effectiveRails = rails;
+    isBoundTicket = boundTicket ?? true;
   } else if (root) {
     const loaded = readActiveTicketRails(root, { storeOverride, env });
     if (!loaded.ok) {
@@ -326,8 +342,10 @@ export function evaluatePreTool({
       };
     }
     effectiveRails = loaded.rails;
+    isBoundTicket = boundTicket !== undefined ? boundTicket : loaded.boundTicket;
   } else {
     effectiveRails = [];
+    isBoundTicket = boundTicket ?? false;
   }
 
   if (effectiveRails.length === 0) {
@@ -336,6 +354,12 @@ export function evaluatePreTool({
 
   if (READ_ONLY_TOOL_NAMES.has(normalizedTool)) {
     return { decision: 'allow', reason: null, matchedRail: null, resolvedPath: null, root };
+  }
+
+  if (NON_FS_UI_TOOL_NAMES.has(normalizedTool)) {
+    if (isBoundTicket === false) {
+      return { decision: 'allow', reason: null, matchedRail: null, resolvedPath: null, root };
+    }
   }
 
   if (toolInput?.__unparseable === true) {
