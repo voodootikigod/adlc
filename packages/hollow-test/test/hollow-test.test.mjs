@@ -16,6 +16,7 @@ import { join, resolve } from 'node:path';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { symlinkSync as linkSync, lstatSync } from 'node:fs';
 import { tmp, gitRepo } from '@adlc/core/test-kit';
+import { isMutableSource } from '../lib/targets.mjs';
 
 // ── git helpers ──────────────────────────────────────────────────────────────
 
@@ -714,6 +715,45 @@ describe('CLI: --test-glob reclassifies a source file as a test', () => {
       `expected the declared test file to leave nothing mutable: ${out}`);
     assert.doesNotMatch(out, /TypeError/,
       'a crash is not the same as the option working');
+  });
+});
+
+describe('CLI: --exclude-glob and default generated-bundle exclusions', () => {
+  let dir;
+
+  beforeEach((t) => {
+    dir = tmp(t, 'hollow-excludeglob-');
+    createRailsAuthoringRepo(dir);
+    writeFileSync(join(dir, 'src', 'generated.mjs'), 'export const g = (x) => x > 0;\n');
+    git(['add', '-A'], dir);
+    git(['commit', '-qm', 'add generated'], dir);
+  });
+
+  it('excludes matching paths when --exclude-glob is passed', () => {
+    const result = runCli(
+      ['--test-cmd', 'node --test test/*.test.mjs', '--base', 'HEAD~1',
+       '--exclude-glob', '**/nothing-matches-this.mjs',
+       '--exclude-glob', '**/generated.mjs',
+       '--max', '3'],
+      dir
+    );
+    const out = result.stderr + result.stdout;
+    assert.match(out, /nothing to mutate/,
+      `expected --exclude-glob to leave nothing mutable: ${out}`);
+    assert.doesNotMatch(out, /TypeError/,
+      'a crash is not the same as the option working');
+  });
+
+  it('default-excludes dist/**, build/**, *.bundle.mjs, and *.min.js', () => {
+    assert.equal(isMutableSource('dist/agb.mjs'), false);
+    assert.equal(isMutableSource('vendor/adlc/dist/adlc.bundle.mjs'), false);
+    assert.equal(isMutableSource('build/output.js'), false);
+    assert.equal(isMutableSource('lib/app.bundle.mjs'), false);
+    assert.equal(isMutableSource('public/app.min.js'), false);
+    assert.equal(isMutableSource('lib/real.mjs'), true);
+    assert.equal(isMutableSource('lib/real.mjs', { excludeGlobs: ['lib/**'] }), false);
+    assert.equal(isMutableSource('dist/agb.mjs', { sourceGlobs: ['dist/**'] }), true);
+    assert.equal(isMutableSource('dist/agb.mjs', { sourceGlobs: ['dist/**'], excludeGlobs: ['dist/**'] }), false);
   });
 });
 

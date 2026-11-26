@@ -44,8 +44,12 @@ const { values } = parseArgs({
     // `spec-lint.mjs` are production files in this very repo. Rather than guess,
     // let a caller whose project uses that convention declare it:
     //   --test-glob '**/*-test.js'
-    'test-glob':  { type: 'string', multiple: true },
-    'source-glob':{ type: 'string', multiple: true },
+    'test-glob':   { type: 'string', multiple: true },
+    'source-glob': { type: 'string', multiple: true },
+    // Extra globs to exclude from mutation (e.g. generated bundles or build
+    // outputs). dist/**, build/**, *.bundle.mjs, and *.min.js are excluded by
+    // default unless rescued by --source-glob.
+    'exclude-glob': { type: 'string', multiple: true },
     // Repo-relative paths of generated files a release bump rewrites. Only these
     // can be reported as version-only; see fileChangeIsVersionOnly.
     generated:    { type: 'string', multiple: true },
@@ -79,6 +83,9 @@ Options:
   --rails <ticket-file> Path to a ticket JSON file; its declared "rails"
                         globs are expanded against tracked files and added
                         as mutation targets (repeatable).
+  --exclude-glob <glob> Exclude matching paths from diff-derived mutation
+                        (repeatable; dist/**, build/**, *.bundle.mjs, and
+                        *.min.js are excluded by default).
   --json                Machine-readable JSON output
   --help                Show this help
 
@@ -99,6 +106,7 @@ const testGlobs = values['test-glob'] ?? [];
 // Rescues production files whose names match a test convention — `hollow-test.mjs`,
 // `spec-lint.mjs`. Convention alone cannot resolve that ambiguity; the project must.
 const sourceGlobs = values['source-glob'] ?? [];
+const excludeGlobs = values['exclude-glob'] ?? [];
 const generatedFiles = new Set(values.generated ?? []);
 const skipBaseline = values['skip-baseline'] === true;
 let fileTestMap = null;
@@ -336,7 +344,7 @@ try {
 }
 
 const changedLines = mutate.changedLinesFromDiff(diff);
-const diffEligibleFilesAll = filterTargetFiles(changedLines, { testGlobs, sourceGlobs });
+const diffEligibleFilesAll = filterTargetFiles(changedLines, { testGlobs, sourceGlobs, excludeGlobs });
 
 // ── comment-only diffs are NOT COVERED, not a failure (#1032) ───────────────
 //

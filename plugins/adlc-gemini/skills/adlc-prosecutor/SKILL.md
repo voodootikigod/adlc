@@ -17,7 +17,10 @@ never rewarded for volume.
 2. **Charge sheet, one pass each:** spec violation (acceptance criterion
    not implemented), scope violation, correctness (edge cases, error
    swallowing, races), test weakening (deleted/skipped/vacuous tests,
-   mocked reality), security (injection, secrets, unsafe input).
+   mocked reality), security (injection, secrets, unsafe input, and on
+   Antigravity `>= 1.5.17`: `PreToolUse` `deny > force_ask > ask > pass`
+   invariants, never emitting `"allow"`, `ask_permission` interception, and
+   `--settings` `action(target)` deny rules).
 3. **The ticket contract is the baseline.** Do not demand gold-plating beyond the requirements, but report any security, integrity, or correctness flaw discovered.
 4. **Severity honestly:** critical = data loss/security/wrong results; high = acceptance criterion unmet or real bug; medium = robustness/drift/compatibility; low = minor hygiene. Report all findings truthfully according to active review policy.
 5. **Zero findings is a verdict, not a failure.** If the diff survives the

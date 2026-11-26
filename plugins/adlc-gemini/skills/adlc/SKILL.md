@@ -197,11 +197,20 @@ findings) for reusable capabilities:
 
 ## Rails in Gemini (Antigravity/JetSki)
 
-This plugin installs a `PreToolUse` rails-guard hook. It is **advisory** in-session —
-the host fails OPEN on a non-zero hook exit, so a frozen-rail write can slip through a hook
-crash/timeout. **The unbypassable guarantee is the commit-time CI gate**
-(`scripts/rails-guard-ci.mjs`). Enforcement activates only when `ADLC_P4_ENFORCEMENT=1`
-and an active ticket declares `rails[]` (`ADLC_RAILS_BYPASS=1` overrides only the CLI
-`adlc rails-guard` gate — the in-session Gemini hook has no per-call bypass other than
-unsetting `ADLC_P4_ENFORCEMENT`). Shell (`run_command`) writes are not gated
-in-session; the CI gate catches them.
+This plugin installs a `PreToolUse` rails-guard hook. On Antigravity `>= 1.5.17`,
+native guardrails layer three mechanisms alongside the commit-time CI gate:
+- **`PreToolUse` `force_ask` & `ask_permission`:** Enforces `deny > force_ask > ask > pass`
+  (never emitting `"allow"`). Protected `.adlc/**` and `.booster/**` roots are
+  unconditionally `deny`; interactive ambiguous shell syntax and out-of-workspace
+  mutations escalate to `force_ask` (blocking silent `--yolo` auto-approval), while
+  headless workers hard-`deny`. `ask_permission` tool calls are mediated through
+  the same guardrail boundary.
+- **Native `--settings` `action(target)` permission rules:** Role profiles emit
+  `allowNonWorkspaceAccess: false` and `permissions.deny` rules (including
+  compiled `write_file(<rail>)` entries) as defense-in-depth.
+- **Unbypassable commit-time CI gate:** Because hook failures can still fail open
+  on crash/timeout, `scripts/rails-guard-ci.mjs` remains the unbypassable guarantee.
+  In-session enforcement activates when `ADLC_P4_ENFORCEMENT=1` and an active ticket
+  declares `rails[]` (`ADLC_RAILS_BYPASS=1` overrides only the CLI `adlc rails-guard`
+  gate — the in-session Gemini hook has no per-call bypass other than unsetting
+  `ADLC_P4_ENFORCEMENT`).
