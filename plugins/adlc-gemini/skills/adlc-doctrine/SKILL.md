@@ -35,6 +35,19 @@ them exactly.
   regenerate a whole file to change three lines.
 - Do not spawn subagents unless your instructions say to.
 
+## Antigravity `>= 1.5.17` Guardrails
+
+- `PreToolUse` enforces a strict precedence lattice: `deny > force_ask > ask > pass`
+  (never emitting `"allow"` or `"auto_approve"`).
+- In interactive sessions, ambiguous shell syntax (`$VAR`, `${VAR}`, backticks,
+  `$()`, `eval`/`source`, git-dir flags, `rm -r`, credentialed `curl`/`wget`) and
+  out-of-workspace file mutations escalate to `force_ask`, prompting the human even
+  under `--yolo` / `auto_approve`. Headless builder workers hard-`deny` them.
+- `ask_permission` requests are intercepted through the same guardrail boundary.
+- Native `--settings` profiles emit `action(target)` permission rules
+  (`allowNonWorkspaceAccess: false`, `permissions.deny`) as defense-in-depth
+  alongside kernel containment and commit-time `adlc rails-guard`.
+
 ## Completion protocol
 
 - End builder replies with exactly `TICKET-DONE` (all gates green, verified

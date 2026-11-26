@@ -177,6 +177,7 @@ exclude production paths such as `packages/hollow-test/lib/targets.mjs` or
 Two escape hatches, because no convention resolves every case:
 
 - `--test-glob <glob>` — treat additional paths as tests.
+- `--exclude-glob <glob>` — exclude matching paths from diff-derived mutation (repeatable; `dist/**`, `build/**`, `*.bundle.mjs`, and `*.min.js` are excluded by default).
 - `--source-glob <glob>` — treat paths as production source even when their name
   matches a test convention. Needed for product names like `hollow-test.mjs` and
   `spec-lint.mjs`, which are indistinguishable from tests by naming alone. For the same reason, **hyphenated** forms (`foo-test.js`,

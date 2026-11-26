@@ -57,6 +57,14 @@ const EXCLUDE_DIR_RE = /(?:^|\/)(?:tests?|specs?|__tests__)\//i;
 const EXCLUDE_FILE_RE =
   /(?:^|\/)(?:[^/]*\.(?:test|spec)\.[^/]+|(?:test|spec)\.[^/.]+|(?:test|spec)[-_][^/]+|[^/]*[-_](?:test|spec)\.[^/.]+)$/i;
 
+// Built-in generated/bundled output exclusions: esbuild/rollup/webpack bundles
+// and minified assets under dist/ or build/ are build outputs, not hand-written
+// source. Mutating them produces thousands of dead-code survivors and timeouts.
+// Callers with hand-written source under dist/ or build/ can opt back in via
+// --source-glob, or exclude additional build dirs via --exclude-glob.
+const EXCLUDE_GENERATED_DIR_RE = /(?:^|\/)(?:dist|build)\//i;
+const EXCLUDE_GENERATED_FILE_RE = /\.(?:bundle\.mjs|min\.js)$/i;
+
 // TypeScript was excluded because JS-shaped operators often produce invalid TS
 // around generics and JSX. #306 made invalid mutants discards rather than false
 // kills, and #313 supplies the repository's TypeScript parser, so those files can
@@ -85,10 +93,12 @@ export function isSupportedSourceExtension(file) {
   return SOURCE_EXT_RE.test(file) && !DECLARATION_RE.test(file);
 }
 
-export function isMutableSource(file, { testGlobs = [], sourceGlobs = [] } = {}) {
+export function isMutableSource(file, { testGlobs = [], sourceGlobs = [], excludeGlobs = [] } = {}) {
   // A source declaration can resolve ambiguous test-like names, but cannot turn
   // a declaration file into runtime source: there is no behaviour to mutate.
   if (DECLARATION_RE.test(file)) return false;
+  // Explicit --exclude-glob always excludes generated/bundled/non-mutable paths.
+  if (excludeGlobs.some((g) => globMatch(g, file))) return false;
   // Explicit source declaration wins over every heuristic below. Names like
   // `hollow-test.mjs` are indistinguishable from a test by convention alone, so
   // the only correct answer is to let the project say which it is.
@@ -97,6 +107,8 @@ export function isMutableSource(file, { testGlobs = [], sourceGlobs = [] } = {})
   }
   if (EXCLUDE_DIR_RE.test(file)) return false;
   if (EXCLUDE_FILE_RE.test(file)) return false;
+  if (EXCLUDE_GENERATED_DIR_RE.test(file)) return false;
+  if (EXCLUDE_GENERATED_FILE_RE.test(file)) return false;
   // Caller-declared test paths. The built-in rules cannot infer every project's
   // convention, and the hyphenated forms in particular are genuinely ambiguous
   // (see EXCLUDE_FILE_RE). Rather than guess wrong in either direction, a
@@ -460,8 +472,8 @@ export function fileChangeIsVersionOnly({ oldSource, newSource, fromVersion, toV
     || (i % 3 === 2 && part === fromVersion && after[i] === toVersion));
 }
 
-export function filterTargetFiles(changedLines, { testGlobs = [], sourceGlobs = [] } = {}) {
-  return Object.keys(changedLines).filter((f) => isMutableSource(f, { testGlobs, sourceGlobs }));
+export function filterTargetFiles(changedLines, { testGlobs = [], sourceGlobs = [], excludeGlobs = [] } = {}) {
+  return Object.keys(changedLines).filter((f) => isMutableSource(f, { testGlobs, sourceGlobs, excludeGlobs }));
 }
 
 /**
