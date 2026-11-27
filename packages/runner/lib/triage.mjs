@@ -130,15 +130,19 @@ function collectGitNumstat(gitRoot, base, scopedFiles) {
     cwd: gitRoot,
     encoding: 'buffer',
   });
-  const wtMap = parseNumstatBuffer(wtBuf);
-  if (base === 'HEAD') {
-    const idxBuf = git(['--literal-pathspecs', 'diff', '--cached', '--numstat', '--no-renames', '-z', 'HEAD', ...pathTail], {
+  const idxBuf = git(['--literal-pathspecs', 'diff', '--cached', '--numstat', '--no-renames', '-z', base, ...pathTail], {
+    cwd: gitRoot,
+    encoding: 'buffer',
+  });
+  let merged = mergeNumstatMaps(parseNumstatBuffer(wtBuf), parseNumstatBuffer(idxBuf));
+  if (base !== 'HEAD' && refExists('HEAD', gitRoot)) {
+    const headBuf = git(['--literal-pathspecs', 'diff', '--numstat', '--no-renames', '-z', `${base}..HEAD`, ...pathTail], {
       cwd: gitRoot,
       encoding: 'buffer',
     });
-    return mergeNumstatMaps(wtMap, parseNumstatBuffer(idxBuf));
+    merged = mergeNumstatMaps(merged, parseNumstatBuffer(headBuf));
   }
-  return wtMap;
+  return merged;
 }
 
 function partitionForFile(filePath) {

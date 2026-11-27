@@ -165,6 +165,16 @@ describe('evaluateTriage track precedence and git collection', () => {
     const unbornRes = evaluateTriage({ cwd: unbornRepo });
     assert.equal(unbornRes.track, 'substantial');
     assert.equal(unbornRes.linesAdded, 160);
+
+    // Branch commit vs base='main' is still classified accurately even if working-tree file reverts to main's bytes
+    gStaged('checkout', '-qb', 'feat/auth-change');
+    writeFileSync(join(stagedRepo, 'packages/a/auth/guard.mjs'), 'export const v = 3;\n');
+    gStaged('add', 'packages/a/auth/guard.mjs');
+    gStaged('commit', '-qm', 'branch auth edit');
+    writeFileSync(join(stagedRepo, 'packages/a/auth/guard.mjs'), 'export const v = 1;\n');
+    const branchBaseRes = evaluateTriage({ cwd: stagedRepo, base: 'main' });
+    assert.equal(branchBaseRes.track, 'substantial');
+    assert.ok(branchBaseRes.riskMatches.length > 0);
   });
 });
 
@@ -178,7 +188,7 @@ describe('scanRepositoryBloat simplify radar', () => {
 
     const shared12 = Array.from({ length: 12 }, (_, i) => `const s${i} = fetchUrl("https://ex.test/*x*/", ${i});`).join('\n');
     const short11 = Array.from({ length: 11 }, (_, i) => `const u${i} = otherCall(${i});`).join('\n');
-    writeFileSync(join(root, 'packages/pkg-a/lib/one.mjs'), `// comment\n${shared12}\nexport function writeFileAtomic(p, c) { return [p, c]; }\n`);
+    writeFileSync(join(root, 'packages/pkg-a/lib/one.mjs'), `// comment\n${shared12}\nimport { a, writeFileAtomic, b } from './other.mjs';\nimport { sha256 } from '@adlc/core';\nexport function writeFileAtomic(p, c) { return [p, c, sha256]; }\n`);
     writeFileSync(join(root, 'packages/pkg-b/lib/two.mjs'), `/* block\ncomment */\n\n${shared12}\nimport { redactSecrets } from '@adlc/core';\nexport const redactSecrets = (v) => v;\nexport const canonicalJson = (x) => JSON.stringify(x);\n`);
     writeFileSync(join(root, 'packages/pkg-a/lib/short-a.mjs'), `${short11}\n`);
     writeFileSync(join(root, 'packages/pkg-b/lib/short-b.mjs'), `${short11}\n`);
@@ -197,7 +207,7 @@ describe('scanRepositoryBloat simplify radar', () => {
       'packages/pkg-b/lib/two.mjs',
     ]);
     assert.deepEqual(report.coreReinventions, [
-      { helper: 'writeFileAtomic', file: 'packages/pkg-a/lib/one.mjs', line: 14 },
+      { helper: 'writeFileAtomic', file: 'packages/pkg-a/lib/one.mjs', line: 16 },
       { helper: 'canonicalJson', file: 'packages/pkg-b/lib/two.mjs', line: 18 },
     ]);
   });

@@ -23,15 +23,18 @@ const TAUTOLOGICAL_PATTERNS = [
   /^self\.assert(?:Equal|Equals|Is)\(\s*(True|False|None|\d+|'[^']*'|"[^"]*")\s*,\s*\1\s*\)/,
 ];
 
-const MOCK_CODE_PATTERNS = [/(?:vi|jest)\.mock\(\s*(['"])( +)\1/g, /\bmock\.module\(\s*(['"])( +)\1/g];
+const MOCK_CODE_PATTERNS = [
+  /(?:vi|jest)\s*\.\s*(?:mock|doMock|unstable_mockModule)\s*\(\s*(['"`])( +)\1/g,
+  /\bmock\s*\.\s*module\s*\(\s*(['"`])( +)\1/g,
+];
 const IMPORT_CODE_PATTERNS = [
-  /(?:^|[^\w$.])(?:import|export)\s+(?:[^;'"]*?\s+from\s+)?(['"])( +)\1/g,
-  /\bimport\s*\(\s*(['"])( +)\1\s*\)/g,
-  /\brequire\s*\(\s*(['"])( +)\1\s*\)/g,
+  /(?:^|[^\w$.])(?:import|export)\s+(?:[^;'"]*?\s+from\s+)?(['"`])( +)\1/g,
+  /\bimport\s*\(\s*(['"`])( +)\1\s*\)/g,
+  /\brequire\s*\(\s*(['"`])( +)\1\s*\)/g,
 ];
 
 const PY_IMPORT_LINE_RE = /^\s*(?:import\b|from\s+\S+\s+import\b)/;
-const REGEX_PUNCT = new Set(['', '\n', '(', ',', '=', ':', '[', '!', '&', '|', '?', '{', '}', ';', '+', '-', '*', '%', '~', '^', '<', '>']);
+const REGEX_START_PUNCT = new Set(['(', ',', '=', ':', '[', '&', '|', '?', '{', '}', ';', '~', '^', '%', '*', '<', '>']);
 const REGEX_WORDS = new Set([
   'return', 'typeof', 'throw', 'case', 'instanceof', 'delete', 'void', 'yield',
   'else', 'do', 'in', 'of', 'new', 'await', 'default', 'export', 'import', 'from', 'as', 'extends', 'async', 'satisfies',
@@ -62,6 +65,7 @@ function maskCommentsAndStrings(source, lang) {
   let lastSig = '\n';
   let lastWord = '';
   let wordAfterDot = false;
+  let canStartRegex = true;
 
   const pushBlank = (s) => {
     for (let k = 0; k < s.length; k += 1) {
@@ -97,12 +101,15 @@ function maskCommentsAndStrings(source, lang) {
         i += 1;
         continue;
       }
+      if ((quote === '"' || quote === "'") && ch === '\n') {
+        pushCode('\n'); quote = null; canStartRegex = false; i += 1; continue;
+      }
       if (ch === '\\' && i + 1 < source.length) { pushStrBody(source.slice(i, i + 2)); i += 2; continue; }
       if (quote === '`' && lang === 'js' && ch === '$' && source[i + 1] === '{') {
-        pushCode('${'); interpolations.push(0); quote = null; lastSig = '{'; lastWord = ''; wordAfterDot = false; i += 2; continue;
+        pushCode('${'); interpolations.push(0); quote = null; lastSig = '{'; lastWord = ''; wordAfterDot = false; canStartRegex = true; i += 2; continue;
       }
       if (source.startsWith(quote, i)) {
-        pushCode(quote); lastSig = quote[0]; lastWord = ''; wordAfterDot = false; i += quote.length; quote = null; continue;
+        pushCode(quote); lastSig = quote[0]; lastWord = ''; wordAfterDot = false; canStartRegex = false; i += quote.length; quote = null; continue;
       }
       pushStrBody(ch); i += 1; continue;
     }
@@ -116,13 +123,20 @@ function maskCommentsAndStrings(source, lang) {
     if (ch === '/' && source[i + 1] === '*') { pushBlank('  '); inBlock = true; i += 2; continue; }
     if (lang === 'js' && interpolations.length > 0 && (ch === '{' || ch === '}')) {
       const top = interpolations.length - 1;
-      if (ch === '{') { interpolations[top] += 1; pushCode('{'); lastSig = '{'; lastWord = ''; wordAfterDot = false; i += 1; continue; }
-      if (interpolations[top] === 0) { interpolations.pop(); pushCode('}'); quote = '`'; i += 1; continue; }
-      interpolations[top] -= 1; pushCode('}'); lastSig = '}'; lastWord = ''; wordAfterDot = false; i += 1; continue;
+      if (ch === '{') { interpolations[top] += 1; pushCode('{'); lastSig = '{'; lastWord = ''; wordAfterDot = false; canStartRegex = true; i += 1; continue; }
+      if (interpolations[top] === 0) { interpolations.pop(); pushCode('}'); quote = '`'; canStartRegex = false; i += 1; continue; }
+      interpolations[top] -= 1; pushCode('}'); lastSig = '}'; lastWord = ''; wordAfterDot = false; canStartRegex = true; i += 1; continue;
     }
-    if (lang === 'js' && ch === '/' && (REGEX_PUNCT.has(lastSig) || (!wordAfterDot && REGEX_WORDS.has(lastWord)))) {
-      const end = scanJsRegexEnd(source, i);
-      if (end !== -1) { pushCode('/'); pushStrBody(source.slice(i + 1, end - 1)); pushCode('/'); lastSig = '/'; lastWord = ''; wordAfterDot = false; i = end; continue; }
+    if (lang === 'js' && (ch === '+' || ch === '-') && source[i + 1] === ch) {
+      pushCode(ch + ch); lastSig = ch; lastWord = ''; wordAfterDot = false; i += 2; continue;
+    }
+    if (lang === 'js' && ch === '/' && canStartRegex) {
+      const isJsxClosingTag = lastSig === '<' && (source[i + 1] === '>' || /^[A-Za-z_$][\w$.:-]*\s*>/.test(source.slice(i + 1)));
+      const isJsxSelfClose = source[i + 1] === '>' && lastSig === '}';
+      if (!isJsxClosingTag && !isJsxSelfClose) {
+        const end = scanJsRegexEnd(source, i);
+        if (end !== -1) { pushCode('/'); pushStrBody(source.slice(i + 1, end - 1)); pushCode('/'); lastSig = '/'; lastWord = ''; wordAfterDot = false; canStartRegex = false; i = end; continue; }
+      }
     }
     if (lang === 'rust' && (ch === 'r' || (ch === 'b' && source[i + 1] === 'r')) && (i === 0 || !/[\w$]/.test(source[i - 1]))) {
       const p = ch === 'b' ? i + 2 : i + 1;
@@ -137,18 +151,44 @@ function maskCommentsAndStrings(source, lang) {
     if (ch === '"' || (lang === 'js' && (ch === "'" || ch === '`'))) { quote = ch; pushCode(ch); i += 1; continue; }
     if (lang === 'js' && /[\w$]/.test(ch)) {
       let end = i + 1; while (end < source.length && /[\w$]/.test(source[end])) end += 1;
-      wordAfterDot = lastSig === '.'; lastWord = source.slice(i, end); lastSig = source[end - 1]; pushCode(lastWord); i = end; continue;
+      wordAfterDot = lastSig === '.';
+      lastWord = source.slice(i, end);
+      lastSig = source[end - 1];
+      canStartRegex = !wordAfterDot && REGEX_WORDS.has(lastWord);
+      pushCode(lastWord);
+      i = end;
+      continue;
     }
-    if (lang === 'js' && !/\s/.test(ch)) { lastSig = ch; lastWord = ''; wordAfterDot = false; }
+    if (lang === 'js' && !/\s/.test(ch)) {
+      if (ch === '!' && source[i + 1] !== '=') {
+        // Prefix `!` keeps canStartRegex=true; TS postfix non-null `x!` keeps canStartRegex=false
+      } else if (ch === '+' || ch === '-') {
+        canStartRegex = true;
+      } else {
+        canStartRegex = REGEX_START_PUNCT.has(ch);
+      }
+      lastSig = ch;
+      lastWord = '';
+      wordAfterDot = false;
+    }
     pushCode(ch); i += 1;
   }
   return { clean, code };
 }
 
-function extractRelativeSpecs(clean, code, patterns) {
+function isTypeOnlyImportMatch(stmtText) {
+  if (/\b(?:import|export)\s+type\b/.test(stmtText)) return true;
+  const namedOnly = stmtText.match(/\b(?:import|export)\s*\{([^}]*)\}\s*from\b/);
+  if (!namedOnly) return false;
+  const specs = namedOnly[1].split(',').map((s) => s.trim()).filter(Boolean);
+  return specs.length > 0 && specs.every((s) => /^type\s+[\w$]/.test(s));
+}
+
+function extractRelativeSpecs(clean, code, patterns, { excludeTypeOnly = false } = {}) {
   const specs = [];
   for (const re of patterns) {
     for (const m of code.matchAll(re)) {
+      if (excludeTypeOnly && isTypeOnlyImportMatch(m[0])) continue;
       const qIdx = m[0].lastIndexOf(m[1], m[0].length - 2);
       const spec = clean.slice(m.index + qIdx + 1, m.index + qIdx + 1 + m[2].length);
       if (/^\.\.?\//.test(spec)) specs.push(spec);
@@ -168,7 +208,9 @@ function analyzeFile(realFile, relFile, rawSource) {
     const stem = resolveStem(realFile, spec);
     if (!mockedByStem.has(stem)) mockedByStem.set(stem, spec);
   }
-  const importedStems = new Set(extractRelativeSpecs(clean, code, IMPORT_CODE_PATTERNS).map((s) => resolveStem(realFile, s)));
+  const importedStems = new Set(
+    extractRelativeSpecs(clean, code, IMPORT_CODE_PATTERNS, { excludeTypeOnly: true }).map((s) => resolveStem(realFile, s)),
+  );
 
   let assertionCount = 0;
   let tautologicalCount = 0;

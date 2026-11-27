@@ -599,6 +599,35 @@ describe('auditRailAdequacy & CLI --audit-rails', () => {
     assert.equal(emojiOffset.ok, false);
     assert.equal(emojiOffset.violations[0].reason, 'mock-only-internal');
 
+    // Postfix ++/--/! division, JSX tags, template-literal specifiers, doMock/unstable_mockModule, and TS import type
+    writeFileSync(
+      join(dir, 'test/postfix-div-smuggle.test.mjs'),
+      'let n = 2;\nn++/1;//"\nvi.mock("../lib/unbacked.mjs");\n//"\nexpect(n).toBe(3);\n',
+      'utf8',
+    );
+    assert.equal(auditRailAdequacy(['test/postfix-div-smuggle.test.mjs'], { root: dir }).violations[0]?.reason, 'mock-only-internal');
+
+    writeFileSync(
+      join(dir, 'test/jsx-valid.test.tsx'),
+      'import { calc } from "../lib/service.ts";\nconst el = <div>{calc(2)}</div>;\nconst el2 = <Comp a={1} />;\nexpect(el).toBeTruthy();\n',
+      'utf8',
+    );
+    assert.equal(auditRailAdequacy(['test/jsx-valid.test.tsx'], { root: dir }).ok, true);
+
+    writeFileSync(
+      join(dir, 'test/do-mock-tpl.test.ts'),
+      'vi.doMock(`../lib/service.ts`);\njest.unstable_mockModule("../lib/service.ts", () => ({}));\nexpect(1 + 1).toBe(2);\n',
+      'utf8',
+    );
+    writeFileSync(
+      join(dir, 'test/type-only-import.test.ts'),
+      'import type { Calc } from "../lib/service.ts";\nimport { type Helper } from "../lib/service.ts";\nexpect(2 + 2).toBe(4);\n',
+      'utf8',
+    );
+    const typeOnlyCheck = auditRailAdequacy(['test/do-mock-tpl.test.ts', 'test/type-only-import.test.ts'], { root: dir });
+    assert.equal(typeOnlyCheck.ok, false);
+    assert.equal(typeOnlyCheck.violations[0].reason, 'mock-only-internal');
+
     const rawDecoys = auditRailAdequacy(['test/raw_go_decoy_test.go', 'test/raw_rust_decoy.rs'], { root: dir });
     assert.equal(rawDecoys.ok, false);
     assert.deepEqual(rawDecoys.violations.map((v) => v.reason), ['missing-assertions', 'missing-assertions']);
@@ -638,6 +667,10 @@ describe('auditRailAdequacy & CLI --audit-rails', () => {
     const errEscape = runHollow(dir, ['--audit-rails', '../escape.test.mjs']);
     assert.equal(errEscape.status, 1);
     assert.match(errEscape.stderr, /escapes repository root/);
+
+    // Combining --audit-rails with --test-cmd runs rail audit AND continues to --test-cmd instead of exiting 0 early
+    const combinedFail = runHollow(dir, ['--audit-rails', 'good.test.mjs', '--test-cmd', 'false']);
+    assert.notEqual(combinedFail.status, 0);
   });
 });
 

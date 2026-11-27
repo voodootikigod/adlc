@@ -53,6 +53,11 @@ test('verifyLintClusters: demotes lint cluster to spec-gap when baseline root co
   verifyLintClusters(clusters, findings, { root: rootDir });
   assert.equal(clusters[0].route, 'spec-gap');
   assert.equal(clusters[0].demotedReason, 'matches-existing-repo');
+
+  const missingRootClusters = [{ name: 'missing-root-tok', route: 'lint', indices: [0, 1] }];
+  verifyLintClusters(missingRootClusters, findings, { root: join(rootDir, 'does-not-exist') });
+  assert.equal(missingRootClusters[0].route, 'spec-gap');
+  assert.equal(missingRootClusters[0].demotedReason, 'baseline-check-failed');
 });
 
 test('lesson-foundry --verify-checks CLI integration: demotes false-positive lint to spec-gap and writes template', (t) => {

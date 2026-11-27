@@ -239,6 +239,18 @@ test('Objective 3: harvestTranscriptUsage extracts usage from Claude, Codex, Gem
   const emptyFile = join(dir, 'empty.jsonl');
   writeFileSync(emptyFile, '');
   assert.equal(harvestTranscriptUsage(emptyFile), null);
+
+  // Pretty-printed multi-line single-object .json transcript
+  const prettyJsonFile = join(dir, 'pretty-session.json');
+  writeFileSync(
+    prettyJsonFile,
+    JSON.stringify({ id: 'm_pretty', usage: { promptTokenCount: 500, candidatesTokenCount: 150 } }, null, 2),
+  );
+  const prettyRes = harvestTranscriptUsage(prettyJsonFile);
+  assert.ok(prettyRes);
+  assert.equal(prettyRes.calls, 1);
+  assert.equal(prettyRes.usage.inputTokens, 500);
+  assert.equal(prettyRes.usage.outputTokens, 150);
 });
 
 test('Objective 3: evaluateStop with transcriptPath and recordSessionUsage idempotent persistence', (t) => {
@@ -442,7 +454,59 @@ test('Objective 3: evaluateStop skips keyless append on signed/keyed manifests a
     transcriptPath: hermTranscript,
     recordSessionUsage: true,
   });
+  delete process.env.ADLC_TICKET;
+  delete process.env.ADLC_MANIFEST_KEY;
   assert.equal(hermStop.decision, 'allow');
   const hermEntry = JSON.parse(readFileSync(join(hermeticRepo, '.adlc', 'manifest.jsonl'), 'utf8').trim());
   assert.equal(hermEntry.sig, undefined);
+
+  // Keyless telemetry prefix (seq 1) does not brick later keyed gate evidence verification (seq 2)
+  record({
+    gate: 'prosecute',
+    ticket: 'T-ACTIVE',
+    dir: join(hermeticRepo, '.adlc'),
+    key: signingKey,
+    rawData: JSON.stringify({ ok: true }),
+  });
+  const afterKeyAdoption = evaluateStop({
+    cwd: hermeticRepo,
+    key: signingKey,
+    requiredGate: 'prosecute',
+    requireEvidence: true,
+  });
+  assert.equal(afterKeyAdoption.decision, 'allow');
+  assert.equal(afterKeyAdoption.hasEvidence, true);
+
+  // Multi-turn incremental transcript delta prevents quadratic token inflation across turns
+  const multiTurnRepo = makeTestRepo(t, { withActiveTicket: true });
+  const mtTranscript = join(multiTurnRepo, 'multi-turn.jsonl');
+  writeFileSync(mtTranscript, JSON.stringify({ id: '1', usage: { input_tokens: 100, output_tokens: 20 } }) + '\n');
+  evaluateStop({
+    cwd: multiTurnRepo,
+    env: {},
+    transcriptPath: mtTranscript,
+    recordSessionUsage: true,
+    sessionId: 'sess-mt-1',
+  });
+  writeFileSync(
+    mtTranscript,
+    JSON.stringify({ id: '1', usage: { input_tokens: 100, output_tokens: 20 } }) + '\n' +
+    JSON.stringify({ id: '2', usage: { input_tokens: 100, output_tokens: 30 } }) + '\n',
+  );
+  evaluateStop({
+    cwd: multiTurnRepo,
+    env: {},
+    transcriptPath: mtTranscript,
+    recordSessionUsage: true,
+    sessionId: 'sess-mt-1',
+  });
+  const mtEntries = readFileSync(join(multiTurnRepo, '.adlc', 'manifest.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map((l) => JSON.parse(l));
+  assert.equal(mtEntries.length, 2);
+  const summedInput = mtEntries.reduce((acc, e) => acc + e.data.usage.inputTokens, 0);
+  const summedOutput = mtEntries.reduce((acc, e) => acc + e.data.usage.outputTokens, 0);
+  assert.equal(summedInput, 200);
+  assert.equal(summedOutput, 50);
 });

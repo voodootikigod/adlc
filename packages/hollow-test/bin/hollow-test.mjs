@@ -125,19 +125,27 @@ if (values['audit-rails'] !== undefined) {
   } catch (err) {
     opError(err.message);
   }
-  if (values.json) {
-    printJson(report);
-  } else if (report.ok) {
-    console.log(`rail-audit: ${report.audited} rail file(s) passed adequacy audit`);
-  } else {
-    for (const v of report.violations) {
-      console.log(`[${v.reason}] ${v.file}: ${v.detail}`);
-    }
-  }
+  const hasMutationRun = Boolean(values['test-cmd']);
   if (!report.ok) {
+    if (values.json) {
+      printJson(report);
+    } else {
+      for (const v of report.violations) {
+        console.log(`[${v.reason}] ${v.file}: ${v.detail}`);
+      }
+    }
     gateFail(`rail adequacy audit failed (${report.violations.length} violation(s))`);
   }
-  pass();
+  if (!hasMutationRun) {
+    if (values.json) {
+      printJson(report);
+    } else {
+      console.log(`rail-audit: ${report.audited} rail file(s) passed adequacy audit`);
+    }
+    pass();
+  } else if (!values.json) {
+    console.log(`rail-audit: ${report.audited} rail file(s) passed adequacy audit`);
+  }
 }
 
 if (!values['test-cmd']) {

@@ -5,7 +5,9 @@
 import { closeSync, constants as fsConstants, fstatSync, openSync, readSync } from 'node:fs';
 import { join } from 'node:path';
 import { computeRiskTier } from '@adlc/build-gate/lib/risk.mjs';
+import { sha256 } from '@adlc/core';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
+import { verifyEntrySig } from '@adlc/gate-manifest/lib/sign.mjs';
 import { verify as verifyManifest } from '@adlc/gate-manifest/lib/verify.mjs';
 import { discoverSegments, segmentPath } from '@adlc/tickets/lib/manifest-primitives.mjs';
 import { enclosingAdlcRoot, readActiveTicketRails } from './pretool.mjs';
@@ -146,7 +148,7 @@ export function hasManifestEvidence(
   }
 
   if (allEntries.length > 0) {
-    const forestCheck = verifyManifest(adlcDir, { requireSignatures: true, requireEntries: false, key });
+    const forestCheck = verifyManifest(adlcDir, { requireSignatures: false, requireEntries: false, key });
     if (!forestCheck.valid) {
       const reason = Array.isArray(forestCheck.errors) && forestCheck.errors.length > 0
         ? forestCheck.errors[0]
@@ -156,6 +158,7 @@ export function hasManifestEvidence(
   }
 
   const matchingEntries = allEntries.filter((entry) => {
+    if (!verifyEntrySig(key, entry)) return false;
     if (entry.data?.sessionTelemetry === true || typeof entry.data?.transcriptSha256 === 'string') return false;
     if (gate && entry.gate !== gate) return false;
     if (ticketId && entry.ticket !== ticketId) return false;
@@ -247,9 +250,13 @@ export function evaluateStop(opts = {}) {
       const rootManifest = join(adlcDir, 'manifest.jsonl');
       const { valid: segments } = discoverSegments(adlcDir);
       const filesToScan = [rootManifest, ...segments.map((seg) => segmentPath(adlcDir, seg))];
+      const currentSessionKey = sessionId ? `session:${sessionId}` : `transcript:${sha256(transcriptPath)}`;
       let alreadyRecorded = false;
       let hasSignedEntry = false;
       let scanFailed = false;
+      let priorInputTokens = 0;
+      let priorOutputTokens = 0;
+      let priorCachedTokens = 0;
       for (const filePath of filesToScan) {
         const parsed = parseStrictJsonl(filePath, { maxBytes: MAX_MANIFEST_FILE_BYTES, remainingLines: MAX_MANIFEST_LINES });
         if (!parsed.ok) {
@@ -263,7 +270,22 @@ export function evaluateStop(opts = {}) {
           if (entry.data?.transcriptSha256 === harvestedUsage.transcriptSha256) {
             alreadyRecorded = true;
           }
+          const sameSession =
+            entry.data?.sessionKey === currentSessionKey ||
+            (sessionId && entry.data?.sessionId === sessionId);
+          if (sameSession && entry.data?.usage && typeof entry.data.usage === 'object') {
+            priorInputTokens += Number(entry.data.usage.inputTokens ?? 0) || 0;
+            priorOutputTokens += Number(entry.data.usage.outputTokens ?? 0) || 0;
+            priorCachedTokens += Number(entry.data.usage.cachedTokens ?? 0) || 0;
+          }
         }
+      }
+
+      const deltaInput = Math.max(0, (harvestedUsage.usage.inputTokens ?? 0) - priorInputTokens);
+      const deltaOutput = Math.max(0, (harvestedUsage.usage.outputTokens ?? 0) - priorOutputTokens);
+      const deltaCached = Math.max(0, (harvestedUsage.usage.cachedTokens ?? 0) - priorCachedTokens);
+      if (deltaInput === 0 && deltaOutput === 0 && deltaCached === 0) {
+        alreadyRecorded = true;
       }
 
       let isKeyedForest = false;
@@ -290,9 +312,15 @@ export function evaluateStop(opts = {}) {
             key: hasSigningKey ? key : null,
             rawData: JSON.stringify({
               sessionTelemetry: true,
+              sessionKey: currentSessionKey,
               sessionId: sessionId ?? null,
               transcriptSha256: harvestedUsage.transcriptSha256,
-              usage: harvestedUsage.usage,
+              usage: {
+                ...harvestedUsage.usage,
+                inputTokens: deltaInput,
+                outputTokens: deltaOutput,
+                cachedTokens: deltaCached,
+              },
               usageStatus: 'reported',
             }),
           });

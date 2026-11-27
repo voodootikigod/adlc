@@ -13,7 +13,7 @@ const REINVENTED_FN_RE =
 const REINVENTED_CONST_RE =
   /\b(?:export\s+)?const\s+(writeFileAtomic|acquireDirLock|canonicalJson|redactSecrets|globMatch|resolveTrustedBinary)\s*=\s*(?:async\s*)?(?:\(|function\b)/g;
 
-const CORE_IMPORT_RE = /import\s*\{([\s\S]*?)\}\s*from\s*['"]@adlc\/core(?:\/[^'"]*)?['"]/g;
+const CORE_IMPORT_RE = /\bimport\s*(?:[\w$]+\s*,\s*)?\{([^{}]*)\}\s*from\s*['"]@adlc\/core(?:\/[^'"]*)?['"]/g;
 
 function walkSourceFiles(rootDir) {
   const collected = [];

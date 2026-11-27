@@ -17,24 +17,34 @@ export function harvestTranscriptUsage(transcriptPath, { maxBytes = 10 * 1024 * 
   const transcriptSha256 = sha256(rawContent);
 
   const rawEntries = [];
-  if (trimmed.startsWith('{') && !trimmed.includes('\n')) {
+  let parsedWhole = false;
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
     try {
-      rawEntries.push(JSON.parse(trimmed));
+      const obj = JSON.parse(trimmed);
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+        rawEntries.push(obj);
+        for (const listKey of ['messages', 'turns', 'events', 'items']) {
+          if (Array.isArray(obj[listKey])) rawEntries.push(...obj[listKey]);
+        }
+        parsedWhole = true;
+      }
     } catch {
-      return null;
+      // Fall through to JSONL line-by-line parsing when file holds multiple {...} lines
     }
   } else if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
     try {
       const arr = JSON.parse(trimmed);
       if (Array.isArray(arr)) {
         rawEntries.push(...arr);
+        parsedWhole = true;
       } else {
         return null;
       }
     } catch {
       return null;
     }
-  } else {
+  }
+  if (!parsedWhole) {
     // JSONL or mixed lines
     for (const line of rawContent.split(/\r?\n/)) {
       const l = line.trim();

@@ -76,9 +76,9 @@ export function verifyLintClusters(clusters, allFindings, { root = process.cwd()
         encoding: 'utf8',
       });
 
-      if (baseRes.status === 2) {
+      if (baseRes.status !== 0) {
         cluster.route = 'spec-gap';
-        cluster.demotedReason = 'matches-existing-repo';
+        cluster.demotedReason = baseRes.status === 2 ? 'matches-existing-repo' : 'baseline-check-failed';
       }
     }
 
