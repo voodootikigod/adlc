@@ -263,11 +263,22 @@ describe('CLI compareSnapshots & end-to-end bin/behavior-diff.mjs', () => {
     }));
 
     const capEnv = { ...process.env, ADLC_MANIFEST_KEY: 'must-not-leak' };
-    const c1 = spawnSync(process.execPath, [cliBin, 'capture', '--config', cfgBefore, '--out', snapBefore], {
+    const c1 = spawnSync(process.execPath, [cliBin, 'capture', '--config', cfgBefore, '--out', snapBefore, '--json'], {
       encoding: 'utf8',
       env: capEnv,
     });
     assert.equal(c1.status, 0, `capture before failed: ${c1.stderr}`);
+    const c1Json = JSON.parse(c1.stdout);
+    assert.equal(c1Json.total, 1);
+    assert.equal(c1Json.ok, 1);
+    assert.equal(c1Json.errored, 0);
+
+    const c2 = spawnSync(process.execPath, [cliBin, 'capture', '--config', cfgAfter, '--out', snapAfter], {
+      encoding: 'utf8',
+      env: capEnv,
+    });
+    assert.equal(c2.status, 0, `capture after failed: ${c2.stderr}`);
+    assert.match(c2.stdout, /captured 1\/1 routes \(0 errors\)/);
 
     const parsedBefore = loadSnapshot(snapBefore);
     assert.equal(parsedBefore.commands.length, 1);
@@ -276,12 +287,6 @@ describe('CLI compareSnapshots & end-to-end bin/behavior-diff.mjs', () => {
 
     const cmpSame = spawnSync(process.execPath, [cliBin, 'compare', snapBefore, snapBefore], { encoding: 'utf8' });
     assert.equal(cmpSame.status, 0, `compare identical failed: ${cmpSame.stderr}`);
-
-    const c2 = spawnSync(process.execPath, [cliBin, 'capture', '--config', cfgAfter, '--out', snapAfter], {
-      encoding: 'utf8',
-      env: capEnv,
-    });
-    assert.equal(c2.status, 0, `capture after failed: ${c2.stderr}`);
 
     const cmpDiff = spawnSync(process.execPath, [cliBin, 'compare', snapBefore, snapAfter], { encoding: 'utf8' });
     assert.equal(cmpDiff.status, 2, `expected compare exit 2 on CLI diff, got ${cmpDiff.status}`);

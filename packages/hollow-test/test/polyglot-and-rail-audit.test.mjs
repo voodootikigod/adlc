@@ -24,7 +24,7 @@ import {
 } from '../lib/polyglot.mjs';
 import { auditRailAdequacy } from '../lib/rail-audit.mjs';
 import { isSupportedSourceExtension, isMutableSource, filterTargetFiles } from '../lib/targets.mjs';
-import { resolveConfiguredTestTarget, testTargetFor, classify } from '../lib/gate-plan.mjs';
+import { resolveConfiguredTestTarget, testTargetFor, classify, mutantBudget } from '../lib/gate-plan.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BIN = resolve(HERE, '../bin/hollow-test.mjs');
@@ -677,5 +677,17 @@ describe('resolveConfiguredTestTarget in gate-plan.mjs', () => {
         `must reject unsafe target: ${JSON.stringify(unsafe)}`,
       );
     }
+
+    const multiTargetDecision = {
+      kind: 'fast',
+      max: 12,
+      files: Array.from({ length: 47 }, (_, i) => `packages/p${i % 14}/lib/f${i}.mjs`),
+      testCmd: Array.from({ length: 14 }, (_, i) => `node --test packages/p${i}/test/*.test.mjs`).join(' && '),
+    };
+    const multiBudget = mutantBudget(multiTargetDecision, { runMs: 126_000, windowMs: 45 * 60_000 });
+    assert.equal(multiBudget.ok, true);
+    assert.equal(multiBudget.want, 94);
+    assert.equal(multiBudget.draw, 94, 'per-file --file-test-map amortizes runMs across distinct && targets');
+    assert.equal(multiBudget.capped, false);
   });
 });

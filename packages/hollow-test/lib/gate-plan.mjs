@@ -386,10 +386,12 @@ export function mutantBudget(decision, { runMs = null, windowMs = HOLLOW_WINDOW_
   if (decision.kind === 'slow') return { ok: true, draw: decision.max, want: decision.max, fits: null, capped: false };
   const want = Math.max(decision.max, files.length * MUTANTS_PER_CHANGED_FILE);
   if (runMs == null) return { ok: true, draw: want, want, fits: null, capped: false };
-  if (runMs > perRunTimeoutMs) {
+  const targets = typeof decision.testCmd === 'string' ? decision.testCmd.split(' && ') : [''];
+  const trialMs = Math.ceil(runMs / targets.length);
+  if (trialMs > perRunTimeoutMs) {
     return { ok: false, draw: 0, want, fits: 0, capped: true, reason: `one run of the fast target command takes ${runMs} ms, past the ${perRunTimeoutMs} ms per-run timeout hollow-test is handed — every run would time out` };
   }
-  const fits = Math.max(0, Math.floor(windowMs / runMs) - 1); // minus the baseline run
+  const fits = Math.max(0, Math.floor(windowMs / trialMs) - 1); // minus the baseline run
   if (fits < decision.max) {
     return { ok: false, draw: 0, want, fits, capped: true, reason: `one run of the fast target command takes ${runMs} ms; ${fits} draw(s) fit the ${windowMs} ms window after the baseline, fewer than the requested floor of ${decision.max}` };
   }
