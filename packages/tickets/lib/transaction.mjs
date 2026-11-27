@@ -61,10 +61,17 @@ function validateRecoveryOperation({ root, store, transactionRoot, journal, item
     key = item.filename;
   } else if (role === 'auxiliary') {
     const expectedAction = journal.operation === 'archive' ? 'write' : journal.operation === 'restore' ? 'delete' : null;
-    if (!directoryStore || !expectedAction || item.action !== expectedAction || typeof journal.ticketId !== 'string') {
+    const isBatchArchive = journal.operation === 'archive' && journal.ticketId === null;
+    if (!directoryStore || !expectedAction || item.action !== expectedAction || (!isBatchArchive && typeof journal.ticketId !== 'string')) {
       throw invalid('INVALID_JOURNAL', 'auxiliary recovery is only valid for archive or restore');
     }
-    assertExactJournalPath(target, join(root, ARCHIVE_DIRECTORY, ticketFilename(journal.ticketId)), 'archive operation target');
+    if (isBatchArchive) {
+      if (dirname(target) !== resolve(root, ARCHIVE_DIRECTORY) || !SHARD_FILENAME.test(basename(target))) {
+        throw invalid('INVALID_JOURNAL', 'batch archive recovery target is not a shard in the archive store');
+      }
+    } else {
+      assertExactJournalPath(target, join(root, ARCHIVE_DIRECTORY, ticketFilename(journal.ticketId)), 'archive operation target');
+    }
     const priorAuxiliaryCount = journal.operations.slice(0, index).filter((operation) => operation?.role === 'auxiliary').length;
     key = `aux-${priorAuxiliaryCount}`;
   } else {

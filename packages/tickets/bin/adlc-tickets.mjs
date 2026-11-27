@@ -219,7 +219,8 @@ async function main() {
       allowUnsigned,
     });
     emit({
-      operation: 'archive-batch',
+      operation: 'archive',
+      batch: true,
       dryRun: result.dryRun,
       ...(result.dryRun ? {} : { applied: result.applied, storeHash: result.storeHash }),
       archivedIds: result.archivedIds,

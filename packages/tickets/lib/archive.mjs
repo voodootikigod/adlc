@@ -142,7 +142,7 @@ function partitionCompletedTickets(active) {
   return { archivable, skippedIds };
 }
 
-export function archiveCompletedTickets(activeStore, archivePath, { expectedSnapshotHash, reason = 'completed', sourceRevision = null, root = '.', authorized = false, write = false, key = null, allowUnsigned = false } = {}) {
+export function archiveCompletedTickets(activeStore, archivePath, { expectedSnapshotHash, reason = 'completed', sourceRevision = null, root = '.', authorized = false, write = false, faultInjector = null, key = null, allowUnsigned = false } = {}) {
   key = validateKeyParam(key);
   validateArchivePath(root, archivePath);
   if (!write) {
@@ -194,16 +194,17 @@ export function archiveCompletedTickets(activeStore, archivePath, { expectedSnap
       key,
       allowUnsigned,
       expectedSnapshotHash: active.hash,
-      operation: 'archive-batch',
+      operation: 'archive',
       evidenceRequired: true,
       ticketId: null,
       root,
       lock,
+      faultInjector,
       auxiliaryOperations,
       verify: () => {
         const archivedSnapshot = new DirectoryTicketStore(archivePath, { archive: true }).load();
         for (const id of archivedIds) {
-          if (!archivedSnapshot.get(id)) throw invalid('TRANSACTION_VERIFY_FAILED', `archive-batch transaction did not materialize ${id}`);
+          if (!archivedSnapshot.get(id)) throw invalid('TRANSACTION_VERIFY_FAILED', `archive transaction did not materialize ${id}`);
         }
       },
     });

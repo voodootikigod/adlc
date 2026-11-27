@@ -195,12 +195,12 @@ export type ActiveRailIndexResult = {
   activeTicket: Readonly<Ticket> | null;
   rails: string[];
   boundTicket: boolean;
-  source: 'none' | 'loadOne' | 'index-cache' | 'full-load' | 'error';
+  source: 'none' | 'memory-cache' | 'index-cache' | 'full-load' | 'error';
   error: string | null;
 };
 export function readActiveRailIndex(
   root: string | null | undefined,
-  options?: { storeOverride?: string | null; env?: Record<string, string | undefined>; writeCache?: boolean },
+  options?: { storeOverride?: string | null; env?: Record<string, string | undefined>; writeCache?: boolean; key?: string | null },
 ): ActiveRailIndexResult;
 
 export type EditorRunner = (editor: string, path: string) => void;
@@ -244,6 +244,7 @@ export function archiveCompletedTickets(
     root?: string;
     authorized?: boolean;
     write?: boolean;
+    faultInjector?: ((step: string, context: unknown) => void) | null;
     key?: string | null;
     allowUnsigned?: boolean;
   },

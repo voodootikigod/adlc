@@ -6,7 +6,7 @@ import { fileURLToPath as fileURLToPath4 } from "node:url";
 // packages/hook-engine/lib/gemini-guard.mjs
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 import { existsSync as existsSync15, realpathSync as realpathSync6, lstatSync as lstatSync16 } from "node:fs";
-import { dirname as dirname12, isAbsolute as isAbsolute11, join as join19, parse as parse2, relative as relative9, resolve as resolve10 } from "node:path";
+import { dirname as dirname12, isAbsolute as isAbsolute11, join as join19, parse as parse2, relative as relative9, resolve as resolve11 } from "node:path";
 import { homedir as homedir5 } from "node:os";
 
 // packages/core/lib/llm.mjs
@@ -60,7 +60,7 @@ function runCliCommand(bin, args, input, opts = {}) {
     } catch {
     }
   };
-  return new Promise((resolve11, reject) => {
+  return new Promise((resolve12, reject) => {
     let child;
     try {
       child = spawnFn(bin, args, {
@@ -114,7 +114,7 @@ function runCliCommand(bin, args, input, opts = {}) {
       if (code !== 0) {
         return reject(new Error(`Process exited with code ${code ?? signal}: ${stderr || stdout}`));
       }
-      resolve11(stdout);
+      resolve12(stdout);
     });
   });
 }
@@ -184,7 +184,7 @@ function agySend({ apiKey, model, system, prompt, timeoutMs }, env = process.env
 
 ${prompt}` : prompt;
   const hostTimeoutMs = typeof timeoutMs === "number" && timeoutMs > 0 ? timeoutMs : parseAgyTimeoutMs(timeoutSpec) + 5e3;
-  return new Promise((resolve11, reject) => {
+  return new Promise((resolve12, reject) => {
     const p = spawn2(bin, args, { stdio: "pipe", env: sanitizeProviderEnv(env) });
     let out = "";
     let err = "";
@@ -225,7 +225,7 @@ ${prompt}` : prompt;
       if (isAgyTimeout(out)) {
         return reject(new Error("agy: timed out waiting for response"));
       }
-      resolve11({ text: out.replace(/\s+$/, ""), usage: null });
+      resolve12({ text: out.replace(/\s+$/, ""), usage: null });
     });
   });
 }
@@ -1371,6 +1371,7 @@ import {
 } from "node:crypto";
 import { join as join5 } from "node:path";
 var ADMIN_PUB_FILENAME = "admin.pub";
+var PRIVATE_KEY_ENV = "ADLC_MANIFEST_PRIVATE_KEY";
 var ED25519_PRIV_PREFIX = "ed25519-priv:";
 var SIG_ALG_ED25519 = "ed25519";
 var MAX_ADMIN_PUB_BYTES = 4096;
@@ -2483,6 +2484,14 @@ function validateKeyParam(key) {
     `manifest key parameter must be a non-empty string (a key) or null (explicitly no key); got ${key === "" ? "'' (empty string)" : typeof key}. Resolve the environment in the bin (getKey()) and thread the value down \u2014 library code never reads process.env.`
   );
 }
+function resolveKeyFromEnv(env = process.env) {
+  if (Object.hasOwn(env, PRIVATE_KEY_ENV)) {
+    const priv = env[PRIVATE_KEY_ENV];
+    return typeof priv === "string" && priv.length > 0 ? priv : null;
+  }
+  const k = env.ADLC_MANIFEST_KEY;
+  return typeof k === "string" && k.length > 0 ? k : null;
+}
 
 // packages/tickets/lib/evidence.mjs
 var sleep2 = (milliseconds) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
@@ -3062,10 +3071,13 @@ var MANIFEST_BASENAMES = Object.freeze(["package.json", "plugin.json", "marketpl
 var GIT_MAX_BUFFER2 = 256 * 1024 * 1024;
 
 // packages/tickets/lib/rail-index.mjs
+import { createHmac as createHmac3 } from "node:crypto";
 import { lstatSync as lstatSync9, readFileSync as readFileSync9, readdirSync as readdirSync5 } from "node:fs";
-import { dirname as dirname9, join as join12 } from "node:path";
+import { dirname as dirname9, join as join12, resolve as resolve6 } from "node:path";
 var ACTIVE_RAIL_INDEX_FILE = ".adlc/.active-rail-index.json";
 var MAX_INDEX_BYTES = 1024 * 1024;
+var MAX_MEMORY_CACHE_ENTRIES = 64;
+var memoryCache = /* @__PURE__ */ new Map();
 function cleanRails(rails) {
   if (!Array.isArray(rails)) return [];
   return rails.filter((r) => typeof r === "string" && r.trim()).map((r) => r.trim());
@@ -3092,15 +3104,19 @@ function computeDirectoryStoreFingerprint(storePath) {
     const dirStat = lstatSync9(storePath);
     if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) return null;
     const entries = readdirSync5(storePath, { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    const lowerNames = /* @__PURE__ */ new Set();
     let sawManifest = false;
     const lines = [];
     for (const entry of entries) {
       if (entry.isSymbolicLink() || !entry.isFile()) return null;
+      const lower = entry.name.toLowerCase();
+      if (lowerNames.has(lower)) return null;
+      lowerNames.add(lower);
       if (entry.name === ".store.json") sawManifest = true;
       else if (!entry.name.endsWith(".json")) return null;
       const stat = lstatSync9(join12(storePath, entry.name));
       if (stat.isSymbolicLink() || !stat.isFile()) return null;
-      lines.push(`${entry.name}:${stat.size}:${stat.mtimeMs}`);
+      lines.push(`${entry.name}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`);
     }
     if (!sawManifest) return null;
     return sha256(lines.join("\n"));
@@ -3108,7 +3124,14 @@ function computeDirectoryStoreFingerprint(storePath) {
     return null;
   }
 }
-function tryReadCachedIndex(root, expectedFingerprint) {
+function resolveVerifier(root, key, env) {
+  const adminPub = readAdminPublicKey(join12(root, ".adlc"));
+  const publicKey = adminPub.status === "ok" ? adminPub.publicKey : null;
+  const verifyKey = key !== void 0 ? key : resolveKeyFromEnv(env);
+  return { verifyKey, publicKey };
+}
+function tryReadSignedIndex(root, expectedFingerprint, verifyKey, publicKey) {
+  if (!verifyKey && !publicKey) return null;
   try {
     const indexPath = join12(root, ACTIVE_RAIL_INDEX_FILE);
     const parentStat = lstatSync9(dirname9(indexPath));
@@ -3117,25 +3140,46 @@ function tryReadCachedIndex(root, expectedFingerprint) {
     if (stat.isSymbolicLink() || !stat.isFile() || stat.size > MAX_INDEX_BYTES) return null;
     const doc = JSON.parse(readFileSync9(indexPath, "utf8"));
     if (!doc || typeof doc !== "object" || Array.isArray(doc)) return null;
-    if (doc.version !== 1 || doc.storeFingerprint !== expectedFingerprint) return null;
+    if (doc.version !== 1 || doc.sigVersion !== 2 || doc.storeFingerprint !== expectedFingerprint) return null;
     if (!Array.isArray(doc.rails) || !Array.isArray(doc.activeTickets)) return null;
     if (!doc.rails.every((r) => typeof r === "string")) return null;
+    if (!entrySigValid(verifyKey, doc, { publicKey })) return null;
     return { ok: true, tickets: doc.activeTickets, activeTicket: doc.activeTickets[0] ?? null, rails: doc.rails, boundTicket: false, source: "index-cache", error: null };
   } catch {
     return null;
   }
 }
-function tryWriteCachedIndex(root, fingerprint, activeTickets2, rails) {
+function tryWriteSignedIndex(root, fingerprint, activeTickets2, rails, key) {
+  if (typeof key !== "string" || key.length === 0) return;
   try {
     const indexPath = join12(root, ACTIVE_RAIL_INDEX_FILE);
     const parentStat = lstatSync9(dirname9(indexPath));
     if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) return;
-    writeFileAtomic(indexPath, `${JSON.stringify({ version: 1, storeFingerprint: fingerprint, activeTickets: activeTickets2, rails })}
+    const doc = isEd25519PrivateKey(key) ? { version: 1, storeFingerprint: fingerprint, activeTickets: activeTickets2, rails, sigVersion: 2, sigAlg: SIG_ALG_ED25519 } : { version: 1, storeFingerprint: fingerprint, activeTickets: activeTickets2, rails, sigVersion: 2 };
+    doc.sig = isEd25519PrivateKey(key) ? signEntryEd25519(key, doc) : createHmac3("sha256", key).update(canonicalEntryBytes(doc)).digest("hex");
+    writeFileAtomic(indexPath, `${JSON.stringify(doc)}
 `);
   } catch {
   }
 }
-function readActiveRailIndex(root, { storeOverride = null, env = process.env, writeCache = false } = {}) {
+function resolveFromSnapshot(snapshot, root, env, source) {
+  const active = filterActiveTickets(snapshot.tickets ?? []);
+  const resolved = resolveActiveTicketAgainst(snapshot, { root, env });
+  if (!resolved.ok) return failResult(`invalid active ticket selection: ${resolved.message ?? "conflict"}`);
+  if (resolved.value !== null) {
+    const selected = resolved.value.ticket;
+    if (selected.completed === true) return failResult(`active ticket "${selected.id}" is already completed`);
+    return { ok: true, tickets: active, activeTicket: selected, rails: cleanRails(selected.rails), boundTicket: true, source, error: null };
+  }
+  return { ok: true, tickets: active, activeTicket: active[0] ?? null, rails: mergeActiveRails(active), boundTicket: false, source, error: null };
+}
+function rememberSnapshot(storeKey, fingerprint, snapshot) {
+  if (memoryCache.size >= MAX_MEMORY_CACHE_ENTRIES && !memoryCache.has(storeKey)) {
+    memoryCache.delete(memoryCache.keys().next().value);
+  }
+  memoryCache.set(storeKey, { storeFingerprint: fingerprint, snapshot });
+}
+function readActiveRailIndex(root, { storeOverride = null, env = process.env, writeCache = false, key = void 0 } = {}) {
   if (!root) return { ok: true, tickets: [], activeTicket: null, rails: [], boundTicket: false, source: "none", error: null };
   let store;
   try {
@@ -3145,34 +3189,17 @@ function readActiveRailIndex(root, { storeOverride = null, env = process.env, wr
   }
   const resolvedId = resolveActiveTicketId({ root, env });
   if (!resolvedId.ok) return failResult(`invalid active ticket selection: ${resolvedId.message ?? "conflict"}`);
-  const isDirectoryStore = store instanceof DirectoryTicketStore && typeof store.loadOne === "function";
-  if (resolvedId.value?.id && isDirectoryStore) {
-    const { id, pointerPresent, ticketHash: pinnedHash, legacyString } = resolvedId.value;
-    let ticket;
-    try {
-      ticket = store.loadOne(id);
-    } catch (err) {
-      return failResult(`ticket store unreadable: ${err?.message ?? String(err)}`);
+  const isDirectoryStore = store instanceof DirectoryTicketStore;
+  const storeKey = isDirectoryStore ? resolve6(store.path) : null;
+  const fp = isDirectoryStore ? computeDirectoryStoreFingerprint(store.path) : null;
+  const { verifyKey, publicKey } = resolveVerifier(root, key, env);
+  if (fp !== null && storeKey !== null) {
+    const mem = memoryCache.get(storeKey);
+    if (mem && mem.storeFingerprint === fp) {
+      return resolveFromSnapshot(mem.snapshot, root, env, "memory-cache");
     }
-    if (ticket === null) return failResult(`invalid active ticket selection: active ticket "${id}" not found`);
-    if (pointerPresent) {
-      const expected = ticketHash(ticket);
-      if (!pinnedHash) {
-        const detail = legacyString ? "a legacy bare-string pointer pins no ticketHash" : `${CURRENT_TICKET_FILE} pins no ticketHash`;
-        return failResult(`invalid active ticket selection: ${detail}; expected ticketHash "${expected}"`);
-      }
-      if (pinnedHash !== expected) {
-        return failResult(`invalid active ticket selection: active ticket "${id}" changed after selection (pointer pins ${pinnedHash}, store has ${expected})`);
-      }
-    }
-    if (ticket.completed === true) return failResult(`active ticket "${ticket.id}" is already completed`);
-    return { ok: true, tickets: [ticket], activeTicket: ticket, rails: cleanRails(ticket.rails), boundTicket: true, source: "loadOne", error: null };
-  }
-  let fp = null;
-  if (resolvedId.value === null && isDirectoryStore) {
-    fp = computeDirectoryStoreFingerprint(store.path);
-    if (fp !== null) {
-      const cached = tryReadCachedIndex(root, fp);
+    if (resolvedId.value === null) {
+      const cached = tryReadSignedIndex(root, fp, verifyKey, publicKey);
       if (cached) return cached;
     }
   }
@@ -3182,18 +3209,12 @@ function readActiveRailIndex(root, { storeOverride = null, env = process.env, wr
   } catch (err) {
     return failResult(`ticket store unreadable: ${err?.message ?? String(err)}`);
   }
-  const active = filterActiveTickets(snapshot.tickets ?? []);
-  const resolved = resolveActiveTicketAgainst(snapshot, { root, env });
-  if (!resolved.ok) return failResult(`invalid active ticket selection: ${resolved.message ?? "conflict"}`);
-  if (resolved.value !== null) {
-    const selected = resolved.value.ticket;
-    if (selected.completed === true) return failResult(`active ticket "${selected.id}" is already completed`);
-    return { ok: true, tickets: active, activeTicket: selected, rails: cleanRails(selected.rails), boundTicket: true, source: "full-load", error: null };
+  if (fp !== null && storeKey !== null) rememberSnapshot(storeKey, fp, snapshot);
+  const result = resolveFromSnapshot(snapshot, root, env, "full-load");
+  if (result.ok && !result.boundTicket && writeCache && fp !== null) {
+    tryWriteSignedIndex(root, fp, result.tickets, result.rails, verifyKey);
   }
-  const rails = mergeActiveRails(active);
-  const activeTicket = active[0] ?? null;
-  if (writeCache && fp) tryWriteCachedIndex(root, fp, active, rails);
-  return { ok: true, tickets: active, activeTicket, rails, boundTicket: false, source: "full-load", error: null };
+  return result;
 }
 
 // packages/tickets/lib/prompt.mjs
@@ -4181,7 +4202,7 @@ var MASK_RULES = [...ASSIGNMENT_RULES, ...SHAPE_RULES];
 // packages/core/lib/workspace-root.mjs
 import { existsSync as existsSync11, lstatSync as lstatSync11, readFileSync as readFileSync10, readlinkSync as readlinkSync2, realpathSync as realpathSync2, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename as basename3, dirname as dirname10, isAbsolute as isAbsolute5, join as join14, relative as relative4, resolve as resolve6 } from "node:path";
+import { basename as basename3, dirname as dirname10, isAbsolute as isAbsolute5, join as join14, relative as relative4, resolve as resolve7 } from "node:path";
 var GITDIR_POINTER_MAX_BYTES = 4096;
 var SHELL_WORKDIR_KEYS = Object.freeze([
   "Cwd",
@@ -4254,12 +4275,12 @@ function hasConflictingToolWorkdirs(args, baseDir = process.cwd()) {
   if (candidates.length <= 1) return false;
   const anchor = typeof baseDir === "string" && baseDir.trim() ? baseDir : process.cwd();
   const resolved = new Set(
-    candidates.map((w) => canonicalizePath(isAbsolute5(w) ? w : resolve6(anchor, w)))
+    candidates.map((w) => canonicalizePath(isAbsolute5(w) ? w : resolve7(anchor, w)))
   );
   return resolved.size > 1;
 }
 function canonicalizePath(targetPath) {
-  const abs = resolve6(targetPath);
+  const abs = resolve7(targetPath);
   let cur = abs;
   const pending = [];
   const seen = /* @__PURE__ */ new Set();
@@ -4272,7 +4293,7 @@ function canonicalizePath(targetPath) {
       seen.add(cur);
       try {
         if (lstatSync11(cur).isSymbolicLink()) {
-          cur = resolve6(dirname10(cur), readlinkSync2(cur));
+          cur = resolve7(dirname10(cur), readlinkSync2(cur));
           continue;
         }
       } catch {
@@ -4317,7 +4338,7 @@ function inspectGitCheckout(dir) {
   const firstLine = trimmed2.split(/\r?\n/, 1)[0];
   const rawPtr = firstLine.slice("gitdir:".length).trim();
   if (!rawPtr) return null;
-  const resolvedGitDir = resolve6(dir, rawPtr);
+  const resolvedGitDir = resolve7(dir, rawPtr);
   try {
     const realGitDir = realpathSync2(resolvedGitDir);
     const realDir = realpathSync2(dir);
@@ -4327,8 +4348,8 @@ function inspectGitCheckout(dir) {
       const backTrimmed = backRaw.trim();
       const commonTrimmed = commonRaw.trim();
       if (backTrimmed && commonTrimmed) {
-        const realBackDir = realpathSync2(dirname10(resolve6(realGitDir, backTrimmed)));
-        const realCommon = realpathSync2(resolve6(realGitDir, commonTrimmed));
+        const realBackDir = realpathSync2(dirname10(resolve7(realGitDir, backTrimmed)));
+        const realCommon = realpathSync2(resolve7(realGitDir, commonTrimmed));
         const realWorktrees = realpathSync2(join14(realCommon, "worktrees"));
         const relWt = relative4(realWorktrees, realGitDir);
         const underWorktrees = relWt !== "" && !relWt.startsWith("..") && !isAbsolute5(relWt);
@@ -4369,7 +4390,7 @@ function findInnermostCheckoutRoot(startPath, options = {}) {
     requireStore = true,
     preserveSpelling = false
   } = options;
-  let startLexical = resolve6(startPath);
+  let startLexical = resolve7(startPath);
   if (allowFileStart) {
     let isDir = false;
     try {
@@ -4476,7 +4497,7 @@ function preferInnermostCheckout(outerRoot, dynamicCandidates = [], options = {}
 }
 
 // packages/hook-engine/lib/pretool.mjs
-import { isAbsolute as isAbsolute6, resolve as resolve7 } from "node:path";
+import { isAbsolute as isAbsolute6, resolve as resolve8 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var READ_ONLY_TOOL_NAMES = /* @__PURE__ */ new Set([
   "read",
@@ -4623,7 +4644,7 @@ function railHit(filePath, root, rails = [], opts = {}) {
     return { hit: false, rail: null, resolvedPath: raw, ancestorDir: false };
   }
   const decoded = decodeFileUriOrPath(raw);
-  const absCandidate = isAbsolute6(decoded) ? decoded : resolve7(baseDir, decoded);
+  const absCandidate = isAbsolute6(decoded) ? decoded : resolve8(baseDir, decoded);
   const rel = resolveRailPath(absCandidate, root);
   if (isOutsideRoot(rel)) {
     return { hit: false, rail: null, resolvedPath: rel, ancestorDir: false };
@@ -4735,7 +4756,7 @@ function evaluatePreTool({
   }
   const checkRoot = root ?? effectiveBase;
   const toolWorkdir = extractToolWorkdir(toolInput);
-  const pathBase = toolWorkdir ? isAbsolute6(toolWorkdir) ? toolWorkdir : resolve7(effectiveBase, toolWorkdir) : effectiveBase;
+  const pathBase = toolWorkdir ? isAbsolute6(toolWorkdir) ? toolWorkdir : resolve8(effectiveBase, toolWorkdir) : effectiveBase;
   if (SHELL_TOOL_NAMES.has(normalizedTool)) {
     const cmd = String(toolInput?.command ?? toolInput?.CommandLine ?? toolInput?.cmd ?? "");
     const cls = classifyShellCommand(cmd);
@@ -5130,7 +5151,7 @@ function flailMessage({ path, count }) {
 // packages/hook-engine/lib/command-verify.mjs
 import { existsSync as existsSync12, lstatSync as lstatSync13, realpathSync as realpathSync4 } from "node:fs";
 import { homedir as homedir3, tmpdir as tmpdir2 } from "node:os";
-import { basename as basename5, dirname as dirname11, isAbsolute as isAbsolute8, join as join16, relative as relative6, resolve as resolve8 } from "node:path";
+import { basename as basename5, dirname as dirname11, isAbsolute as isAbsolute8, join as join16, relative as relative6, resolve as resolve9 } from "node:path";
 var TRUST_ROOT_RAILS = [
   ".adlc",
   ".adlc/**",
@@ -5428,7 +5449,7 @@ function isUnauthorizedWorkspaceEscape(cmd, { root = null, cwd = root } = {}) {
       const nt = t.replace(/\\/g, "/");
       if (isCommandToken && isTrustedNodeExec(nt)) allowedExec.add(nt);
       if (checkAbs(nt, isCommandToken)) return true;
-    } else if (hasRoot && effCwd && (t.includes("/") || t.includes("\\")) && !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(t) && !isPathInside(resolve8(effCwd, t), root)) return true;
+    } else if (hasRoot && effCwd && (t.includes("/") || t.includes("\\")) && !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(t) && !isPathInside(resolve9(effCwd, t), root)) return true;
   }
   const re = /(?:^|[\s=;,"'`$(><])(\/[A-Za-z0-9_./~-]*)/g;
   let m;
@@ -5457,7 +5478,7 @@ function hasShellTrustRootSecretAccess(cmd, { root = process.cwd(), cwd = root, 
     if (!(items.length > 0 && !/[\r\n;&|<>$`()={}]/.test(cmd) && items.every((it) => it.isCommandToken || !/(node_modules\/\.bin\/|\.mocharc|jest\.config\.|vitest\.config\.)/i.test(it.rawToken.replace(/\\/g, "/"))))) return true;
   }
   for (const { rawToken: t, isOutRedirect, isCommandToken } of collectShellCandidateTokens(cmd)) {
-    const abs = isAbsolute8(t) ? t : resolve8(effCwd, t);
+    const abs = isAbsolute8(t) ? t : resolve9(effCwd, t);
     const lex = canonicalizePath(abs);
     let real = lex;
     try {
@@ -5475,7 +5496,7 @@ function hasShellSymlinkOrSecretEscape(cmd, { root = process.cwd(), cwd = root, 
   const effCwd = cwd ?? root;
   const simpleRead = !/[\r\n;&|<>$`()={}\\~]/.test(cmd) && /^\s*(cat|head|tail|ls|stat|file|wc)\b/.test(cmd);
   for (const { rawToken: t, isOutRedirect, isCommandToken } of collectShellCandidateTokens(cmd)) {
-    const abs = isAbsolute8(t) ? t : resolve8(effCwd, t);
+    const abs = isAbsolute8(t) ? t : resolve9(effCwd, t);
     try {
       const isSym = lstatSync13(abs).isSymbolicLink();
       if (isSym || existsSync12(abs)) {
@@ -5525,7 +5546,7 @@ function isReadonlyCommand(cmd, { root = process.cwd(), cwd = root, env = proces
     const t = tokens[i];
     if (/^(-o|--output|--output-directory)$/i.test(t) || /^--output=/i.test(t) || isUnauthorizedWorkspaceEscape(t, { root }) || isTrustRootSecretAccess(t)) return false;
     if (!t.startsWith("-") && FILE_READER_BINS.has(bin)) {
-      const res = isAbsolute8(t) ? t : resolve8(root, t);
+      const res = isAbsolute8(t) ? t : resolve9(root, t);
       const rel = relative6(root, res);
       if (rel.startsWith("..") || isAbsolute8(rel) || isTrustRootSecretAccess(res)) return false;
       try {
@@ -5550,12 +5571,12 @@ function isVerificationCommand(cmd, { root, workdirAnchorBase = null, toolArgs, 
   if (/[\r\n;&|<>$`~]/.test(trimmed2) || /(^|\s)\/dev\//i.test(trimmed2) || /(^|\s)--(\s+|$)/.test(trimmed2)) return false;
   if (/(^|\s)(--prefix|--cwd|-C|--if-present|--test-name-pattern|--test-skip-pattern|--test-only|--passWithNoTests|--test-shard|--test-reporter-destination|--output|--output-dir|--output-directory|--destination|-o|--grep|-g|--require|--import|--loader|--experimental-loader|-r|--test-global-setup|--test-global-teardown|--test-update-snapshots|--test-coverage|--experimental-test-coverage|--watch|--watch-mode|--run|-w|--workspace|--workspaces|--include-workspace-root)\b/i.test(trimmed2)) return false;
   if (/(--require=|--import=|--loader=|--experimental-loader=|--test-shard=|--test-name-pattern=|--test-skip-pattern=|--test-reporter-destination=|--output=|--destination=|--test-global-setup=|--test-global-teardown=|--test-coverage=|--experimental-test-coverage=|--workspace=)/i.test(trimmed2)) return false;
-  const realRoot = root ? realpathOr2(resolve8(root)) : null;
+  const realRoot = root ? realpathOr2(resolve9(root)) : null;
   const wdBase = workdirAnchorBase ?? root ?? process.cwd();
   if (hasConflictingToolWorkdirs(toolArgs, wdBase)) return false;
   const cwd = extractToolWorkdir(toolArgs);
   if (typeof cwd === "string" && cwd) {
-    if (!root || !realRoot || relative6(realRoot, realpathOr2(isAbsolute8(cwd) ? cwd : resolve8(wdBase, cwd))) !== "") return false;
+    if (!root || !realRoot || relative6(realRoot, realpathOr2(isAbsolute8(cwd) ? cwd : resolve9(wdBase, cwd))) !== "") return false;
   } else if (!allowImplicitCwd || !realRoot) return false;
   const tokens = tokenizeCommand2(trimmed2);
   if (realRoot) {
@@ -5565,7 +5586,7 @@ function isVerificationCommand(cmd, { root, workdirAnchorBase = null, toolArgs, 
       if (tok.startsWith("~")) return false;
       if (i === 0 && isTrustedNodeExec(tok.replace(/\\/g, "/"))) continue;
       if (tok.startsWith("/") || tok.startsWith("\\") || tok.includes("/") || tok.includes("\\") || tok.includes("..")) {
-        const rel = relative6(realRoot, realpathOr2(tok.startsWith("/") || tok.startsWith("\\") ? tok : resolve8(root, tok)));
+        const rel = relative6(realRoot, realpathOr2(tok.startsWith("/") || tok.startsWith("\\") ? tok : resolve9(root, tok)));
         if (rel.startsWith("..") || isAbsolute8(rel)) return false;
       }
     }
@@ -5582,7 +5603,7 @@ function isVerificationCommand(cmd, { root, workdirAnchorBase = null, toolArgs, 
 }
 
 // packages/hook-engine/lib/session-tracker.mjs
-import { createHash as createHash4, createHmac as createHmac3, randomBytes as randomBytes2 } from "node:crypto";
+import { createHash as createHash4, createHmac as createHmac4, randomBytes as randomBytes2 } from "node:crypto";
 import { existsSync as existsSync13, readFileSync as readFileSync11, writeFileSync as writeFileSync5, renameSync as renameSync3, mkdirSync as mkdirSync5, statSync as statSync2, rmSync as rmSync4, lstatSync as lstatSync14, unlinkSync as unlinkSync4, openSync as openSync7, readSync as readSync5, writeSync, closeSync as closeSync7, fstatSync as fstatSync4, readdirSync as readdirSync7, realpathSync as realpathSync5, constants as fsConstants5 } from "node:fs";
 import { isAbsolute as isAbsolute9, join as join17, relative as relative7 } from "node:path";
 var DEFAULT_DEPTH_THRESHOLD = 50;
@@ -5766,7 +5787,7 @@ function getOrCreateSessionSecret(root, env = process.env) {
     }
   }
   if (!mk) return null;
-  const derived = createHmac3("sha256", mk).update(`adlc-session-secret:${root}`).digest("hex");
+  const derived = createHmac4("sha256", mk).update(`adlc-session-secret:${root}`).digest("hex");
   loadedSecretCache.set(key, derived);
   return derived;
 }
@@ -5897,7 +5918,7 @@ function reclaimJudgedLock(lockDir, judged) {
 function computeBaselineSig(sessionID, s, root, env) {
   const k = getOrCreateSessionSecret(root, env);
   if (!k) return null;
-  return createHmac3("sha256", k).update(JSON.stringify({ sessionID, t: s?.initialActiveTicket ?? null, h: s?.initialStoreHash ?? null, p: s?.initialPointer ?? null, tr: s?.initialTranscript ?? null, tf: s?.initialTestFiles ?? null, depth: s?.depth ?? 0, totalCalls: s?.totalCalls ?? 0, mutatingCalls: s?.mutatingCalls ?? 0, compacted: Boolean(s?.compacted), ended: Boolean(s?.ended), inv: Boolean(s?.invalidated), edits: Array.isArray(s?.edits) ? s.edits : [], warned: Array.isArray(s?.warned) ? s.warned : [], flailStatus: s?.flailStatus ? { verdict: s.flailStatus.verdict ?? "", summary: s.flailStatus.summary ?? "" } : null, lastTranscriptSize: s?.lastTranscriptSize ?? null, lastTranscriptHash: s?.lastTranscriptHash ?? null, lastExitCode: typeof s?.lastExitCode === "number" ? s.lastExitCode : null, ledgerSeq: s?.ledgerSeq ?? 0, ledgerMac: s?.ledgerMac ?? null })).digest("hex");
+  return createHmac4("sha256", k).update(JSON.stringify({ sessionID, t: s?.initialActiveTicket ?? null, h: s?.initialStoreHash ?? null, p: s?.initialPointer ?? null, tr: s?.initialTranscript ?? null, tf: s?.initialTestFiles ?? null, depth: s?.depth ?? 0, totalCalls: s?.totalCalls ?? 0, mutatingCalls: s?.mutatingCalls ?? 0, compacted: Boolean(s?.compacted), ended: Boolean(s?.ended), inv: Boolean(s?.invalidated), edits: Array.isArray(s?.edits) ? s.edits : [], warned: Array.isArray(s?.warned) ? s.warned : [], flailStatus: s?.flailStatus ? { verdict: s.flailStatus.verdict ?? "", summary: s.flailStatus.summary ?? "" } : null, lastTranscriptSize: s?.lastTranscriptSize ?? null, lastTranscriptHash: s?.lastTranscriptHash ?? null, lastExitCode: typeof s?.lastExitCode === "number" ? s.lastExitCode : null, ledgerSeq: s?.ledgerSeq ?? 0, ledgerMac: s?.ledgerMac ?? null })).digest("hex");
 }
 function openVerifiedRegular(filePath, maxBytes) {
   const ls = lstatSync14(filePath);
@@ -5927,7 +5948,7 @@ function createPersistentTracker(root = process.cwd(), env = process.env) {
   const lockFailures = /* @__PURE__ */ new Set();
   const snapKey = (sid) => `${root}:${sid}`;
   const corruptStore = () => Object.assign(/* @__PURE__ */ Object.create(null), { _corrupted: true });
-  const macOf = (prev, seq, data) => createHmac3("sha256", getOrCreateSessionSecret(root, env)).update(`${prev}:${seq}:${JSON.stringify(data)}`).digest("hex");
+  const macOf = (prev, seq, data) => createHmac4("sha256", getOrCreateSessionSecret(root, env)).update(`${prev}:${seq}:${JSON.stringify(data)}`).digest("hex");
   function withLock(sid, fn, fallback) {
     if (!ticketStoreExists(root, env)) return fn();
     try {
@@ -6339,7 +6360,7 @@ function checkBuildGate({ sessionID, tracker, root = process.cwd(), env = proces
 
 // packages/hook-engine/lib/gemini-stop-verify.mjs
 import { existsSync as existsSync14, lstatSync as lstatSync15 } from "node:fs";
-import { isAbsolute as isAbsolute10, join as join18, relative as relative8, resolve as resolve9 } from "node:path";
+import { isAbsolute as isAbsolute10, join as join18, relative as relative8, resolve as resolve10 } from "node:path";
 import { homedir as homedir4 } from "node:os";
 var GLOB_SAFE_RE = /^[a-zA-Z0-9._/*?[\]{}@+!-]+$/;
 function sanitizeField(value, maxLen = 128) {
@@ -6505,10 +6526,10 @@ function evaluateGeminiStop(payload, { env = process.env, helpers } = {}) {
         const isShell = isShellTool(name, args);
         const isMut = !isShell && classifyTool(name, args) !== "readonly";
         const rawWd = extractToolWorkdir(args);
-        const effAnchor = rawWd && typeof rawWd === "string" && rawWd.trim() ? isAbsolute10(rawWd.trim()) ? rawWd.trim() : resolve9(fileAnchorBase, rawWd.trim()) : fileAnchorBase;
+        const effAnchor = rawWd && typeof rawWd === "string" && rawWd.trim() ? isAbsolute10(rawWd.trim()) ? rawWd.trim() : resolve10(fileAnchorBase, rawWd.trim()) : fileAnchorBase;
         let callTargetsOuterOnly = false;
         if (isNested) {
-          const fpRoots = fps.filter((p) => typeof p === "string" && p.trim()).map((p) => isAbsolute10(p.trim()) ? p.trim() : resolve9(effAnchor, p.trim())).map((ap) => findAdlcRoot2(canonicalizeExisting2(ap), env) ?? findAdlcRoot2(ap, env)).filter(Boolean);
+          const fpRoots = fps.filter((p) => typeof p === "string" && p.trim()).map((p) => isAbsolute10(p.trim()) ? p.trim() : resolve10(effAnchor, p.trim())).map((ap) => findAdlcRoot2(canonicalizeExisting2(ap), env) ?? findAdlcRoot2(ap, env)).filter(Boolean);
           const wdRoot = rawWd && typeof rawWd === "string" && rawWd.trim() ? findAdlcRoot2(canonicalizeExisting2(effAnchor), env) ?? findAdlcRoot2(effAnchor, env) : null;
           const allRoots = [...wdRoot ? [wdRoot] : [], ...fpRoots];
           if (allRoots.length > 0 && allRoots.every((cr) => canonicalizePath(cr) !== canonicalizePath(root))) {
@@ -6528,7 +6549,7 @@ function evaluateGeminiStop(payload, { env = process.env, helpers } = {}) {
             return cont("Tampering with session transcript files is strictly prohibited.");
           }
           if (!callTargetsOuterOnly && fps.some((p) => {
-            const abs = isAbsolute10(p) ? p : resolve9(effAnchor, p);
+            const abs = isAbsolute10(p) ? p : resolve10(effAnchor, p);
             const rel = relative8(root, abs);
             return rel.startsWith("..") || isAbsolute10(rel);
           })) {
@@ -6549,7 +6570,7 @@ function evaluateGeminiStop(payload, { env = process.env, helpers } = {}) {
           const cmd = extractCommandString(args);
           const normCmd = String(cmd ?? "").replace(/\\/g, "/");
           const shellAnchorBase = isNested ? outerWs : root;
-          const actualCwd = rawWd && typeof rawWd === "string" && rawWd.trim() ? isAbsolute10(rawWd.trim()) ? rawWd.trim() : resolve9(shellAnchorBase, rawWd.trim()) : root;
+          const actualCwd = rawWd && typeof rawWd === "string" && rawWd.trim() ? isAbsolute10(rawWd.trim()) ? rawWd.trim() : resolve10(shellAnchorBase, rawWd.trim()) : root;
           const allowImplicit = hasUnambiguousWorkspaceCwd2(payload, env, root);
           const ro = isReadonlyCommand(cmd, { root: callTargetsOuterOnly ? outerWs : root, cwd: actualCwd, env });
           if (!ro && isTrustRootSecretAccess(cmd, overrideEscaped) || hasShellTrustRootSecretAccess(cmd, { root, cwd: actualCwd, env }) || hasShellSymlinkOrSecretEscape(cmd, { root, cwd: actualCwd, env }) || !ro && /(^|[\s=;,"'/$.()[\]])transcript.*\.jsonl/i.test(normCmd)) {
@@ -6750,7 +6771,7 @@ function findAdlcRoot(absPath, env = process.env) {
       cur = dirname12(absPath);
     }
     const { root: fsRoot } = parse2(cur);
-    const normHome = homeDir ? realpathOr3(resolve10(homeDir)) : null;
+    const normHome = homeDir ? realpathOr3(resolve11(homeDir)) : null;
     while (true) {
       if (normHome && realpathOr3(cur) === normHome) break;
       if (existsSync15(join19(cur, ".adlc"))) return cur;
@@ -6763,7 +6784,7 @@ function findAdlcRoot(absPath, env = process.env) {
 }
 function declaredOuterWorkspace(payload, targetHint = null) {
   const base = nonPluginCwd() ?? process.cwd();
-  const all = WORKSPACE_KEYS.flatMap((k) => Array.isArray(payload?.[k]) ? payload[k] : [payload?.[k]]).filter((s) => typeof s === "string" && s.trim()).map((s) => isAbsolute11(s.trim()) ? s.trim() : resolve10(base, s.trim()));
+  const all = WORKSPACE_KEYS.flatMap((k) => Array.isArray(payload?.[k]) ? payload[k] : [payload?.[k]]).filter((s) => typeof s === "string" && s.trim()).map((s) => isAbsolute11(s.trim()) ? s.trim() : resolve11(base, s.trim()));
   if (!all.length) return null;
   return typeof targetHint === "string" && targetHint.trim() && isAbsolute11(targetHint.trim()) ? all.find((w) => isPathInside(targetHint.trim(), w)) ?? all[0] : all[0];
 }
@@ -6774,8 +6795,8 @@ function anchorPath(rawPath, payload, env = null) {
   const wd = isToolPayload(payload) ? extractCwdFromArgs(extractArgs(payload)) : null;
   const ws = WORKSPACE_KEYS.flatMap((k) => Array.isArray(payload?.[k]) ? payload[k] : []).find((s) => typeof s === "string" && s.trim()) ?? [payload?.cwd, payload?.workingDirectory, payload?.working_directory, payload?.workspaceRoot, env?.AGY_WORKSPACE, env?.ANTIGRAVITY_WORKSPACE, env?.GEMINI_WORKSPACE, env?.PROJECT_ROOT, env?.WORKSPACE_ROOT].find((s) => typeof s === "string" && s.trim());
   if (ws) {
-    const absWs = isAbsolute11(ws) ? ws : resolve10(nonPluginCwd() ?? process.cwd(), ws);
-    if (typeof wd === "string" && wd.trim() && norm !== wd.trim().replace(/\\/g, "/")) return { abs: join19(isAbsolute11(wd.trim()) ? wd.trim() : resolve10(absWs, wd.trim()), norm), anchored: true };
+    const absWs = isAbsolute11(ws) ? ws : resolve11(nonPluginCwd() ?? process.cwd(), ws);
+    if (typeof wd === "string" && wd.trim() && norm !== wd.trim().replace(/\\/g, "/")) return { abs: join19(isAbsolute11(wd.trim()) ? wd.trim() : resolve11(absWs, wd.trim()), norm), anchored: true };
     return { abs: join19(absWs, norm), anchored: true };
   }
   if (typeof wd === "string" && wd.trim() && isAbsolute11(wd.trim())) return { abs: norm === wd.trim().replace(/\\/g, "/") ? wd.trim() : join19(wd.trim(), norm), anchored: true };
@@ -6856,7 +6877,7 @@ function discoverRootFromTranscriptRecords(records, env = process.env, { anchorB
   const found = [];
   for (const r of records) for (const c of extractToolCalls(r)) for (const p of [...extractAllToolWorkdirs(extractArgs({ toolCall: c })), ...extractFilePaths({ toolCall: c })]) {
     if (typeof p !== "string" || !p.trim()) continue;
-    const rp = isAbsolute11(p) ? p : anchorBase ? resolve10(anchorBase, p) : null;
+    const rp = isAbsolute11(p) ? p : anchorBase ? resolve11(anchorBase, p) : null;
     if (!rp) continue;
     const cand = findAdlcRoot(canonicalizeExisting(rp), env) ?? findAdlcRoot(rp, env);
     if (cand) found.push(cand);
@@ -6867,14 +6888,14 @@ function discoverRootFromTranscriptRecords(records, env = process.env, { anchorB
 }
 function hasUnambiguousWorkspaceCwd(payload, env = process.env, expectedRoot = null) {
   const baseCwd = nonPluginCwd() ?? process.cwd();
-  const toCan = (s) => canonicalizePath(isAbsolute11(s.trim()) ? resolve10(s.trim()) : resolve10(baseCwd, s.trim()));
+  const toCan = (s) => canonicalizePath(isAbsolute11(s.trim()) ? resolve11(s.trim()) : resolve11(baseCwd, s.trim()));
   const uniq = [...new Set(WORKSPACE_KEYS.flatMap((k) => Array.isArray(payload?.[k]) ? payload[k] : [payload?.[k]]).filter((s) => typeof s === "string" && s.trim()).map(toCan))];
   const expDir = [payload?.cwd, payload?.workingDirectory, payload?.working_directory, payload?.workspaceRoot].find((s) => typeof s === "string" && s.trim());
   const expEnv = [env?.AGY_WORKSPACE, env?.ANTIGRAVITY_WORKSPACE, env?.GEMINI_WORKSPACE, env?.PROJECT_ROOT, env?.WORKSPACE_ROOT].find((s) => typeof s === "string" && s.trim());
   if (uniq.length > 1 && !expDir && !expEnv) return false;
   if (typeof expectedRoot === "string" && expectedRoot.trim()) {
     const imp = expDir ?? (uniq.length === 1 ? uniq[0] : null) ?? expEnv ?? (env === process.env ? nonPluginCwd() : null) ?? env?.PWD ?? env?.INIT_CWD ?? null;
-    return Boolean(imp && toCan(imp) === canonicalizePath(resolve10(expectedRoot.trim())));
+    return Boolean(imp && toCan(imp) === canonicalizePath(resolve11(expectedRoot.trim())));
   }
   return true;
 }
@@ -6885,7 +6906,7 @@ function resolveWorkspaceRoot(payload, env = process.env) {
   const outer = declaredOuterWorkspace(payload);
   const wds = extractAllToolWorkdirs(extractArgs(payload));
   const fps = isToolPayload(payload) ? extractFilePaths(payload) : [];
-  const dyn = [payload?.cwd, payload?.workingDirectory, payload?.working_directory, payload?.workspaceRoot, ...[...wds, ...fps].filter((s) => typeof s === "string" && s.trim()).map((s) => isAbsolute11(s.trim()) ? s.trim() : resolve10(outer ?? baseCwd, s.trim())), env === process.env ? nonPluginCwd() : null].filter((s) => typeof s === "string" && s.trim());
+  const dyn = [payload?.cwd, payload?.workingDirectory, payload?.working_directory, payload?.workspaceRoot, ...[...wds, ...fps].filter((s) => typeof s === "string" && s.trim()).map((s) => isAbsolute11(s.trim()) ? s.trim() : resolve11(outer ?? baseCwd, s.trim())), env === process.env ? nonPluginCwd() : null].filter((s) => typeof s === "string" && s.trim());
   const upg = (c) => preferInnermostCheckout(c, dyn, { storeOverride, homeDir, pluginDir: PLUGIN_ROOT, allowFileStart: true, preserveSpelling: true }) ?? c;
   const cands = [payload?.cwd, payload?.workingDirectory, payload?.working_directory, payload?.workspaceRoot, ...WORKSPACE_KEYS.flatMap((k) => Array.isArray(payload?.[k]) ? payload[k] : [payload?.[k]]), env?.AGY_WORKSPACE, env?.ANTIGRAVITY_WORKSPACE, env?.GEMINI_WORKSPACE, env?.PROJECT_ROOT, env?.WORKSPACE_ROOT, env === process.env ? nonPluginCwd() : null, env?.PWD, env?.INIT_CWD, ...wds.filter(isAbsolute11)].filter((s) => typeof s === "string" && s.trim());
   for (const c of cands) {
@@ -6920,7 +6941,7 @@ function decide(payload, { env = process.env, trackerCache } = {}) {
     const swd = !isShell ? extractCwdFromArgs(args) : null;
     if (enforcing && typeof swd === "string" && swd.trim()) {
       const b = declaredOuterWorkspace(payload, isAbsolute11(swd.trim()) ? swd.trim() : wsRoot) ?? wsRoot;
-      if (!b || !isPathInside(isAbsolute11(swd.trim()) ? swd.trim() : resolve10(b, swd.trim()), b)) return forceAsk("structured tool workdir targets path outside workspace", env);
+      if (!b || !isPathInside(isAbsolute11(swd.trim()) ? swd.trim() : resolve11(b, swd.trim()), b)) return forceAsk("structured tool workdir targets path outside workspace", env);
     }
     if (cls === "readonly") {
       if (enforcing) {
@@ -6944,7 +6965,7 @@ function decide(payload, { env = process.env, trackerCache } = {}) {
         const can = canonicalizeExisting(abs);
         const b = declaredOuterWorkspace(payload, abs) ?? wsRoot;
         if (enforcing && ov && typeof ov === "string" && ov.trim()) {
-          const ovAbs = isAbsolute11(ov.trim()) ? ov.trim() : resolve10(wsRoot ?? b ?? process.cwd(), ov.trim());
+          const ovAbs = isAbsolute11(ov.trim()) ? ov.trim() : resolve11(wsRoot ?? b ?? process.cwd(), ov.trim());
           const ovCan = canonicalizeExisting(ovAbs);
           if (abs === ovAbs || can === ovCan || isPathInside(abs, ovAbs) || isPathInside(can, ovCan)) {
             return deny("frozen rail \u2014 direct modification of external ticket store is strictly prohibited");
@@ -6975,7 +6996,7 @@ function decide(payload, { env = process.env, trackerCache } = {}) {
       const cmd = extractCommandString(args);
       const cw = extractCwdFromArgs(args);
       const b = declaredOuterWorkspace(payload, cw && isAbsolute11(cw) ? cw : wsRoot) ?? wsRoot;
-      const ec = (cw ? isAbsolute11(cw) ? cw : b ? resolve10(b, cw) : null : null) ?? wsRoot ?? process.cwd();
+      const ec = (cw ? isAbsolute11(cw) ? cw : b ? resolve11(b, cw) : null : null) ?? wsRoot ?? process.cwd();
       if (cmd) {
         if (isTrustRootSecretAccess(cmd, ovRe) && !isReadonlyCommand(cmd, { root: b ?? ec, cwd: ec, env })) return deny("shell modification of ticket store or trust-root rails is strictly prohibited");
         if (hasShellTrustRootSecretAccess(cmd, { root: b ?? ec, cwd: ec, env }) || hasShellSymlinkOrSecretEscape(cmd, { root: b ?? ec, cwd: ec, env })) return deny("shell access to master key, trust-root secrets, or escaping symlink is strictly prohibited");

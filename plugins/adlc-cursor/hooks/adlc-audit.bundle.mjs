@@ -3206,6 +3206,8 @@ var init_rail_index = __esm({
     init_define_ADLC_MCP_BUILD_METADATA();
     init_canonical();
     init_durability();
+    init_key_contract();
+    init_manifest_primitives();
     init_pointer();
     init_store();
     init_directory();
