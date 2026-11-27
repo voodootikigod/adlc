@@ -6,7 +6,7 @@
 import { existsSync, readFileSync, mkdirSync, openSync, writeFileSync, fsyncSync, closeSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { sha256, withLedgerLock } from '@adlc/core';
-import { signEntry } from './sign.mjs';
+import { signEntry, isEd25519PrivateKey, SIG_ALG_ED25519, assertEd25519KeyMatchesAdminPub } from './sign.mjs';
 import { verify } from './verify.mjs';
 import { segmentPath, segmentDirPath } from './forest.mjs';
 import { isSegmentedRepo, normalizeManifestDirAndCwd, resolveOpenSegment, lineagePath } from './lineage.mjs';
@@ -59,6 +59,7 @@ export function appendToSegment(payload, dir, { signatureVersion, cwd, key }) {
 // lock like it should. Checking only after the lock is held means a queued
 // writer only ever observes a FINISHED publish, never a transient one.
 function appendWithinLedgerLock(payload, dir, { signatureVersion, cwd, key }) {
+  assertEd25519KeyMatchesAdminPub(dir, key);
   const integrity = verify(dir, { requireSignatures: false, key });
   if (!integrity.valid) {
     throw new Error(`manifest forest is invalid: ${integrity.message}`);
@@ -133,7 +134,12 @@ function appendLockedEntry(payload, resolved, targetPath, signatureVersion, key)
   // record()'s CLI path).
   const effectiveSignatureVersion = resolved.isNew ? 2 : signatureVersion;
   if (key) {
-    if (effectiveSignatureVersion === 2) chained.sigVersion = 2;
+    if (isEd25519PrivateKey(key)) {
+      chained.sigVersion = 2;
+      chained.sigAlg = SIG_ALG_ED25519;
+    } else if (effectiveSignatureVersion === 2) {
+      chained.sigVersion = 2;
+    }
     chained.sig = signEntry(key, chained);
   }
 

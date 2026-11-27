@@ -18,7 +18,7 @@
 // to PR-controlled code.)
 
 import { dirname, resolve } from 'node:path';
-import { ADLC_DIR, isChangeSetRevision, changeSetBase, changeSetDigest } from '@adlc/core';
+import { ADLC_DIR, isChangeSetRevision, changeSetBase, changeSetDigest, inferModelProviderFamily } from '@adlc/core';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
 // Two independent defenses on the read side: verify() proves the append-only chain
 // was not corrupted-and-skipped to drop a revocation (#326 Codex F2); verifyEntrySig()
@@ -59,22 +59,33 @@ function requireNonEmptyString(value, field) {
 // class as lying about --author-provider outright, which the gate concedes it
 // cannot stop. The gate's value is the auditable, revision-bound record, not
 // unforgeable identity.
-export function normalizeProvider(value) {
+function isBareAgyProvider(value) {
+  if (typeof value !== 'string') return false;
+  const folded = value.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+  return folded === 'agy' || folded === 'antigravity';
+}
+
+export function normalizeProvider(value, { model } = {}) {
   if (typeof value !== 'string') return '';
   const folded = value.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+  if (folded === 'agy' || folded === 'antigravity') {
+    return inferModelProviderFamily(model);
+  }
+  if (folded.startsWith('agy:') || folded.startsWith('antigravity:')) {
+    const embeddedModel = folded.slice(folded.indexOf(':') + 1);
+    return inferModelProviderFamily(embeddedModel || model);
+  }
   if (folded === 'claude' || folded === 'anthropic' || /^claude[-.]/.test(folded)) return 'anthropic';
   if (folded === 'openai' || /^(?:codex|gpt|o1|o3|o4)(?:[-.]|$)/.test(folded)) return 'openai';
-  if (
-    folded === 'gemini' || folded === 'agy' || folded === 'antigravity' || folded === 'google' ||
-    /^gemini[-.]/.test(folded)
-  ) return 'google';
+  if (folded === 'gemini' || folded === 'google' || /^gemini[-.]/.test(folded)) return 'google';
   return folded;
 }
 
 /**
  * Record a cross-model attestation. FAIL-CLOSED: throws if any field is missing,
- * the verdict is unknown, or provider === authorProvider (a same-model review is
- * NOT cross-model and must never be recordable as one).
+ * the verdict is unknown, provider/authorProvider is ambiguous (e.g. bare 'agy'),
+ * or provider === authorProvider (a same-model review is NOT cross-model and must
+ * never be recordable as one).
  *
  * @returns the recorded manifest entry.
  */
@@ -88,7 +99,19 @@ export function recordCrossModelReview({ ticket, revision, provider, authorProvi
   if (!VALID_VERDICTS.has(verdict)) {
     throw new Error(`cross-model review verdict must be one of ${[...VALID_VERDICTS].join(', ')}, got "${verdict}"`);
   }
-  if (normalizeProvider(provider) === normalizeProvider(authorProvider)) {
+  const normProvider = normalizeProvider(provider);
+  const normAuthor = normalizeProvider(authorProvider);
+  if (!normProvider) {
+    throw new Error(
+      `cross-model review provider "${provider}" is ambiguous — pass agy:<model> (e.g. "agy:Gemini 2.5 Pro") or a concrete provider family (anthropic, google, openai)`
+    );
+  }
+  if (!normAuthor) {
+    throw new Error(
+      `cross-model review authorProvider "${authorProvider}" is ambiguous — pass agy:<model> (e.g. "agy:Claude Sonnet 4.6") or a concrete provider family (anthropic, google, openai)`
+    );
+  }
+  if (normProvider === normAuthor) {
     throw new Error('cross-model review requires a provider distinct from the author');
   }
   return record({
@@ -399,8 +422,12 @@ function revocationCandidate(entry, { ticket, revision }) {
   if (data.revision !== revision) return null;
   if (data.verdict !== 'needs-attention') return null;
   const provider = normalizeProvider(data.provider);
-  if (provider === '') return null;
-  return { provider };
+  if (provider !== '') return { provider, revokesAll: false };
+  // Historical bare 'agy'/'antigravity' revocations predate model-aware identity:
+  // treat them as a wildcard revocation for (revision, [ticket]) so pre-existing
+  // revocations never fail open.
+  if (isBareAgyProvider(data.provider)) return { provider: '*', revokesAll: true };
+  return null;
 }
 
 // TERMINAL revocation (spec §6): an approve for (provider, revision, [ticket])
@@ -418,12 +445,17 @@ function revocationCandidate(entry, { ticket, revision }) {
 function crossModelSatisfied(entries, match) {
   const approvedProviders = new Set();
   const revokedProviders = new Set();
+  let revokedAll = false;
   for (const entry of entries) {
     const approve = candidateReview(entry, match);
     if (approve) approvedProviders.add(approve.provider);
     const revocation = revocationCandidate(entry, match);
-    if (revocation) revokedProviders.add(revocation.provider);
+    if (revocation) {
+      if (revocation.revokesAll) revokedAll = true;
+      else revokedProviders.add(revocation.provider);
+    }
   }
+  if (revokedAll) return false;
   for (const provider of approvedProviders) {
     if (!revokedProviders.has(provider)) return true;
   }
@@ -605,5 +637,6 @@ export function hasCrossModelApproveForRevision({ dir, revision, authorProvider,
  */
 export function scopeObservedEntriesToAuthor(observedEntries, authorProvider) {
   const runAuthor = normalizeProvider(authorProvider);
+  if (!runAuthor) return [];
   return observedEntries.filter((entry) => normalizeProvider(entry?.data?.authorProvider) === runAuthor);
 }

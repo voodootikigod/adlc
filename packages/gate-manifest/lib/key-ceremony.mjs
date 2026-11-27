@@ -22,7 +22,7 @@
 // transaction — this slice establishes the refusal and the exception flag itself.
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { openSync, writeSync, fsyncSync, closeSync, fchmodSync, realpathSync, unlinkSync, fstatSync } from 'node:fs';
+import { openSync, writeSync, fsyncSync, closeSync, fchmodSync, realpathSync, unlinkSync, fstatSync, lstatSync, mkdirSync } from 'node:fs';
 import { dirname, basename, resolve, relative, isAbsolute, sep } from 'node:path';
 import { stdin, stdout } from 'node:process';
 import { execFileSync } from 'node:child_process';
@@ -191,6 +191,7 @@ export function computeKeyFingerprint(key) {
 function sanitizedGitEnv() {
   const sanitized = { ...process.env };
   delete sanitized.ADLC_MANIFEST_KEY;
+  delete sanitized.ADLC_MANIFEST_PRIVATE_KEY;
   for (const name of Object.keys(sanitized)) {
     if (name.startsWith('GIT_')) delete sanitized[name];
   }
@@ -562,4 +563,38 @@ export function resolveCeremonyKey({ importKey, allowKeyImport = false, entropy 
     return { key: importKey, imported: true };
   }
   return { key: generateManifestKey(entropy), imported: false };
+}
+
+/**
+ * Write an Ed25519 SPKI PEM public key to `path` (e.g. `.adlc/admin.pub`).
+ * Unlike the private key handoff file, a public key is intentionally committable
+ * inside the repository. Refuses to write through a symlink.
+ * @param {string} path
+ * @param {string} publicKeyPem
+ */
+export function writePublicKeyFile(path, publicKeyPem) {
+  if (typeof publicKeyPem !== 'string' || !publicKeyPem.includes('-----BEGIN PUBLIC KEY-----')) {
+    throw new TypeError('public key must be a canonical SPKI PEM string');
+  }
+  try {
+    const st = lstatSync(path);
+    if (st.isSymbolicLink()) {
+      throw new Error(`refusing to write public key through symlink: ${path}`);
+    }
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  mkdirSync(dirname(resolve(path)), { recursive: true });
+  const fd = openSync(path, 'w', 0o644);
+  try {
+    const buffer = Buffer.from(publicKeyPem, 'utf8');
+    let written = 0;
+    while (written < buffer.length) {
+      written += writeSync(fd, buffer, written, buffer.length - written);
+    }
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  fsyncDirectory(dirname(resolve(path)));
 }

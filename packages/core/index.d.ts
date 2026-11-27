@@ -110,6 +110,7 @@ export function dropObjectArgKey(line: string): string | null;
 
 export function isAgyTimeout(output: string): boolean;
 export function parseAgyTimeoutMs(spec?: string): number;
+export function inferModelProviderFamily(modelId: unknown): 'anthropic' | 'google' | 'openai' | '';
 /** Map Gemini `usageMetadata` to usage; thinking tokens count as output. */
 export function usageFromGemini(raw: unknown): { inputTokens: number; outputTokens: number; cachedTokens: number } | null;
 export function complete(options: CompletionOptions, env?: Record<string, string | undefined>): Promise<string>;

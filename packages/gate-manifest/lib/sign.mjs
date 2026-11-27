@@ -13,49 +13,91 @@
 //   so ticket/revision/provenance fields on the final ledger entry are covered.
 //   canonicalEntryBytes is single-sourced from @adlc/tickets/lib/manifest-primitives.mjs.
 
-import { createHmac, timingSafeEqual } from 'node:crypto';
-import { canonicalEntryBytes } from '@adlc/tickets/lib/manifest-primitives.mjs';
+import { createHmac } from 'node:crypto';
+import {
+  ADMIN_PUB_FILENAME,
+  ED25519_PRIV_PREFIX,
+  SIG_ALG_ED25519,
+  canonicalEntryBytes,
+  generateEd25519KeyPair,
+  isEd25519PrivateKey,
+  derivePublicKeyPem,
+  signEntryEd25519,
+  verifyEntryEd25519,
+  readAdminPublicKey,
+  entrySigValid,
+} from '@adlc/tickets/lib/manifest-primitives.mjs';
+import { PRIVATE_KEY_ENV, resolveKeyFromEnv } from '@adlc/tickets/lib/key-contract.mjs';
 
-export { canonicalEntryBytes };
+export {
+  ADMIN_PUB_FILENAME,
+  PRIVATE_KEY_ENV,
+  ED25519_PRIV_PREFIX,
+  SIG_ALG_ED25519,
+  canonicalEntryBytes,
+  generateEd25519KeyPair,
+  isEd25519PrivateKey,
+  derivePublicKeyPem,
+  signEntryEd25519,
+  verifyEntryEd25519,
+  readAdminPublicKey,
+};
 
-/** Env var holding the secret signing key. */
+/** Env var holding the legacy symmetric signing key. */
 export const KEY_ENV = 'ADLC_MANIFEST_KEY';
 
 /**
  * Read the signing key from the environment.
- * Returns the key string, or null when unset/empty.
+ * Prefers ADLC_MANIFEST_PRIVATE_KEY (with explicit-empty fail-closed semantics)
+ * over ADLC_MANIFEST_KEY. Returns the key string, or null when unset/empty.
  * @param {NodeJS.ProcessEnv} [env]
  * @returns {string|null}
  */
 export function getKey(env = process.env) {
-  const k = env[KEY_ENV];
-  return typeof k === 'string' && k.length > 0 ? k : null;
+  return resolveKeyFromEnv(env);
 }
 
 /**
- * Compute the HMAC-SHA256 signature (hex) of an entry under a key.
+ * Compute the signature (hex) of an entry under a signing key.
+ * Uses Ed25519 when `key` carries the `ed25519-priv:` prefix, otherwise HMAC-SHA256.
  * @param {string} key
  * @param {object} entry
- * @returns {string} hex digest
+ * @returns {string} hex signature
  */
 export function signEntry(key, entry) {
+  if (isEd25519PrivateKey(key)) {
+    return signEntryEd25519(key, entry);
+  }
   return createHmac('sha256', key).update(canonicalEntryBytes(entry)).digest('hex');
 }
 
 /**
- * Constant-time check that `entry.sig` is the correct HMAC for `key`.
- * Returns false when sig is missing, malformed, or wrong.
- * @param {string} key
+ * Verify `entry.sig` under `key` (HMAC-SHA256 or Ed25519 private key) and/or
+ * an explicit Ed25519 `publicKey`. Returns false when sig is missing, malformed, or wrong.
+ * @param {string|null} key
  * @param {object} entry
+ * @param {{ publicKey?: string|null }} [opts]
  * @returns {boolean}
  */
-export function verifyEntrySig(key, entry) {
-  if (typeof entry.sig !== 'string' || entry.sig.length === 0) return false;
-  const expected = signEntry(key, entry);
-  // Both are hex strings of equal length (sha256 → 64 hex chars) when sig is
-  // well-formed; guard against length mismatch which timingSafeEqual rejects.
-  const a = Buffer.from(entry.sig, 'utf8');
-  const b = Buffer.from(expected, 'utf8');
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
+export function verifyEntrySig(key, entry, opts) {
+  return entrySigValid(key, entry, opts);
+}
+
+/**
+ * Verify that an Ed25519 private signing key is valid and matches `<dir>/admin.pub`
+ * when present. Fails closed on corrupt/symlinked `admin.pub` or key mismatch.
+ * No-op for non-Ed25519 keys (HMAC or null).
+ * @param {string} dir
+ * @param {string|null} key
+ */
+export function assertEd25519KeyMatchesAdminPub(dir, key) {
+  if (!isEd25519PrivateKey(key)) return;
+  const derivedPub = derivePublicKeyPem(key);
+  const adminPub = readAdminPublicKey(dir);
+  if (adminPub.status === 'error') {
+    throw new Error(`${ADMIN_PUB_FILENAME}: ${adminPub.reason}`);
+  }
+  if (adminPub.status === 'ok' && adminPub.publicKey !== derivedPub) {
+    throw new Error(`Ed25519 private key does not match ${ADMIN_PUB_FILENAME}`);
+  }
 }

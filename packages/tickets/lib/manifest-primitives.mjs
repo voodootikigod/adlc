@@ -18,7 +18,32 @@ import {
 import { execFileSync } from 'node:child_process';
 import { randomBytes, createHmac, timingSafeEqual } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { sha256, canonicalJson } from './canonical.mjs';
+import { sha256 } from './canonical.mjs';
+import {
+  ADMIN_PUB_FILENAME,
+  ED25519_PRIV_PREFIX,
+  SIG_ALG_ED25519,
+  canonicalEntryBytes,
+  generateEd25519KeyPair,
+  isEd25519PrivateKey,
+  derivePublicKeyPem,
+  signEntryEd25519,
+  verifyEntryEd25519,
+  readAdminPublicKey,
+} from './manifest-crypto.mjs';
+
+export {
+  ADMIN_PUB_FILENAME,
+  ED25519_PRIV_PREFIX,
+  SIG_ALG_ED25519,
+  canonicalEntryBytes,
+  generateEd25519KeyPair,
+  isEd25519PrivateKey,
+  derivePublicKeyPem,
+  signEntryEd25519,
+  verifyEntryEd25519,
+  readAdminPublicKey,
+};
 
 export const SEGMENT_DIRNAME = 'manifest.d';
 export const SEGMENT_NAME_RE = /^[a-z0-9-]{1,40}-[0-9A-HJKMNP-TV-Z]{26}\.jsonl$/;
@@ -376,6 +401,7 @@ export function assertSegmentPathCommittable(dir = '.adlc', name, opts = {}) {
   ({ dir, cwd: probeCwd } = normalizeManifestDirAndCwd(dir, opts));
   const env = { ...process.env };
   delete env.ADLC_MANIFEST_KEY;
+  delete env.ADLC_MANIFEST_PRIVATE_KEY;
   delete env.GIT_DIR;
   delete env.GIT_WORK_TREE;
   delete env.GIT_INDEX_FILE;
@@ -403,25 +429,24 @@ export function assertSegmentPathCommittable(dir = '.adlc', name, opts = {}) {
   }
 }
 
-export function canonicalEntryBytes(entry) {
-  if (entry.sigVersion === 2) {
-    const { sig: _sig, segment: _segment, ...signed } = entry;
-    return canonicalJson(signed);
-  }
-  const canonical = {
-    seq: entry.seq,
-    gate: entry.gate,
-    ts: entry.ts,
-  };
-  if (entry.ticket !== undefined) canonical.ticket = entry.ticket;
-  if (entry.data !== undefined) canonical.data = entry.data;
-  canonical.files = entry.files;
-  canonical.prev = entry.prev;
-  return JSON.stringify(canonical);
-}
-
-export function entrySigValid(key, entry) {
+export function entrySigValid(key, entry, { publicKey = null } = {}) {
   if (typeof entry?.sig !== 'string' || entry.sig.length === 0) return false;
+  if (entry.sigAlg === SIG_ALG_ED25519) {
+    let verifierKey = publicKey;
+    if (verifierKey === null && isEd25519PrivateKey(key)) {
+      try {
+        verifierKey = derivePublicKeyPem(key);
+      } catch {
+        return false;
+      }
+    }
+    if (typeof verifierKey !== 'string' || verifierKey.length === 0) return false;
+    return verifyEntryEd25519(verifierKey, entry);
+  }
+  if (entry.sigAlg !== undefined) return false;
+  if (key === null || typeof key !== 'string' || key.length === 0 || isEd25519PrivateKey(key)) {
+    return false;
+  }
   const expected = createHmac('sha256', key).update(canonicalEntryBytes(entry)).digest('hex');
   const a = Buffer.from(entry.sig, 'utf8');
   const b = Buffer.from(expected, 'utf8');
@@ -586,9 +611,35 @@ export function checkForestSignedEra({
   return { ok: true };
 }
 
+export function checkForestEd25519Era({
+  segmentNames,
+  anchorBySegment,
+  rootSawEd25519,
+  segmentResults,
+}) {
+  const ordered = orderSegmentNames(segmentNames, anchorBySegment);
+  const ed25519Segments = new Set();
+  for (const name of ordered) {
+    const res = segmentResults.get(name);
+    const anchor = anchorBySegment.get(name);
+    const parentSeg = anchor && anchor.segment !== 'root' ? anchor.segment : null;
+    const parentInEd25519Era =
+      (anchor?.segment === 'root' && Boolean(rootSawEd25519)) ||
+      (parentSeg !== null && ed25519Segments.has(parentSeg));
+    if (parentInEd25519Era && res?.firstNonEd25519) {
+      return { ok: false, segment: name, firstNonEd25519: res.firstNonEd25519 };
+    }
+    if (parentInEd25519Era || res?.sawEd25519Entry) {
+      ed25519Segments.add(name);
+    }
+  }
+  return { ok: true };
+}
+
 export function isUnsignedKeyedRoot(declaredAuth, key, requireSignatures, rootResult) {
   return (
     key !== null &&
+    !isEd25519PrivateKey(key) &&
     !requireSignatures &&
     declaredAuth === 'keyed' &&
     rootResult.valid &&
@@ -598,19 +649,58 @@ export function isUnsignedKeyedRoot(declaredAuth, key, requireSignatures, rootRe
   );
 }
 
-export function verifyChain(nonEmpty, { key, requireSignatures, anchorOnFirst }) {
+export function verifyChain(
+  nonEmpty,
+  {
+    key = null,
+    publicKey = null,
+    requireSignatures = false,
+    anchorOnFirst = false,
+    allowPreEd25519Only = false,
+  } = {},
+) {
   if (nonEmpty.length === 0) {
     if (anchorOnFirst) {
-      return { valid: false, message: 'empty segment file has no first entry to carry the required anchor', count: 0, signed: false, break: { seq: null, lineNo: null, reason: 'empty segment file' }, lastRawLine: null, firstAnchor: undefined, sawSignedEntry: false, firstUnsigned: null };
+      return {
+        valid: false,
+        message: 'empty segment file has no first entry to carry the required anchor',
+        count: 0,
+        signed: false,
+        break: { seq: null, lineNo: null, reason: 'empty segment file' },
+        lastRawLine: null,
+        firstAnchor: undefined,
+        sawSignedEntry: false,
+        firstUnsigned: null,
+        sawEd25519Entry: false,
+        firstNonEd25519: null,
+      };
     }
-    return { valid: true, message: 'empty manifest', count: 0, signed: false, break: null, lastRawLine: null, firstAnchor: undefined, sawSignedEntry: false, firstUnsigned: null };
+    return {
+      valid: true,
+      message: 'empty manifest',
+      count: 0,
+      signed: false,
+      break: null,
+      lastRawLine: null,
+      firstAnchor: undefined,
+      sawSignedEntry: false,
+      firstUnsigned: null,
+      sawEd25519Entry: false,
+      firstNonEd25519: null,
+    };
   }
+
+  const hasHmacKey = key !== null && !isEd25519PrivateKey(key);
+  const hasEd25519Verifier = publicKey !== null || isEd25519PrivateKey(key);
+  const hasAnyVerifier = hasHmacKey || hasEd25519Verifier;
 
   let prevRawLine = null;
   let prevSeq = null;
   let firstAnchor;
   let seenSignedEntry = false;
+  let seenEd25519Entry = false;
   let firstUnsigned = null;
+  let firstNonEd25519 = null;
 
   for (const { line, lineNo } of nonEmpty) {
     let entry;
@@ -662,18 +752,38 @@ export function verifyChain(nonEmpty, { key, requireSignatures, anchorOnFirst })
       return fail(lineNo - 1, { seq: entry.seq, lineNo, reason: 'only a segment\'s first entry may carry an anchor field' }, `chain broken at seq ${entry.seq} (line ${lineNo}): only a segment's first entry may carry an anchor field`);
     }
 
-    if (key !== null) {
+    if (hasAnyVerifier) {
       const hasSig = entry.sig !== undefined && entry.sig !== null;
-      if (!hasSig) {
-        if (firstUnsigned === null) firstUnsigned = { seq: entry.seq, lineNo };
-        const toleratedLegacyPrefix = !requireSignatures && !seenSignedEntry;
-        if (!toleratedLegacyPrefix) {
+      if (entry.sigAlg === SIG_ALG_ED25519) {
+        if (!hasSig) {
           return fail(lineNo - 1, { seq: entry.seq, lineNo, reason: 'unsigned entry' }, `chain broken at seq ${entry.seq} (line ${lineNo}): unsigned entry`);
         }
-      } else if (!entrySigValid(key, entry)) {
-        return fail(lineNo - 1, { seq: entry.seq, lineNo, reason: 'signature invalid' }, `chain broken at seq ${entry.seq} (line ${lineNo}): signature invalid`);
-      } else {
+        if (!entrySigValid(key, entry, { publicKey })) {
+          return fail(lineNo - 1, { seq: entry.seq, lineNo, reason: 'signature invalid' }, `chain broken at seq ${entry.seq} (line ${lineNo}): signature invalid`);
+        }
         seenSignedEntry = true;
+        seenEd25519Entry = true;
+      } else if (entry.sigAlg !== undefined) {
+        return fail(lineNo - 1, { seq: entry.seq, lineNo, reason: 'signature invalid' }, `chain broken at seq ${entry.seq} (line ${lineNo}): unsupported signature algorithm`);
+      } else {
+        if (seenEd25519Entry) {
+          return fail(lineNo - 1, { seq: entry.seq, lineNo, reason: 'downgrade after ed25519 entry' }, `chain broken at seq ${entry.seq} (line ${lineNo}): non-ed25519 entry after ed25519 era`);
+        }
+        if (firstNonEd25519 === null) firstNonEd25519 = { seq: entry.seq, lineNo };
+        if (!hasSig) {
+          if (firstUnsigned === null) firstUnsigned = { seq: entry.seq, lineNo };
+          if (hasHmacKey) {
+            const toleratedLegacyPrefix = !requireSignatures && !seenSignedEntry;
+            if (!toleratedLegacyPrefix) {
+              return fail(lineNo - 1, { seq: entry.seq, lineNo, reason: 'unsigned entry' }, `chain broken at seq ${entry.seq} (line ${lineNo}): unsigned entry`);
+            }
+          }
+        } else if (hasHmacKey) {
+          if (!entrySigValid(key, entry, { publicKey })) {
+            return fail(lineNo - 1, { seq: entry.seq, lineNo, reason: 'signature invalid' }, `chain broken at seq ${entry.seq} (line ${lineNo}): signature invalid`);
+          }
+          seenSignedEntry = true;
+        }
       }
     }
 
@@ -681,7 +791,16 @@ export function verifyChain(nonEmpty, { key, requireSignatures, anchorOnFirst })
     prevSeq = entry.seq;
   }
 
-  const signed = key !== null && requireSignatures;
+  if (requireSignatures && !hasHmacKey && hasEd25519Verifier && !allowPreEd25519Only && !seenEd25519Entry) {
+    const target = firstNonEd25519 ?? { seq: null, lineNo: null };
+    return fail(
+      nonEmpty.length,
+      { seq: target.seq, lineNo: target.lineNo, reason: 'no valid ed25519 signatures' },
+      'chain broken: no valid ed25519 signatures found',
+    );
+  }
+
+  const signed = requireSignatures && (hasHmacKey || (hasEd25519Verifier && seenEd25519Entry));
   return {
     valid: true,
     message: signed ? `manifest ok, signed (${nonEmpty.length} entries)` : `manifest ok (${nonEmpty.length} entries)`,
@@ -692,10 +811,24 @@ export function verifyChain(nonEmpty, { key, requireSignatures, anchorOnFirst })
     firstAnchor,
     sawSignedEntry: seenSignedEntry,
     firstUnsigned,
+    sawEd25519Entry: seenEd25519Entry,
+    firstNonEd25519,
   };
 
   function fail(count, breakInfo, message) {
-    return { valid: false, message, count, signed: false, break: breakInfo, lastRawLine: null, firstAnchor: undefined, sawSignedEntry: false, firstUnsigned: null };
+    return {
+      valid: false,
+      message,
+      count,
+      signed: false,
+      break: breakInfo,
+      lastRawLine: null,
+      firstAnchor: undefined,
+      sawSignedEntry: false,
+      firstUnsigned: null,
+      sawEd25519Entry: false,
+      firstNonEd25519: null,
+    };
   }
 }
 
@@ -709,7 +842,26 @@ function seqMap(nonEmpty) {
   return m;
 }
 
-export function verifyManifestForest(dir = '.adlc', { requireSignatures = true, requireEntries = false, key = null } = {}) {
+export function verifyManifestForest(dir = '.adlc', { requireSignatures = true, requireEntries = false, key = null, publicKey = undefined } = {}) {
+  let effectivePublicKey = publicKey;
+  if (effectivePublicKey === undefined) {
+    const adminPub = readAdminPublicKey(dir);
+    if (adminPub.status === 'error') {
+      return {
+        valid: false,
+        message: `${ADMIN_PUB_FILENAME}: ${adminPub.reason}`,
+        count: 0,
+        segments: 0,
+        signed: false,
+        break: { seq: null, lineNo: null, reason: adminPub.reason, segment: ADMIN_PUB_FILENAME },
+      };
+    }
+    effectivePublicKey = adminPub.publicKey;
+  }
+
+  const hasHmacKey = key !== null && !isEd25519PrivateKey(key);
+  const hasEd25519Verifier = effectivePublicKey !== null || isEd25519PrivateKey(key);
+
   const rootRaw = readRawLines(join(dir, 'manifest.jsonl'));
   const { valid: segmentNames, invalid: invalidSegments } = discoverSegments(dir);
 
@@ -749,7 +901,7 @@ export function verifyManifestForest(dir = '.adlc', { requireSignatures = true, 
         break: { seq: null, lineNo: null, reason, segment: 'root' },
       };
     }
-    const result = verifyChain(rootRaw, { key, requireSignatures, anchorOnFirst: false });
+    const result = verifyChain(rootRaw, { key, publicKey: effectivePublicKey, requireSignatures, anchorOnFirst: false });
     if (isUnsignedKeyedRoot(markerCheck.auth, key, requireSignatures, result)) {
       const u = result.firstUnsigned;
       return { valid: false, message: `chain broken at seq ${u.seq} (line ${u.lineNo}): unsigned entry`, count: result.count, segments: 0, signed: false, break: { seq: u.seq, lineNo: u.lineNo, reason: 'unsigned entry', segment: 'root' } };
@@ -757,7 +909,13 @@ export function verifyManifestForest(dir = '.adlc', { requireSignatures = true, 
     return { valid: result.valid, message: result.message, count: result.count, segments: 0, signed: result.signed, break: result.break ? { ...result.break, segment: 'root' } : null };
   }
 
-  const rootResult = verifyChain(rootRaw, { key, requireSignatures, anchorOnFirst: false });
+  const rootResult = verifyChain(rootRaw, {
+    key,
+    publicKey: effectivePublicKey,
+    requireSignatures,
+    anchorOnFirst: false,
+    allowPreEd25519Only: true,
+  });
   if (!rootResult.valid) {
     return { valid: false, message: rootResult.message, count: rootResult.count, segments: segmentNames.length, signed: false, break: { ...rootResult.break, segment: 'root' } };
   }
@@ -768,10 +926,17 @@ export function verifyManifestForest(dir = '.adlc', { requireSignatures = true, 
   const segmentResults = new Map();
   let totalCount = rootResult.count;
   let allSigned = rootResult.count === 0 ? true : rootResult.signed;
+  let forestSawEd25519 = rootResult.sawEd25519Entry;
 
   for (const name of segmentNames) {
     const raw = readRawLines(segmentPath(dir, name));
-    const result = verifyChain(raw, { key, requireSignatures, anchorOnFirst: true });
+    const result = verifyChain(raw, {
+      key,
+      publicKey: effectivePublicKey,
+      requireSignatures,
+      anchorOnFirst: true,
+      allowPreEd25519Only: true,
+    });
     if (!result.valid) {
       return { valid: false, message: `manifest.d/${name}: ${result.message}`, count: totalCount + result.count, segments: segmentNames.length, signed: false, break: { ...result.break, segment: name } };
     }
@@ -780,6 +945,7 @@ export function verifyManifestForest(dir = '.adlc', { requireSignatures = true, 
     segmentResults.set(name, result);
     totalCount += result.count;
     allSigned = allSigned && (result.count === 0 ? true : result.signed);
+    if (result.sawEd25519Entry) forestSawEd25519 = true;
   }
 
   for (const name of segmentNames) {
@@ -795,7 +961,38 @@ export function verifyManifestForest(dir = '.adlc', { requireSignatures = true, 
     return { valid: false, message: `manifest.d/${cycleCheck.segment}: anchor cycle detected`, count: totalCount, segments: segmentNames.length, signed: false, break: { seq: null, lineNo: null, reason: 'anchor cycle', segment: cycleCheck.segment } };
   }
 
-  if (key !== null && !requireSignatures) {
+  if (hasEd25519Verifier) {
+    const edEra = checkForestEd25519Era({
+      segmentNames,
+      anchorBySegment,
+      rootSawEd25519: rootResult.sawEd25519Entry,
+      segmentResults,
+    });
+    if (!edEra.ok) {
+      const u = edEra.firstNonEd25519;
+      const msg = `chain broken at seq ${u.seq} (line ${u.lineNo}): non-ed25519 entry after ed25519 era`;
+      return {
+        valid: false,
+        message: `manifest.d/${edEra.segment}: ${msg}`,
+        count: totalCount,
+        segments: segmentNames.length,
+        signed: false,
+        break: { seq: u.seq, lineNo: u.lineNo, reason: 'downgrade after ed25519 entry', segment: edEra.segment },
+      };
+    }
+    if (requireSignatures && !hasHmacKey && totalCount > 0 && !forestSawEd25519) {
+      return {
+        valid: false,
+        message: 'manifest forest has no valid ed25519 signatures',
+        count: totalCount,
+        segments: segmentNames.length,
+        signed: false,
+        break: { seq: null, lineNo: null, reason: 'no valid ed25519 signatures', segment: 'root' },
+      };
+    }
+  }
+
+  if (hasHmacKey && !requireSignatures) {
     const eraCheck = checkForestSignedEra({
       declaredAuth: markerCheck.auth,
       rootEmpty: rootRaw.length === 0,
@@ -821,7 +1018,7 @@ export function verifyManifestForest(dir = '.adlc', { requireSignatures = true, 
     }
   }
 
-  const signed = allSigned;
+  const signed = hasHmacKey ? allSigned : (hasEd25519Verifier && requireSignatures && forestSawEd25519);
   return {
     valid: true,
     message: signed
@@ -834,10 +1031,10 @@ export function verifyManifestForest(dir = '.adlc', { requireSignatures = true, 
   };
 }
 
-function isChainIntact(lines, key) {
+function isChainIntact(lines, key, publicKey = null) {
   return verifyChain(
     lines.map((line, i) => ({ line, lineNo: i + 1 })),
-    { key, requireSignatures: false, anchorOnFirst: true },
+    { key, publicKey, requireSignatures: false, anchorOnFirst: true },
   ).valid;
 }
 
@@ -845,6 +1042,14 @@ export function resolveOpenSegment(dir = '.adlc', opts = {}) {
   const key = opts?.key ?? null;
   let cwd;
   ({ dir, cwd } = normalizeManifestDirAndCwd(dir, opts));
+  let effectivePublicKey = opts?.publicKey;
+  if (effectivePublicKey === undefined) {
+    const adminPub = readAdminPublicKey(dir);
+    if (adminPub.status === 'error') {
+      throw new Error(`${ADMIN_PUB_FILENAME}: ${adminPub.reason}`);
+    }
+    effectivePublicKey = adminPub.publicKey;
+  }
   const markerDoc = readBoundedJsonNoFollow(markerPath(dir));
   if (markerDoc && markerDoc.auth === 'keyed' && key === null) {
     throw new Error(
@@ -869,8 +1074,8 @@ export function resolveOpenSegment(dir = '.adlc', opts = {}) {
       } catch {
         // handled below
       }
-      const firstAuthenticated = Boolean(first) && first.sigVersion === 2 && entrySigValid(key, first);
-      if (!isChainIntact(lines, key) || !firstAuthenticated) {
+      const firstAuthenticated = Boolean(first) && first.sigVersion === 2 && entrySigValid(key, first, { publicKey: effectivePublicKey });
+      if (!isChainIntact(lines, key, effectivePublicKey) || !firstAuthenticated) {
         throw new Error(
           `segment ${recovered.name} declares this branch but cannot be authenticated with the configured key `
           + '(broken chain, or its branch-bearing first entry lacks a verified v2 signature) — refusing to extend '

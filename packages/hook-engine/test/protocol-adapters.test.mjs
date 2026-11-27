@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   HARNESS_PROTOCOLS,
+  DECISION_LATTICE,
   resolveHarnessProtocol,
   normalizeHookInput,
   formatHookOutput,
@@ -18,9 +19,12 @@ test('HARNESS_PROTOCOLS lists all 7 shipped harnesses and resolveHarnessProtocol
   assert.equal(resolveHarnessProtocol('antigravity'), 'gemini');
   assert.equal(resolveHarnessProtocol('claude'), 'claude-code');
   assert.throws(() => resolveHarnessProtocol('unknown-harness'), /Unsupported harness protocol/);
+  assert.ok(DECISION_LATTICE.deny > DECISION_LATTICE.force_ask);
+  assert.ok(DECISION_LATTICE.force_ask > DECISION_LATTICE.ask);
+  assert.ok(DECISION_LATTICE.ask > DECISION_LATTICE.pass);
 });
 
-test('normalizeHookInput normalizes event names, tool names, inputs, and cwds across harnesses', () => {
+test('normalizeHookInput extracts nested toolCall/tool_call, preinvocation, workspacePaths, and conversationId', () => {
   const cc = normalizeHookInput('claude-code', {
     hook_event_name: 'PreToolUse',
     tool_name: 'Edit',
@@ -33,6 +37,32 @@ test('normalizeHookInput normalizes event names, tool names, inputs, and cwds ac
   assert.deepEqual(cc.toolInput, { file_path: 'a.mjs' });
   assert.equal(cc.cwd, '/repo');
   assert.equal(cc.sessionId, 's1');
+
+  const agyNested = normalizeHookInput('agy', {
+    toolCall: { name: 'write_to_file', args: { TargetFile: 'src/a.js' } },
+    workspacePaths: ['/ws/main', '/ws/extra'],
+    conversationId: 'conv-42',
+  });
+  assert.equal(agyNested.harness, 'gemini');
+  assert.equal(agyNested.event, 'pretool');
+  assert.equal(agyNested.toolName, 'write_to_file');
+  assert.equal(agyNested.toolInput.TargetFile, 'src/a.js');
+  assert.deepEqual(agyNested.workspacePaths, ['/ws/main', '/ws/extra']);
+  assert.equal(agyNested.outerRoot, '/ws/main');
+  assert.equal(agyNested.conversationId, 'conv-42');
+  assert.equal(agyNested.sessionId, 'conv-42');
+
+  const snakeNested = normalizeHookInput('jetski', {
+    event: 'PreInvocation',
+    tool_call: { toolName: 'replace_file_content', parameters: { TargetFile: 'src/b.js' } },
+    workspaceRoots: ['/ws/jetski'],
+    conversation_id: 'js-99',
+  });
+  assert.equal(snakeNested.event, 'session-start');
+  assert.equal(snakeNested.toolName, 'replace_file_content');
+  assert.equal(snakeNested.toolInput.TargetFile, 'src/b.js');
+  assert.equal(snakeNested.outerRoot, '/ws/jetski');
+  assert.equal(snakeNested.conversationId, 'js-99');
 
   const agy = normalizeHookInput('agy', {
     hookEventName: 'BeforeTool',
@@ -49,7 +79,7 @@ test('normalizeHookInput normalizes event names, tool names, inputs, and cwds ac
   assert.equal(normalizeHookInput('cursor', { event: 'sessionStart' }).event, 'session-start');
 });
 
-test('formatHookOutput produces native deny, block, and context payloads for all 7 harnesses', () => {
+test('formatHookOutput produces native payloads and 4-level Gemini lattice across all 7 harnesses', () => {
   const deny = { decision: 'deny', reason: 'frozen rail hit' };
   const block = { decision: 'block', reason: 'missing manifest' };
   const ctx = { additionalContext: 'ADLC active ticket: T-1' };
@@ -70,7 +100,6 @@ test('formatHookOutput produces native deny, block, and context payloads for all
   assert.equal(copilot.exitCode, 0);
   assert.deepEqual(copilot.payload, { reason: 'frozen rail hit' });
 
-  // End-to-end Copilot payload with JSON-stringified toolArgs reaches denial.
   const copilotNorm = normalizeHookInput('copilot', {
     toolName: 'edit_file',
     toolArgs: JSON.stringify({ file_path: 'test/auth.test.mjs' }),
@@ -83,7 +112,6 @@ test('formatHookOutput produces native deny, block, and context payloads for all
   assert.equal(copilotWire.exitCode, 0);
   assert.match(copilotWire.payload.reason, /test\/auth\.test\.mjs/);
 
-  // Unparseable or oversized (>256 KiB) Copilot toolArgs fails closed.
   const badCopilot = normalizeHookInput('copilot', { toolName: 'edit_file', toolArgs: '{bad-json' });
   assert.equal(badCopilot.toolInput.__unparseable, true);
   assert.equal(evaluatePreTool({ ...badCopilot, rails: ['test/auth.test.mjs'] }).decision, 'deny');
@@ -98,28 +126,38 @@ test('formatHookOutput produces native deny, block, and context payloads for all
   assert.equal(formatHookOutput('cursor', 'stop', block).payload.followup_message, block.reason);
   assert.equal(formatHookOutput('cursor', 'session-start', ctx).payload.additional_context, ctx.additionalContext);
 
-  const gemini = formatHookOutput('gemini', 'pretool', deny);
-  assert.equal(gemini.exitCode, 0);
-  assert.equal(gemini.payload.decision, 'deny');
-  assert.equal(gemini.payload.allow_tool, false);
-  assert.equal(gemini.payload.deny_reason, deny.reason);
+  // Gemini 4-level decision lattice: deny > force_ask > ask > pass
+  const geminiDeny = formatHookOutput('gemini', 'pretool', deny);
+  assert.equal(geminiDeny.exitCode, 0);
+  assert.deepEqual(geminiDeny.payload, { decision: 'deny', reason: deny.reason, allow_tool: false, deny_reason: deny.reason });
+
+  const geminiForceAsk = formatHookOutput('gemini', 'pretool', { decision: 'force_ask', reason: 'ambiguous shell' });
+  assert.equal(geminiForceAsk.exitCode, 0);
+  assert.deepEqual(geminiForceAsk.payload, { decision: 'force_ask', reason: 'ambiguous shell', allow_tool: false });
+
+  const geminiAsk = formatHookOutput('gemini', 'pretool', { decision: 'ask', reason: 'confirm action' });
+  assert.equal(geminiAsk.exitCode, 0);
+  assert.deepEqual(geminiAsk.payload, { decision: 'ask', reason: 'confirm action' });
+
+  const geminiPass = formatHookOutput('gemini', 'pretool', { decision: 'pass' });
+  assert.equal(geminiPass.exitCode, 0);
+  assert.deepEqual(geminiPass.payload, { decision: 'pass', allow_tool: true });
+
   const geminiStop = formatHookOutput('gemini', 'stop', block);
   assert.equal(geminiStop.exitCode, 0);
   assert.deepEqual(geminiStop.payload, { decision: 'continue', reason: block.reason });
+  assert.deepEqual(formatHookOutput('gemini', 'stop', { decision: 'continue', reason: 'unverified' }).payload, { decision: 'continue', reason: 'unverified' });
   assert.equal(formatHookOutput('gemini', 'session-start', ctx).payload.hookSpecificOutput.additionalContext, ctx.additionalContext);
+  assert.deepEqual(formatHookOutput('gemini', 'posttool', {}).payload, {});
 
-  const opencode = formatHookOutput('opencode', 'pretool', deny);
-  assert.equal(opencode.payload.blocked, true);
+  assert.equal(formatHookOutput('opencode', 'pretool', deny).payload.blocked, true);
+  assert.equal(formatHookOutput('pi', 'pretool', deny).payload.block, true);
 
-  const pi = formatHookOutput('pi', 'pretool', deny);
-  assert.equal(pi.payload.block, true);
-
-  // Allow with no context produces native allow for gemini and empty stdout for other harnesses.
   for (const h of HARNESS_PROTOCOLS) {
     const res = formatHookOutput(h, 'pretool', { decision: 'allow' });
     assert.equal(res.exitCode, 0);
     if (h === 'gemini') {
-      assert.deepEqual(res.payload, { decision: 'allow', allow_tool: true });
+      assert.deepEqual(res.payload, { decision: 'pass', allow_tool: true });
       assert.deepEqual(formatHookOutput('gemini', 'stop', { decision: 'allow' }).payload, { decision: 'stop' });
     } else {
       assert.equal(res.stdout, '');

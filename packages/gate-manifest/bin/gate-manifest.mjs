@@ -15,8 +15,8 @@ import { adopt } from '../lib/adopt.mjs';
 import { migrate } from '../lib/migrate.mjs';
 import { migrateBranch } from '../lib/migrate-branch.mjs';
 import { ADLC_DIR } from '@adlc/core';
-import { getKey } from '../lib/sign.mjs';
-import { resolveCeremonyKey, writeKeyHandoffFile, computeKeyFingerprint } from '../lib/key-ceremony.mjs';
+import { getKey, generateEd25519KeyPair } from '../lib/sign.mjs';
+import { resolveCeremonyKey, writeKeyHandoffFile, writePublicKeyFile, computeKeyFingerprint } from '../lib/key-ceremony.mjs';
 
 const USAGE =
   'usage: gate-manifest <verb> [options]\n' +
@@ -25,7 +25,7 @@ const USAGE =
   '       show   [--ticket id] [--json]\n' +
   '       attest [--ticket id] [--allow-legacy-unsigned]\n' +
   '       repair-chain --reason "..." [--write] [--attest-unsigned] [--json]\n' +
-  '       generate-key --output <path> [--allow-key-import] [--json]\n' +
+  '       generate-key --output <path> [--allow-key-import] [--json] [--ed25519] [--public-output <path>]\n' +
   '       enable [--write] [--json] [--allow-keyless]\n' +
   '       migrate --reason "..." [--write] [--attest-unsigned] [--json]\n' +
   '       migrate-branch [--from <ref>] [--write] [--attest-unsigned] [--json]\n' +
@@ -47,6 +47,8 @@ const { values: flags, positionals } = parseArgs({
     'allow-legacy-unsigned': { type: 'boolean', default: false },
     'require-entries': { type: 'boolean', default: false },
     output: { type: 'string' },
+    ed25519: { type: 'boolean', default: false },
+    'public-output': { type: 'string' },
     'allow-key-import': { type: 'boolean', default: false },
     'allow-keyless': { type: 'boolean', default: false },
     from: { type: 'string' },
@@ -208,7 +210,44 @@ if (verb === 'repair-chain') {
 // ── generate-key ─────────────────────────────────────────────────────────────
 if (verb === 'generate-key') {
   if (!flags.output) {
-    opError('usage: gate-manifest generate-key --output <path> [--allow-key-import] [--json]');
+    opError('usage: gate-manifest generate-key --output <path> [--allow-key-import] [--json] [--ed25519] [--public-output <path>]');
+  }
+
+  if (flags.ed25519) {
+    if (flags['allow-key-import']) {
+      opError('generate-key: --ed25519 cannot be combined with --allow-key-import');
+    }
+    const pair = generateEd25519KeyPair();
+    try {
+      writeKeyHandoffFile(flags.output, pair.privateKey);
+      if (flags['public-output']) {
+        writePublicKeyFile(flags['public-output'], pair.publicKey);
+      }
+    } catch (err) {
+      opError(err.message);
+    }
+
+    const publicOutput = flags['public-output'] ?? null;
+    if (flags.json) {
+      printJson({
+        algorithm: 'ed25519',
+        publicKey: pair.publicKey,
+        keyFingerprint: pair.keyFingerprint,
+        output: flags.output,
+        publicOutput,
+      });
+    } else {
+      console.log(`Ed25519 private key written to ${flags.output} (mode 0600) — store it in your secret manager, then delete this file.`);
+      if (publicOutput) {
+        console.log(`Ed25519 public key written to ${publicOutput}`);
+      }
+      console.log(`keyFingerprint: ${pair.keyFingerprint}`);
+    }
+    pass();
+  }
+
+  if (flags['public-output']) {
+    opError('generate-key: --public-output is only valid with --ed25519');
   }
 
   // The import exception NEVER accepts the key as a CLI argument — argv is visible via

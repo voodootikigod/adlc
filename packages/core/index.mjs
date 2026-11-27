@@ -1,5 +1,6 @@
 // @adlc/core — single import surface for all ADLC tools.
 export * from './lib/llm.mjs';
+export { inferModelProviderFamily } from './lib/model-family.mjs';
 export * from './lib/git.mjs';
 export * from './lib/cli.mjs';
 export * from './lib/ledger.mjs';

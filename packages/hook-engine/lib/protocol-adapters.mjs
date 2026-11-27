@@ -12,6 +12,15 @@ export const HARNESS_PROTOCOLS = Object.freeze([
   'pi',
 ]);
 
+export const DECISION_LATTICE = Object.freeze({
+  pass: 0,
+  allow: 0,
+  ask: 1,
+  force_ask: 2,
+  deny: 3,
+  block: 3,
+});
+
 const MAX_TOOL_ARGS_BYTES = 256 * 1024;
 
 const HARNESS_ALIASES = new Map([
@@ -28,11 +37,6 @@ const HARNESS_ALIASES = new Map([
   ['pi', 'pi'],
 ]);
 
-/**
- * Canonicalize a harness identifier (supporting aliases like `agy`/`jetski` -> `gemini`).
- * @param {string} harness
- * @returns {string}
- */
 export function resolveHarnessProtocol(harness) {
   const key = String(harness ?? '').trim().toLowerCase();
   const resolved = HARNESS_ALIASES.get(key);
@@ -53,10 +57,14 @@ function canonicalEventName(rawEvent) {
   if (e === 'stop' || e === 'afteragent' || e === 'session.idle' || e === 'agent_end') {
     return 'stop';
   }
-  if (e === 'sessionstart' || e === 'session.created' || e === 'session_start') {
+  if (e === 'sessionstart' || e === 'session.created' || e === 'session_start' || e === 'preinvocation') {
     return 'session-start';
   }
   return e || 'pretool';
+}
+
+function isPlainObj(v) {
+  return Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 }
 
 function parseToolArgsString(raw) {
@@ -65,91 +73,113 @@ function parseToolArgsString(raw) {
   }
   try {
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed
-      : { __unparseable: true };
+    return isPlainObj(parsed) ? parsed : { __unparseable: true };
   } catch {
     return { __unparseable: true };
   }
 }
 
-/**
- * Normalize a harness-native hook payload into a canonical hook-engine input.
- * Supports Copilot's JSON-stringified `toolArgs` field as well as structured
- * `tool_input`, `toolInput`, `args`, and `input` objects.
- *
- * @param {string} harness
- * @param {object} [rawPayload]
- * @returns {{ harness: string, event: string, toolName: string, toolInput: object, toolResult: unknown, cwd: string | null, outerRoot: string | null, sessionId: string | null }}
- */
+function firstNonEmptyString(values) {
+  for (const v of values) {
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return null;
+}
+
+function extractWorkspacePaths(p) {
+  const raw = [p.workspacePaths, p.workspace_paths, p.workspaceRoots, p.workspace_roots];
+  const out = [];
+  for (const entry of raw) {
+    if (Array.isArray(entry)) {
+      for (const item of entry) {
+        if (typeof item === 'string' && item.trim() && !out.includes(item.trim())) {
+          out.push(item.trim());
+        }
+      }
+    } else if (typeof entry === 'string' && entry.trim() && !out.includes(entry.trim())) {
+      out.push(entry.trim());
+    }
+  }
+  return out;
+}
+
 export function normalizeHookInput(harness, rawPayload = {}) {
   const proto = resolveHarnessProtocol(harness);
-  const p = rawPayload && typeof rawPayload === 'object' ? rawPayload : {};
+  const p = isPlainObj(rawPayload) ? rawPayload : {};
+  const tc = isPlainObj(p.toolCall) ? p.toolCall : (isPlainObj(p.tool_call) ? p.tool_call : null);
 
   const event = canonicalEventName(
     p.hook_event_name ?? p.hookEventName ?? p.event ?? p.type ?? 'pretool'
   );
   const toolName = String(
-    p.tool_name ?? p.toolName ?? p.tool ?? p.name ?? ''
+    p.tool_name ??
+    p.toolName ??
+    (typeof p.tool === 'string' ? p.tool : null) ??
+    p.name ??
+    tc?.name ??
+    tc?.toolName ??
+    tc?.tool_name ??
+    ''
   );
 
-  let toolInput =
-    (p.tool_input && typeof p.tool_input === 'object' && !Array.isArray(p.tool_input) ? p.tool_input : null) ??
-    (p.toolInput && typeof p.toolInput === 'object' && !Array.isArray(p.toolInput) ? p.toolInput : null) ??
-    (p.toolArgs && typeof p.toolArgs === 'object' && !Array.isArray(p.toolArgs) ? p.toolArgs : null) ??
-    (p.args && typeof p.args === 'object' && !Array.isArray(p.args) ? p.args : null) ??
-    (p.input && typeof p.input === 'object' && !Array.isArray(p.input) ? p.input : null);
+  const objCandidates = [
+    p.tool_input,
+    p.toolInput,
+    p.toolArgs,
+    p.args,
+    p.input,
+    tc?.args,
+    tc?.arguments,
+    tc?.params,
+    tc?.parameters,
+    tc?.input,
+    tc?.tool_input,
+    tc?.toolInput,
+  ];
+  let toolInput = objCandidates.find(isPlainObj) ?? null;
 
-  if (!toolInput && typeof p.toolArgs === 'string') {
-    toolInput = parseToolArgsString(p.toolArgs);
-  }
   if (!toolInput) {
-    toolInput = {};
+    const strArgs = typeof p.toolArgs === 'string'
+      ? p.toolArgs
+      : (typeof tc?.arguments === 'string' ? tc.arguments : null);
+    if (strArgs !== null) toolInput = parseToolArgsString(strArgs);
   }
+  if (!toolInput) toolInput = {};
 
   const toolResult = p.tool_response ?? p.toolResult ?? p.result ?? p.output ?? null;
-  const cwd =
-    (typeof p.cwd === 'string' && p.cwd.trim() ? p.cwd.trim() : null) ??
-    (typeof p.directory === 'string' && p.directory.trim() ? p.directory.trim() : null) ??
-    (typeof p.workingDirectory === 'string' && p.workingDirectory.trim() ? p.workingDirectory.trim() : null) ??
-    null;
-  const outerRoot =
-    (Array.isArray(p.workspace_roots) && typeof p.workspace_roots[0] === 'string' ? p.workspace_roots[0] : null) ??
-    (typeof p.project_dir === 'string' ? p.project_dir : null) ??
-    (typeof p.projectRoot === 'string' ? p.projectRoot : null) ??
-    null;
-  const sessionId =
-    (typeof p.session_id === 'string' ? p.session_id : null) ??
-    (typeof p.sessionId === 'string' ? p.sessionId : null) ??
-    null;
-  const transcriptPath =
-    (typeof p.transcript_path === 'string' && p.transcript_path.trim() ? p.transcript_path.trim() : null) ??
-    (typeof p.transcriptPath === 'string' && p.transcriptPath.trim() ? p.transcriptPath.trim() : null) ??
-    null;
+  const cwd = firstNonEmptyString([p.cwd, p.directory, p.workingDirectory, p.working_directory]);
+  const workspacePaths = extractWorkspacePaths(p);
+  const outerRoot = firstNonEmptyString([workspacePaths[0], p.project_dir, p.projectRoot]);
+  const conversationId = firstNonEmptyString([
+    p.conversationId,
+    p.conversation_id,
+    p.conversationID,
+    p.params?.conversationId,
+    p.params?.conversation_id,
+  ]);
+  const sessionId = firstNonEmptyString([p.session_id, p.sessionId, p.sessionID, conversationId]);
+  const transcriptPath = firstNonEmptyString([p.transcript_path, p.transcriptPath]);
 
-  return { harness: proto, event, toolName, toolInput, toolResult, cwd, outerRoot, sessionId, transcriptPath };
+  return {
+    harness: proto,
+    event,
+    toolName,
+    toolInput,
+    toolResult,
+    cwd,
+    outerRoot,
+    workspacePaths,
+    conversationId,
+    sessionId,
+    transcriptPath,
+  };
 }
 
-/**
- * Format a canonical hook-engine evaluation result into the native wire output
- * and exit code expected by `harness`:
- * - `claude-code`: `hookSpecificOutput.permissionDecision='deny'` (exit 0), Stop `{ decision:'block', reason }`
- * - `codex`: `{ decision:'block', reason }` (exit 2)
- * - `copilot`: top-level `{ reason }` (exit 0)
- * - `cursor`: `{ permission:'deny', user_message, agent_message }` (snake_case, exit 0), Stop `{ followup_message }`
- * - `gemini` (`agy`/`jetski`): PreTool `{ decision:'deny', reason, allow_tool:false, deny_reason }` (exit 0), Stop `{ decision:'continue', reason }`
- * - `opencode`: `{ blocked:true, reason }`
- * - `pi`: `{ block:true, reason }`
- *
- * @param {string} harness
- * @param {'pretool' | 'posttool' | 'stop' | 'session-start'} event
- * @param {object} result
- * @returns {{ exitCode: number, payload: object, stdout: string }}
- */
 export function formatHookOutput(harness, event, result = {}) {
   const proto = resolveHarnessProtocol(harness);
   const ev = canonicalEventName(event);
-  const denied = result.decision === 'deny' || result.decision === 'block';
+  const dec = String(result.decision ?? '').toLowerCase();
+  const denied = dec === 'deny' || dec === 'block';
   const reason = result.reason ?? '';
   const context = result.additionalContext ?? result.advisory ?? '';
 
@@ -167,17 +197,10 @@ export function formatHookOutput(harness, event, result = {}) {
       };
     } else if (ev === 'stop' && denied) {
       payload = { decision: 'block', reason };
-    } else if (ev === 'session-start' && context) {
+    } else if ((ev === 'session-start' || ev === 'posttool') && context) {
       payload = {
         hookSpecificOutput: {
-          hookEventName: 'SessionStart',
-          additionalContext: context,
-        },
-      };
-    } else if (ev === 'posttool' && context) {
-      payload = {
-        hookSpecificOutput: {
-          hookEventName: 'PostToolUse',
+          hookEventName: ev === 'session-start' ? 'SessionStart' : 'PostToolUse',
           additionalContext: context,
         },
       };
@@ -212,11 +235,17 @@ export function formatHookOutput(harness, event, result = {}) {
     }
   } else if (proto === 'gemini') {
     if (ev === 'pretool') {
-      payload = denied
-        ? { decision: 'deny', reason, allow_tool: false, deny_reason: reason }
-        : { decision: 'allow', allow_tool: true };
+      if (denied) {
+        payload = { decision: 'deny', reason, allow_tool: false, deny_reason: reason };
+      } else if (dec === 'force_ask') {
+        payload = { decision: 'force_ask', reason, allow_tool: false };
+      } else if (dec === 'ask') {
+        payload = { decision: 'ask', reason };
+      } else {
+        payload = { decision: 'pass', allow_tool: true };
+      }
     } else if (ev === 'stop') {
-      payload = denied
+      payload = (denied || dec === 'continue')
         ? { decision: 'continue', reason }
         : { decision: 'stop' };
     } else if (context) {

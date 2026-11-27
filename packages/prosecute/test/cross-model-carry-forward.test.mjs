@@ -91,7 +91,7 @@ const BASE4 = '4'.repeat(40);
 const BASE5 = '5'.repeat(40);
 
 const seed = (dir, revision, over = {}) => recordCrossModelReview({
-  ticket: 'T1', revision, provider: 'agy', authorProvider: 'anthropic', verdict: 'approve', dir, ...over,
+  ticket: 'T1', revision, provider: 'agy:Gemini 2.5 Pro', authorProvider: 'anthropic', verdict: 'approve', dir, ...over,
 });
 const carry = (dir, fromRevision, revision) => carryForwardCrossModelReview({
   ticket: 'T1', fromRevision, revision, dir,
@@ -101,7 +101,7 @@ const lastEntry = (dir) => readEntries('manifest', dir).entries.at(-1);
 // Hand-build a segment file directly, same pattern as cross-model.test.mjs's
 // writeCrossModelSegment (the segment WRITER is T-MANIFEST-FOREST slice 3, not
 // yet built). A needs-attention entry does not need a signature (spec §6).
-function writeRevocationSegment(dir, name, { ticket, revision }) {
+function writeRevocationSegment(dir, name, { ticket, revision, provider = 'openai' }) {
   const lines = readFileSync(ledgerPath('manifest', dir), 'utf8').split('\n').filter((l) => l.trim());
   const last = lines.at(-1);
   const anchor = { segment: 'root', seq: JSON.parse(last).seq, lineHash: sha256(last) };
@@ -110,7 +110,7 @@ function writeRevocationSegment(dir, name, { ticket, revision }) {
     gate: 'cross-model-review',
     ts: '2026-01-01T00:00:00.000Z',
     ticket,
-    data: { provider: 'openai', authorProvider: 'anthropic', verdict: 'needs-attention', revision },
+    data: { provider, authorProvider: 'anthropic', verdict: 'needs-attention', revision },
     files: {},
     prev: null,
     anchor,
@@ -132,7 +132,7 @@ describe('carryForwardCrossModelReview (#365 B)', () => {
       assert.equal(e.data.carriedFrom, rev(BASE1), 'the ledger must show which verdict was carried');
       assert.equal(e.data.carryDepth, 1, 'depth must be visible so an Nth-hand verdict is auditable');
       // The verdict is the SAME one — provider distinctness is inherited, not re-asserted.
-      assert.equal(e.data.provider, 'agy');
+      assert.equal(e.data.provider, 'agy:Gemini 2.5 Pro');
       assert.equal(e.data.authorProvider, 'anthropic');
     } finally { clean(dir); }
   });
@@ -290,7 +290,7 @@ describe('carryForwardCrossModelReview (#365 B)', () => {
     const dir = ledger();
     try {
       recordCrossModelReview({
-        ticket: 'T1', revision: rev(BASE1), provider: 'agy', authorProvider: 'anthropic',
+        ticket: 'T1', revision: rev(BASE1), provider: 'agy:Gemini 2.5 Pro', authorProvider: 'anthropic',
         verdict: 'needs-attention', dir,
       });
       assert.throws(() => carry(dir, rev(BASE1), rev(BASE2)), /approve/i);
@@ -320,6 +320,19 @@ describe('carryForwardCrossModelReview (#365 B)', () => {
     } finally { clean(dir); }
   });
 
+  it('refuses to carry forward fromRevision if a historical bare agy revocation exists in a SEGMENT', () => {
+    const dir = ledger();
+    try {
+      seed(dir, rev(BASE1));
+      writeRevocationSegment(dir, 'feat-01ARZ3NDEKTSV4RRFFQ69G5FAW.jsonl', { ticket: 'T1', revision: rev(BASE1), provider: 'agy' });
+      assert.throws(
+        () => carry(dir, rev(BASE1), rev(BASE2)),
+        /revoked/i,
+        'a historical bare agy revocation must still block carry-forward'
+      );
+    } finally { clean(dir); }
+  });
+
   // Adversarial-review finding (T-MANIFEST-FOREST slice 3): record() now routes new
   // cross-model attestations into a segment once the repo is cutover, so the
   // "latest entry" lookup this depends on must be forest-aware too — a root-only
@@ -335,7 +348,7 @@ describe('carryForwardCrossModelReview (#365 B)', () => {
       // A fresh, independent review lands in the newly-opened segment — NOT a
       // carry, a real distinct-provider approve, at a different revision.
       recordCrossModelReview({
-        ticket: 'T1', revision: rev(BASE2), provider: 'agy', authorProvider: 'anthropic', verdict: 'approve', dir,
+        ticket: 'T1', revision: rev(BASE2), provider: 'agy:Gemini 2.5 Pro', authorProvider: 'anthropic', verdict: 'approve', dir,
       });
 
       assert.throws(
@@ -405,7 +418,7 @@ describe('carryForwardCrossModelReview (#365 B)', () => {
       seed(dir, rev(BASE1)); // pre-cutover approve for T1 @ BASE1, lands in root
       activateSegments(dir);
       recordCrossModelReview({
-        ticket: 'T1', revision: rev(BASE2), provider: 'agy', authorProvider: 'anthropic', verdict: 'approve', dir,
+        ticket: 'T1', revision: rev(BASE2), provider: 'agy:Gemini 2.5 Pro', authorProvider: 'anthropic', verdict: 'approve', dir,
       }); // THIS checkout's own segment
 
       // A hand-built segment simulating a DIFFERENT branch/lineage's evidence —

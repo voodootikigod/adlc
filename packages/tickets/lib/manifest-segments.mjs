@@ -4,6 +4,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  ADMIN_PUB_FILENAME,
   segmentPath,
   lineagePath,
   discoverSegments,
@@ -14,6 +15,7 @@ import {
   deriveSlug,
   currentBranch,
   readLineageToken,
+  readAdminPublicKey,
   ulidOf,
   peekOpenSegment,
   recoverOpenSegment,
@@ -24,6 +26,7 @@ import {
 } from './manifest-primitives.mjs';
 
 export {
+  ADMIN_PUB_FILENAME,
   segmentPath,
   lineagePath,
   discoverSegments,
@@ -34,6 +37,7 @@ export {
   deriveSlug,
   currentBranch,
   readLineageToken,
+  readAdminPublicKey,
   ulidOf,
   peekOpenSegment,
   recoverOpenSegment,
@@ -54,19 +58,19 @@ function parseLines(lines) {
   }).filter(Boolean);
 }
 
-function chainIsIntact(lines, key = null, { anchorOnFirst = false } = {}) {
+function chainIsIntact(lines, key = null, { anchorOnFirst = false, publicKey = null } = {}) {
   return verifyChain(
-    lines.map((line, lineNo) => ({ line, lineNo })),
-    { key, requireSignatures: false, anchorOnFirst },
+    lines.map((line, lineNo) => ({ line, lineNo: lineNo + 1 })),
+    { key, publicKey, requireSignatures: false, anchorOnFirst },
   ).valid;
 }
 
-function signedEntriesOnly(lines, key) {
-  return lines.filter((line) => entrySigValid(key, JSON.parse(line)));
+function signedEntriesOnly(lines, key, publicKey = null) {
+  return lines.filter((line) => entrySigValid(key, JSON.parse(line), { publicKey }));
 }
 
-export function forestChainsIntact(dir, { key = null } = {}) {
-  return verifyManifestForest(dir, { key, requireSignatures: false }).valid;
+export function forestChainsIntact(dir, { key = null, publicKey = undefined } = {}) {
+  return verifyManifestForest(dir, { key, publicKey, requireSignatures: false }).valid;
 }
 
 export function readForestEntries(dir) {
@@ -85,8 +89,17 @@ export function readForestEntries(dir) {
  * when it cannot tell: broken chain, non-empty chain with no signed entry, empty
  * own segment, keyless/ambiguous recovery candidate, detached HEAD with segments.
  */
-export function readOwnChains(dir, { cwd, allowRecovery = false, key = null } = {}) {
+export function readOwnChains(dir, { cwd, allowRecovery = false, key = null, publicKey = undefined } = {}) {
   ({ dir, cwd } = normalizeManifestDirAndCwd(dir, { cwd }));
+  let effectivePublicKey = publicKey;
+  if (effectivePublicKey === undefined) {
+    const adminPub = readAdminPublicKey(dir);
+    if (adminPub.status === 'error') {
+      throw new Error(`${ADMIN_PUB_FILENAME}: ${adminPub.reason}`);
+    }
+    effectivePublicKey = adminPub.publicKey;
+  }
+  const hasVerifier = key !== null || effectivePublicKey !== null;
   const rootRaw = readRawLines(join(dir, 'manifest.jsonl'));
   // Root and a token-matched (peeked) segment are not identity-ambiguous the
   // way a RECOVERED segment is — root is canonically root, and the local
@@ -109,11 +122,11 @@ export function readOwnChains(dir, { cwd, allowRecovery = false, key = null } = 
   // entry") become "so nothing here needs signing, ever, even once a key
   // exists."
   let rootLines = rootRaw;
-  if (key !== null) {
-    if (!chainIsIntact(rootRaw, key)) {
+  if (hasVerifier) {
+    if (!chainIsIntact(rootRaw, key, { publicKey: effectivePublicKey })) {
       throw new Error('root manifest failed chain or signature verification — refusing to trust it');
     }
-    rootLines = signedEntriesOnly(rootRaw, key);
+    rootLines = signedEntriesOnly(rootRaw, key, effectivePublicKey);
     // Empty is not "unsigned" — a rootless segmented repo genuinely has
     // nothing in root, which is not a forgery risk (nothing to distrust);
     // only a NON-EMPTY chain with zero validly-signed entries is the concern.
@@ -138,11 +151,11 @@ export function readOwnChains(dir, { cwd, allowRecovery = false, key = null } = 
       throw new Error(`segment ${peeked.name} is empty — a real segment always has a first entry, refusing to trust it`);
     }
     let peekedLines = peekedRaw;
-    if (key !== null) {
-      if (!chainIsIntact(peekedRaw, key, { anchorOnFirst: true })) {
+    if (hasVerifier) {
+      if (!chainIsIntact(peekedRaw, key, { anchorOnFirst: true, publicKey: effectivePublicKey })) {
         throw new Error(`segment ${peeked.name} failed chain or signature verification — refusing to trust it`);
       }
-      peekedLines = signedEntriesOnly(peekedRaw, key);
+      peekedLines = signedEntriesOnly(peekedRaw, key, effectivePublicKey);
       // peekedRaw is never empty here — the unconditional check above already
       // refused an empty segment before this point is reached.
       if (peekedLines.length === 0) {
@@ -176,7 +189,7 @@ export function readOwnChains(dir, { cwd, allowRecovery = false, key = null } = 
     }
     return [root];
   }
-  if (key === null) {
+  if (!hasVerifier) {
     // A known branch, but nothing can be signature-verified. Check
     // EXISTENCE only via recoverOpenSegment — never trust its content for
     // this purpose, only whether a plausible candidate exists at all — the
@@ -224,10 +237,10 @@ export function readOwnChains(dir, { cwd, allowRecovery = false, key = null } = 
   // why a lone later signature must not launder an earlier unsigned forged
   // entry into trust).
   const rawLines = readRawLines(segmentPath(dir, recovered.name));
-  if (!chainIsIntact(rawLines, key, { anchorOnFirst: true })) {
+  if (!chainIsIntact(rawLines, key, { anchorOnFirst: true, publicKey: effectivePublicKey })) {
     throw new Error(`recovered segment ${recovered.name} failed chain or signature verification — refusing to trust it`);
   }
-  const signedRecovered = signedEntriesOnly(rawLines, key);
+  const signedRecovered = signedEntriesOnly(rawLines, key, effectivePublicKey);
   if (signedRecovered.length === 0) {
     throw new Error(`recovered segment ${recovered.name} failed chain or signature verification — refusing to trust it`);
   }

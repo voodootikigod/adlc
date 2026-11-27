@@ -21,6 +21,7 @@ import {
   claudeCliSend,
   codexCliSend,
 } from './cli-providers.mjs';
+export { inferModelProviderFamily } from './model-family.mjs';
 
 // agy's timeout marker is its ENTIRE output on failure. Matching it as a
 // bare substring would false-trip whenever a model quotes the phrase in a

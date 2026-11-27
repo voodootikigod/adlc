@@ -25,6 +25,10 @@
 // Environment resolution (getKey / loadManifestKeyFromEnvLocal) happens ONLY in bins,
 // once, at the top; the resolved value is threaded down through this contract.
 
+import { PRIVATE_KEY_ENV } from './manifest-crypto.mjs';
+
+export { PRIVATE_KEY_ENV };
+
 /**
  * Validate a manifest-key parameter. Returns the value for the two legal forms,
  * throws a TypeError for everything else.
@@ -45,13 +49,20 @@ export function validateKeyParam(key) {
 
 /**
  * Resolve the manifest key from an environment map — the BIN-side counterpart of
- * validateKeyParam. Returns the key when set non-empty, else null. This is the only
- * sanctioned env read in this package; libraries receive the resolved value.
+ * validateKeyParam. ADLC_MANIFEST_PRIVATE_KEY takes precedence by presence: an
+ * explicitly-empty ADLC_MANIFEST_PRIVATE_KEY='' fails closed (returns null) and
+ * never falls back to ADLC_MANIFEST_KEY. Otherwise falls back to ADLC_MANIFEST_KEY.
+ * This is the only sanctioned env read in this package; libraries receive the
+ * resolved value.
  *
  * @param {NodeJS.ProcessEnv} [env]
  * @returns {string|null}
  */
 export function resolveKeyFromEnv(env = process.env) {
+  if (Object.hasOwn(env, PRIVATE_KEY_ENV)) {
+    const priv = env[PRIVATE_KEY_ENV];
+    return typeof priv === 'string' && priv.length > 0 ? priv : null;
+  }
   const k = env.ADLC_MANIFEST_KEY;
   return typeof k === 'string' && k.length > 0 ? k : null;
 }

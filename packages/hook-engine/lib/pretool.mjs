@@ -4,6 +4,7 @@
 // ticket rail resolution across all 7 ADLC harnesses.
 
 import { isAbsolute, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   activeTickets,
   classifyShellCommand,
@@ -15,28 +16,17 @@ import {
   preferInnermostCheckout,
   resolveRailPath,
 } from '@adlc/core';
-import { detectTicketStore, resolveActiveTicketAgainst } from '@adlc/tickets';
+import {
+  detectTicketStore,
+  resolveActiveTicketAgainst,
+  resolveActiveTicketId as resolveCanonicalActiveTicketId,
+} from '@adlc/tickets';
 
 const READ_ONLY_TOOL_NAMES = new Set([
-  'read',
-  'read_file',
-  'view_file',
-  'view_file_outline',
-  'view_code_item',
-  'glob',
-  'grep',
-  'grep_search',
-  'find_by_name',
-  'list_dir',
-  'ls',
-  'search_web',
-  'read_url_content',
-  'web_search',
-  'web_fetch',
-  'todo_read',
-  'ask_question',
-  'list_resources',
-  'read_resource',
+  'read', 'read_file', 'view_file', 'view_file_outline', 'view_code_item',
+  'glob', 'grep', 'grep_search', 'find_by_name', 'list_dir', 'ls',
+  'search_web', 'read_url_content', 'web_search', 'web_fetch',
+  'todo_read', 'ask_question', 'list_resources', 'read_resource',
 ]);
 
 const NON_FS_UI_TOOL_NAMES = new Set([
@@ -48,62 +38,58 @@ const NON_FS_UI_TOOL_NAMES = new Set([
 ]);
 
 const SHELL_TOOL_NAMES = new Set([
-  'bash',
-  'shell',
-  'run_command',
-  'execute_command',
-  'terminal',
-  'powershell',
-  'exec',
-  'command',
+  'bash', 'shell', 'run_command', 'execute_command', 'terminal',
+  'powershell', 'exec', 'command',
 ]);
 
-const PATCH_TOOL_NAMES = new Set([
-  'apply_patch',
-  'patch',
-]);
+const PATCH_TOOL_NAMES = new Set(['apply_patch', 'patch']);
 
 const FILE_MUTATION_TOOL_NAMES = new Set([
-  'write',
-  'edit',
-  'multiedit',
-  'notebookedit',
-  'write_file',
-  'edit_file',
-  'modify_file',
-  'write_to_file',
-  'replace_file_content',
-  'multi_replace_file_content',
-  'create_file',
-  'delete_file',
-  'remove_file',
-  'rename_file',
-  'move_file',
-  'unlink',
+  'write', 'edit', 'multiedit', 'notebookedit', 'write_file', 'edit_file',
+  'modify_file', 'write_to_file', 'replace_file_content',
+  'multi_replace_file_content', 'create_file', 'delete_file', 'remove_file',
+  'rename_file', 'move_file', 'unlink',
 ]);
 
 const DELETE_OR_MOVE_TOOL_NAMES = new Set([
-  'delete_file',
-  'remove_file',
-  'rename_file',
-  'move_file',
-  'unlink',
+  'delete_file', 'remove_file', 'rename_file', 'move_file', 'unlink',
 ]);
 
 const DIR_DELETE_CMD_RE = /(?:^|[\s;&|()])(?:(?:command|env|sudo|busybox)\s+)*(?:[A-Za-z0-9_./-]+\/)?(?:(?:rm|rmdir|mv|unlink)\b|git\s+(?:rm|clean)\b|find\b[^\n;|&]*\s-delete\b)/;
+
+const FILE_PATH_KEYS = [
+  'file_path', 'filePath', 'FilePath', 'path', 'Path', 'TargetFile', 'target_file',
+  'targetFile', 'target_path', 'targetPath', 'AbsolutePath', 'TargetContentPath',
+  'TargetDir', 'old_path', 'new_path', 'source', 'destination', 'dest',
+];
 
 function isOutsideRoot(rel) {
   return rel === '..' || rel.startsWith('../') || isAbsolute(rel);
 }
 
-/**
- * Resolve the authoritative ADLC checkout root enclosing `startPath`,
- * respecting nested linked git worktrees and preferring the innermost checkout.
- *
- * @param {string} startPath
- * @param {{ outerRoot?: string | null, storeOverride?: string | null, pluginDir?: string | null, requireStore?: boolean }} [opts]
- * @returns {string | null}
- */
+function allowVerdict(root) {
+  return { decision: 'allow', reason: null, matchedRail: null, resolvedPath: null, root };
+}
+
+function denyVerdict(reason, root, matchedRail = null, resolvedPath = null) {
+  return { decision: 'deny', reason, matchedRail, resolvedPath, root };
+}
+
+function decodeFileUriOrPath(raw) {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith('file://')) return trimmed;
+  try {
+    return fileURLToPath(trimmed);
+  } catch {
+    const stripped = trimmed.replace(/^file:\/\/(?:localhost)?/i, '');
+    try {
+      return decodeURIComponent(stripped);
+    } catch {
+      return stripped;
+    }
+  }
+}
+
 export function enclosingAdlcRoot(startPath, opts = {}) {
   const {
     outerRoot = null,
@@ -118,14 +104,6 @@ export function enclosingAdlcRoot(startPath, opts = {}) {
   return findInnermostCheckoutRoot(startPath, searchOpts);
 }
 
-/**
- * True if deleting/moving `relPath` would remove or relocate a directory that
- * contains (or matches) a frozen `railGlob`.
- *
- * @param {string} relPath - repo-relative forward-slash path
- * @param {string} railGlob - frozen rail glob pattern
- * @returns {boolean}
- */
 export function isAncestorDirOfRail(relPath, railGlob) {
   const dir = String(relPath ?? '').replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
   const glob = String(railGlob ?? '').replace(/\\/g, '/').replace(/^\.\//, '');
@@ -145,24 +123,14 @@ export function isAncestorDirOfRail(relPath, railGlob) {
   return false;
 }
 
-/**
- * Check whether `filePath` (resolved through symlinks relative to `root`) hits
- * any frozen rail in `rails`. When `checkAncestorDir` is true, also blocks
- * ancestor directories containing any frozen rail.
- *
- * @param {string} filePath
- * @param {string} root
- * @param {string[]} rails
- * @param {{ checkAncestorDir?: boolean, baseDir?: string }} [opts]
- * @returns {{ hit: boolean, rail: string | null, resolvedPath: string, ancestorDir: boolean }}
- */
 export function railHit(filePath, root, rails = [], opts = {}) {
   const { checkAncestorDir = false, baseDir = root } = opts;
   const raw = String(filePath ?? '').trim();
   if (!raw || !root || !Array.isArray(rails) || rails.length === 0) {
     return { hit: false, rail: null, resolvedPath: raw, ancestorDir: false };
   }
-  const absCandidate = isAbsolute(raw) ? raw : resolve(baseDir, raw);
+  const decoded = decodeFileUriOrPath(raw);
+  const absCandidate = isAbsolute(decoded) ? decoded : resolve(baseDir, decoded);
   const rel = resolveRailPath(absCandidate, root);
   if (isOutsideRoot(rel)) {
     return { hit: false, rail: null, resolvedPath: rel, ancestorDir: false };
@@ -180,25 +148,29 @@ export function railHit(filePath, root, rails = [], opts = {}) {
   return { hit: false, rail: null, resolvedPath: rel, ancestorDir: false };
 }
 
-/**
- * True if a shell command invokes a directory-deleting or directory-moving tool.
- * @param {string} command
- * @returns {boolean}
- */
 export function isDirectoryDeletionCommand(command) {
   return DIR_DELETE_CMD_RE.test(String(command ?? ''));
 }
 
 /**
- * Read active ticket(s) and their merged frozen rails from `root`.
- * Returns `ok: false` with `error` when trust-state validation fails (corrupt
- * store, unreadable store, or invalid active-ticket pointer) so callers fail
- * closed instead of silently disabling enforcement.
- *
- * @param {string} root
- * @param {{ storeOverride?: string | null, env?: NodeJS.ProcessEnv }} [opts]
- * @returns {{ ok: boolean, tickets: object[], activeTicket: object | null, rails: string[], boundTicket: boolean, error: string | null }}
+ * Identity-level active ticket resolver matching the CONFLICT_ADAPTERS contract
+ * in packages/tickets/test/pointer.test.mjs (fail-closed on pointer corruption
+ * or ADLC_TICKET conflict, returning `{ id, conflict, code, message, ticketHash }`).
  */
+export function resolveActiveTicketId(root, env = process.env) {
+  const resolved = resolveCanonicalActiveTicketId({ root: root ?? '.', env });
+  if (!resolved.ok) {
+    return { id: null, conflict: true, code: resolved.code, message: resolved.message };
+  }
+  return {
+    id: resolved.value?.id ?? null,
+    conflict: false,
+    code: null,
+    message: null,
+    ticketHash: resolved.value?.ticketHash ?? null,
+  };
+}
+
 export function readActiveTicketRails(root, { storeOverride = null, env = process.env } = {}) {
   const cleanEnv = env.ADLC_TICKET ? { ...env } : env;
   if (!root) return { ok: true, tickets: [], activeTicket: null, rails: [], boundTicket: false, error: null };
@@ -264,40 +236,31 @@ export function readActiveTicketRails(root, { storeOverride = null, env = proces
 function extractFilePathsFromInput(toolInput) {
   if (!toolInput || typeof toolInput !== 'object') return [];
   const out = [];
-  const keys = [
-    'file_path', 'filePath', 'path', 'Path', 'TargetFile', 'target_file',
-    'target_path', 'old_path', 'new_path', 'source', 'destination', 'dest',
-  ];
-  for (const k of keys) {
+  for (const k of FILE_PATH_KEYS) {
     if (typeof toolInput[k] === 'string' && toolInput[k].trim()) {
-      out.push(toolInput[k].trim());
+      out.push(decodeFileUriOrPath(toolInput[k]));
+    }
+  }
+  for (const uriKey of ['uri', 'URI']) {
+    const raw = toolInput[uriKey];
+    if (typeof raw === 'string' && raw.trim()) {
+      const trimmed = raw.trim();
+      if (trimmed.startsWith('file://') || !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) {
+        out.push(decodeFileUriOrPath(trimmed));
+      }
     }
   }
   if (Array.isArray(toolInput.files)) {
     for (const f of toolInput.files) {
-      if (typeof f === 'string' && f.trim()) out.push(f.trim());
+      if (typeof f === 'string' && f.trim()) out.push(decodeFileUriOrPath(f));
       else if (f && typeof f === 'object' && typeof f.path === 'string' && f.path.trim()) {
-        out.push(f.path.trim());
+        out.push(decodeFileUriOrPath(f.path));
       }
     }
   }
   return out;
 }
 
-/**
- * Evaluate a PreToolUse invocation against frozen rails (fail-closed).
- *
- * @param {object} opts
- * @param {string} opts.toolName
- * @param {object} [opts.toolInput]
- * @param {string} [opts.cwd]
- * @param {string | null} [opts.outerRoot]
- * @param {string[] | null} [opts.rails]
- * @param {boolean} [opts.boundTicket]
- * @param {string | null} [opts.storeOverride]
- * @param {NodeJS.ProcessEnv} [opts.env]
- * @returns {{ decision: 'allow' | 'deny', reason: string | null, matchedRail: string | null, resolvedPath: string | null, root: string | null }}
- */
 export function evaluatePreTool({
   toolName = '',
   toolInput = {},
@@ -313,13 +276,7 @@ export function evaluatePreTool({
   const normalizedTool = String(toolName ?? '').trim().toLowerCase();
 
   if (hasConflictingToolWorkdirs(toolInput, effectiveBase)) {
-    return {
-      decision: 'deny',
-      reason: 'conflicting working directory arguments in tool input',
-      matchedRail: null,
-      resolvedPath: null,
-      root,
-    };
+    return denyVerdict('conflicting working directory arguments in tool input', root);
   }
 
   let effectiveRails;
@@ -330,16 +287,8 @@ export function evaluatePreTool({
   } else if (root) {
     const loaded = readActiveTicketRails(root, { storeOverride, env });
     if (!loaded.ok) {
-      if (READ_ONLY_TOOL_NAMES.has(normalizedTool)) {
-        return { decision: 'allow', reason: null, matchedRail: null, resolvedPath: null, root };
-      }
-      return {
-        decision: 'deny',
-        reason: `ADLC trust-state error (failing closed): ${loaded.error}`,
-        matchedRail: null,
-        resolvedPath: null,
-        root,
-      };
+      if (READ_ONLY_TOOL_NAMES.has(normalizedTool)) return allowVerdict(root);
+      return denyVerdict(`ADLC trust-state error (failing closed): ${loaded.error}`, root);
     }
     effectiveRails = loaded.rails;
     isBoundTicket = boundTicket !== undefined ? boundTicket : loaded.boundTicket;
@@ -348,28 +297,14 @@ export function evaluatePreTool({
     isBoundTicket = boundTicket ?? false;
   }
 
-  if (effectiveRails.length === 0) {
-    return { decision: 'allow', reason: null, matchedRail: null, resolvedPath: null, root };
+  if (effectiveRails.length === 0 || READ_ONLY_TOOL_NAMES.has(normalizedTool)) {
+    return allowVerdict(root);
   }
-
-  if (READ_ONLY_TOOL_NAMES.has(normalizedTool)) {
-    return { decision: 'allow', reason: null, matchedRail: null, resolvedPath: null, root };
+  if (NON_FS_UI_TOOL_NAMES.has(normalizedTool) && isBoundTicket === false) {
+    return allowVerdict(root);
   }
-
-  if (NON_FS_UI_TOOL_NAMES.has(normalizedTool)) {
-    if (isBoundTicket === false) {
-      return { decision: 'allow', reason: null, matchedRail: null, resolvedPath: null, root };
-    }
-  }
-
   if (toolInput?.__unparseable === true) {
-    return {
-      decision: 'deny',
-      reason: 'unparseable tool payload while frozen rails are active — failing closed',
-      matchedRail: null,
-      resolvedPath: null,
-      root,
-    };
+    return denyVerdict('unparseable tool payload while frozen rails are active — failing closed', root);
   }
 
   const checkRoot = root ?? effectiveBase;
@@ -379,56 +314,27 @@ export function evaluatePreTool({
     : effectiveBase;
 
   if (SHELL_TOOL_NAMES.has(normalizedTool)) {
-    const cmd = String(
-      toolInput?.command ?? toolInput?.CommandLine ?? toolInput?.cmd ?? ''
-    );
+    const cmd = String(toolInput?.command ?? toolInput?.CommandLine ?? toolInput?.cmd ?? '');
     const cls = classifyShellCommand(cmd);
     if (cls.readOnly && cls.writeOption) {
-      return {
-        decision: 'deny',
-        reason: 'shell command uses a file-writing output option while frozen rails are active',
-        matchedRail: null,
-        resolvedPath: null,
-        root,
-      };
+      return denyVerdict('shell command uses a file-writing output option while frozen rails are active', root);
     }
-    if (cls.readOnly) {
-      return { decision: 'allow', reason: null, matchedRail: null, resolvedPath: null, root };
-    }
+    if (cls.readOnly) return allowVerdict(root);
     if (!cls.mutating) {
-      return {
-        decision: 'deny',
-        reason: 'shell command is neither positively read-only nor a transparent file mutation while frozen rails are active',
-        matchedRail: null,
-        resolvedPath: null,
-        root,
-      };
+      return denyVerdict('shell command is neither positively read-only nor a transparent file mutation while frozen rails are active', root);
     }
     if (cls.opaque || cls.changesCwd || cls.expands || cls.paths.length === 0) {
-      return {
-        decision: 'deny',
-        reason: 'shell mutation cannot be verified against frozen rails (opaque, cwd-changing, expanding, or targetless)',
-        matchedRail: null,
-        resolvedPath: null,
-        root,
-      };
+      return denyVerdict('shell mutation cannot be verified against frozen rails (opaque, cwd-changing, expanding, or targetless)', root);
     }
-
     const checkAncestorDir = isDirectoryDeletionCommand(cmd);
     for (const p of cls.paths) {
       const hit = railHit(p, checkRoot, effectiveRails, { checkAncestorDir, baseDir: pathBase });
       if (hit.hit) {
         const kind = hit.ancestorDir ? 'ancestor directory of frozen rail' : 'frozen rail';
-        return {
-          decision: 'deny',
-          reason: `shell command targets ${kind} "${hit.rail}" via "${hit.resolvedPath}"`,
-          matchedRail: hit.rail,
-          resolvedPath: hit.resolvedPath,
-          root,
-        };
+        return denyVerdict(`shell command targets ${kind} "${hit.rail}" via "${hit.resolvedPath}"`, root, hit.rail, hit.resolvedPath);
       }
     }
-    return { decision: 'allow', reason: null, matchedRail: null, resolvedPath: null, root };
+    return allowVerdict(root);
   }
 
   if (PATCH_TOOL_NAMES.has(normalizedTool)) {
@@ -436,63 +342,32 @@ export function evaluatePreTool({
     const patchPaths = new Set();
     collectPatchPaths(patchText, patchPaths);
     if (patchPaths.size === 0) {
-      return {
-        decision: 'deny',
-        reason: 'patch payload exposes no verifiable target paths while frozen rails are active',
-        matchedRail: null,
-        resolvedPath: null,
-        root,
-      };
+      return denyVerdict('patch payload exposes no verifiable target paths while frozen rails are active', root);
     }
     for (const p of patchPaths) {
       const hit = railHit(p, checkRoot, effectiveRails, { checkAncestorDir: false, baseDir: pathBase });
       if (hit.hit) {
-        return {
-          decision: 'deny',
-          reason: `patch targets frozen rail "${hit.rail}" via "${hit.resolvedPath}"`,
-          matchedRail: hit.rail,
-          resolvedPath: hit.resolvedPath,
-          root,
-        };
+        return denyVerdict(`patch targets frozen rail "${hit.rail}" via "${hit.resolvedPath}"`, root, hit.rail, hit.resolvedPath);
       }
     }
-    return { decision: 'allow', reason: null, matchedRail: null, resolvedPath: null, root };
+    return allowVerdict(root);
   }
 
   if (FILE_MUTATION_TOOL_NAMES.has(normalizedTool)) {
     const paths = extractFilePathsFromInput(toolInput);
     if (paths.length === 0) {
-      return {
-        decision: 'deny',
-        reason: `${toolName} exposes no verifiable target path while frozen rails are active`,
-        matchedRail: null,
-        resolvedPath: null,
-        root,
-      };
+      return denyVerdict(`${toolName} exposes no verifiable target path while frozen rails are active`, root);
     }
     const checkAncestorDir = DELETE_OR_MOVE_TOOL_NAMES.has(normalizedTool);
     for (const p of paths) {
       const hit = railHit(p, checkRoot, effectiveRails, { checkAncestorDir, baseDir: pathBase });
       if (hit.hit) {
         const kind = hit.ancestorDir ? 'ancestor directory of frozen rail' : 'frozen rail';
-        return {
-          decision: 'deny',
-          reason: `${toolName} targets ${kind} "${hit.rail}" via "${hit.resolvedPath}"`,
-          matchedRail: hit.rail,
-          resolvedPath: hit.resolvedPath,
-          root,
-        };
+        return denyVerdict(`${toolName} targets ${kind} "${hit.rail}" via "${hit.resolvedPath}"`, root, hit.rail, hit.resolvedPath);
       }
     }
-    return { decision: 'allow', reason: null, matchedRail: null, resolvedPath: null, root };
+    return allowVerdict(root);
   }
 
-  // Fail closed on unrecognized non-read-only tools when frozen rails are active.
-  return {
-    decision: 'deny',
-    reason: `unrecognized tool "${toolName || '<empty>'}" cannot be verified as read-only while frozen rails are active`,
-    matchedRail: null,
-    resolvedPath: null,
-    root,
-  };
+  return denyVerdict(`unrecognized tool "${toolName || '<empty>'}" cannot be verified as read-only while frozen rails are active`, root);
 }
