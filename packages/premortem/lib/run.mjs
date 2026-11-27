@@ -42,7 +42,21 @@ function isFailingRecordedVerdict(verdict) {
  *                  unbound premortem record can satisfy any ticket's P1 gate
  */
 export async function run(opts) {
-  const { specPath, tier = 'frontier', maxCauses, outPath, json, promptOnlyMode, recordVerdictSource, ticket, key = null } = opts;
+  const {
+    specPath,
+    tier = 'frontier',
+    maxCauses,
+    outPath,
+    dir = '.adlc',
+    json,
+    promptOnlyMode,
+    recordVerdictSource,
+    ticket,
+    provider,
+    env = process.env,
+  } = opts;
+  const rawKey = opts.key ?? env.ADLC_MANIFEST_KEY ?? process.env.ADLC_MANIFEST_KEY ?? null;
+  const key = rawKey === '' ? null : rawKey;
 
   if (recordVerdictSource !== undefined && !ticket) {
     opError('--record-verdict requires --ticket (an unbound premortem record cannot count as this ticket\'s P1 evidence)');
@@ -88,7 +102,7 @@ export async function run(opts) {
       let verdict;
       try {
         verdict = await readVerdictSource(recordVerdictSource);
-        entry = recordVerdict({ verdict, ticket, specPath, extra: { specPath }, key });
+        entry = recordVerdict({ verdict, ticket, specPath, extra: { specPath }, dir, key });
       } catch (err) {
         opError(`could not record verdict to manifest ledger: ${err.message}`);
       }
@@ -101,7 +115,7 @@ export async function run(opts) {
   }
 
   // Ensure a provider is available before attempting the call
-  if (!detectProvider()) {
+  if (!detectProvider(env, provider)) {
     opError(
       'no LLM provider configured — set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY\n' +
         'Use --prompt-only to get the prompt without calling the API.'
@@ -110,13 +124,21 @@ export async function run(opts) {
 
   // --- call LLM ---
   let rawText;
+  let completionMeta = null;
   try {
-    rawText = await complete({
-      tier,
-      system: SYSTEM_PROMPT,
-      prompt,
-      maxTokens: 4096,
-    });
+    rawText = await complete(
+      {
+        tier,
+        provider,
+        system: SYSTEM_PROMPT,
+        prompt,
+        maxTokens: 4096,
+        onCompleteMeta: (meta) => {
+          completionMeta = meta;
+        },
+      },
+      env,
+    );
   } catch (err) {
     opError(`LLM call failed: ${err.message}`);
   }
@@ -132,6 +154,40 @@ export async function run(opts) {
   const causes = parsed?.causes;
   if (!Array.isArray(causes) || causes.length === 0) {
     opError('model response did not contain a non-empty causes array');
+  }
+
+  if (ticket && completionMeta) {
+    const { appendManifestEntry, parseData, record } = await import('@adlc/gate-manifest/lib/record.mjs');
+    const rawData = JSON.stringify({
+      specPath,
+      provider: completionMeta.provider,
+      model: completionMeta.model,
+      tier,
+      attestationMode: completionMeta.attestationMode,
+      executionWitnessed: true,
+      usageStatus: completionMeta.usage ? 'reported' : 'unreported',
+      ...(completionMeta.usage ? { usage: completionMeta.usage } : {}),
+    });
+    try {
+      if (specPath && specPath.includes(',')) {
+        const { hashFiles } = await import('@adlc/core');
+        appendManifestEntry(
+          {
+            gate: 'premortem',
+            ts: new Date().toISOString(),
+            ticket,
+            data: parseData(rawData),
+            files: hashFiles([specPath]),
+          },
+          dir,
+          { signatureVersion: 1, key },
+        );
+      } else {
+        record({ gate: 'premortem', ticket, dir, key, rawFiles: specPath, rawData });
+      }
+    } catch (err) {
+      opError(`could not record premortem to manifest ledger: ${err.message}`);
+    }
   }
 
   // --- emit output ---

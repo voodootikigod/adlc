@@ -10,6 +10,8 @@ export function renderHelp(version) {
   lines.push('  adlc <tool> [args...]       run an ADLC tool');
   lines.push('  adlc run <phase> [args...]  assert phase evidence');
   lines.push('  adlc accept [args...]       record P6 acceptance evidence');
+  lines.push('  adlc triage [args...]       classify diff into an ADLC execution track');
+  lines.push('  adlc simplify [args...]     scan repository for structural duplication and core reinventions');
   lines.push(MCP_SERVER_USAGE_LINE);
   lines.push('  adlc --help                 this help');
   lines.push('  adlc --version              print the dispatcher version');

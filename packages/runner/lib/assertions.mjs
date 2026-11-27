@@ -4,6 +4,7 @@ import { ADLC_DIR, canonicalJson, hashFiles, loadTickets, sha256 } from '@adlc/c
 // which is only true of a chain this checkout can place in sequence. See
 // own-chain.mjs for why the forest's own order cannot carry that weight.
 import { readOwnManifestChain } from '@adlc/gate-manifest/lib/own-chain.mjs';
+import { verify } from '@adlc/gate-manifest/lib/verify.mjs';
 import { specApprovalIntegrityErrors, validateSpecApprovalRecord } from '@adlc/gate-manifest';
 export { specApprovalIntegrityErrors, validateSpecApprovalRecord };
 import { readFileSync } from 'node:fs';
@@ -37,12 +38,32 @@ const PHASE_REQUIREMENTS = {
   p7: ['lesson-foundry', 'rejection-mining', 'skill-rot'],
 };
 
+export const TRACK_REQUIREMENTS = Object.freeze({
+  trivial: ['rails-check', 'hollow-test', 'p5-pass-completed'],
+  bounded: ['rails-red', 'hollow-test', 'rails-check', 'p5-complete'],
+  substantial: ['coldstart', 'premortem', 'rails-red', 'hollow-test', 'rails-check', 'p5-complete'],
+  architectural: ['coldstart', 'premortem', 'parallax', 'rails-red', 'hollow-test', 'rails-check', 'p5-complete'],
+});
+
+export function allTracks() {
+  return ['trivial', 'bounded', 'substantial', 'architectural'];
+}
+
 export function requiresTicket(phase) {
-  return phase === 'p0' || phase === 'p1' || phase === 'p2' || phase === 'p3' || phase === 'p4' || phase === 'p5' || phase === 'p6';
+  return (
+    phase === 'bounded' ||
+    phase === 'p0' ||
+    phase === 'p1' ||
+    phase === 'p2' ||
+    phase === 'p3' ||
+    phase === 'p4' ||
+    phase === 'p5' ||
+    phase === 'p6'
+  );
 }
 
 function requiresRevision(phase) {
-  return phase === 'p5' || phase === 'p6';
+  return phase === 'trivial' || phase === 'bounded' || phase === 'p5' || phase === 'p6';
 }
 
 function p5CompletionIntegrityErrors(entries, entry, ticket, revision) {
@@ -338,15 +359,15 @@ function coldstartIntegrityErrors(entries, ticket, cwd, dir, phase) {
   return errors;
 }
 
-function latestRailCheckEntry(entries, ticket, revision) {
+function latestRailCheckEntry(entries, ticket, revision, allowUnrevisioned = false) {
   return entries
     .filter((entry) => entryType(entry) === 'rails-check' && matchesTicket(entry, ticket))
-    .filter((entry) => matchesRevision(entry, revision))
+    .filter((entry) => (allowUnrevisioned && entry?.revision === undefined) || matchesRevision(entry, revision))
     .at(-1);
 }
 
-function p4IntegrityErrors(entries, ticket, revision, cwd) {
-  const entry = latestRailCheckEntry(entries, ticket, revision);
+function p4IntegrityErrors(entries, ticket, revision, cwd, allowUnrevisioned = false) {
+  const entry = latestRailCheckEntry(entries, ticket, revision, allowUnrevisioned);
   if (!entry) return [];
   const errors = [];
   if (entry.railsDiffEmpty !== true) {
@@ -414,25 +435,204 @@ export function p4EvidenceBindingErrors(entries, ticket, cwd) {
 }
 
 export function requirementsForPhase(phase) {
-  return PHASE_REQUIREMENTS[phase] ?? null;
+  if (Object.hasOwn(PHASE_REQUIREMENTS, phase)) return PHASE_REQUIREMENTS[phase];
+  if (phase === 'trivial' || phase === 'bounded') return TRACK_REQUIREMENTS[phase];
+  return null;
 }
 
 export function allPhases() {
   return Object.keys(PHASE_REQUIREMENTS);
 }
 
-export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = process.cwd() } = {}) {
-  const requirements = requirementsForPhase(phase);
-  if (requirements === null) {
-    return { ok: false, operational: true, phase, errors: [`unknown phase: ${phase}`] };
+const REVISION_BOUND_TYPES = new Set(['p5-pass-completed', 'p5-dry-pass', 'p5-complete', 'p6-acceptance-packet']);
+
+function isWitnessedFreshEntry(entry, gateType) {
+  const data = entry?.data;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  if (data.promptOnly === true) return false;
+  if (data.executionWitnessed === true) return true;
+  if (typeof data.usage?.provider === 'string' && data.usage.provider.length > 0) return true;
+  if (
+    gateType === 'coldstart' &&
+    data.cache &&
+    typeof data.cache === 'object' &&
+    !Array.isArray(data.cache) &&
+    typeof data.cache.ticketHash === 'string' &&
+    data.cache.ticketHash.length > 0 &&
+    typeof data.cache.model === 'string' &&
+    data.cache.model.length > 0 &&
+    Array.isArray(data.cache.gaps)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function freshContextIntegrityErrors(entries, ticket, phase, track) {
+  const label = phase.toUpperCase();
+  const gatesToCheck = [];
+  if (phase === 'p0' || phase === 'p2') {
+    gatesToCheck.push('coldstart');
+  } else if (phase === 'p1') {
+    gatesToCheck.push('premortem');
+    if (track === 'architectural') gatesToCheck.push('parallax');
+  }
+  const errors = [];
+  for (const gateType of gatesToCheck) {
+    const latest = entries
+      .filter((candidate) => entryType(candidate) === gateType && matchesTicket(candidate, ticket))
+      .at(-1);
+    if (!latest) continue;
+    if (!isWitnessedFreshEntry(latest, gateType)) {
+      errors.push(
+        `${label} evidence is rejected: ${gateType} requires witnessed fresh-context provenance (prompt-only, malformed-cache, and field-less records are not accepted)`,
+      );
+    }
+  }
+  return errors;
+}
+
+export function assertPhase(
+  phase,
+  { dir = ADLC_DIR, ticket, revision, key, cwd = process.cwd(), track, requireFreshContext } = {},
+) {
+  const baseRequirements = requirementsForPhase(phase);
+  if (baseRequirements === null) {
+    return { ok: false, operational: true, phase, missing: [], errors: [`unknown phase: ${phase}`] };
+  }
+  if (track !== undefined) {
+    if (!allTracks().includes(track) || ((phase === 'trivial' || phase === 'bounded') && track !== phase)) {
+      return { ok: false, phase, missing: [], errors: ['invalid --track'], operational: true };
+    }
   }
   if (requiresTicket(phase) && !ticket) {
-    return { ok: false, operational: true, phase, errors: [`${phase} requires --ticket`] };
+    return { ok: false, operational: true, phase, missing: [], errors: [`${phase} requires --ticket`] };
   }
 
+  const requirements =
+    phase === 'p1' && track === 'architectural'
+      ? [...baseRequirements, 'parallax']
+      : baseRequirements;
+
   const { entries, skipped, identityError } = readOwnManifestChain(dir, { cwd });
+  if (typeof key === 'string' && key.length > 0 && skipped.length === 0 && !identityError) {
+    const verified = verify(dir, { requireSignatures: false, key });
+    if (!verified.valid) {
+      return {
+        ok: false,
+        operational: false,
+        phase,
+        ticket,
+        missing: [],
+        errors: [`manifest verification failed: ${verified.message}`],
+      };
+    }
+  }
+
   const hasExplicitRevision = revision !== undefined && revision !== null && String(revision).trim() !== '';
   const explicitRevision = hasExplicitRevision ? String(revision) : undefined;
+
+  if (phase === 'trivial') {
+    const ignoredPaths = manifestArtifactPaths(cwd, dir);
+    const latestTrivialPass = entries
+      .filter((entry) => entryType(entry) === 'p5-pass-completed' && matchesTicket(entry, ticket) && Boolean(entry?.revision))
+      .at(-1);
+    const recordedPassRev = latestTrivialPass?.revision ?? null;
+    const liveRev = explicitRevision
+      ? null
+      : resolveLiveP5WorktreeRevision({
+          cwd,
+          explicitRevision,
+          recordedP5Revision: recordedPassRev,
+          ignorePaths: ignoredPaths,
+        });
+    const resolvedRev = explicitRevision ?? liveRev;
+
+    if (!resolvedRev) {
+      return {
+        ok: false,
+        operational: true,
+        phase,
+        ticket,
+        missing: [],
+        errors: ['trivial requires a git worktree revision or --revision'],
+      };
+    }
+    if (!explicitRevision && recordedPassRev && recordedPassRev !== resolvedRev) {
+      return {
+        ok: false,
+        operational: false,
+        phase,
+        ticket,
+        revision: recordedPassRev,
+        currentRevision: resolvedRev,
+        missing: [],
+        errors: [`P5 evidence is stale: recorded ${recordedPassRev}, current worktree is ${resolvedRev}`],
+      };
+    }
+
+    const p4Errors = p4IntegrityErrors(entries, ticket, resolvedRev, cwd, true);
+    if (p4Errors.length > 0) {
+      return {
+        ok: false,
+        operational: false,
+        phase,
+        ticket,
+        revision: resolvedRev,
+        missing: [],
+        errors: p4Errors,
+      };
+    }
+
+    const passesAtRev = entries.filter(
+      (entry) =>
+        entryType(entry) === 'p5-pass-completed' &&
+        matchesTicket(entry, ticket) &&
+        Boolean(entry?.revision) &&
+        matchesRevision(entry, resolvedRev),
+    );
+    const hasDryPassAtRev = passesAtRev.some((entry) => entry.dry === true);
+    if (passesAtRev.length > 0 && !hasDryPassAtRev) {
+      return {
+        ok: false,
+        operational: false,
+        phase,
+        ticket,
+        revision: resolvedRev,
+        missing: [],
+        errors: ['P5 evidence is incomplete: trivial requires at least one dry=true p5-pass-completed entry'],
+      };
+    }
+
+    const present = new Set();
+    for (const entry of entries) {
+      if (!matchesTicket(entry, ticket)) continue;
+      const type = entryType(entry);
+      if (!type) continue;
+      if (type === 'p5-pass-completed') {
+        if (entry.dry === true && Boolean(entry.revision) && matchesRevision(entry, resolvedRev)) {
+          present.add(type);
+        }
+      } else if (entry.revision === undefined || matchesRevision(entry, resolvedRev)) {
+        present.add(type);
+      }
+    }
+    const missing = requirements.filter((type) => !present.has(type));
+    return {
+      ok: missing.length === 0 && skipped.length === 0,
+      operational: false,
+      phase,
+      ticket,
+      revision: resolvedRev,
+      required: requirements,
+      present: Array.from(present).sort(),
+      missing,
+      errors: [],
+      skipped,
+      identityError,
+    };
+  }
+
   const latestScopedP5Revision = requiresRevision(phase) ? latestP5Revision(entries, ticket) : null;
   const p5Revision = phase === 'p6' && !explicitRevision ? latestScopedP5Revision : null;
   const assertedP5Entry = requiresRevision(phase)
@@ -477,6 +677,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       ticket,
       revision: assertedRevisionForLiveCheck,
       currentRevision: liveWorktreeRevision,
+      missing: [],
       errors: [`current worktree revision could not be resolved while P5 evidence exists at ${assertedRevisionForLiveCheck}`],
     };
   }
@@ -488,6 +689,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       ticket,
       revision: assertedRevisionForLiveCheck,
       currentRevision: liveWorktreeRevision,
+      missing: [],
       errors: [`P5 evidence is stale: recorded ${assertedRevisionForLiveCheck}, current worktree is ${liveWorktreeRevision}`],
     };
   }
@@ -499,6 +701,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       ticket,
       revision: p5Revision ?? currentRevision,
       currentRevision,
+      missing: [],
       errors: [ticketStaleError],
     };
   }
@@ -510,6 +713,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       ticket,
       revision: p5Revision ?? currentRevision,
       currentRevision,
+      missing: [],
       errors: transcriptErrors,
     };
   }
@@ -521,6 +725,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       ticket,
       revision: p5Revision ?? currentRevision,
       currentRevision,
+      missing: [],
       errors: p5CompletionErrors,
     };
   }
@@ -532,17 +737,16 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
   const p6Errors = phase === 'p6' && assertedP5Entry
     ? p6IntegrityErrors(latestP6Entry(entries, ticket, resolvedRevision), currentBinding)
     : [];
-  const p4Errors = phase === 'p4'
-    ? p4IntegrityErrors(entries, ticket, resolvedRevision, cwd)
+  const p4Errors = phase === 'p4' || phase === 'bounded'
+    ? p4IntegrityErrors(entries, ticket, resolvedRevision, cwd, phase === 'bounded')
     : [];
-  // operational: false — an unresolved gap, a rejected verdict, or stale
-  // evidence is a normal, expected GATE rejection with concrete reasons
-  // (exit 2), not an infrastructure failure that couldn't be evaluated at
-  // all (exit 1). Codex cross-model review, round 4 + #764: the CLI's opError-on-
-  // operational path exits 1 for these, which misreports a fixable content
-  // problem as an outage to any automation branching on exit code.
+  const enforceFresh =
+    Object.hasOwn(PHASE_REQUIREMENTS, phase) &&
+    (requireFreshContext === true || track === 'substantial' || track === 'architectural');
+  const freshErrors = enforceFresh ? freshContextIntegrityErrors(entries, ticket, phase, track) : [];
+
   const p1Errors = phase === 'p1'
-    ? specApprovalIntegrityErrors(entries, ticket, cwd)
+    ? [...specApprovalIntegrityErrors(entries, ticket, cwd), ...freshErrors]
     : [];
   if (p1Errors.length > 0) {
     return {
@@ -550,11 +754,12 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       operational: false,
       phase,
       ticket,
+      missing: [],
       errors: p1Errors,
     };
   }
   const p0Errors = (phase === 'p0' || phase === 'p2') && ticket
-    ? coldstartIntegrityErrors(entries, ticket, cwd, dir, phase)
+    ? [...coldstartIntegrityErrors(entries, ticket, cwd, dir, phase), ...freshErrors]
     : [];
   if (p0Errors.length > 0) {
     return {
@@ -562,6 +767,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       operational: false,
       phase,
       ticket,
+      missing: [],
       errors: p0Errors,
     };
   }
@@ -573,6 +779,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       ticket,
       revision: resolvedRevision,
       currentRevision,
+      missing: [],
       errors: p6Errors,
     };
   }
@@ -583,6 +790,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       phase,
       ticket,
       revision: resolvedRevision,
+      missing: [],
       errors: p4Errors,
     };
   }
@@ -593,6 +801,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       operational: false,
       phase,
       ticket,
+      missing: [],
       errors: p4BindingErrors,
     };
   }
@@ -602,6 +811,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       operational: true,
       phase,
       ticket,
+      missing: [],
       errors: [`${phase} requires a git worktree revision or --revision`],
     };
   }
@@ -609,19 +819,17 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
   const present = new Set(
     entries
       .filter((entry) => matchesTicket(entry, ticket))
-      .filter((entry) => matchesRevision(entry, resolvedRevision))
+      .filter((entry) => {
+        if (phase === 'bounded' && !REVISION_BOUND_TYPES.has(entryType(entry))) {
+          return entry?.revision === undefined || matchesRevision(entry, resolvedRevision);
+        }
+        return matchesRevision(entry, resolvedRevision);
+      })
       .map((entry) => entryType(entry))
       .filter(Boolean)
   );
   const missing = requirements.filter((type) => !present.has(type));
 
-  // `identityError` alongside `skipped`, not folded into it: own-chain appends
-  // the refusal to BOTH channels (see its contract), and a caller with only the
-  // list cannot tell "we cannot establish which evidence is ours" from "this
-  // line would not parse". bin/adlc.mjs read the whole list as the latter and
-  // told every detached-HEAD checkout its ledger was malformed. `ok` is
-  // deliberately unchanged — a non-empty `skipped` already fails the gate
-  // closed, and this is a diagnostics channel, not a second gate.
   return {
     ok: missing.length === 0 && skipped.length === 0,
     operational: false,
@@ -631,6 +839,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
     required: requirements,
     present: Array.from(present).sort(),
     missing,
+    errors: [],
     skipped,
     identityError,
   };

@@ -10,6 +10,7 @@ const { values, positionals } = parseArgs({
     tier:         { type: 'string',  default: 'frontier' },
     'max-causes': { type: 'string' },
     out:          { type: 'string' },
+    dir:          { type: 'string',  default: '.adlc' },
     json:         { type: 'boolean', default: false },
     'prompt-only':{ type: 'boolean', default: false },
     'record-verdict': { type: 'string' },
@@ -19,7 +20,7 @@ const { values, positionals } = parseArgs({
 });
 
 if (values.help) {
-  console.log(`premortem SPEC.MD [--tier cheap|mid|frontier] [--max-causes N] [--out report.md] [--json] [--prompt-only] [--record-verdict FILE-OR-DASH --ticket ID]
+  console.log(`premortem SPEC.MD [--tier cheap|mid|frontier] [--max-causes N] [--out report.md] [--dir .adlc] [--json] [--prompt-only] [--record-verdict FILE-OR-DASH --ticket ID]
 
 Failure-first spec stress test (ADLC C2).
 
@@ -27,14 +28,14 @@ Failure-first spec stress test (ADLC C2).
   --tier           Model tier: cheap | mid | frontier  (default: frontier)
   --max-causes N   Cap the number of causes requested (positive integer, ranked most likely first)
   --out            Write markdown report to this file instead of stdout
+  --dir            ADLC ledger directory (default: .adlc)
   --json           Emit machine-readable JSON {causes:[...]}
   --prompt-only    Print the exact prompt and exit 0 (no API key needed)
   --record-verdict <file|->  With --prompt-only: read the operator's answer
                    from <file> (or stdin when '-') and record it into the
                    gate-manifest ledger (.adlc/manifest.jsonl, or .adlc/manifest.d/ in forest mode) via gate-manifest.
                    Requires --ticket — an unbound record can satisfy any ticket's P1 gate.
-  --ticket ID      Ticket to bind the recorded verdict to (required with
-                   --record-verdict)
+  --ticket ID      Ticket to bind recorded evidence to (records witnessed provenance on live runs; required with --record-verdict)
   --help           Show this help
 
 Exit codes:
@@ -73,6 +74,7 @@ await run({
   tier: values.tier,
   maxCauses,
   outPath: values.out,
+  dir: values.dir,
   json: values.json,
   promptOnlyMode: values['prompt-only'],
   recordVerdictSource: values['record-verdict'],
