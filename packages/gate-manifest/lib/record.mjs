@@ -6,7 +6,12 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { sha256, hashFiles, appendEntries, ADLC_DIR } from '@adlc/core';
-import { signEntry } from './sign.mjs';
+import {
+  signEntry,
+  isEd25519PrivateKey,
+  SIG_ALG_ED25519,
+  assertEd25519KeyMatchesAdminPub,
+} from './sign.mjs';
 import { verify } from './verify.mjs';
 import { isSegmentedRepo } from './lineage.mjs';
 import { appendToSegment } from './segment-writer.mjs';
@@ -25,7 +30,7 @@ import { validateKeyParam } from '@adlc/tickets/lib/key-contract.mjs';
 // `branch` would silently overwrite the writer's own `currentBranch()` value
 // and get authenticated as if genuine, letting a payload from branch A sign
 // itself as belonging to branch B.
-const RESERVED_CHAIN_FIELDS = ['seq', 'prev', 'sig', 'sigVersion', 'segment', 'anchor', 'branch'];
+const RESERVED_CHAIN_FIELDS = ['seq', 'prev', 'sig', 'sigVersion', 'sigAlg', 'segment', 'anchor', 'branch'];
 
 /**
  * Atomically append an arbitrary top-level evidence entry to the C11 manifest.
@@ -131,7 +136,13 @@ export function appendManifestEntry(payload, dir = ADLC_DIR, { signatureVersion 
       prev: state.lastRawLine === null ? null : sha256(state.lastRawLine),
     };
     if (signingKey) {
-      if (signatureVersion === 2) chained.sigVersion = 2;
+      assertEd25519KeyMatchesAdminPub(dir, signingKey);
+      if (isEd25519PrivateKey(signingKey)) {
+        chained.sigVersion = 2;
+        chained.sigAlg = SIG_ALG_ED25519;
+      } else if (signatureVersion === 2) {
+        chained.sigVersion = 2;
+      }
       chained.sig = signEntry(signingKey, chained);
     }
     return [chained];
@@ -207,7 +218,13 @@ export function buildEntry({ gate, ticket, data, filePaths, prevRawLine, prevSeq
   // Sign last: `sig` is computed over the canonical bytes of all other fields
   // (see sign.mjs) and appended as the final field so it is excluded from the
   // signed payload. Without a key the entry is unsigned and verify will flag it.
-  if (key) entry.sig = signEntry(key, entry);
+  if (key) {
+    if (isEd25519PrivateKey(key)) {
+      entry.sigVersion = 2;
+      entry.sigAlg = SIG_ALG_ED25519;
+    }
+    entry.sig = signEntry(key, entry);
+  }
 
   return entry;
 }
