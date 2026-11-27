@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import {
   ADMIN_PUB_FILENAME,
   generateEd25519KeyPair,
+  signEntry,
 } from '@adlc/gate-manifest/lib/sign.mjs';
 import { sha256 } from '@adlc/core';
 import {
@@ -304,6 +305,24 @@ describe('adlc-prosecute CLI & runProsecution — Ed25519 end-to-end zero-secret
     ], { cwd: repo });
     assert.equal(checkAfterCarry.status, 0, checkAfterCarry.stderr);
     assert.equal(JSON.parse(checkAfterCarry.stdout).satisfied, true);
+
+    // Verify 1-character HMAC key is still accepted in readObservedAttestations (kills key.length > 1 mutant)
+    const oneCharStore = join(trustedDir, 'one-char-hmac.jsonl');
+    const hmacEntry = {
+      seq: 1,
+      gate: 'cross-model-review',
+      ticket: 'T-1CHAR',
+      ts: new Date().toISOString(),
+      prev: null,
+      files: {},
+      data: { revision: 'a'.repeat(40), provider: 'openai', authorProvider: 'anthropic', verdict: 'approve' },
+      sigVersion: 2,
+    };
+    hmacEntry.sig = signEntry('k', hmacEntry);
+    writeFileSync(oneCharStore, `${JSON.stringify(hmacEntry)}\n`);
+    const oneCharRead = readObservedAttestations(oneCharStore, { key: 'k', publicKey: null });
+    assert.equal(oneCharRead.length, 1);
+    assert.equal(oneCharRead[0].ticket, 'T-1CHAR');
 
     // Verify read-side hasCrossModelApprove & hasCrossModelApproveForRevision succeed with key: null via trustedDir.
     const carriedRev = carriedEntry.data.revision;

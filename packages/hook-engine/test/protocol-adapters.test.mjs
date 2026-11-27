@@ -22,6 +22,8 @@ test('HARNESS_PROTOCOLS lists all 7 shipped harnesses and resolveHarnessProtocol
   assert.ok(DECISION_LATTICE.deny > DECISION_LATTICE.force_ask);
   assert.ok(DECISION_LATTICE.force_ask > DECISION_LATTICE.ask);
   assert.ok(DECISION_LATTICE.ask > DECISION_LATTICE.pass);
+  assert.equal(DECISION_LATTICE.allow, DECISION_LATTICE.pass);
+  assert.ok(DECISION_LATTICE.ask > DECISION_LATTICE.allow);
 });
 
 test('normalizeHookInput extracts nested toolCall/tool_call, preinvocation, workspacePaths, and conversationId', () => {

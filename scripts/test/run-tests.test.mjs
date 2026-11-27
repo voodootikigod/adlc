@@ -18,7 +18,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { join, dirname, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AMBIENT_SESSION_ENV_VARS, buildSegmentEnv, packageHasTests, packageSegments, SCRUBBED_ENV_VARS, shouldScrubEnvValue } from '../run-tests.mjs';
+import { AMBIENT_SESSION_ENV_VARS, buildSegmentEnv, packageHasTests, packageSegments, SCRUBBED_ENV_VARS, SEGMENTS, shouldScrubEnvValue } from '../run-tests.mjs';
 
 const REPO_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
@@ -261,4 +261,10 @@ test('packageSegments includes cli-test and adapter-test globs and skips package
   assert.match(segs[0][1], /adapter-test\/\*\.test\.mjs/);
   assert.doesNotMatch(segs[1][1], /cli-test/);
   assert.doesNotMatch(segs[1][1], /adapter-test/);
+});
+
+test('SEGMENTS includes hook-bundle drift check command', () => {
+  const hookDrift = SEGMENTS.find(([name]) => name === 'hook-bundle drift');
+  assert.ok(hookDrift, 'expected hook-bundle drift segment');
+  assert.equal(hookDrift[1], 'node scripts/build-hooks.mjs --check');
 });

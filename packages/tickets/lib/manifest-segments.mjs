@@ -60,7 +60,7 @@ function parseLines(lines) {
 
 function chainIsIntact(lines, key = null, { anchorOnFirst = false, publicKey = null } = {}) {
   return verifyChain(
-    lines.map((line, lineNo) => ({ line, lineNo: lineNo + 1 })),
+    lines.map((line) => ({ line })),
     { key, publicKey, requireSignatures: false, anchorOnFirst },
   ).valid;
 }

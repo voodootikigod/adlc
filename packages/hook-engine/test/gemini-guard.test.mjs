@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import {
   mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, readdirSync, readFileSync, utimesSync,
 } from 'node:fs';
@@ -9,14 +10,20 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as hookEngine from '../index.mjs';
 import * as cliGemini from '../lib/cli-gemini.mjs';
 import { evaluatePreTool, resolveActiveTicketId } from '../lib/pretool.mjs';
-import { resolveTranscriptPath } from '../lib/flail-transcript.mjs';
+import {
+  resolveTranscriptPath, detectEditChurn, detectRepeatedErrors,
+} from '../lib/flail-transcript.mjs';
 import {
   classifyTool, isReadonlyCommand, isVerificationCommand, isSecretStatePath, isTrustRootOrSecretPath,
 } from '../lib/command-verify.mjs';
 import {
   createPersistentTracker, verifyPreExistingTestFiles, judgeStaleLock, reclaimJudgedLock, LOCK_TTL_MS,
+  DEFAULT_DEPTH_THRESHOLD, MAX_TRACKED_SESSIONS,
 } from '../lib/session-tracker.mjs';
-import { decide, runFromStdin, preInvocation, postToolUse, onStop } from '../lib/gemini-guard.mjs';
+import {
+  decide, runFromStdin, preInvocation, postToolUse, onStop, extractToolName,
+} from '../lib/gemini-guard.mjs';
+import { sanitizeField } from '../lib/gemini-stop-verify.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LIB_DIR = join(HERE, '..', 'lib');
@@ -298,6 +305,59 @@ test('runFromStdin and postToolUse execute cleanly', (t) => {
     conversationId: 'stdin-1',
   }), env);
   assert.equal(res.decision, 'pass');
+
+  // Direct CLI execution via cli-gemini.mjs stdin (exercises readStdin + dispatchGeminiHook)
+  const cliOut = spawnSync(process.execPath, [join(LIB_DIR, 'cli-gemini.mjs')], {
+    input: JSON.stringify({ toolCall: { name: 'read_file', args: { path: join(dir, 'src', 'app.mjs') } }, workspacePaths: [dir] }),
+    encoding: 'utf8',
+    env: { ...env, ADLC_MANIFEST_KEY: '', ADLC_MANIFEST_PRIVATE_KEY: '' },
+    timeout: 10_000,
+  });
+  assert.equal(cliOut.status, 0, cliOut.stderr);
+  assert.equal(JSON.parse(cliOut.stdout).decision, 'pass');
+
+  // Tool classification ('modify' hint & 'read_resource'), 'patch' tool rail check, 'tool' envelope key, sanitizeField default cap
+  assert.equal(classifyTool('modify_config', { TargetFile: 'x.js' }), 'mutating');
+  assert.equal(classifyTool('read_resource', {}), 'readonly');
+  assert.equal(extractToolName({ tool: { name: 'edit_file' } }), 'edit_file');
+  assert.equal(sanitizeField('a'.repeat(200)).length, 128);
+  assert.equal(
+    evaluatePreTool({
+      toolName: 'patch',
+      toolInput: { patch: '--- a/test/frozen.test.mjs\n+++ b/test/frozen.test.mjs\n' },
+      cwd: dir,
+      rails: ['test/frozen.test.mjs'],
+    }).decision,
+    'deny',
+  );
+
+  // Default flail thresholds (3 edits triggers churn; 2 repeated errors triggers error repeat)
+  assert.equal(
+    detectEditChurn(['Editing src/a.js', 'Editing src/a.js', 'Editing src/a.js']).length,
+    1,
+  );
+  assert.equal(
+    detectRepeatedErrors([['TypeError: boom'], ['TypeError: boom']]).length,
+    1,
+  );
+
+  // Default session tracker depth threshold (50) and max tracked sessions cap (100)
+  assert.equal(DEFAULT_DEPTH_THRESHOLD, 50);
+  assert.equal(MAX_TRACKED_SESSIONS, 100);
+  const tracker = createPersistentTracker(dir, env);
+  for (let i = 0; i < 101; i++) tracker.recordToolCall(`sess-cap-${i}`, 'write_to_file', { TargetFile: 'src/a.mjs' });
+  const sessionsDoc = JSON.parse(readFileSync(join(dir, '.adlc', 'sessions.json'), 'utf8'));
+  assert.equal(Object.keys(sessionsDoc).length, 100);
+
+  // PLUGIN_ROOT guard: decide with no workspacePaths from inside LIB_DIR ignores plugin dir as project root
+  const prevCwd = process.cwd();
+  try {
+    process.chdir(LIB_DIR);
+    const noWs = decide({ toolCall: { name: 'read_file', args: { path: 'a.js' } } }, { env });
+    assert.equal(noWs.decision, 'pass');
+  } finally {
+    process.chdir(prevCwd);
+  }
   assert.equal(res.allow_tool, true);
 
   const post = postToolUse({ workspacePaths: [dir], conversationId: 'stdin-1', exitCode: 0, output: 'ok' }, { env });

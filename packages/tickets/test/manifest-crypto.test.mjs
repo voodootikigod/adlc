@@ -535,4 +535,17 @@ test('verifyChain rejects unsupported sigAlg and unsigned sigAlg:ed25519 entries
   });
   assert.equal(r2.valid, false);
   assert.equal(r2.break.reason, 'unsigned entry');
+
+  // Segment chain verification reports exact 1-based lineNo on broken line 1
+  withTmpDir((root) => {
+    const adlcDir = join(root, '.adlc');
+    const segDir = join(adlcDir, 'manifest.d');
+    mkdirSync(segDir, { recursive: true });
+    writeFileSync(join(segDir, '.store.json'), JSON.stringify({ formatVersion: 1, mode: 'segmented' }));
+    writeFileSync(join(adlcDir, ADMIN_PUB_FILENAME), kp.publicKey);
+    const badSeg = makeUnsignedEntry(1, null, { sigAlg: SIG_ALG_ED25519, sig: '00'.repeat(64), anchor: null });
+    writeFileSync(join(segDir, 'feat-01J00000000000000000000000.jsonl'), `${JSON.stringify(badSeg)}\n`);
+    const forestRes = forestChainsIntact(adlcDir, { key: null, publicKey: kp.publicKey, requireSignatures: true });
+    assert.equal(forestRes, false);
+  });
 });
