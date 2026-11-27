@@ -40,7 +40,7 @@ function buildMinimalReproEnv(baseEnv, isolatedHome) {
   return env;
 }
 
-function resolveExecutable(cmd, workDir, pathEnv = process.env.PATH ?? '') {
+function resolveExecutable(cmd, workDir, pathEnv) {
   if (typeof cmd !== 'string' || cmd.length === 0 || cmd.startsWith('-') || cmd.includes('\0')) {
     return null;
   }
@@ -63,7 +63,7 @@ function resolveExecutable(cmd, workDir, pathEnv = process.env.PATH ?? '') {
   }
 
   const exts = process.platform === 'win32' ? ['', '.exe', '.cmd', '.bat', '.com'] : [''];
-  for (const dir of pathEnv.split(delimiter)) {
+  for (const dir of String(pathEnv).split(delimiter)) {
     if (!dir) continue;
     for (const ext of exts) {
       const candidate = join(dir, `${cmd}${ext}`);
