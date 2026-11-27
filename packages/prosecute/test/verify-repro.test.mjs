@@ -91,18 +91,36 @@ test('verifyRepro: scrubs ADLC_MANIFEST_KEY and sensitive candidate env in temp 
   assert.equal(res.reproduced, true);
   assert.equal(res.exitCode, 0);
 
-  // Verify workspace symlinks inside node_modules/@scope/pkg cannot mutate live worktree packages
-  mkdirSync(join(fixtureDir, 'packages', 'pkg'), { recursive: true });
+  // Verify workspace symlinks inside node_modules/@scope/pkg AND node_modules/.bin cannot mutate live worktree packages
+  mkdirSync(join(fixtureDir, 'packages', 'pkg', 'bin'), { recursive: true });
   writeFileSync(join(fixtureDir, 'packages', 'pkg', 'index.mjs'), 'export const safe = 1;\n');
+  writeFileSync(join(fixtureDir, 'packages', 'pkg', 'bin', 'cli.mjs'), '#!/usr/bin/env node\nexport const binSafe = 1;\n');
   mkdirSync(join(fixtureDir, 'node_modules', '@demo'), { recursive: true });
+  mkdirSync(join(fixtureDir, 'node_modules', '.bin'), { recursive: true });
   symlinkSync(join(fixtureDir, 'packages', 'pkg'), join(fixtureDir, 'node_modules', '@demo', 'pkg'), 'dir');
+  symlinkSync(join(fixtureDir, 'packages', 'pkg', 'bin', 'cli.mjs'), join(fixtureDir, 'node_modules', '.bin', 'demo-cli'), 'file');
 
   const mutRes = verifyRepro({
-    cmd: 'node --input-type=module -e "import { writeFileSync } from \'node:fs\'; writeFileSync(\'node_modules/@demo/pkg/index.mjs\', \'MUTATED\');"',
+    cmd: 'node --input-type=module -e "import { writeFileSync } from \'node:fs\'; writeFileSync(\'node_modules/@demo/pkg/index.mjs\', \'MUTATED\'); writeFileSync(\'node_modules/.bin/demo-cli\', \'MUTATED_BIN\');"',
     root: fixtureDir,
   });
   assert.equal(mutRes.exitCode, 0, mutRes.stderr);
   assert.equal(readFileSync(join(fixtureDir, 'packages', 'pkg', 'index.mjs'), 'utf8'), 'export const safe = 1;\n');
+  assert.equal(readFileSync(join(fixtureDir, 'packages', 'pkg', 'bin', 'cli.mjs'), 'utf8'), '#!/usr/bin/env node\nexport const binSafe = 1;\n');
+});
+
+test('verifyRepro: treats signal termination (null exit status) as non-zero failure in both modes', () => {
+  const sigDefault = verifyRepro({ cmd: 'node -e "process.kill(process.pid, \'SIGKILL\')"' });
+  assert.equal(sigDefault.operationalError, false);
+  assert.equal(sigDefault.status, null);
+  assert.equal(sigDefault.reproduced, false);
+  assert.equal(sigDefault.exitCode, 2);
+
+  const sigExpectFail = verifyRepro({ cmd: 'node -e "process.kill(process.pid, \'SIGKILL\')"', expectFail: true });
+  assert.equal(sigExpectFail.operationalError, false);
+  assert.equal(sigExpectFail.status, null);
+  assert.equal(sigExpectFail.reproduced, true);
+  assert.equal(sigExpectFail.exitCode, 0);
 });
 
 test('adlc-prosecute verify-repro CLI dispatch and JSON output', () => {

@@ -5,7 +5,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 const ASSERTION_PY_RE =
-  /\b(?:assert(?:\s*\.|\s*\(|\s*!|_eq!|_ne!|\s)|expect\s*\(|\.should\b|t\.(?:Fatal|Fatalf|Error|Errorf)\s*\()/g;
+  /\b(?:assert(?:\s*\.|\s*\(|\s*!|_eq!|_ne!|\s)|self\.assert[A-Z]\w*\s*\(|expect\s*\(|\.should\b|t\.(?:Fatal|Fatalf|Error|Errorf)\s*\()/g;
 const ASSERTION_CODE_RE =
   /\b(?:assert(?:\s*\.|\s*\(|\s*!|_eq!|_ne!)|expect\s*\(|\.should\b|t\.(?:Fatal|Fatalf|Error|Errorf)\s*\()/g;
 
@@ -18,6 +18,9 @@ const TAUTOLOGICAL_PATTERNS = [
   /^expect\(\s*true\s*\)\s*\.\s*(?:toBe\(\s*true\s*\)|toEqual\(\s*true\s*\)|toStrictEqual\(\s*true\s*\)|toBeTruthy\(\s*\))/,
   /^expect\(\s*false\s*\)\s*\.\s*(?:toBe\(\s*false\s*\)|toEqual\(\s*false\s*\)|toBeFalsy\(\s*\))/,
   /^assert\s+\(?\s*True\s*\)?\s*(?:,\s*(?:'[^']*'|"[^"]*")\s*)?(?:;|\s*$)/,
+  /^self\.assertTrue\(\s*True\s*(?:,\s*(?:'[^']*'|"[^"]*")\s*)?\)/,
+  /^self\.assertFalse\(\s*False\s*(?:,\s*(?:'[^']*'|"[^"]*")\s*)?\)/,
+  /^self\.assert(?:Equal|Equals|Is)\(\s*(True|False|None|\d+|'[^']*'|"[^"]*")\s*,\s*\1\s*\)/,
 ];
 
 const MOCK_CODE_PATTERNS = [/(?:vi|jest)\.mock\(\s*(['"])( +)\1/g, /\bmock\.module\(\s*(['"])( +)\1/g];

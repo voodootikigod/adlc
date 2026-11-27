@@ -112,6 +112,11 @@ describe('evaluateTriage track precedence and git collection', () => {
     assert.equal(archContract.track, 'architectural');
     assert.deepEqual(archContract.requiredGates, TRACK_REQUIREMENTS.architectural);
 
+    const mtsContract = evaluateTriage({ cwd, files: ['packages/a/index.d.mts', 'packages/b/mod.cts'], linesAdded: 10, linesDeleted: 0 });
+    assert.equal(mtsContract.track, 'architectural');
+    assert.equal(mtsContract.contractSurfaceChanged, true);
+    assert.equal(mtsContract.codeFilesChanged, 2);
+
     const archRisk = evaluateTriage({ cwd, files: ['packages/a/x.mjs', 'plugins/b/y.mjs', 'crates/c/src/auth/guard.rs'] });
     assert.equal(archRisk.track, 'architectural');
   });
@@ -133,6 +138,33 @@ describe('evaluateTriage track precedence and git collection', () => {
     assert.equal(res.linesDeleted, 2);
     assert.equal(res.totalCodeLines, 33);
     assert.equal(res.codeFilesChanged, 2);
+
+    // Subdirectory cwd still resolves repo-root-relative untracked file line counts accurately
+    const subRes = evaluateTriage({ cwd: join(dir, 'packages/alpha') });
+    assert.equal(subRes.track, 'bounded');
+    assert.equal(subRes.linesAdded, 31);
+
+    // Staged-only index change (working tree reverted to HEAD while index holds risk-tier file) is detected
+    const { dir: stagedRepo, g: gStaged } = makeGitRepo(t);
+    mkdirSync(join(stagedRepo, 'packages/a/auth'), { recursive: true });
+    writeFileSync(join(stagedRepo, 'packages/a/auth/guard.mjs'), 'export const v = 1;\n');
+    gStaged('add', '-A');
+    gStaged('commit', '-qm', 'init');
+    writeFileSync(join(stagedRepo, 'packages/a/auth/guard.mjs'), 'export const v = 2;\n');
+    gStaged('add', 'packages/a/auth/guard.mjs');
+    writeFileSync(join(stagedRepo, 'packages/a/auth/guard.mjs'), 'export const v = 1;\n');
+    const stagedRes = evaluateTriage({ cwd: stagedRepo });
+    assert.equal(stagedRes.track, 'substantial');
+    assert.ok(stagedRes.riskMatches.length > 0);
+
+    // Unborn HEAD (git init + staged files before initial commit) is classified accurately
+    const { dir: unbornRepo, g: gUnborn } = makeGitRepo(t);
+    mkdirSync(join(unbornRepo, 'packages/a/lib'), { recursive: true });
+    writeFileSync(join(unbornRepo, 'packages/a/lib/big.mts'), `${'export const x = 1;\n'.repeat(160)}`);
+    gUnborn('add', '-A');
+    const unbornRes = evaluateTriage({ cwd: unbornRepo });
+    assert.equal(unbornRes.track, 'substantial');
+    assert.equal(unbornRes.linesAdded, 160);
   });
 });
 
@@ -216,6 +248,12 @@ describe('assertPhase track modes and witnessed fresh-context gates', () => {
     assert.deepEqual(assertPhase('bounded', { dir: bDir, ticket: 'T1', revision: bRev, cwd }).missing, ['p5-complete']);
     writeFullP5(bDir, { ticket: 'T1', revision: bRev, cwd });
     assert.equal(assertPhase('bounded', { dir: bDir, ticket: 'T1', revision: bRev, cwd, track: 'bounded' }).ok, true);
+
+    // Rejects surviving hollow-test mutants on bounded and p3 as well
+    appendEntry({ gate: 'hollow-test', ticket: 'T1', data: { summary: { survived: 2 } } }, bDir);
+    assert.equal(assertPhase('bounded', { dir: bDir, ticket: 'T1', revision: bRev, cwd }).ok, false);
+    appendEntry({ gate: 'hollow-test', ticket: 'T1', data: { summary: { survived: 0 } } }, bDir);
+    assert.equal(assertPhase('bounded', { dir: bDir, ticket: 'T1', revision: bRev, cwd }).ok, true);
 
     // Rejects [dry:true, dry:false] when latest pass at revision found defects
     appendEntry({ type: 'p5-pass-completed', revision: rev, dry: false, lens: 'security' }, adlcDir);

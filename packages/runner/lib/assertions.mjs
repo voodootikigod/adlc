@@ -367,6 +367,15 @@ function latestRailCheckEntry(entries, ticket, revision, allowUnrevisioned = fal
     .at(-1);
 }
 
+function hollowTestIntegrityErrors(entries, ticket, revision, allowUnrevisioned = true) {
+  const latestHollow = entries
+    .filter((entry) => entryType(entry) === 'hollow-test' && matchesTicket(entry, ticket))
+    .filter((entry) => (allowUnrevisioned && entry?.revision === undefined) || matchesRevision(entry, revision))
+    .at(-1);
+  const hollowSurvivors = Number(latestHollow?.survived ?? latestHollow?.data?.survived ?? latestHollow?.data?.summary?.survived ?? 0);
+  return hollowSurvivors > 0 ? [`hollow-test recorded ${hollowSurvivors} surviving mutant(s)`] : [];
+}
+
 function p4IntegrityErrors(entries, ticket, revision, cwd, allowUnrevisioned = false) {
   const entry = latestRailCheckEntry(entries, ticket, revision, allowUnrevisioned);
   if (!entry) return [];
@@ -601,11 +610,8 @@ export function assertPhase(
       };
     }
 
-    const latestHollow = trivialEntries
-      .filter((entry) => entryType(entry) === 'hollow-test' && (entry.revision === undefined || matchesRevision(entry, resolvedRev)))
-      .at(-1);
-    const hollowSurvivors = Number(latestHollow?.survived ?? latestHollow?.data?.survived ?? latestHollow?.data?.summary?.survived ?? 0);
-    if (hollowSurvivors > 0) {
+    const hollowErrors = hollowTestIntegrityErrors(trivialEntries, ticket, resolvedRev, true);
+    if (hollowErrors.length > 0) {
       return {
         ok: false,
         operational: false,
@@ -613,7 +619,7 @@ export function assertPhase(
         ticket,
         revision: resolvedRev,
         missing: [],
-        errors: [`hollow-test recorded ${hollowSurvivors} surviving mutant(s)`],
+        errors: hollowErrors,
       };
     }
 
@@ -770,6 +776,9 @@ export function assertPhase(
   const p4Errors = phase === 'p4' || phase === 'bounded'
     ? p4IntegrityErrors(entries, ticket, resolvedRevision, cwd, phase === 'bounded')
     : [];
+  const hollowErrors = phase === 'bounded' || phase === 'p3'
+    ? hollowTestIntegrityErrors(entries, ticket, resolvedRevision, true)
+    : [];
   const enforceFresh =
     Object.hasOwn(PHASE_REQUIREMENTS, phase) &&
     (requireFreshContext === true || track === 'substantial' || track === 'architectural');
@@ -822,6 +831,17 @@ export function assertPhase(
       revision: resolvedRevision,
       missing: [],
       errors: p4Errors,
+    };
+  }
+  if (hollowErrors.length > 0) {
+    return {
+      ok: false,
+      operational: false,
+      phase,
+      ticket,
+      ...(resolvedRevision ? { revision: resolvedRevision } : {}),
+      missing: [],
+      errors: hollowErrors,
     };
   }
   const p4BindingErrors = phase === 'p4' ? p4EvidenceBindingErrors(entries, ticket, cwd) : [];

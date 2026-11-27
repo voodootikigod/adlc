@@ -53,9 +53,11 @@ export async function run(opts) {
     recordVerdictSource,
     ticket,
     provider,
-    env = process.env,
   } = opts;
-  const rawKey = opts.key !== undefined ? opts.key : (env?.ADLC_MANIFEST_KEY ?? null);
+  const env = opts.env ?? process.env;
+  const rawKey = opts.key !== undefined
+    ? opts.key
+    : (opts.env !== undefined ? (opts.env?.ADLC_MANIFEST_KEY ?? null) : null);
   const key = rawKey === '' ? null : rawKey;
 
   if (recordVerdictSource !== undefined && !ticket) {

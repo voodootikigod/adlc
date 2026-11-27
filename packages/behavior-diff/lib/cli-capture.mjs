@@ -143,7 +143,12 @@ export async function captureCommand(entry, defaultTimeoutMs = DEFAULT_CLI_TIMEO
     const timer = setTimeout(() => {
       timedOut = true;
       try { child.kill('SIGKILL'); } catch {}
+      try { child.stdin?.destroy(); } catch {}
+      try { child.stdout?.destroy(); } catch {}
+      try { child.stderr?.destroy(); } catch {}
+      finish({ id, cmd, args, error: `timeout after ${timeoutMs}ms` });
     }, timeoutMs);
+    timer.unref?.();
 
     const outChunks = [];
     let outLen = 0;

@@ -90,16 +90,18 @@ function parseStrictJsonl(filePath, { maxBytes = MAX_MANIFEST_FILE_BYTES, remain
  */
 export function hasManifestEvidence(
   root,
-  {
+  opts = {},
+) {
+  const {
     gate = null,
     ticketId = null,
     revision = null,
     ticketHash = null,
-    key = process.env.ADLC_MANIFEST_KEY ?? null,
+    env = process.env,
     maxBytes = MAX_MANIFEST_FILE_BYTES,
     maxSegments = MAX_MANIFEST_SEGMENTS,
-  } = {},
-) {
+  } = opts;
+  const key = opts.key !== undefined ? opts.key : (env?.ADLC_MANIFEST_KEY ?? null);
   if (!root) return { found: false, matchingEntries: [], manifestSegments: [], error: null };
   if (typeof key !== 'string' || key.length === 0) {
     return {
@@ -154,6 +156,7 @@ export function hasManifestEvidence(
   }
 
   const matchingEntries = allEntries.filter((entry) => {
+    if (entry.data?.sessionTelemetry === true || typeof entry.data?.transcriptSha256 === 'string') return false;
     if (gate && entry.gate !== gate) return false;
     if (ticketId && entry.ticket !== ticketId) return false;
     if (revision && entry.data?.revision !== revision) return false;
@@ -192,22 +195,24 @@ export function hasManifestEvidence(
  * @param {string | null} [opts.sessionId]
  * @returns {{ decision: 'allow' | 'block', reason: string | null, risk: { tier: 'high' | 'normal', signals: string[] }, hasEvidence: boolean, manifestSegments: string[], root: string | null, harvestedUsage?: object | null }}
  */
-export function evaluateStop({
-  cwd = process.cwd(),
-  outerRoot = null,
-  ticket = null,
-  requiredGate = null,
-  revision = null,
-  ticketHash = null,
-  requireEvidence = false,
-  key = process.env.ADLC_MANIFEST_KEY ?? null,
-  transcriptPath = null,
-  recordSessionUsage = false,
-  phaseGate = 'p4',
-  sessionId = null,
-} = {}) {
+export function evaluateStop(opts = {}) {
+  const {
+    cwd = process.cwd(),
+    outerRoot = null,
+    ticket = null,
+    requiredGate = null,
+    revision = null,
+    ticketHash = null,
+    requireEvidence = false,
+    env = process.env,
+    transcriptPath = null,
+    recordSessionUsage = false,
+    phaseGate = 'p4',
+    sessionId = null,
+  } = opts;
+  const key = opts.key !== undefined ? opts.key : (env?.ADLC_MANIFEST_KEY ?? null);
   const root = enclosingAdlcRoot(cwd, { outerRoot });
-  const loaded = !ticket && root ? readActiveTicketRails(root) : null;
+  const loaded = !ticket && root ? readActiveTicketRails(root, { env }) : null;
   if (loaded && !loaded.ok && requireEvidence) {
     return {
       decision: 'block',
@@ -228,13 +233,16 @@ export function evaluateStop({
         revision,
         ticketHash,
         key,
+        env,
       })
     : { found: false, matchingEntries: [], manifestSegments: [], error: null };
+
+  const willBlock = Boolean(requireEvidence && (evidence.error || !evidence.found));
 
   let harvestedUsage = null;
   if (transcriptPath) {
     harvestedUsage = harvestTranscriptUsage(transcriptPath);
-    if (recordSessionUsage === true && root && harvestedUsage?.calls > 0) {
+    if (!willBlock && recordSessionUsage === true && root && harvestedUsage?.calls > 0) {
       const adlcDir = join(root, '.adlc');
       const rootManifest = join(adlcDir, 'manifest.jsonl');
       const { valid: segments } = discoverSegments(adlcDir);
@@ -281,6 +289,7 @@ export function evaluateStop({
             dir: adlcDir,
             key: hasSigningKey ? key : null,
             rawData: JSON.stringify({
+              sessionTelemetry: true,
               sessionId: sessionId ?? null,
               transcriptSha256: harvestedUsage.transcriptSha256,
               usage: harvestedUsage.usage,
@@ -294,7 +303,7 @@ export function evaluateStop({
     }
   }
 
-  if (requireEvidence && (evidence.error || !evidence.found)) {
+  if (willBlock) {
     const label = requiredGate ? `gate "${requiredGate}"` : 'gate';
     const ticketLabel = activeTicket?.id ? ` for ticket "${activeTicket.id}"` : '';
     const detail = evidence.error

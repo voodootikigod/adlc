@@ -181,6 +181,21 @@ describe('CLI command validation and capture (cli-capture.mjs)', () => {
     });
     assert.ok(timeoutRec.error);
     assert.match(timeoutRec.error, /timeout after 100ms/);
+
+    // Grandchild inheriting stdio pipes must not block timeout resolution
+    const t0 = Date.now();
+    const inheritedPipeRec = await captureCommand({
+      id: 'descendant-pipe',
+      cmd: process.execPath,
+      args: [
+        '-e',
+        'import("node:child_process").then(({ spawn }) => { const c = spawn(process.execPath, ["-e", "setTimeout(() => {}, 2500)"], { stdio: "inherit" }); c.unref(); setTimeout(() => {}, 2500); });',
+      ],
+      timeoutMs: 100,
+    });
+    const elapsed = Date.now() - t0;
+    assert.match(inheritedPipeRec.error, /timeout after 100ms/);
+    assert.ok(elapsed < 1500, `expected prompt timeout resolution (<1500ms), took ${elapsed}ms`);
   });
 });
 

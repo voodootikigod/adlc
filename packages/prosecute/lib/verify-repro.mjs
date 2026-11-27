@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, cpSync, symlinkSync, existsSync, mkdirSync, readdirSync, realpathSync } from 'node:fs';
+import { mkdtempSync, rmSync, cpSync, symlinkSync, existsSync, mkdirSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
 import { git, repoRoot, tokenizeCommand, sanitizeCandidateEnv } from '@adlc/core';
@@ -23,7 +23,7 @@ function linkWorkspaceSafeNodeModules(root, tempWorkspace) {
     for (const ent of readdirSync(srcDir, { withFileTypes: true })) {
       const srcPath = join(srcDir, ent.name);
       const dstPath = join(dstDir, ent.name);
-      if (ent.name.startsWith('@') && ent.isDirectory()) {
+      if ((ent.name.startsWith('@') || ent.name === '.bin') && ent.isDirectory() && !ent.isSymbolicLink()) {
         linkEntries(srcPath, dstPath);
         continue;
       }
@@ -36,7 +36,9 @@ function linkWorkspaceSafeNodeModules(root, tempWorkspace) {
           !relToRoot.startsWith(`.${sep}`) &&
           relToRoot.split(sep)[0] !== 'node_modules';
         const linkTarget = pointsInsideRepo ? join(tempWorkspace, relToRoot) : realTarget;
-        symlinkSync(linkTarget, dstPath, ent.isDirectory() ? 'junction' : 'file');
+        const targetIsDir = statSync(realTarget).isDirectory();
+        const linkType = targetIsDir ? (process.platform === 'win32' ? 'junction' : 'dir') : 'file';
+        symlinkSync(linkTarget, dstPath, linkType);
       } catch {
         // ignore broken or unreadable node_modules entries
       }
@@ -233,12 +235,13 @@ export function verifyRepro({
       };
     }
 
-    const status = res.status ?? 0;
+    const status = res.status;
+    const exitedZero = status === 0 && !res.signal;
     let reproduced = false;
     let exitCode = 2;
 
     if (expectFail) {
-      if (status !== 0) {
+      if (!exitedZero) {
         reproduced = true;
         exitCode = 0;
       } else {
@@ -246,7 +249,7 @@ export function verifyRepro({
         exitCode = 2;
       }
     } else {
-      if (status === 0) {
+      if (exitedZero) {
         reproduced = true;
         exitCode = 0;
       } else {
@@ -260,6 +263,7 @@ export function verifyRepro({
       exitCode,
       operationalError: false,
       status,
+      signal: res.signal ?? null,
       stdout: res.stdout || '',
       stderr: res.stderr || '',
     };

@@ -7,6 +7,7 @@ import {
   git,
   isGitRepo,
   refExists,
+  repoRoot,
   splitNulPaths,
 } from '@adlc/core';
 import { TRACK_REQUIREMENTS } from './assertions.mjs';
@@ -17,10 +18,10 @@ export const TEST_FILE_RE =
   /(?:^|\/)(?:test|tests|__tests__|cli-test|adapter-test)\/|\.(?:test|spec)\.[a-z\d]+$|(?:^|\/)test_[^/]+\.py$|_test\.(?:py|go)$/i;
 
 export const CODE_EXT_RE =
-  /\.(?:mjs|cjs|js|jsx|ts|tsx|py|go|rs|java|rb|php|cs|c|cc|cpp|h|hpp|swift|kt)$/i;
+  /\.(?:mjs|cjs|mts|cts|js|jsx|ts|tsx|py|go|rs|java|rb|php|cs|c|cc|cpp|h|hpp|swift|kt)$/i;
 
 export const CONTRACT_SURFACE_RE =
-  /(?:^|\/)package\.json$|\.d\.ts$|(?:^|\/)(?:drizzle|migrations|prisma\/migrations|alembic\/versions|supabase\/migrations)\/|(?:^|\/)openapi(?:\.[a-z\d]+)?$|(?:^|\/)schema\.(?:prisma|sql|graphql|json|ya?ml)$/i;
+  /(?:^|\/)package\.json$|\.d\.[mc]?ts$|(?:^|\/)(?:drizzle|migrations|prisma\/migrations|alembic\/versions|supabase\/migrations)\/|(?:^|\/)openapi(?:\.[a-z\d]+)?$|(?:^|\/)schema\.(?:prisma|sql|graphql|json|ya?ml)$/i;
 
 export function nonTestCode(filePath) {
   return CODE_EXT_RE.test(filePath) && !TEST_FILE_RE.test(filePath);
@@ -86,17 +87,58 @@ function readUntrackedPaths(cwd) {
   return untracked;
 }
 
-function collectGitNumstat(cwd, base, scopedFiles) {
-  if (!refExists(base, cwd)) {
+function mergeNumstatMaps(primary, secondary) {
+  const merged = new Map(primary);
+  for (const [path, st] of secondary.entries()) {
+    const existing = merged.get(path);
+    if (!existing) {
+      merged.set(path, st);
+    } else {
+      merged.set(path, {
+        added: Math.max(existing.added, st.added),
+        deleted: Math.max(existing.deleted, st.deleted),
+      });
+    }
+  }
+  return merged;
+}
+
+function collectGitNumstat(gitRoot, base, scopedFiles) {
+  const pathTail = scopedFiles && scopedFiles.length > 0 ? ['--', ...scopedFiles] : ['--'];
+  if (!refExists(base, gitRoot)) {
     if (base !== 'HEAD') {
       throw new OpError(`unknown git base ref: ${base}`);
     }
-    return new Map();
+    const stagedBuf = git(['--literal-pathspecs', 'diff', '--cached', '--numstat', '--no-renames', '-z', ...pathTail], {
+      cwd: gitRoot,
+      encoding: 'buffer',
+    });
+    const unstagedBuf = git(['--literal-pathspecs', 'diff', '--numstat', '--no-renames', '-z', ...pathTail], {
+      cwd: gitRoot,
+      encoding: 'buffer',
+    });
+    const stagedMap = parseNumstatBuffer(stagedBuf);
+    const unstagedMap = parseNumstatBuffer(unstagedBuf);
+    const combined = new Map(stagedMap);
+    for (const [p, st] of unstagedMap.entries()) {
+      const prev = combined.get(p);
+      combined.set(p, prev ? { added: prev.added + st.added, deleted: prev.deleted + st.deleted } : st);
+    }
+    return combined;
   }
-  const args = ['--literal-pathspecs', 'diff', '--numstat', '--no-renames', '-z', base, '--'];
-  if (scopedFiles && scopedFiles.length > 0) args.push(...scopedFiles);
-  const buf = git(args, { cwd, encoding: 'buffer' });
-  return parseNumstatBuffer(buf);
+  const wtBuf = git(['--literal-pathspecs', 'diff', '--numstat', '--no-renames', '-z', base, ...pathTail], {
+    cwd: gitRoot,
+    encoding: 'buffer',
+  });
+  const wtMap = parseNumstatBuffer(wtBuf);
+  if (base === 'HEAD') {
+    const idxBuf = git(['--literal-pathspecs', 'diff', '--cached', '--numstat', '--no-renames', '-z', 'HEAD', ...pathTail], {
+      cwd: gitRoot,
+      encoding: 'buffer',
+    });
+    return mergeNumstatMaps(wtMap, parseNumstatBuffer(idxBuf));
+  }
+  return wtMap;
 }
 
 function partitionForFile(filePath) {
@@ -126,8 +168,9 @@ export function evaluateTriage({
       linesAdded = overrideAdded;
       linesDeleted = overrideDeleted;
     } else if (isGitRepo(cwd)) {
-      const stats = collectGitNumstat(cwd, base, changedFiles);
-      const untracked = new Set(readUntrackedPaths(cwd));
+      const gitRoot = repoRoot(cwd);
+      const stats = collectGitNumstat(gitRoot, base, changedFiles);
+      const untracked = new Set(readUntrackedPaths(gitRoot));
       let gitAdded = 0;
       let gitDeleted = 0;
       for (const f of changedFiles) {
@@ -137,7 +180,7 @@ export function evaluateTriage({
           gitAdded += st.added;
           gitDeleted += st.deleted;
         } else if (untracked.has(f)) {
-          gitAdded += countFileLines(resolve(cwd, f));
+          gitAdded += countFileLines(resolve(gitRoot, f));
         }
       }
       linesAdded = hasAddedOverride ? overrideAdded : gitAdded;
@@ -154,14 +197,16 @@ export function evaluateTriage({
     if (!isGitRepo(cwd)) {
       throw new OpError('not inside a git repository (pass --files or run inside a git worktree)');
     }
-    const stats = collectGitNumstat(cwd, base, null);
-    const untracked = readUntrackedPaths(cwd);
+    const gitRoot = repoRoot(cwd);
+    const effectiveDir = resolve(cwd, dir);
+    const stats = collectGitNumstat(gitRoot, base, null);
+    const untracked = readUntrackedPaths(gitRoot);
     const fileSet = new Set();
     let gitAdded = 0;
     let gitDeleted = 0;
 
     for (const [f, st] of stats.entries()) {
-      if (isAdlcRuntimePath(f, cwd, dir)) continue;
+      if (isAdlcRuntimePath(f, gitRoot, effectiveDir)) continue;
       fileSet.add(f);
       if (nonTestCode(f)) {
         gitAdded += st.added;
@@ -169,10 +214,10 @@ export function evaluateTriage({
       }
     }
     for (const f of untracked) {
-      if (isAdlcRuntimePath(f, cwd, dir) || fileSet.has(f)) continue;
+      if (isAdlcRuntimePath(f, gitRoot, effectiveDir) || fileSet.has(f)) continue;
       fileSet.add(f);
       if (nonTestCode(f)) {
-        gitAdded += countFileLines(resolve(cwd, f));
+        gitAdded += countFileLines(resolve(gitRoot, f));
       }
     }
 

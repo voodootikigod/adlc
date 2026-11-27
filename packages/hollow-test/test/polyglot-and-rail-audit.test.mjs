@@ -84,8 +84,8 @@ function makeRustfmtShim(t) {
   const script = [
     '#!/usr/bin/env node',
     "import { readFileSync } from 'node:fs';",
-    'const file = process.argv[process.argv.length - 1];',
-    "const src = readFileSync(file, 'utf8');",
+    'const lastArg = process.argv[process.argv.length - 1];',
+    'const src = lastArg && lastArg.endsWith(".rs") ? readFileSync(lastArg, "utf8") : readFileSync(0, "utf8");',
     'if (src.includes("SYNTAX_ERR") || (src.match(/\\{/g)?.length ?? 0) !== (src.match(/\\}/g)?.length ?? 0)) {',
     '  process.stderr.write("error: unexpected token\\n");',
     '  process.exit(1);',
@@ -289,7 +289,13 @@ describe('checkPolyglotSyntax & CLI --polyglot / --structural', () => {
 
     const shimDir = RUSTFMT_BIN ? dirname(RUSTFMT_BIN) : makeRustfmtShim(t);
     const rustEnv = { ...process.env, PATH: `${shimDir}${delimiter}${process.env.PATH ?? ''}` };
-    assert.equal(checkPolyglotSyntax('lib.rs', 'pub fn ok() -> bool { true }\n', 'rust', { env: rustEnv }).verdict, 'valid');
+    const crateDir = tmp(t, 'rust-crate-');
+    mkdirSync(join(crateDir, 'src'), { recursive: true });
+    writeFileSync(join(crateDir, 'Cargo.toml'), '[package]\nname = "demo"\nversion = "0.1.0"\nedition = "2021"\n', 'utf8');
+    assert.equal(
+      checkPolyglotSyntax(join(crateDir, 'src/lib.rs'), 'mod submod;\npub async fn ok() -> bool { true }\n', 'rust', { env: rustEnv }).verdict,
+      'valid',
+    );
     assert.equal(checkPolyglotSyntax('lib.rs', 'pub fn broken() -> bool { \n', 'rust', { env: rustEnv }).verdict, 'invalid');
   });
 
@@ -539,6 +545,22 @@ describe('auditRailAdequacy & CLI --audit-rails', () => {
     assert.equal(badTaut.ok, false);
     assert.equal(badTaut.audited, 2);
     assert.deepEqual(badTaut.violations.map((v) => v.reason), ['tautological-only', 'tautological-only']);
+
+    // Python unittest.TestCase assertions (self.assertEqual / self.assertTrue)
+    writeFileSync(
+      join(dir, 'test/unittest_valid.py'),
+      'import unittest\nclass T(unittest.TestCase):\n    def test_ok(self):\n        self.assertTrue(gate(4))\n        self.assertEqual(gate(5), False)\n',
+      'utf8',
+    );
+    writeFileSync(
+      join(dir, 'test/unittest_taut.py'),
+      'import unittest\nclass T(unittest.TestCase):\n    def test_taut(self):\n        self.assertTrue(True)\n        self.assertEqual(1, 1)\n',
+      'utf8',
+    );
+    assert.equal(auditRailAdequacy(['test/unittest_valid.py'], { root: dir }).ok, true);
+    const utTaut = auditRailAdequacy(['test/unittest_taut.py'], { root: dir });
+    assert.equal(utTaut.ok, false);
+    assert.equal(utTaut.violations[0].reason, 'tautological-only');
 
     // Mock-only without unmocked importer fails; two files that BOTH mock the same stem also fail
     const badMockSingle = auditRailAdequacy(['test/mock-unit.test.mjs'], { root: dir });

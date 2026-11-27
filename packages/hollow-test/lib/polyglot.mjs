@@ -3,9 +3,9 @@
 // line-level mutation operators, and isolated temp-file syntax validation.
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { sanitizeCandidateEnv } from '@adlc/core';
 
 export function polyglotLanguage(file) {
@@ -195,26 +195,60 @@ export function generatePolyglotMutants(content, lang, { targetLines, maxMutants
 const SYNTAX_SPECS = {
   python: { ext: '.py', bin: 'python3', args: (f) => ['-I', '-m', 'py_compile', f] },
   go: { ext: '.go', bin: 'gofmt', args: (f) => ['-e', f] },
-  rust: { ext: '.rs', bin: 'rustfmt', args: (f) => ['--emit', 'stdout', f] },
+  rust: { ext: '.rs', bin: 'rustfmt', stdin: true },
 };
+
+function detectRustEdition(filePath) {
+  if (typeof filePath !== 'string' || !filePath) return '2021';
+  let cur = dirname(resolve(filePath));
+  for (let depth = 0; depth < 8; depth += 1) {
+    const cargoPath = join(cur, 'Cargo.toml');
+    if (existsSync(cargoPath)) {
+      try {
+        const cargo = readFileSync(cargoPath, 'utf8');
+        const m = cargo.match(/^\s*edition\s*=\s*"(\d{4})"/m);
+        if (m) return m[1];
+      } catch {
+        // fall through to default edition
+      }
+      break;
+    }
+    const parent = dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  return '2021';
+}
 
 export function checkPolyglotSyntax(filePath, content, lang, { env = process.env, timeoutMs = 30_000 } = {}) {
   const spec = SYNTAX_SPECS[lang ?? polyglotLanguage(filePath)];
   if (!spec) return { verdict: 'unknown', detail: `unsupported polyglot language for ${String(filePath)}` };
-  const dir = mkdtempSync(join(tmpdir(), 'adlc-polyglot-'));
   let result;
-  try {
-    const tmpFile = join(dir, `check${spec.ext}`);
-    writeFileSync(tmpFile, content, 'utf8');
-    result = spawnSync(spec.bin, spec.args(tmpFile), {
+  if (spec.stdin) {
+    const edition = detectRustEdition(filePath);
+    result = spawnSync(spec.bin, ['--edition', edition, '--emit', 'stdout'], {
       shell: false,
       encoding: 'utf8',
       timeout: timeoutMs,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      input: content,
+      stdio: ['pipe', 'pipe', 'pipe'],
       env: sanitizeCandidateEnv(env),
     });
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+  } else {
+    const dir = mkdtempSync(join(tmpdir(), 'adlc-polyglot-'));
+    try {
+      const tmpFile = join(dir, `check${spec.ext}`);
+      writeFileSync(tmpFile, content, 'utf8');
+      result = spawnSync(spec.bin, spec.args(tmpFile), {
+        shell: false,
+        encoding: 'utf8',
+        timeout: timeoutMs,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: sanitizeCandidateEnv(env),
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
   if (result.error?.code === 'ENOENT') return { verdict: 'unknown', detail: `missing toolchain binary "${spec.bin}" (${result.error.message})` };
   if (result.error?.code === 'ETIMEDOUT') return { verdict: 'unknown', detail: `${spec.bin} syntax check timed out` };

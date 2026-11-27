@@ -111,6 +111,29 @@ test('live run() with --ticket records witnessed headless-cli provenance and omi
   });
   const isolatedEntry = JSON.parse(readFileSync(join(isolatedDir, 'manifest.jsonl'), 'utf8').trim());
   assert.equal(isolatedEntry.sig, undefined);
+
+  // Also hermetic when BOTH opts.key and opts.env are omitted completely
+  const origFetch = globalThis.fetch;
+  process.env.ANTHROPIC_API_KEY = 'stub-api-token';
+  t.after(() => {
+    globalThis.fetch = origFetch;
+    delete process.env.ANTHROPIC_API_KEY;
+  });
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({ content: [{ text: SAMPLE_CAUSES_JSON }] }),
+  });
+  const defaultEnvDir = join(root, 'default-env-adlc');
+  await run({
+    specPath,
+    tier: 'cheap',
+    provider: 'anthropic',
+    ticket: 'T-LIVE-NO-OPTS-ENV',
+    dir: defaultEnvDir,
+    json: true,
+  });
+  const defaultEnvEntry = JSON.parse(readFileSync(join(defaultEnvDir, 'manifest.jsonl'), 'utf8').trim());
+  assert.equal(defaultEnvEntry.sig, undefined);
 });
 
 test('live run() with API provider records usage, signs with key, and skips recording when ticket is omitted', async (t) => {

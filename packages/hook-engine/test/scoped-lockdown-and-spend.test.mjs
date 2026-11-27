@@ -378,4 +378,71 @@ test('Objective 3: evaluateStop skips keyless append on signed/keyed manifests a
     requiredGate: 'p5',
   });
   assert.equal(detStop.decision, 'block');
+
+  // Session telemetry entries must NEVER self-satisfy hasManifestEvidence on blocked or subsequent Stop checks
+  const selfForgeRepo = makeTestRepo(t, { withActiveTicket: true });
+  const sfTranscript = join(selfForgeRepo, 'session.jsonl');
+  writeFileSync(
+    sfTranscript,
+    JSON.stringify({ id: 'm4', provider: 'claude', model: 'claude-sonnet-4-6', usage: { input_tokens: 40, output_tokens: 10 } }),
+  );
+  // Blocked stop does not append usage entry at all
+  const block1 = evaluateStop({
+    cwd: selfForgeRepo,
+    key: signingKey,
+    transcriptPath: sfTranscript,
+    recordSessionUsage: true,
+    requireEvidence: true,
+    requiredGate: 'p4',
+    phaseGate: 'p4',
+  });
+  assert.equal(block1.decision, 'block');
+  assert.equal(existsSync(join(selfForgeRepo, '.adlc', 'manifest.jsonl')), false);
+
+  // Even if an advisory stop records signed p4 session telemetry, a subsequent requireEvidence=true Stop still blocks
+  const advisory = evaluateStop({
+    cwd: selfForgeRepo,
+    key: signingKey,
+    transcriptPath: sfTranscript,
+    recordSessionUsage: true,
+    requireEvidence: false,
+    phaseGate: 'p4',
+  });
+  assert.equal(advisory.decision, 'allow');
+  assert.equal(existsSync(join(selfForgeRepo, '.adlc', 'manifest.jsonl')), true);
+
+  const block2 = evaluateStop({
+    cwd: selfForgeRepo,
+    key: signingKey,
+    transcriptPath: sfTranscript,
+    recordSessionUsage: true,
+    requireEvidence: true,
+    requiredGate: 'p4',
+    phaseGate: 'p4',
+  });
+  assert.equal(block2.decision, 'block');
+  assert.equal(block2.hasEvidence, false);
+
+  // Hermetic env option isolates evaluateStop from ambient process.env.ADLC_TICKET and ADLC_MANIFEST_KEY
+  process.env.ADLC_TICKET = 'T-DOES-NOT-EXIST';
+  process.env.ADLC_MANIFEST_KEY = 'ambient-outer-hmac';
+  t.after(() => {
+    delete process.env.ADLC_TICKET;
+    delete process.env.ADLC_MANIFEST_KEY;
+  });
+  const hermeticRepo = makeTestRepo(t, { withActiveTicket: true });
+  const hermTranscript = join(hermeticRepo, 'session.jsonl');
+  writeFileSync(
+    hermTranscript,
+    JSON.stringify({ id: 'm5', provider: 'claude', model: 'claude-sonnet-4-6', usage: { input_tokens: 15, output_tokens: 5 } }),
+  );
+  const hermStop = evaluateStop({
+    cwd: hermeticRepo,
+    env: {},
+    transcriptPath: hermTranscript,
+    recordSessionUsage: true,
+  });
+  assert.equal(hermStop.decision, 'allow');
+  const hermEntry = JSON.parse(readFileSync(join(hermeticRepo, '.adlc', 'manifest.jsonl'), 'utf8').trim());
+  assert.equal(hermEntry.sig, undefined);
 });
