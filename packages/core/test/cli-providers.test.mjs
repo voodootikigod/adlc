@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
+import { fileURLToPath } from 'node:url';
 import {
   CLAUDE_CLI_MODELS,
   CODEX_CLI_MODELS,
@@ -215,7 +217,7 @@ test('claudeCliSend enforces timeout and rejects on failure', async () => {
   assert.equal(mockChild.killSignal, 'SIGKILL');
 });
 
-test('claudeCliSend rejects on non-zero process exit code', async () => {
+test('claudeCliSend rejects on non-zero process exit code and child error', async () => {
   const mockSpawn = () => {
     return createMockChild({ exitCode: 1, stdoutText: 'fatal error occurred' });
   };
@@ -229,4 +231,40 @@ test('claudeCliSend rejects on non-zero process exit code', async () => {
     claudeCliSend('1', 'claude-sonnet-4-6', null, 'fail test', { env }),
     /Process exited with code 1/,
   );
+
+  const errSpawn = () => createMockChild({ emitError: new Error('spawn ENOENT') });
+  await assert.rejects(
+    claudeCliSend('1', 'claude-sonnet-4-6', null, 'error test', {
+      env: { NODE_ENV: 'test', __adlcCliSpawn: errSpawn },
+    }),
+    /spawn ENOENT/,
+  );
+});
+
+test('claudeCliSend timeout keeps a bare Node event loop alive without node:test keepalive (Node 18/20/22 regression)', () => {
+  const modUrl = new URL('../lib/cli-providers.mjs', import.meta.url).href;
+  const script = [
+    "import { EventEmitter } from 'node:events';",
+    "import { PassThrough } from 'node:stream';",
+    `import { claudeCliSend } from ${JSON.stringify(modUrl)};`,
+    'let settled = false;',
+    "process.on('beforeExit', () => { if (!settled) { process.stderr.write('PREMATURE_BEFORE_EXIT'); process.exit(42); } });",
+    'const mockSpawn = () => {',
+    '  const c = new EventEmitter();',
+    '  c.stdin = new PassThrough();',
+    '  c.stdout = new PassThrough();',
+    '  c.stderr = new PassThrough();',
+    '  c.kill = () => {};',
+    '  return c;',
+    '};',
+    "try { await claudeCliSend('1', 'claude-sonnet-4-6', null, 'hang', { env: { NODE_ENV: 'test', __adlcCliSpawn: mockSpawn }, timeoutMs: 25 }); process.exit(1); }",
+    'catch (err) { settled = true; if (!/Process timed out after 25ms/.test(err.message)) process.exit(2); }',
+  ].join('\n');
+
+  const res = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    encoding: 'utf8',
+    timeout: 5000,
+    cwd: fileURLToPath(new URL('..', import.meta.url)),
+  });
+  assert.equal(res.status, 0, `bare event loop exited ${res.status}: ${res.stderr}`);
 });

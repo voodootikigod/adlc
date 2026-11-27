@@ -78,7 +78,6 @@ function runCliCommand(bin, args, input, opts = {}) {
       cleanupCwd();
       reject(new Error(`Process timed out after ${timeoutMs}ms`));
     }, timeoutMs);
-    timer.unref?.();
 
     const outDecoder = new StringDecoder('utf8');
     const errDecoder = new StringDecoder('utf8');
