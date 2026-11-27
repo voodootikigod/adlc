@@ -323,6 +323,12 @@ describe('adlc-prosecute CLI & runProsecution — Ed25519 end-to-end zero-secret
     const oneCharRead = readObservedAttestations(oneCharStore, { key: 'k', publicKey: null });
     assert.equal(oneCharRead.length, 1);
     assert.equal(oneCharRead[0].ticket, 'T-1CHAR');
+    const tamperedOneChar = { ...hmacEntry, sig: '00'.repeat(32) };
+    writeFileSync(oneCharStore, `${JSON.stringify(tamperedOneChar)}\n`);
+    assert.throws(
+      () => readObservedAttestations(oneCharStore, { key: 'k', publicKey: null }),
+      /does not verify under the given key/,
+    );
 
     // Verify read-side hasCrossModelApprove & hasCrossModelApproveForRevision succeed with key: null via trustedDir.
     const carriedRev = carriedEntry.data.revision;

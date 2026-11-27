@@ -306,7 +306,7 @@ test('runFromStdin and postToolUse execute cleanly', (t) => {
   }), env);
   assert.equal(res.decision, 'pass');
 
-  // Direct CLI execution via cli-gemini.mjs stdin (exercises readStdin + dispatchGeminiHook)
+  // Direct CLI execution via cli-gemini.mjs stdin & dispatchGeminiHook branches
   const cliOut = spawnSync(process.execPath, [join(LIB_DIR, 'cli-gemini.mjs')], {
     input: JSON.stringify({ toolCall: { name: 'read_file', args: { path: join(dir, 'src', 'app.mjs') } }, workspacePaths: [dir] }),
     encoding: 'utf8',
@@ -315,10 +315,14 @@ test('runFromStdin and postToolUse execute cleanly', (t) => {
   });
   assert.equal(cliOut.status, 0, cliOut.stderr);
   assert.equal(JSON.parse(cliOut.stdout).decision, 'pass');
+  assert.equal(cliGemini.dispatchGeminiHook('', env).decision, 'deny');
+  assert.equal(cliGemini.dispatchGeminiHook('{bad-json', env).decision, 'deny');
+  assert.ok(Array.isArray(cliGemini.dispatchGeminiHook(JSON.stringify({ hook_event_name: 'PreInvocation', workspacePaths: [dir], conversationId: 'cli-ev-1' }), env).injectSteps));
 
-  // Tool classification ('modify' hint & 'read_resource'), 'patch' tool rail check, 'tool' envelope key, sanitizeField default cap
+  // Tool classification ('modify' hint, 'read_resource', MCP inner 'read_resource'), 'patch' tool allow+deny, 'tool' envelope key, sanitizeField cap
   assert.equal(classifyTool('modify_config', { TargetFile: 'x.js' }), 'mutating');
   assert.equal(classifyTool('read_resource', {}), 'readonly');
+  assert.equal(classifyTool('call_mcp_tool', { ToolName: 'read_resource' }), 'readonly');
   assert.equal(extractToolName({ tool: { name: 'edit_file' } }), 'edit_file');
   assert.equal(sanitizeField('a'.repeat(200)).length, 128);
   assert.equal(
@@ -329,6 +333,15 @@ test('runFromStdin and postToolUse execute cleanly', (t) => {
       rails: ['test/frozen.test.mjs'],
     }).decision,
     'deny',
+  );
+  assert.equal(
+    evaluatePreTool({
+      toolName: 'patch',
+      toolInput: { patch: '*** Begin Patch\n*** Update File: src/app.mjs\n*** End Patch\n' },
+      cwd: dir,
+      rails: ['test/frozen.test.mjs'],
+    }).decision,
+    'allow',
   );
 
   // Default flail thresholds (3 edits triggers churn; 2 repeated errors triggers error repeat)
@@ -349,12 +362,12 @@ test('runFromStdin and postToolUse execute cleanly', (t) => {
   const sessionsDoc = JSON.parse(readFileSync(join(dir, '.adlc', 'sessions.json'), 'utf8'));
   assert.equal(Object.keys(sessionsDoc).length, 100);
 
-  // PLUGIN_ROOT guard: decide with no workspacePaths from inside LIB_DIR ignores plugin dir as project root
+  // PLUGIN_ROOT guard: decide with no workspacePaths from inside fixture repo (outside PLUGIN_ROOT) enforces frozen rail
   const prevCwd = process.cwd();
   try {
-    process.chdir(LIB_DIR);
-    const noWs = decide({ toolCall: { name: 'read_file', args: { path: 'a.js' } } }, { env });
-    assert.equal(noWs.decision, 'pass');
+    process.chdir(dir);
+    const cwdDeny = decide({ toolCall: { name: 'write_to_file', args: { TargetFile: join(dir, 'test', 'frozen.test.mjs') } } }, { env });
+    assert.equal(cwdDeny.decision, 'deny');
   } finally {
     process.chdir(prevCwd);
   }
