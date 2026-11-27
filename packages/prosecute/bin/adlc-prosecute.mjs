@@ -13,11 +13,11 @@ import { readObservedAttestations, mirrorObservedAttestations } from '../lib/att
 import { ADMIN_PUB_FILENAME, getKey, readAdminPublicKey } from '@adlc/gate-manifest/lib/sign.mjs';
 import { loadManifestKeyFromEnvLocal } from '../lib/load-env-local.mjs';
 
-function resolveTrustedPublicKey(dir, trustedDir) {
-  const keyDir = trustedDir ?? dir;
-  const res = readAdminPublicKey(keyDir);
+function resolveTrustedPublicKey(trustedDir) {
+  if (!trustedDir) return null;
+  const res = readAdminPublicKey(trustedDir);
   if (res.status === 'error') {
-    opError(`${ADMIN_PUB_FILENAME} in ${keyDir}: ${res.reason}`);
+    opError(`${ADMIN_PUB_FILENAME} in ${trustedDir}: ${res.reason}`);
   }
   return res.publicKey;
 }
@@ -906,7 +906,7 @@ if (positionals[0] === 'record-cross-model') {
   // the ORIGINAL review's identity, since it IS that review, just bound to a moved base.
   if (values['carry-forward']) {
     const key = getKey();
-    const publicKey = resolveTrustedPublicKey(values.dir, values['trusted-dir']);
+    const publicKey = resolveTrustedPublicKey(values['trusted-dir']);
     let carried;
     try {
       carried = carryForwardCrossModelReview({
@@ -975,7 +975,7 @@ if (positionals[0] === 'record-cross-model') {
 if (positionals[0] === 'mirror-attestations') {
   if (!values['attestation-store']) opError('mirror-attestations requires --attestation-store PATH');
   const key = getKey();
-  const publicKey = resolveTrustedPublicKey(values.dir, values['trusted-dir']);
+  const publicKey = resolveTrustedPublicKey(values['trusted-dir']);
   if (!key && !publicKey) opError('mirror-attestations requires ADLC_MANIFEST_KEY or a trusted admin.pub to verify which entries are trustworthy to mirror');
   // #355 round-3 cross-model review (codex): each entry's OWN signature is still
   // verified inside mirrorObservedAttestations, but that alone is not enough — a
@@ -1045,7 +1045,7 @@ if (positionals[0] === 'tier-check') {
   // AC3: the tier decision is ALWAYS visible — tiered or not.
   if (!tier.isTrustRootTier) {
     const key = getKey();
-    const publicKey = resolveTrustedPublicKey(values.dir, values['trusted-dir']);
+    const publicKey = resolveTrustedPublicKey(values['trusted-dir']);
     if (values.json) printJson({ trustRootTier: false, reasons: [], crossModelRequired: false, satisfied: true, revision: null, keyAvailable: Boolean(key || publicKey), chainTrustworthy: null, truncationDetected: false, skippedOwnRails });
     else console.log('tier-check: NOT trust-root tier — no cross-model review required.');
     process.exit(0);
@@ -1081,7 +1081,7 @@ if (positionals[0] === 'tier-check') {
   // a trusted Ed25519 admin.pub or HMAC key. Without either verifier the gate cannot
   // tell a real cross-model approve from a PR-forged manifest line, so it fails closed.
   const key = getKey();
-  const publicKey = resolveTrustedPublicKey(values.dir, values['trusted-dir']);
+  const publicKey = resolveTrustedPublicKey(values['trusted-dir']);
   if (!key && !publicKey) {
     if (values.json) {
       printJson({ trustRootTier: true, reasons: tier.reasons, crossModelRequired: true, satisfied: false, revision, keyAvailable: false, chainTrustworthy: null, truncationDetected: false, skippedOwnRails });
@@ -1262,7 +1262,7 @@ const authorProvider = values['author-provider'] ?? process.env.ADLC_AUTHOR_PROV
 const result = runProsecution(input, {
   ticket: values.ticket,
   key: getKey(),
-  publicKey: resolveTrustedPublicKey(values.dir, values['trusted-dir']),
+  publicKey: resolveTrustedPublicKey(values['trusted-dir']),
   target: values.target,
   base: values.base,
   revision: values.revision,

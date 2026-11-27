@@ -38,12 +38,14 @@ import { recoverOpenSegment } from '@adlc/gate-manifest/lib/lineage.mjs';
 export const CROSS_MODEL_GATE = 'cross-model-review';
 const VALID_VERDICTS = new Set(['approve', 'needs-attention']);
 
-function resolvePublicKey({ dir, publicKey, trustedDir } = {}) {
+function resolvePublicKey({ publicKey, trustedDir } = {}) {
   if (publicKey !== undefined) {
     return { ok: true, publicKey: typeof publicKey === 'string' && publicKey.length > 0 ? publicKey : null };
   }
-  const keyDir = trustedDir ?? (dir ?? ADLC_DIR);
-  const res = readAdminPublicKey(keyDir);
+  if (!trustedDir) {
+    return { ok: true, publicKey: null };
+  }
+  const res = readAdminPublicKey(trustedDir);
   if (res.status === 'error') {
     return { ok: false, publicKey: null, reason: `${ADMIN_PUB_FILENAME}: ${res.reason}` };
   }

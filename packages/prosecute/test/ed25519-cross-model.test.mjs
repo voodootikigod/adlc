@@ -476,6 +476,28 @@ describe('adlc-prosecute CLI & runProsecution — Ed25519 end-to-end zero-secret
     const emptyJson = JSON.parse(checkEmpty.stdout);
     assert.equal(emptyJson.satisfied, false);
     assert.equal(emptyJson.keyAvailable, false);
+
+    // Omitting --trusted-dir altogether -> MUST ALSO fail closed and NEVER trust PR-local .adlc/admin.pub!
+    const checkOmitted = runBin([
+      'tier-check',
+      '--base', 'main',
+      '--author-provider', 'anthropic',
+      '--dir', '.adlc',
+      '--json',
+    ], { cwd: repo });
+    assert.equal(checkOmitted.status, 2);
+    const omittedJson = JSON.parse(checkOmitted.stdout);
+    assert.equal(omittedJson.satisfied, false);
+    assert.equal(omittedJson.keyAvailable, false);
+    assert.equal(
+      hasCrossModelApproveForRevision({
+        dir: join(repo, '.adlc'),
+        revision: omittedJson.revision,
+        authorProvider: 'anthropic',
+        key: null,
+      }),
+      false,
+    );
   });
 
   it('rejects truncated Ed25519 revocation via --attestation-store and --trusted-dir with zero secrets', (t) => {
