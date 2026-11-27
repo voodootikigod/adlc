@@ -37,15 +37,15 @@ function buildMinimalReproEnv(baseEnv, isolatedHome) {
   return env;
 }
 
-function opFailure(msg, status = null, stdout = '', stderr = '') {
+function opFailure(msg, status = null) {
   return {
     reproduced: false,
     exitCode: 1,
     operationalError: true,
     status,
     error: msg,
-    stdout: stdout || '',
-    stderr: stderr || `error: ${msg}`,
+    stdout: '',
+    stderr: `error: ${msg}`,
   };
 }
 
@@ -111,7 +111,7 @@ export function verifyRepro({
   sandboxType: explicitSandboxType,
   unsafeNoSandbox = false,
 }) {
-  if (typeof cmd !== 'string' || cmd.trim() === '') {
+  if (typeof cmd !== 'string') {
     return opFailure('Empty command provided');
   }
 
@@ -119,11 +119,11 @@ export function verifyRepro({
   try {
     argv = tokenizeCommand(cmd);
   } catch (err) {
-    return opFailure(err.message, null, '', `error: command tokenize failed: ${err.message}`);
+    return opFailure(err.message);
   }
 
-  if (!argv || argv.length === 0) {
-    return opFailure('Empty command provided after tokenization');
+  if (argv.length === 0) {
+    return opFailure('Empty command provided');
   }
 
   const binaryBase = argv[0].toLowerCase().split(/[\\/]/).pop().replace(/\.(?:exe|cmd|bat|com)$/i, '');
@@ -233,11 +233,11 @@ export function verifyRepro({
     if (res.error) {
       const isTimeout = res.error.code === 'ETIMEDOUT' || res.signal === 'SIGTERM';
       const msg = isTimeout ? `Command timed out after ${timeoutMs}ms` : res.error.message;
-      return opFailure(msg, res.status, res.stdout, res.stderr);
+      return opFailure(msg, res.status);
     }
 
-    if (res.status === 126 || res.status === 127 || /^bwrap: execvp /m.test(res.stderr || '')) {
-      return opFailure(`Binary execution failed with status ${res.status}`, res.status, res.stdout, res.stderr);
+    if (/^bwrap: execvp /m.test(res.stderr)) {
+      return opFailure(`Binary execution failed with status ${res.status}`, res.status);
     }
 
     const status = res.status;

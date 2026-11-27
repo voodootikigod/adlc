@@ -10,11 +10,19 @@ import { normalizeProvider, recordCrossModelReview } from '../lib/cross-model.mj
 
 const CLI_PATH = fileURLToPath(new URL('../bin/adlc-prosecute.mjs', import.meta.url));
 
-test('verifyRepro: rejects empty or whitespace command as operational error (exit 1)', () => {
-  const res = verifyRepro({ cmd: '   ' });
-  assert.equal(res.operationalError, true);
-  assert.equal(res.exitCode, 1);
-  assert.equal(res.reproduced, false);
+test('verifyRepro: rejects empty, non-string, unclosed-quote, or timed-out command as operational error (exit 1)', () => {
+  for (const bad of ['   ', null, 'node -e "unclosed']) {
+    const res = verifyRepro({ cmd: bad });
+    assert.equal(res.operationalError, true);
+    assert.equal(res.exitCode, 1);
+    assert.equal(res.reproduced, false);
+    assert.equal(res.stdout, '');
+    assert.match(res.stderr, /^error:/);
+  }
+  const timedOut = verifyRepro({ cmd: 'node -e "setTimeout(() => {}, 5000)"', timeoutMs: 50 });
+  assert.equal(timedOut.operationalError, true);
+  assert.equal(timedOut.exitCode, 1);
+  assert.match(timedOut.error, /timed out/);
 });
 
 test('verifyRepro: rejects shell wrapper binaries (sh, bash, zsh, eval) as operational error (exit 1)', (t) => {
@@ -29,6 +37,7 @@ test('verifyRepro: rejects shell wrapper binaries (sh, bash, zsh, eval) as opera
     assert.equal(res.operationalError, true, `expected operational error for ${sh}`);
     assert.equal(res.exitCode, 1);
     assert.equal(res.reproduced, false);
+    assert.ok(res.error.includes(sh));
   }
 });
 
@@ -124,6 +133,7 @@ test('verifyRepro: scrubs ADLC_MANIFEST_KEY and sensitive candidate env in temp 
     root: fixtureDir,
   });
   assert.equal(mutRes.exitCode, 0, mutRes.stderr);
+  if (process.platform === 'linux') assert.equal(mutRes.sandbox, 'bwrap');
   assert.equal(readFileSync(join(fixtureDir, 'packages', 'pkg', 'index.mjs'), 'utf8'), 'export const safe = 1;\n');
   assert.equal(readFileSync(join(fixtureDir, 'packages', 'pkg', 'bin', 'cli.mjs'), 'utf8'), '#!/usr/bin/env node\nexport const binSafe = 1;\n');
   assert.equal(readFileSync(join(externalPkgDir, 'ext.mjs'), 'utf8'), 'export const extSafe = 1;\n');
@@ -136,6 +146,7 @@ test('verifyRepro: scrubs ADLC_MANIFEST_KEY and sensitive candidate env in temp 
     unsafeNoSandbox: true,
   });
   assert.equal(unsafeExtRes.exitCode, 0, unsafeExtRes.stderr);
+  assert.equal(unsafeExtRes.sandbox, 'none');
   assert.equal(readFileSync(join(externalPkgDir, 'ext.mjs'), 'utf8'), 'export const extSafe = 1;\n');
 
   // Fails closed when OS sandbox is unavailable and unsafeNoSandbox is omitted (default false)
