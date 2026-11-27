@@ -32,13 +32,23 @@ test('verifyRepro: rejects shell wrapper binaries (sh, bash, zsh, eval) as opera
   }
 });
 
-test('verifyRepro: rejects non-existent binary or missing command as operational failure (exit 1)', () => {
+test('verifyRepro: rejects non-existent binary or missing command as operational failure (exit 1)', (t) => {
   const res = verifyRepro({ cmd: 'definitely-not-a-real-binary-12345 --foo' });
   assert.equal(res.operationalError, true);
   assert.equal(res.exitCode, 1);
   assert.equal(res.reproduced, false);
 
-  const leadingDash = verifyRepro({ cmd: '-bad-executable --foo' });
+  const dashDir = mkdtempSync(join(tmpdir(), 'verify-repro-dash-'));
+  t.after(() => rmSync(dashDir, { recursive: true, force: true }));
+  const dashBin = join(dashDir, '-dash-bin');
+  writeFileSync(dashBin, '#!/bin/sh\nexit 0\n');
+  chmodSync(dashBin, 0o755);
+  const origPath = process.env.PATH;
+  process.env.PATH = `${dashDir}:${origPath ?? ''}`;
+  t.after(() => {
+    process.env.PATH = origPath;
+  });
+  const leadingDash = verifyRepro({ cmd: '-dash-bin' });
   assert.equal(leadingDash.operationalError, true);
   assert.equal(leadingDash.exitCode, 1);
 });
