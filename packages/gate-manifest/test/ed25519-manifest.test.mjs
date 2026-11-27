@@ -20,7 +20,8 @@ import {
   verifyEntryEd25519,
   readAdminPublicKey,
 } from '../lib/sign.mjs';
-import { appendManifestEntry, record } from '../lib/record.mjs';
+import { appendManifestEntry, buildEntry, record } from '../lib/record.mjs';
+import { writePublicKeyFile } from '../lib/key-ceremony.mjs';
 import { verify } from '../lib/verify.mjs';
 
 const BIN = new URL('../bin/gate-manifest.mjs', import.meta.url).pathname;
@@ -311,4 +312,12 @@ test('CLI: generate-key --ed25519 writes 0600 private key outside repo, optional
   );
   assert.notEqual(symRes.status, 0);
   assert.match(symRes.stderr, /symlink/i);
+
+  // writePublicKeyFile rejects invalid PEM; buildEntry stamps sigVersion:2 + sigAlg:ed25519
+  assert.throws(() => writePublicKeyFile(join(outsideDir, 'bad.pub'), 'not-a-pem'), TypeError);
+  const kp = generateEd25519KeyPair();
+  const built = buildEntry({ gate: 'test', ticket: 'T-1', filePaths: [], prevRawLine: null, prevSeq: 0, ts: new Date().toISOString(), key: kp.privateKey });
+  assert.equal(built.sigVersion, 2);
+  assert.equal(built.sigAlg, SIG_ALG_ED25519);
+  assert.equal(verifyEntrySig(null, built, { publicKey: kp.publicKey }), true);
 });

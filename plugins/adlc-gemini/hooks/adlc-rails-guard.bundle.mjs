@@ -5069,7 +5069,7 @@ var PURE_READS = /* @__PURE__ */ new Set([
   "listresources",
   "readresource"
 ]);
-var READONLY_MCP_INNER_TOOLS = /* @__PURE__ */ new Set(["codegraphexplore", "agbstatus", "agbdoctor", "agbpreflight", "listresources", "readresource"]);
+var READONLY_MCP_INNER_TOOLS = /* @__PURE__ */ new Set(["codegraphexplore", "agbstatus", "agbdoctor", "agbpreflight"]);
 var SHELL_TOOL_NAMES2 = /* @__PURE__ */ new Set([
   "bash",
   "sh",

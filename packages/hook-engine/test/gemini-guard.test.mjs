@@ -319,10 +319,10 @@ test('runFromStdin and postToolUse execute cleanly', (t) => {
   assert.equal(cliGemini.dispatchGeminiHook('{bad-json', env).decision, 'deny');
   assert.ok(Array.isArray(cliGemini.dispatchGeminiHook(JSON.stringify({ hook_event_name: 'PreInvocation', workspacePaths: [dir], conversationId: 'cli-ev-1' }), env).injectSteps));
 
-  // Tool classification ('modify' hint, 'read_resource', MCP inner 'read_resource'), 'patch' tool allow+deny, 'tool' envelope key, sanitizeField cap
+  // Tool classification ('modify' hint, 'read_resource', MCP inner 'agb_preflight'), 'patch' tool allow+deny, 'tool' envelope key, sanitizeField cap
   assert.equal(classifyTool('modify_config', { TargetFile: 'x.js' }), 'mutating');
   assert.equal(classifyTool('read_resource', {}), 'readonly');
-  assert.equal(classifyTool('call_mcp_tool', { ToolName: 'read_resource' }), 'readonly');
+  assert.equal(classifyTool('call_mcp_tool', { ToolName: 'agb_preflight' }), 'readonly');
   assert.equal(extractToolName({ tool: { name: 'edit_file' } }), 'edit_file');
   assert.equal(sanitizeField('a'.repeat(200)).length, 128);
   assert.equal(
@@ -362,11 +362,11 @@ test('runFromStdin and postToolUse execute cleanly', (t) => {
   const sessionsDoc = JSON.parse(readFileSync(join(dir, '.adlc', 'sessions.json'), 'utf8'));
   assert.equal(Object.keys(sessionsDoc).length, 100);
 
-  // PLUGIN_ROOT guard: decide with no workspacePaths from inside fixture repo (outside PLUGIN_ROOT) enforces frozen rail
+  // PLUGIN_ROOT guard: decide with no workspacePaths and RELATIVE target from inside fixture repo (outside PLUGIN_ROOT) enforces frozen rail via nonPluginCwd()
   const prevCwd = process.cwd();
   try {
     process.chdir(dir);
-    const cwdDeny = decide({ toolCall: { name: 'write_to_file', args: { TargetFile: join(dir, 'test', 'frozen.test.mjs') } } }, { env });
+    const cwdDeny = decide({ toolCall: { name: 'write_to_file', args: { TargetFile: 'test/frozen.test.mjs' } } }, { env });
     assert.equal(cwdDeny.decision, 'deny');
   } finally {
     process.chdir(prevCwd);

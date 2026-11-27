@@ -19,7 +19,7 @@ export const PURE_READS = new Set([
   'search', 'findbyname', 'searchweb', 'managetask', 'schedule', 'listpermissions', 'sendmessage', 'askquestion',
   'invokesubagent', 'askpermission', 'managesubagents', 'definesubagent', 'readurlcontent', 'listresources', 'readresource',
 ]);
-const READONLY_MCP_INNER_TOOLS = new Set(['codegraphexplore', 'agbstatus', 'agbdoctor', 'agbpreflight', 'listresources', 'readresource']);
+const READONLY_MCP_INNER_TOOLS = new Set(['codegraphexplore', 'agbstatus', 'agbdoctor', 'agbpreflight']);
 const SHELL_TOOL_NAMES = new Set([
   'bash', 'sh', 'zsh', 'fish', 'shell', 'terminal', 'cmd', 'powershell', 'pwsh', 'console', 'exec', 'run',
   'runcommand', 'runcmd', 'runterminalcmd', 'runterminalcommand', 'runinterminal', 'runinterminalcommand',
