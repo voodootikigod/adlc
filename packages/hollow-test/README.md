@@ -14,18 +14,22 @@ kill whole-codebase mutation testing.
 
 ```
 hollow-test --test-cmd "node --test test/*.test.mjs" [options]
+hollow-test --audit-rails <file> [--audit-rails <file>...] [--json]
 ```
 
 ### Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--test-cmd <cmd>` | *(required)* | Shell command to run the test suite. Must exit non-zero on failure. |
+| `--test-cmd <cmd>` | *(required for mutation)* | Shell command to run the test suite. Must exit non-zero on failure. |
 | `--base <ref>` | merge-base with `main`/`master` (fails closed if none can be resolved) | Git base ref for the diff (e.g. `HEAD~1`, `main`, a SHA). |
 | `--max <n>` | `20` | Maximum total mutants across all files. Budget is spread round-robin. |
 | `--timeout-ms <n>` | `120000` | Per-mutant test-command timeout in milliseconds. |
 | `--target <file>` | *(none)* | Mutate this file directly, independent of the diff (repeatable). Bypasses the test/spec path exclusion and mutates the whole file, not just diff-changed lines. |
 | `--rails <ticket-file>` | *(none)* | Path to a ticket JSON file; its declared `rails` globs are expanded against `git ls-files` and added as mutation targets (repeatable). |
+| `--audit-rails <file>` | *(none)* | Run standalone P3 rail adequacy audit (without `--test-cmd`) checking test rail files for missing assertions, tautological-only assertions, and unbacked relative internal module mocks (repeatable). |
+| `--polyglot` | `false` | Opt in to Python (`.py`), Go (`.go`), and Rust (`.rs`) mutation operators with isolated temp-file syntax validation (`python3 -I -m py_compile`, `gofmt -e`, `rustfmt --emit stdout`). |
+| `--structural` | `false` | Enable structural call-site option-drop fallback mutation operators from `@adlc/core`. |
 | `--json` | *(off)* | Machine-readable JSON output (for orchestrators). |
 | `--help` | *(off)* | Show usage and exit 0. |
 
@@ -33,9 +37,25 @@ hollow-test --test-cmd "node --test test/*.test.mjs" [options]
 
 | Code | Meaning |
 |------|---------|
-| `0` | Gate passes — all mutants were killed. |
-| `1` | Operational error — dirty working tree, not a git repo, bad arguments, no usable `typescript` for a TypeScript target, a target that does not parse unmutated, **nothing to mutate** (the diff contains no eligible source files and neither `--target` nor `--rails` was given), or a **selected file received no mutation budget** (see below). |
-| `2` | Gate fails — one or more mutants survived (hollow coverage). |
+| `0` | Gate passes — all mutants were killed (or `--audit-rails` found zero adequacy violations). |
+| `1` | Operational error — dirty working tree, not a git repo, bad arguments, missing/escaping `--audit-rails` path, missing polyglot toolchain or `typescript` parser, a target that does not parse unmutated, **nothing to mutate** (the diff contains no eligible source files and neither `--target` nor `--rails` was given), or a **selected file received no mutation budget** (see below). |
+| `2` | Gate fails — one or more mutants survived (hollow coverage) or `--audit-rails` reported violations (`missing-assertions`, `tautological-only`, `mock-only-internal`). |
+
+### Configured test mapping (`.adlc/config.json`)
+
+`gate-plan.mjs` exports `resolveConfiguredTestTarget(file, root)` ahead of `testTargetFor`'s built-in monorepo heuristics, reading optional `.adlc/config.json`:
+
+```json
+{
+  "hollowTest": {
+    "testMap": {
+      "services/billing/**/*.mjs": "tests/billing.test.mjs"
+    }
+  }
+}
+```
+
+Configured targets must be relative paths inside the repository root without `..` segments, leading `-` flags, or shell metacharacters.
 
 ### `--max` too small for the diff: a starved file fails closed
 
