@@ -225,3 +225,72 @@ export function checkPolyglotSyntax(filePath, content, lang, { env = process.env
   const detail = String(result.stderr ?? '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean)[0] ?? `exit ${result.status}`;
   return { verdict: 'invalid', detail };
 }
+
+/**
+ * Execute one polyglot mutant trial (syntax check + atomic write/restore + test run).
+ */
+export function executePolyglotMutant({
+  target,
+  mutant,
+  content,
+  mutatedContent,
+  polyLang,
+  targetTestCmd,
+  timeoutMs,
+  cwd,
+  runTestFn,
+  writeFileFn,
+  beforeWrite,
+  afterRestore,
+}) {
+  const polySyntax = checkPolyglotSyntax(target.absolutePath, mutatedContent, polyLang);
+  if (polySyntax.verdict === 'unknown') {
+    return {
+      killed: false,
+      invalid: false,
+      undetermined: true,
+      reason: `syntax check did not run (${polySyntax.detail})`,
+      timedOut: false,
+      exitCode: null,
+    };
+  }
+  if (polySyntax.verdict === 'invalid') {
+    return {
+      killed: false,
+      invalid: true,
+      undetermined: false,
+      reason: null,
+      timedOut: false,
+      exitCode: null,
+    };
+  }
+
+  beforeWrite?.();
+  let rawTrial;
+  try {
+    writeFileFn(target.absolutePath, mutatedContent);
+    rawTrial = runTestFn(targetTestCmd, timeoutMs, cwd);
+  } finally {
+    writeFileFn(target.absolutePath, content);
+    afterRestore?.();
+  }
+
+  if (rawTrial.spawnFailed) {
+    return {
+      killed: false,
+      invalid: false,
+      undetermined: true,
+      reason: `test command did not run (${rawTrial.reason})`,
+      timedOut: false,
+      exitCode: null,
+    };
+  }
+  return {
+    killed: rawTrial.timedOut || rawTrial.status !== 0,
+    invalid: false,
+    undetermined: false,
+    reason: null,
+    timedOut: rawTrial.timedOut,
+    exitCode: rawTrial.status,
+  };
+}

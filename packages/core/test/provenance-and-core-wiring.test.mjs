@@ -39,7 +39,7 @@ function makeSpawnChild(stdoutText, exitCode = 0) {
 
 test('detectProvider resolves claude-cli and codex-cli while keeping PROVIDER_NAMES stable', () => {
   assert.deepEqual(PROVIDER_NAMES, ['anthropic', 'openai', 'gemini', 'agy']);
-  assert.deepEqual(CLI_PROVIDER_NAMES, ['claude-cli', 'codex-cli']);
+  assert.deepEqual(CLI_PROVIDER_NAMES, ['agy', 'claude-cli', 'codex-cli']);
   assert.deepEqual(VALID_ATTESTATION_MODES, ['self-context', 'headless-cli', 'api']);
 
   assert.equal(detectProvider({ ADLC_CLAUDE_CLI: '1' })?.name, 'claude-cli');
@@ -161,14 +161,7 @@ test('recordPromptOnlyVerdict unconditionally enforces self-context non-witnesse
 });
 
 test('mutate.generateMutants supports opt-in includeStructural without altering default behavior', () => {
-  const src = 'runTask("build", { retries: 2, dryRun: true });\n';
-  const defaultOnly = mutate.generateMutants(src);
-  assert.equal(
-    defaultOnly.some((m) => m.operator === 'object-arg-key-drop'),
-    false,
-  );
-
-  // Use a line with no numeric or boolean literal so primary/value-substitute operators skip it
+  // Use a call-site option bag with identifier values so no primary or value-substitute operator fires
   const pureBag = 'invokeClient(endpoint, { mode: currentMode, target: destPath });\n';
   assert.equal(mutate.generateMutants(pureBag).length, 0);
   const withStructural = mutate.generateMutants(pureBag, { includeStructural: true });

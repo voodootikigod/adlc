@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, chmodSync, symlinkSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -89,6 +89,19 @@ test('verifyRepro: scrubs ADLC_MANIFEST_KEY and sensitive candidate env in temp 
   assert.equal(res.operationalError, false, res.stderr);
   assert.equal(res.reproduced, true);
   assert.equal(res.exitCode, 0);
+
+  // Verify workspace symlinks inside node_modules/@scope/pkg cannot mutate live worktree packages
+  mkdirSync(join(fixtureDir, 'packages', 'pkg'), { recursive: true });
+  writeFileSync(join(fixtureDir, 'packages', 'pkg', 'index.mjs'), 'export const safe = 1;\n');
+  mkdirSync(join(fixtureDir, 'node_modules', '@demo'), { recursive: true });
+  symlinkSync(join(fixtureDir, 'packages', 'pkg'), join(fixtureDir, 'node_modules', '@demo', 'pkg'), 'dir');
+
+  const mutRes = verifyRepro({
+    cmd: 'node --input-type=module -e "import { writeFileSync } from \'node:fs\'; writeFileSync(\'node_modules/@demo/pkg/index.mjs\', \'MUTATED\');"',
+    root: fixtureDir,
+  });
+  assert.equal(mutRes.exitCode, 0, mutRes.stderr);
+  assert.equal(readFileSync(join(fixtureDir, 'packages', 'pkg', 'index.mjs'), 'utf8'), 'export const safe = 1;\n');
 });
 
 test('adlc-prosecute verify-repro CLI dispatch and JSON output', () => {

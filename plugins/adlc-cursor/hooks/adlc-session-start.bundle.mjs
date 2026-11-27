@@ -69,7 +69,7 @@ function collectPayloadSessionIds(payload) {
 
 // plugins/adlc-cursor/lib/workspace-resolve.mjs
 import { existsSync as existsSync13, mkdirSync as mkdirSync6, readFileSync as readFileSync10, renameSync as renameSync4, writeFileSync as writeFileSync6 } from "node:fs";
-import { dirname as dirname11, isAbsolute as isAbsolute5, join as join12, normalize as normalize2, resolve as pathResolve } from "node:path";
+import { dirname as dirname11, isAbsolute as isAbsolute5, join as join13, normalize as normalize2, resolve as pathResolve } from "node:path";
 
 // packages/tickets/lib/pointer.mjs
 var MAX_POINTER_BYTES = 64 * 1024;
@@ -2192,6 +2192,9 @@ import { StringDecoder as StringDecoder2 } from "node:string_decoder";
 
 // packages/core/lib/cli-providers.mjs
 import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync as rmSync3 } from "node:fs";
+import { tmpdir } from "node:os";
+import { join as join9 } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 var CLAUDE_CLI_MODELS = Object.freeze({
   cheap: "claude-haiku-4-5",
@@ -2214,7 +2217,7 @@ function normalizeCliAnthropicUsage(u) {
 function runCliCommand(bin, args, input, opts = {}) {
   const envSource = opts.env ?? process.env;
   const isTest = envSource.NODE_ENV === "test" || process.env.NODE_ENV === "test";
-  const spawnFn = isTest && typeof envSource.__adlcCliSpawn === "function" ? envSource.__adlcCliSpawn : isTest && typeof process.env.__adlcCliSpawn === "function" ? process.env.__adlcCliSpawn : spawn;
+  const spawnFn = isTest && typeof envSource.__adlcCliSpawn === "function" ? envSource.__adlcCliSpawn : spawn;
   const env = {};
   for (const [k, v] of Object.entries(envSource)) {
     if (k === "ADLC_MANIFEST_KEY" || k.startsWith("ADLC_ADMIN_")) continue;
@@ -2223,15 +2226,24 @@ function runCliCommand(bin, args, input, opts = {}) {
   if (!env.HOME && process.env.HOME) env.HOME = process.env.HOME;
   if (!env.PATH && process.env.PATH) env.PATH = process.env.PATH;
   const timeoutMs = Number.isFinite(opts?.timeoutMs) && opts.timeoutMs > 0 ? opts.timeoutMs : 12e4;
+  const isolatedCwd = mkdtempSync(join9(tmpdir(), "adlc-cli-cwd-"));
+  const cleanupCwd = () => {
+    try {
+      rmSync3(isolatedCwd, { recursive: true, force: true });
+    } catch {
+    }
+  };
   return new Promise((resolve6, reject) => {
     let child;
     try {
       child = spawnFn(bin, args, {
         shell: false,
+        cwd: isolatedCwd,
         stdio: ["pipe", "pipe", "pipe"],
         env
       });
     } catch (err) {
+      cleanupCwd();
       return reject(err);
     }
     let stdout = "";
@@ -2244,6 +2256,7 @@ function runCliCommand(bin, args, input, opts = {}) {
         child.kill("SIGKILL");
       } catch {
       }
+      cleanupCwd();
       reject(new Error(`Process timed out after ${timeoutMs}ms`));
     }, timeoutMs);
     timer.unref?.();
@@ -2262,12 +2275,14 @@ function runCliCommand(bin, args, input, opts = {}) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      cleanupCwd();
       reject(err);
     });
     child.on("close", (code, signal) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      cleanupCwd();
       stdout += outDecoder.end();
       stderr += errDecoder.end();
       if (code !== 0) {
@@ -2279,7 +2294,7 @@ function runCliCommand(bin, args, input, opts = {}) {
 }
 async function claudeCliSend(apiKey, model, system, prompt, opts = {}) {
   const bin = apiKey === "1" || apiKey === "true" ? "claude" : apiKey;
-  const args = ["--print", "--output-format", "json", "--model", model];
+  const args = ["--print", "--output-format", "json", "--tools", "", "--model", model];
   const input = system ? `${system}
 
 ---
@@ -2300,7 +2315,7 @@ ${prompt}` : prompt;
 }
 async function codexCliSend(apiKey, model, system, prompt, opts = {}) {
   const bin = apiKey === "1" || apiKey === "true" ? "codex" : apiKey;
-  const args = ["exec", "--skip-git-repo-check", "-m", model, "-"];
+  const args = ["exec", "--skip-git-repo-check", "--sandbox", "read-only", "-m", model, "-"];
   const input = system ? `${system}
 
 ---
@@ -2541,7 +2556,7 @@ var CLI_PROVIDERS = [
 ];
 var ALL_PROVIDERS = [...PROVIDERS, ...CLI_PROVIDERS];
 var PROVIDER_NAMES = PROVIDERS.map((p) => p.name);
-var CLI_PROVIDER_NAMES = Object.freeze(CLI_PROVIDERS.map((p) => p.name));
+var CLI_PROVIDER_NAMES = Object.freeze(ALL_PROVIDERS.filter((p) => p.isCli).map((p) => p.name));
 
 // packages/core/lib/git.mjs
 var GIT_MAX_BUFFER2 = 64 * 1024 * 1024;
@@ -2565,7 +2580,7 @@ var SECRET_PATTERNS = [
 
 // packages/core/lib/tickets.mjs
 import { existsSync as existsSync11, lstatSync as lstatSync7 } from "node:fs";
-import { dirname as dirname8, isAbsolute as isAbsolute4, join as join9 } from "node:path";
+import { dirname as dirname8, isAbsolute as isAbsolute4, join as join10 } from "node:path";
 
 // packages/core/lib/glob.mjs
 var SLASH2 = "/".charCodeAt(0);
@@ -2578,8 +2593,8 @@ var TICKET_TRUST_ROOT_RAILS = Object.freeze([
   ".adlc/current-ticket.json"
 ]);
 function ticketStoreExists(root = ".", override = null) {
-  if (override) return existsSync11(isAbsolute4(override) ? override : join9(root, override));
-  return existsSync11(join9(root, ".adlc/tickets.json")) || existsSync11(join9(root, ".adlc/tickets/.store.json"));
+  if (override) return existsSync11(isAbsolute4(override) ? override : join10(root, override));
+  return existsSync11(join10(root, ".adlc/tickets.json")) || existsSync11(join10(root, ".adlc/tickets/.store.json"));
 }
 
 // packages/core/lib/revision.mjs
@@ -3197,7 +3212,7 @@ var WORKDIR_CONTAINERS = Object.freeze([
 
 // plugins/adlc-cursor/generated-active-ticket.mjs
 import { lstatSync as lstatSync8, openSync as openSync4, fstatSync, readSync as readSync2, closeSync as closeSync4, constants as fsConstants2 } from "node:fs";
-import { dirname as dirname9, join as join10 } from "node:path";
+import { dirname as dirname9, join as join11 } from "node:path";
 var CURRENT_TICKET_FILE2 = ".adlc/current-ticket.json";
 var MAX_POINTER_BYTES2 = 64 * 1024;
 var ABSENT = /* @__PURE__ */ Symbol("pointer-absent");
@@ -3256,7 +3271,7 @@ function conflictMessage(envId, fileId) {
   return `ADLC_TICKET ("${envId}") conflicts with ${CURRENT_TICKET_FILE2} ("${fileId}"): they name different tickets. The active ticket is per-worktree state \u2014 ADLC supports exactly one active ticket per worktree, and parallel work on a second ticket needs its own worktree (git worktree add <path> -b <branch>), not a second pointer in this one. Failing closed: which ticket governs this build cannot be determined.`;
 }
 function readActiveTicketPointer2(root = ".") {
-  const path = join10(root, CURRENT_TICKET_FILE2);
+  const path = join11(root, CURRENT_TICKET_FILE2);
   const raw = readPointerFileBounded(path);
   if (raw === ABSENT) return ok({ present: false });
   if (raw === null) {
@@ -3377,10 +3392,10 @@ import {
   writeFileSync as writeFileSync5
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname as dirname10, join as join11 } from "node:path";
+import { dirname as dirname10, join as join12 } from "node:path";
 function resolveStateDir(env = process.env) {
   const override = typeof env.ADLC_CURSOR_STATE_DIR === "string" && env.ADLC_CURSOR_STATE_DIR.trim() ? env.ADLC_CURSOR_STATE_DIR.trim() : null;
-  return override || join11(homedir(), ".cursor", "adlc");
+  return override || join12(homedir(), ".cursor", "adlc");
 }
 function ensureDir(dir) {
   mkdirSync5(dir, { recursive: true });
@@ -3465,7 +3480,7 @@ function isAdlcBearing(root, env = process.env) {
   if (!root) return false;
   const override = env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null;
   if (ticketStoreExists(root, override)) return true;
-  return existsSync13(join12(root, ".adlc", "tickets.json")) || existsSync13(join12(root, ".adlc", "tickets")) || existsSync13(join12(root, ".adlc", "ticket-transactions"));
+  return existsSync13(join13(root, ".adlc", "tickets.json")) || existsSync13(join13(root, ".adlc", "tickets")) || existsSync13(join13(root, ".adlc", "ticket-transactions"));
 }
 function classifyRoot(root, env = process.env) {
   let snapshot;
@@ -3571,7 +3586,7 @@ function resolveConsumerWorkspace(payload = {}, env = process.env) {
 }
 var INDEX_NAME = "cursor-session-workspaces.json";
 function sessionIndexPath(env = process.env) {
-  return env.ADLC_CURSOR_SESSION_INDEX?.trim() || join12(resolveStateDir(env), INDEX_NAME);
+  return env.ADLC_CURSOR_SESSION_INDEX?.trim() || join13(resolveStateDir(env), INDEX_NAME);
 }
 function upsertSessionResolution({
   sessionId,

@@ -1,10 +1,54 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, cpSync, symlinkSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, cpSync, symlinkSync, existsSync, mkdirSync, readdirSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import { git, repoRoot, tokenizeCommand, sanitizeCandidateEnv } from '@adlc/core';
 
 const FORBIDDEN_COMMANDS = new Set(['sh', 'bash', 'zsh', 'eval']);
+
+function linkWorkspaceSafeNodeModules(root, tempWorkspace) {
+  const rootNm = join(root, 'node_modules');
+  const destNm = join(tempWorkspace, 'node_modules');
+  if (!existsSync(rootNm) || existsSync(destNm)) return;
+
+  let realRoot;
+  try {
+    realRoot = realpathSync(root);
+  } catch {
+    realRoot = root;
+  }
+
+  const linkEntries = (srcDir, dstDir) => {
+    mkdirSync(dstDir, { recursive: true });
+    for (const ent of readdirSync(srcDir, { withFileTypes: true })) {
+      const srcPath = join(srcDir, ent.name);
+      const dstPath = join(dstDir, ent.name);
+      if (ent.name.startsWith('@') && ent.isDirectory()) {
+        linkEntries(srcPath, dstPath);
+        continue;
+      }
+      try {
+        const realTarget = realpathSync(srcPath);
+        const relToRoot = relative(realRoot, realTarget);
+        const pointsInsideRepo =
+          relToRoot !== '' &&
+          !relToRoot.startsWith('..') &&
+          !relToRoot.startsWith(`.${sep}`) &&
+          relToRoot.split(sep)[0] !== 'node_modules';
+        const linkTarget = pointsInsideRepo ? join(tempWorkspace, relToRoot) : realTarget;
+        symlinkSync(linkTarget, dstPath, ent.isDirectory() ? 'junction' : 'file');
+      } catch {
+        // ignore broken or unreadable node_modules entries
+      }
+    }
+  };
+
+  try {
+    linkEntries(rootNm, destNm);
+  } catch {
+    // ignore optional node_modules linking failure
+  }
+}
 
 /**
  * Verify a candidate reproduction command in a disposable sandboxed workspace.
@@ -146,16 +190,8 @@ export function verifyRepro({
       }
     }
 
-    // Symlink read-only node_modules if present in root
-    const rootNodeModules = join(root, 'node_modules');
-    const destNodeModules = join(tempWorkspace, 'node_modules');
-    if (existsSync(rootNodeModules) && !existsSync(destNodeModules)) {
-      try {
-        symlinkSync(rootNodeModules, destNodeModules, 'junction');
-      } catch {
-        // ignore symlink failures
-      }
-    }
+    // Link node_modules while re-pointing workspace package symlinks into tempWorkspace
+    linkWorkspaceSafeNodeModules(root, tempWorkspace);
 
     // Sanitize candidate environment
     const childEnv = sanitizeCandidateEnv(process.env);

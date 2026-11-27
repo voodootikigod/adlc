@@ -2,7 +2,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, writeFileSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -235,7 +235,7 @@ describe('CLI compareSnapshots & end-to-end bin/behavior-diff.mjs', () => {
     assert.ok(oneErrRes.changed[0].diffs.some((d) => d.field === 'error'));
   });
 
-  test('end-to-end CLI capture and compare exits 0 when identical and 2 when CLI behavior changes', (t) => {
+  test('end-to-end CLI capture and compare exits 0 when identical and 2 when CLI behavior changes', async (t) => {
     const dir = tmp(t, 'behavior-diff-cli-e2e-');
     const cfgBefore = join(dir, 'cfg-before.json');
     const cfgAfter = join(dir, 'cfg-after.json');
@@ -296,5 +296,19 @@ describe('CLI compareSnapshots & end-to-end bin/behavior-diff.mjs', () => {
     assert.equal(cmpDiff.status, 2, `expected compare exit 2 on CLI diff, got ${cmpDiff.status}`);
     assert.match(cmpDiff.stdout, /CMD check-json/);
     assert.match(cmpDiff.stdout, /exitCode: 0 → 2/);
+
+    // Real subprocess ENOENT spawn error + reachability refusal gate (refuses to write --out when 0 reachable)
+    const enoentRec = await captureCommand({ id: 'missing-bin', cmd: 'nonexistent-binary-adlc-998877', args: [] });
+    assert.equal(typeof enoentRec.error, 'string');
+    assert.ok(enoentRec.error.length > 0);
+
+    const cfgDead = join(dir, 'cfg-dead.json');
+    const snapDead = join(dir, 'dead-out.json');
+    writeFileSync(cfgDead, JSON.stringify({
+      commands: [{ id: 'missing-bin', cmd: 'nonexistent-binary-adlc-998877', args: [] }],
+    }));
+    const cDead = spawnSync(process.execPath, [cliBin, 'capture', '--config', cfgDead, '--out', snapDead], { encoding: 'utf8' });
+    assert.equal(cDead.status, 1);
+    assert.equal(existsSync(snapDead), false);
   });
 });

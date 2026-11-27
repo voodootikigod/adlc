@@ -297,9 +297,10 @@ const CLI_PROVIDERS = [
 
 const ALL_PROVIDERS = [...PROVIDERS, ...CLI_PROVIDERS];
 
-/** Names of all known providers, in auto-detect priority order. */
+/** Built-in default provider names in auto-detect priority order (see CLI_PROVIDER_NAMES for all CLI providers). */
 export const PROVIDER_NAMES = PROVIDERS.map((p) => p.name);
-export const CLI_PROVIDER_NAMES = Object.freeze(CLI_PROVIDERS.map((p) => p.name));
+/** All subprocess CLI provider names (including agy, claude-cli, and codex-cli). */
+export const CLI_PROVIDER_NAMES = Object.freeze(ALL_PROVIDERS.filter((p) => p.isCli).map((p) => p.name));
 
 /**
  * Detect the first available provider (or the one forced).

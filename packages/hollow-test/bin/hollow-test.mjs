@@ -25,7 +25,7 @@ import {
   resolveTarget, recordPathFor, writeFileAtomic, sweepStaleTemps,
 } from '../lib/inflight.mjs';
 import { printTable, buildJsonReport } from '../lib/report.mjs';
-import { polyglotLanguage, generatePolyglotMutants, checkPolyglotSyntax } from '../lib/polyglot.mjs';
+import { polyglotLanguage, generatePolyglotMutants, checkPolyglotSyntax, executePolyglotMutant } from '../lib/polyglot.mjs';
 import { auditRailAdequacy } from '../lib/rail-audit.mjs';
 
 // ── arg parsing ─────────────────────────────────────────────────────────────
@@ -876,92 +876,69 @@ try {
         continue;
       }
 
-      if (polyLang !== null) {
-        const polySyntax = checkPolyglotSyntax(target.absolutePath, mutatedContent, polyLang);
-        if (polySyntax.verdict === 'unknown') {
-          results.push({
-            file: target.file,
-            line: mutant.line,
-            operator: mutant.operator,
-            killed: false,
-            invalid: false,
-            undetermined: true,
-            reason: `syntax check did not run (${polySyntax.detail})`,
-            timedOut: false,
-            original: mutant.original,
-            mutated: mutant.mutated,
-          });
-          continue;
-        }
-        if (polySyntax.verdict === 'invalid') {
-          results.push({
-            file: target.file,
-            line: mutant.line,
-            operator: mutant.operator,
-            killed: false,
-            invalid: true,
-            undetermined: false,
-            reason: null,
-            timedOut: false,
-            original: mutant.original,
-            mutated: mutant.mutated,
-          });
-          continue;
-        }
-      }
-
-      // Register for emergency restore twice over: in memory for a signal we can
-      // catch, and on disk for one we cannot.
-      //
-      // FAIL CLOSED if the record cannot be written. Swallowing the error would
-      // mutate the file with no way back — precisely the SIGKILL case the record
-      // exists for, silently unprotected. The mutant bytes go in too, so recovery
-      // can PROVE the file is still what we wrote before overwriting it.
-      currentFilePath = target.absolutePath;
-      currentOriginal = content;
-      if (inflightPath !== null) {
-        try {
-          writeRecord(inflightPath, {
-            pid: process.pid,
-            relFile: relative(root, target.absolutePath),
-            original: content,
-            mutated: mutatedContent,
-          });
-        } catch (err) {
-          opError(
-            `could not write the in-flight record (${err.message}) — refusing to mutate ` +
-            `${target.file}, because a run interrupted now could not be recovered`
-          );
-        }
-      }
-
       let trial;
       if (polyLang !== null) {
-        let rawTrial;
-        try {
-          writeFileAtomic(target.absolutePath, mutatedContent);
-          rawTrial = runTest(targetTestCmd, timeoutMs, cwd);
-        } finally {
-          writeFileAtomic(target.absolutePath, content);
-        }
-        trial = rawTrial.spawnFailed
-          ? {
-              killed: false,
-              invalid: false,
-              undetermined: true,
-              reason: `test command did not run (${rawTrial.reason})`,
-              timedOut: false,
-              exitCode: null,
+        trial = executePolyglotMutant({
+          target,
+          mutant,
+          content,
+          mutatedContent,
+          polyLang,
+          targetTestCmd,
+          timeoutMs,
+          cwd,
+          runTestFn: runTest,
+          writeFileFn: writeFileAtomic,
+          beforeWrite: () => {
+            currentFilePath = target.absolutePath;
+            currentOriginal = content;
+            if (inflightPath !== null) {
+              try {
+                writeRecord(inflightPath, {
+                  pid: process.pid,
+                  relFile: relative(root, target.absolutePath),
+                  original: content,
+                  mutated: mutatedContent,
+                });
+              } catch (err) {
+                opError(
+                  `could not write the in-flight record (${err.message}) — refusing to mutate ` +
+                  `${target.file}, because a run interrupted now could not be recovered`
+                );
+              }
             }
-          : {
-              killed: rawTrial.timedOut || rawTrial.status !== 0,
-              invalid: false,
-              undetermined: false,
-              reason: null,
-              timedOut: rawTrial.timedOut,
-              exitCode: rawTrial.status,
-            };
+          },
+          afterRestore: () => {
+            currentFilePath = null;
+            currentOriginal = null;
+            clearInflight();
+          },
+        });
       } else {
+        // Register for emergency restore twice over: in memory for a signal we can
+        // catch, and on disk for one we cannot.
+        //
+        // FAIL CLOSED if the record cannot be written. Swallowing the error would
+        // mutate the file with no way back — precisely the SIGKILL case the record
+        // exists for, silently unprotected. The mutant bytes go in too, so recovery
+        // can PROVE the file is still what we wrote before overwriting it.
+        currentFilePath = target.absolutePath;
+        currentOriginal = content;
+        if (inflightPath !== null) {
+          try {
+            writeRecord(inflightPath, {
+              pid: process.pid,
+              relFile: relative(root, target.absolutePath),
+              original: content,
+              mutated: mutatedContent,
+            });
+          } catch (err) {
+            opError(
+              `could not write the in-flight record (${err.message}) — refusing to mutate ` +
+              `${target.file}, because a run interrupted now could not be recovered`
+            );
+          }
+        }
         trial = await runMutantWithWorker(
           target.absolutePath,
           content,
@@ -971,12 +948,11 @@ try {
           cwd,
           { tsWorker }
         );
+        // Trial done; the file is restored, so clear both emergency records.
+        currentFilePath = null;
+        currentOriginal = null;
+        clearInflight();
       }
-
-      // Trial done; the file is restored, so clear both emergency records.
-      currentFilePath = null;
-      currentOriginal = null;
-      clearInflight();
 
       results.push({
         file: target.file,

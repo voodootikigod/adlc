@@ -126,8 +126,10 @@ test('claudeCliSend spawns claude binary with json format and stdin prompt, stri
 
   const response = await claudeCliSend('1', 'claude-sonnet-4-6', 'system prompt', 'user prompt', { env });
   assert.equal(capturedBin, 'claude');
-  assert.deepEqual(capturedArgs, ['--print', '--output-format', 'json', '--model', 'claude-sonnet-4-6']);
+  assert.deepEqual(capturedArgs, ['--print', '--output-format', 'json', '--tools', '', '--model', 'claude-sonnet-4-6']);
   assert.equal(mockChild.getReceivedInput(), 'system prompt\n\n---\n\nuser prompt');
+  assert.equal(typeof capturedSpawnOpts.cwd, 'string');
+  assert.notEqual(capturedSpawnOpts.cwd, process.cwd());
   assert.equal(capturedSpawnOpts.env.ADLC_MANIFEST_KEY, undefined);
   assert.equal(capturedSpawnOpts.env.ADLC_ADMIN_TOKEN, undefined);
   assert.equal(capturedSpawnOpts.env.HOME, '/mock/home');
@@ -157,20 +159,22 @@ test('claudeCliSend resolves custom binary and handles prompt without system pro
 
   const response = await claudeCliSend('/usr/local/bin/custom-claude', 'claude-haiku-4-5', null, 'bare prompt', { env });
   assert.equal(capturedBin, '/usr/local/bin/custom-claude');
-  assert.deepEqual(capturedArgs, ['--print', '--output-format', 'json', '--model', 'claude-haiku-4-5']);
+  assert.deepEqual(capturedArgs, ['--print', '--output-format', 'json', '--tools', '', '--model', 'claude-haiku-4-5']);
   assert.equal(mockChild.getReceivedInput(), 'bare prompt');
   assert.equal(response.text, 'Plain text without json result');
   assert.equal(response.usage, null);
 });
 
-test('codexCliSend spawns codex exec with skip-git-repo-check and stdin prompt', async () => {
+test('codexCliSend spawns codex exec with skip-git-repo-check, read-only sandbox, isolated cwd, and stdin prompt', async () => {
   let capturedBin = null;
   let capturedArgs = null;
+  let capturedSpawnOpts = null;
   let mockChild = null;
 
-  const mockSpawn = (bin, args) => {
+  const mockSpawn = (bin, args, spawnOpts) => {
     capturedBin = bin;
     capturedArgs = args;
+    capturedSpawnOpts = spawnOpts;
     mockChild = createMockChild({
       stdoutText: 'Codex completion output',
     });
@@ -184,7 +188,8 @@ test('codexCliSend spawns codex exec with skip-git-repo-check and stdin prompt',
 
   const response = await codexCliSend('true', 'gpt-5.1', 'sys instructions', 'user question', { env });
   assert.equal(capturedBin, 'codex');
-  assert.deepEqual(capturedArgs, ['exec', '--skip-git-repo-check', '-m', 'gpt-5.1', '-']);
+  assert.deepEqual(capturedArgs, ['exec', '--skip-git-repo-check', '--sandbox', 'read-only', '-m', 'gpt-5.1', '-']);
+  assert.notEqual(capturedSpawnOpts.cwd, process.cwd());
   assert.equal(mockChild.getReceivedInput(), 'sys instructions\n\n---\n\nuser question');
   assert.equal(response.text, 'Codex completion output');
   assert.equal(response.usage, null);

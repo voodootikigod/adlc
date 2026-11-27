@@ -2,6 +2,9 @@
 // Enables zero-API-key execution via local subscription shims.
 
 import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 
 export const CLAUDE_CLI_MODELS = Object.freeze({
@@ -28,11 +31,9 @@ export function normalizeCliAnthropicUsage(u) {
 function runCliCommand(bin, args, input, opts = {}) {
   const envSource = opts.env ?? process.env;
   const isTest = envSource.NODE_ENV === 'test' || process.env.NODE_ENV === 'test';
-  const spawnFn = (isTest && typeof envSource.__adlcCliSpawn === 'function')
+  const spawnFn = isTest && typeof envSource.__adlcCliSpawn === 'function'
     ? envSource.__adlcCliSpawn
-    : (isTest && typeof process.env.__adlcCliSpawn === 'function')
-      ? process.env.__adlcCliSpawn
-      : spawn;
+    : spawn;
 
   const env = {};
   for (const [k, v] of Object.entries(envSource)) {
@@ -43,16 +44,24 @@ function runCliCommand(bin, args, input, opts = {}) {
   if (!env.PATH && process.env.PATH) env.PATH = process.env.PATH;
 
   const timeoutMs = Number.isFinite(opts?.timeoutMs) && opts.timeoutMs > 0 ? opts.timeoutMs : 120_000;
+  const isolatedCwd = mkdtempSync(join(tmpdir(), 'adlc-cli-cwd-'));
+  const cleanupCwd = () => {
+    try {
+      rmSync(isolatedCwd, { recursive: true, force: true });
+    } catch {}
+  };
 
   return new Promise((resolve, reject) => {
     let child;
     try {
       child = spawnFn(bin, args, {
         shell: false,
+        cwd: isolatedCwd,
         stdio: ['pipe', 'pipe', 'pipe'],
         env,
       });
     } catch (err) {
+      cleanupCwd();
       return reject(err);
     }
 
@@ -66,6 +75,7 @@ function runCliCommand(bin, args, input, opts = {}) {
       try {
         child.kill('SIGKILL');
       } catch {}
+      cleanupCwd();
       reject(new Error(`Process timed out after ${timeoutMs}ms`));
     }, timeoutMs);
     timer.unref?.();
@@ -87,6 +97,7 @@ function runCliCommand(bin, args, input, opts = {}) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      cleanupCwd();
       reject(err);
     });
 
@@ -94,6 +105,7 @@ function runCliCommand(bin, args, input, opts = {}) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      cleanupCwd();
       stdout += outDecoder.end();
       stderr += errDecoder.end();
       if (code !== 0) {
@@ -106,7 +118,7 @@ function runCliCommand(bin, args, input, opts = {}) {
 
 export async function claudeCliSend(apiKey, model, system, prompt, opts = {}) {
   const bin = apiKey === '1' || apiKey === 'true' ? 'claude' : apiKey;
-  const args = ['--print', '--output-format', 'json', '--model', model];
+  const args = ['--print', '--output-format', 'json', '--tools', '', '--model', model];
   const input = system ? `${system}\n\n---\n\n${prompt}` : prompt;
   const stdout = await runCliCommand(bin, args, input, opts);
   try {
@@ -123,7 +135,7 @@ export async function claudeCliSend(apiKey, model, system, prompt, opts = {}) {
 
 export async function codexCliSend(apiKey, model, system, prompt, opts = {}) {
   const bin = apiKey === '1' || apiKey === 'true' ? 'codex' : apiKey;
-  const args = ['exec', '--skip-git-repo-check', '-m', model, '-'];
+  const args = ['exec', '--skip-git-repo-check', '--sandbox', 'read-only', '-m', model, '-'];
   const input = system ? `${system}\n\n---\n\n${prompt}` : prompt;
   const stdout = await runCliCommand(bin, args, input, opts);
   return { text: stdout, usage: null };
