@@ -103,7 +103,7 @@ export function hasManifestEvidence(
     maxBytes = MAX_MANIFEST_FILE_BYTES,
     maxSegments = MAX_MANIFEST_SEGMENTS,
   } = opts;
-  const key = opts.key !== undefined ? opts.key : (env?.ADLC_MANIFEST_KEY ?? null);
+  const key = opts.key !== undefined ? opts.key : env?.ADLC_MANIFEST_KEY;
   if (!root) return { found: false, matchingEntries: [], manifestSegments: [], error: null };
   if (typeof key !== 'string' || key.length === 0) {
     return {

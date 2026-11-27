@@ -7,6 +7,7 @@ import {
   evaluatePreTool,
   readActiveTicketRails,
   harvestTranscriptUsage,
+  hasManifestEvidence,
   evaluateStop,
   normalizeHookInput,
 } from '../index.mjs';
@@ -476,6 +477,14 @@ test('Objective 3: evaluateStop skips keyless append on signed/keyed manifests a
   });
   assert.equal(afterKeyAdoption.decision, 'allow');
   assert.equal(afterKeyAdoption.hasEvidence, true);
+  assert.equal(
+    hasManifestEvidence(hermeticRepo, { gate: 'prosecute', env: { ADLC_MANIFEST_KEY: signingKey } }).found,
+    true,
+  );
+  assert.equal(
+    hasManifestEvidence(hermeticRepo, { gate: 'prosecute', env: {} }).found,
+    false,
+  );
 
   // Multi-turn incremental transcript delta prevents quadratic token inflation across turns
   const multiTurnRepo = makeTestRepo(t, { withActiveTicket: true });
