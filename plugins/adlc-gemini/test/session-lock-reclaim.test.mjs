@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import { tmp } from '@adlc/core/test-kit';
-import { LOCK_TTL_MS, judgeStaleLock, reclaimJudgedLock } from '../build-gate-inline.mjs';
+import { LOCK_TTL_MS, judgeStaleLock, reclaimJudgedLock } from '../hooks/adlc-rails-guard.bundle.mjs';
 
 function deadPid() {
   const r = spawnHook(['-e', 'process.stdout.write(String(process.pid))']);

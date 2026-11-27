@@ -82,6 +82,7 @@ export const MARKER_NEGATION_LINES = Object.freeze([
 function gitProbeEnv() {
   const env = { ...process.env };
   delete env.ADLC_MANIFEST_KEY;
+  delete env.ADLC_MANIFEST_PRIVATE_KEY;
   delete env.GIT_DIR;
   delete env.GIT_WORK_TREE;
   delete env.GIT_INDEX_FILE;

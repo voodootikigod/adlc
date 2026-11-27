@@ -16,23 +16,19 @@
 
 import { existsSync, readFileSync, appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { verifyEntrySig } from '@adlc/gate-manifest/lib/sign.mjs';
+import { isEd25519PrivateKey, SIG_ALG_ED25519, verifyEntrySig } from '@adlc/gate-manifest/lib/sign.mjs';
 import { changeSetDigest } from '@adlc/core';
 
 // Round-5 cross-model review (codex): a present-but-invalid signature on a STORE
-// entry must FAIL CLOSED, not be silently treated as absent. It means either an
-// ADLC_MANIFEST_KEY rotation (every historical store entry needs migrating onto
-// the new key — the same treatment this repo already gives the main manifest
-// chain, see the #364 tests/gate-manifest docs) or tampering by whoever has
-// bypass-level write access to the store's protected branch. Silently filtering
-// it out would let a truncated revocation go undetected (the exact attack this
-// store exists to close) and would let a stale-but-present `sig` block a valid
-// re-append via mirror's dedup, permanently masking the corruption. `key`
-// absent skips verification entirely (nothing CAN be verified without it,
-// matching this codebase's "no key -> nothing is trusted" convention elsewhere
-// — that is a different, deliberate case from "key present, one entry doesn't
-// match it").
-function readStoreEntries(storePath, key) {
+// entry must FAIL CLOSED, not be silently treated as absent. It means either a
+// key rotation (every historical store entry needs migrating onto the new key)
+// or tampering by whoever has bypass-level write access to the store's protected
+// branch. Silently filtering it out would let a truncated revocation go undetected
+// (the exact attack this store exists to close) and would let a stale-but-present
+// `sig` block a valid re-append via mirror's dedup, permanently masking the
+// corruption. When neither `key` nor `publicKey` is present, verification is
+// skipped (matching "no verifier -> nothing is trusted").
+function readStoreEntries(storePath, { key = null, publicKey = null } = {}) {
   if (!existsSync(storePath)) return [];
   const content = readFileSync(storePath, 'utf8');
   const entries = [];
@@ -40,37 +36,51 @@ function readStoreEntries(storePath, key) {
     if (!line.trim()) continue;
     entries.push(JSON.parse(line));
   }
-  if (key) {
+  const hasHmacKey = typeof key === 'string' && key.length > 0 && !isEd25519PrivateKey(key);
+  const hasEd25519Verifier = (typeof publicKey === 'string' && publicKey.length > 0) || isEd25519PrivateKey(key);
+  if (hasHmacKey || hasEd25519Verifier) {
     for (const entry of entries) {
-      if (!verifyEntrySig(key, entry)) {
+      if (entry?.sigAlg === SIG_ALG_ED25519) {
+        if (!verifyEntrySig(key, entry, { publicKey })) {
+          throw new Error(
+            `attestation store at ${storePath} contains an Ed25519 entry (seq=${entry?.seq ?? '?'}) whose signature does not verify under the trusted public key (or no Ed25519 public key was provided) — refusing to silently treat it as absent.`
+          );
+        }
+      } else if (entry?.sigAlg !== undefined) {
         throw new Error(
-          `attestation store at ${storePath} contains an entry (seq=${entry?.seq ?? '?'}) whose signature does not verify under the given key — this is either an ADLC_MANIFEST_KEY rotation (every historical store entry needs migrating onto the new key) or tampering. Refusing to silently treat it as absent: migrate or rebootstrap the store rather than ignoring this.`
+          `attestation store at ${storePath} contains an entry (seq=${entry?.seq ?? '?'}) with unsupported sigAlg "${entry.sigAlg}" — refusing to silently treat it as absent.`
         );
+      } else if (hasHmacKey) {
+        if (!verifyEntrySig(key, entry, { publicKey })) {
+          throw new Error(
+            `attestation store at ${storePath} contains an entry (seq=${entry?.seq ?? '?'}) whose signature does not verify under the given key — this is either an ADLC_MANIFEST_KEY rotation (every historical store entry needs migrating onto the new key) or tampering. Refusing to silently treat it as absent: migrate or rebootstrap the store rather than ignoring this.`
+          );
+        }
       }
     }
   }
   return entries;
 }
 
-function verifiedSig(key, entry) {
-  return typeof entry?.sig === 'string' && Boolean(key) && verifyEntrySig(key, entry);
+function verifiedSig(key, entry, publicKey = null) {
+  return typeof entry?.sig === 'string' && entry.sig.length > 0 && (Boolean(key) || Boolean(publicKey)) && verifyEntrySig(key, entry, { publicKey });
 }
 
 /**
  * Read the store's entries, FAILING CLOSED (throwing) if any entry's signature
- * does not verify under `key` — see the fail-closed rationale above
+ * does not verify under `key` / `publicKey` — see the fail-closed rationale above
  * `readStoreEntries`. A missing file is the bootstrap case (first trusted run
- * ever) and returns an empty list without throwing. Without a key nothing can be
- * verified, so nothing is trusted and this returns an empty list — matches the
- * rest of this codebase's "no key -> nothing is trusted" convention.
+ * ever) and returns an empty list without throwing. Without either a key or a
+ * publicKey nothing can be verified, so nothing is trusted and this returns an
+ * empty list.
  *
  * @param {string} storePath  direct path to the attestations.jsonl FILE.
- * @param {{ key?: string|null }} [opts]
+ * @param {{ key?: string|null, publicKey?: string|null }} [opts]
  * @returns {object[]}
  */
-export function readObservedAttestations(storePath, { key } = {}) {
-  if (!key) return [];
-  return readStoreEntries(storePath, key);
+export function readObservedAttestations(storePath, { key = null, publicKey = null } = {}) {
+  if (!key && !publicKey) return [];
+  return readStoreEntries(storePath, { key, publicKey });
 }
 
 /**
@@ -84,10 +94,10 @@ export function readObservedAttestations(storePath, { key } = {}) {
  *
  * @returns {{ ok: true } | { ok: false, missing: string[] }}
  */
-export function assertNoTruncation({ prEntries, observedEntries, revision, key, ticket }) {
+export function assertNoTruncation({ prEntries, observedEntries, revision, key = null, publicKey = null, ticket }) {
   const matchesTicket = (entry) => ticket === undefined || entry?.ticket === ticket;
-  const scopedPrEntries = prEntries.filter((entry) => matchesTicket(entry) && verifiedSig(key, entry));
-  const scopedObserved = observedEntries.filter((entry) => matchesTicket(entry) && verifiedSig(key, entry));
+  const scopedPrEntries = prEntries.filter((entry) => matchesTicket(entry) && verifiedSig(key, entry, publicKey));
+  const scopedObserved = observedEntries.filter((entry) => matchesTicket(entry) && verifiedSig(key, entry, publicKey));
   const relevantRevisions = new Set([revision]);
   // Walk carriedFrom iteratively (fixpoint) so every ancestor revision of `revision`
   // is covered, whether the link lives in the PR manifest or the observed store.
@@ -131,10 +141,10 @@ export function assertNoTruncation({ prEntries, observedEntries, revision, key, 
  *
  * @returns {number}
  */
-export function mirrorObservedAttestations({ prEntries, storePath, key }) {
-  const existingEntries = readStoreEntries(storePath, key);
+export function mirrorObservedAttestations({ prEntries, storePath, key = null, publicKey = null }) {
+  const existingEntries = readStoreEntries(storePath, { key, publicKey });
   const existingSigs = new Set(existingEntries.map((entry) => entry.sig));
-  const toAppend = prEntries.filter((entry) => verifiedSig(key, entry) && !existingSigs.has(entry.sig));
+  const toAppend = prEntries.filter((entry) => verifiedSig(key, entry, publicKey) && !existingSigs.has(entry.sig));
   if (toAppend.length === 0) return 0;
   mkdirSync(dirname(storePath), { recursive: true });
   appendFileSync(storePath, toAppend.map((entry) => `${JSON.stringify(entry)}\n`).join(''));

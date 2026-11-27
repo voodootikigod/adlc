@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, rmSync, existsSync, utimesSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execSync } from 'node:child_process';
+import { runHook } from './helpers/run-hook.mjs';
 import {
   computeRiskTier,
   createDepthTracker,
@@ -14,11 +14,17 @@ import {
   decideBuildGate,
   checkBuildGate,
   DEFAULT_DEPTH_THRESHOLD,
-} from '../build-gate-inline.mjs';
-import { createFlailTracker, detectEditChurn, flailMessage, DEFAULT_FLAIL_THRESHOLD } from '../flail-inline.mjs';
-import { runFromStdin, postToolUse, printStatus, printDoctor } from '../hooks/adlc-rails-guard.mjs';
-import { TRUST_ROOT_RAILS } from '../rails-checker.mjs';
-import { ticketFilename } from '../generated-ticket-reader.mjs';
+  createFlailTracker,
+  detectEditChurn,
+  flailMessage,
+  DEFAULT_FLAIL_THRESHOLD,
+  runFromStdin,
+  postToolUse,
+  printStatus,
+  printDoctor,
+  TRUST_ROOT_RAILS,
+} from '../hooks/adlc-rails-guard.bundle.mjs';
+import { ticketFilename } from '@adlc/tickets';
 
 test('DEFAULT_DEPTH_THRESHOLD and DEFAULT_FLAIL_THRESHOLD pin exact boundary constants', () => {
   assert.equal(DEFAULT_DEPTH_THRESHOLD, 50);
@@ -109,7 +115,7 @@ test('checkBuildGate: fails closed on active ticket pointer conflict', () => {
     const env = { ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T-ENV' };
     const gate = checkBuildGate({ sessionID: 's-conflict', root, env });
     assert.equal(gate.decision, 'deny');
-    assert.match(gate.reason, /ticket pointer conflict/i);
+    assert.match(gate.reason, /conflicts with \.adlc\/current-ticket\.json|ticket pointer conflict/i);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -159,10 +165,10 @@ test('printStatus & printDoctor: execute subcommand displays without crashing an
 
 test('CLI subcommand end-to-end: adlc-rails-guard.cjs status and doctor subcommands execute via subprocess', () => {
   const cjsPath = fileURLToPath(new URL('../hooks/adlc-rails-guard.cjs', import.meta.url));
-  const statusOut = execSync(`node "${cjsPath}" status`, { encoding: 'utf8' });
+  const statusOut = runHook([cjsPath, 'status'], { encoding: 'utf8' });
   assert.ok(statusOut.includes('ADLC Gemini Status'));
 
-  const doctorOut = execSync(`node "${cjsPath}" doctor`, { encoding: 'utf8' });
+  const doctorOut = runHook([cjsPath, 'doctor'], { encoding: 'utf8' });
   assert.ok(doctorOut.includes('ADLC Gemini Doctor'));
 });
 

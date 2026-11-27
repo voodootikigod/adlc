@@ -19,7 +19,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyTool, hasMutatingPayloadDeep, isShellTool } from '../rails-checker.mjs';
+import { classifyTool, hasMutatingPayloadDeep, isShellTool } from '../hooks/adlc-rails-guard.bundle.mjs';
 
 // Every agy MUTATING file tool must classify 'mutating' (so a rail write is
 // denied). All five are structured file-content mutators.

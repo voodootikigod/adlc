@@ -10,8 +10,17 @@ import { classifyTrustRootTier } from '../lib/tier.mjs';
 import { usageWarnings } from '../lib/schema.mjs';
 import { recordCrossModelReview, carryForwardCrossModelReview, hasCrossModelApproveForRevision, evaluateCrossModelRevision, manifestChainTrustworthy, manifestChainBreakReason, CROSS_MODEL_GATE } from '../lib/cross-model.mjs';
 import { readObservedAttestations, mirrorObservedAttestations } from '../lib/attestation-store.mjs';
-import { getKey } from '@adlc/gate-manifest/lib/sign.mjs';
+import { ADMIN_PUB_FILENAME, getKey, readAdminPublicKey } from '@adlc/gate-manifest/lib/sign.mjs';
 import { loadManifestKeyFromEnvLocal } from '../lib/load-env-local.mjs';
+
+function resolveTrustedPublicKey(trustedDir) {
+  if (!trustedDir) return null;
+  const res = readAdminPublicKey(trustedDir);
+  if (res.status === 'error') {
+    opError(`${ADMIN_PUB_FILENAME} in ${trustedDir}: ${res.reason}`);
+  }
+  return res.publicKey;
+}
 
 // An --input / provenance.transcript path is excluded from the change-set identity, so an
 // in-tree path outside the evidence directories would let real source change without moving
@@ -647,6 +656,10 @@ const { values, positionals } = parseArgs({
     // protected-ref attestation store. Omitted → tier-check behaves exactly as
     // before (#354). Used by both `tier-check` and `mirror-attestations`.
     'attestation-store': { type: 'string' },
+    // Anchor Ed25519 admin.pub verification to a trusted directory (e.g. CI's
+    // base checkout `$GITHUB_WORKSPACE/.adlc`) rather than PR-controlled `--dir`.
+    // When supplied, admin.pub is read EXCLUSIVELY from `--trusted-dir`.
+    'trusted-dir': { type: 'string' },
     // --record-finding mode: land one CONFIRMED prosecution finding in the
     // findings ledger so P7 lesson-foundry can cluster it (closes the P5→P7 loop).
     'record-finding': { type: 'boolean', default: false },
@@ -727,20 +740,22 @@ ADLC P5 review-evidence recorder.
       causal chain. Remedy: check out the branch that owns this work, or run
       from a named worktree.
 
-  tier-check ... [--attestation-store PATH]
+  tier-check ... [--attestation-store PATH] [--trusted-dir DIR]
       OPTIONAL: pass a direct file path to a protected-ref attestation store to
       also detect a dropped signed entry (TRUNCATION) that the manifest alone
       cannot see. Omitting this flag reproduces prior behavior exactly — this is
       opt-in hardening, not a required capability. The store path MUST be
       OUTSIDE the tree being tiered (like the ./_pr sibling-worktree pattern), or
       its own presence perturbs the working-tree revision hash.
+      Pass --trusted-dir DIR in CI to anchor Ed25519 admin.pub verification to
+      the trusted base checkout rather than the PR-controlled --dir.
 
-  mirror-attestations --attestation-store PATH [--dir .adlc]
+  mirror-attestations --attestation-store PATH [--dir .adlc] [--trusted-dir DIR]
       Append every valid (signature-verified) cross-model entry from the
       manifest under --dir not already in the store at PATH, deduped by
-      signature. Requires ADLC_MANIFEST_KEY. Intended for the trusted CI
-      workflow, run BEFORE tier-check, against a base-controlled store path —
-      never a PR-controlled one.
+      signature. Requires ADLC_MANIFEST_KEY or a trusted admin.pub. Intended for
+      the trusted CI workflow, run BEFORE tier-check, against a base-controlled
+      store path — never a PR-controlled one.
 
   --record-finding --file <path> --desc "<prose>" [--category <lens>] [--severity <s>] [--line <n>] [--verdict <v>] [--dir .adlc]
       Record ONE confirmed prosecution finding to <dir>/findings.jsonl for P7
@@ -890,6 +905,8 @@ if (positionals[0] === 'record-cross-model') {
   // below) because it takes NO --provider/--author-provider/--verdict — the carried entry keeps
   // the ORIGINAL review's identity, since it IS that review, just bound to a moved base.
   if (values['carry-forward']) {
+    const key = getKey();
+    const publicKey = resolveTrustedPublicKey(values['trusted-dir']);
     let carried;
     try {
       carried = carryForwardCrossModelReview({
@@ -897,9 +914,10 @@ if (positionals[0] === 'record-cross-model') {
         fromRevision: values['carry-forward'],
         revision,
         dir: values.dir,
-        key: getKey(),
+        key,
+        publicKey,
         observedEntries: values['attestation-store']
-          ? readObservedAttestations(values['attestation-store'], { key: getKey() })
+          ? readObservedAttestations(values['attestation-store'], { key, publicKey })
           : undefined,
       });
     } catch (err) {
@@ -957,7 +975,8 @@ if (positionals[0] === 'record-cross-model') {
 if (positionals[0] === 'mirror-attestations') {
   if (!values['attestation-store']) opError('mirror-attestations requires --attestation-store PATH');
   const key = getKey();
-  if (!key) opError('mirror-attestations requires ADLC_MANIFEST_KEY to verify which entries are trustworthy to mirror');
+  const publicKey = resolveTrustedPublicKey(values['trusted-dir']);
+  if (!key && !publicKey) opError('mirror-attestations requires ADLC_MANIFEST_KEY or a trusted admin.pub to verify which entries are trustworthy to mirror');
   // #355 round-3 cross-model review (codex): each entry's OWN signature is still
   // verified inside mirrorObservedAttestations, but that alone is not enough — a
   // signed entry copied out of context from an unrelated, legitimate manifest is
@@ -969,7 +988,7 @@ if (positionals[0] === 'mirror-attestations') {
   // (called by manifestChainTrustworthy) returns invalid on the first line it
   // cannot JSON.parse, before readEntries' tolerant `skipped` collection could
   // ever matter — checking `skipped` again here would be unreachable dead code.
-  if (!manifestChainTrustworthy(values.dir, key)) {
+  if (!manifestChainTrustworthy(values.dir, key, { publicKey })) {
     opError(`mirror-attestations: the manifest chain at ${values.dir} does not verify — refusing to mirror from an untrustworthy manifest into the shared attestation store`);
   }
   // Forest-aware (adversarial-review finding, T-MANIFEST-FOREST slice 3): once
@@ -980,7 +999,7 @@ if (positionals[0] === 'mirror-attestations') {
   const crossModelEntries = entries.filter((entry) => (entry.gate ?? entry.type) === CROSS_MODEL_GATE);
   let appended;
   try {
-    appended = mirrorObservedAttestations({ prEntries: crossModelEntries, storePath: values['attestation-store'], key });
+    appended = mirrorObservedAttestations({ prEntries: crossModelEntries, storePath: values['attestation-store'], key, publicKey });
   } catch (err) {
     // #355 round-5 cross-model review (codex): the store itself can be tampered with
     // (or the key rotated) — mirrorObservedAttestations fails closed rather than
@@ -1025,7 +1044,9 @@ if (positionals[0] === 'tier-check') {
 
   // AC3: the tier decision is ALWAYS visible — tiered or not.
   if (!tier.isTrustRootTier) {
-    if (values.json) printJson({ trustRootTier: false, reasons: [], crossModelRequired: false, satisfied: true, revision: null, keyAvailable: Boolean(getKey()), chainTrustworthy: null, truncationDetected: false, skippedOwnRails });
+    const key = getKey();
+    const publicKey = resolveTrustedPublicKey(values['trusted-dir']);
+    if (values.json) printJson({ trustRootTier: false, reasons: [], crossModelRequired: false, satisfied: true, revision: null, keyAvailable: Boolean(key || publicKey), chainTrustworthy: null, truncationDetected: false, skippedOwnRails });
     else console.log('tier-check: NOT trust-root tier — no cross-model review required.');
     process.exit(0);
   }
@@ -1056,16 +1077,16 @@ if (positionals[0] === 'tier-check') {
   });
   if (!revision) opError('tier-check: revision could not be resolved; run inside a git worktree or pass --revision');
 
-  // #326 hardening — the attestation is trusted ONLY via its HMAC signature, verified with
-  // the key. Without the key the gate cannot tell a real cross-model approve from a PR-forged
-  // manifest line (a PR controls the manifest file but not the key), so it fails closed with a
-  // distinct message rather than the misleading "no attestation".
+  // #326 hardening — the attestation is trusted ONLY via its signature, verified with
+  // a trusted Ed25519 admin.pub or HMAC key. Without either verifier the gate cannot
+  // tell a real cross-model approve from a PR-forged manifest line, so it fails closed.
   const key = getKey();
-  if (!key) {
+  const publicKey = resolveTrustedPublicKey(values['trusted-dir']);
+  if (!key && !publicKey) {
     if (values.json) {
       printJson({ trustRootTier: true, reasons: tier.reasons, crossModelRequired: true, satisfied: false, revision, keyAvailable: false, chainTrustworthy: null, truncationDetected: false, skippedOwnRails });
     } else {
-      console.error(`tier-check: ADLC_MANIFEST_KEY is not available, so cross-model attestations cannot be signature-verified — an unverifiable attestation is forgeable, so NONE is trusted. This required trust-root gate FAILS CLOSED for revision ${revision}. Provide the key as a CI secret (available to same-repo runs) and re-record the attestation with it.`);
+      console.error(`tier-check: ADLC_MANIFEST_KEY is not available (and no trusted admin.pub was found), so cross-model attestations cannot be signature-verified — an unverifiable attestation is forgeable, so NONE is trusted. This required trust-root gate FAILS CLOSED for revision ${revision}. Provide a trusted admin.pub or ADLC_MANIFEST_KEY and re-record the attestation with it.`);
     }
     process.exit(2);
   }
@@ -1078,7 +1099,7 @@ if (positionals[0] === 'tier-check') {
   let observedEntries;
   if (attestationStorePath) {
     try {
-      observedEntries = readObservedAttestations(attestationStorePath, { key });
+      observedEntries = readObservedAttestations(attestationStorePath, { key, publicKey });
     } catch (err) {
       // #355 round-5 cross-model review (codex): a tampered/rotated-key store entry
       // now fails closed (see attestation-store.mjs) instead of being silently
@@ -1087,12 +1108,12 @@ if (positionals[0] === 'tier-check') {
     }
   }
 
-  const satisfied = hasCrossModelApproveForRevision({ dir: values.dir, revision, authorProvider, key, observedEntries, ticket: values.ticket });
-  const chainTrustworthy = satisfied || manifestChainTrustworthy(values.dir, key);
+  const satisfied = hasCrossModelApproveForRevision({ dir: values.dir, revision, authorProvider, key, publicKey, observedEntries, ticket: values.ticket });
+  const chainTrustworthy = satisfied || manifestChainTrustworthy(values.dir, key, { publicKey });
   let truncationDetected = false;
   if (!satisfied && chainTrustworthy && observedEntries !== undefined) {
     const { entries: prEntries } = readManifestForest(values.dir);
-    truncationDetected = evaluateCrossModelRevision({ prEntries, observedEntries, revision, authorProvider, key, ticket: values.ticket }).truncationDetected;
+    truncationDetected = evaluateCrossModelRevision({ prEntries, observedEntries, revision, authorProvider, key, publicKey, ticket: values.ticket }).truncationDetected;
   }
   if (values.json) {
     printJson({ trustRootTier: true, reasons: tier.reasons, crossModelRequired: true, satisfied, revision, keyAvailable: true, chainTrustworthy, truncationDetected, skippedOwnRails });
@@ -1110,7 +1131,7 @@ if (positionals[0] === 'tier-check') {
     // actionable ones specifically; fall back to a NEUTRAL message for the rest rather
     // than asserting a specific (and likely wrong) root cause like key rotation for
     // what could be raw ledger corruption or tampering unrelated to any key.
-    const reason = manifestChainBreakReason(values.dir, key);
+    const reason = manifestChainBreakReason(values.dir, key, { publicKey });
     const causeLine = reason === 'unsigned entry'
       ? `The usual cause is that an entry was appended WITHOUT ADLC_MANIFEST_KEY set after this ledger had already adopted signing — a config gap somewhere the entry was recorded, not a rotation. Ensure the key is set for every future record. To repair: \`adlc gate-manifest repair-chain --reason "<why>" --write --attest-unsigned\` — NOTE this re-signs EVERY currently-unsigned entry in the WHOLE manifest under today's key, including any honest legacy prefix that predates signing, not just the lapsed one; review \`adlc gate-manifest verify --allow-legacy-unsigned\` output first to confirm that is what you want.\n`
       : reason === 'signature invalid'
@@ -1241,6 +1262,7 @@ const authorProvider = values['author-provider'] ?? process.env.ADLC_AUTHOR_PROV
 const result = runProsecution(input, {
   ticket: values.ticket,
   key: getKey(),
+  publicKey: resolveTrustedPublicKey(values['trusted-dir']),
   target: values.target,
   base: values.base,
   revision: values.revision,

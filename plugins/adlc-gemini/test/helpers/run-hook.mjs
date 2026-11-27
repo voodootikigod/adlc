@@ -2,7 +2,7 @@
 // process. Every spawn gets a SIGKILL deadline, and a killed run's output
 // throws instead of reading as an empty result.
 
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 
 /**
  * Wall-clock ceiling for one hook run. Deliberately generous: the value is the
@@ -87,4 +87,18 @@ export function runHook(args, opts = {}) {
 export function spawnHook(args, opts = {}) {
   const options = resolveSpawnOptions(opts);
   return refuseKilledOutput(spawnSync(process.execPath, args, options), options.timeout);
+}
+
+/** spawn a child Node process asynchronously with a hard SIGKILL timeout guard. */
+export function spawnHookAsync(args, opts = {}) {
+  const options = resolveSpawnOptions(opts);
+  const { timeout, killSignal, ...spawnOpts } = options;
+  const child = spawn(process.execPath, args, spawnOpts);
+  const timer = setTimeout(() => {
+    try { child.kill(killSignal); } catch {}
+  }, timeout);
+  timer.unref?.();
+  child.once('exit', () => clearTimeout(timer));
+  child.once('error', () => clearTimeout(timer));
+  return child;
 }

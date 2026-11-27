@@ -14,7 +14,6 @@ test('self-contained harness ticket readers match the canonical generated source
   for (const output of [
     'plugins/adlc-codex/hooks/generated-ticket-reader.mjs',
     'plugins/adlc-claude-code/hooks/generated-ticket-reader.mjs',
-    'plugins/adlc-gemini/generated-ticket-reader.mjs',
   ]) assert.equal(readFileSync(join(ROOT, output), 'utf8'), source, `${output} drifted; run the generator`);
 });
 
@@ -30,7 +29,6 @@ test('every shipped glob matcher is the canonical one, byte for byte', () => {
     'plugins/adlc-codex/hooks/generated-glob-match.mjs',
     'plugins/adlc-claude-code/hooks/generated-glob-match.mjs',
     'plugins/adlc-copilot/hooks/generated-glob-match.mjs',
-    'plugins/adlc-gemini/generated-glob-match.mjs',
     'packages/tickets/lib/generated-glob-match.mjs',
     'packages/core/lib/generated-glob-match.mjs',
   ]) assert.equal(readFileSync(join(ROOT, output), 'utf8'), source, `${output} drifted; run the generator`);
@@ -69,7 +67,6 @@ test('every shipped rail-path resolver is the canonical one, byte for byte', () 
   const source = readFileSync(join(ROOT, 'packages/core/lib/railpath.mjs'), 'utf8')
     .replace('// GENERATED-RAILPATH SOURCE.', '// GENERATED FILE — DO NOT EDIT DIRECTLY.');
   for (const output of [
-    'plugins/adlc-gemini/generated-railpath.mjs',
     'plugins/adlc-codex/hooks/generated-railpath.mjs',
     'plugins/adlc-copilot/hooks/generated-railpath.mjs',
   ]) assert.equal(readFileSync(join(ROOT, output), 'utf8'), source, `${output} drifted; run the generator`);
@@ -79,7 +76,6 @@ test('every shipped workspace-root resolver is the canonical one, byte for byte'
   const source = readFileSync(join(ROOT, 'packages/core/lib/workspace-root.mjs'), 'utf8')
     .replace('// GENERATED-WORKSPACE-ROOT SOURCE.', '// GENERATED FILE — DO NOT EDIT DIRECTLY.');
   for (const output of [
-    'plugins/adlc-gemini/generated-workspace-root.mjs',
     'plugins/adlc-claude-code/hooks/generated-workspace-root.mjs',
     'plugins/adlc-codex/hooks/generated-workspace-root.mjs',
     'plugins/adlc-copilot/hooks/generated-workspace-root.mjs',
@@ -118,7 +114,6 @@ test('every shipped glob matcher answers a repeated-globstar rail in bounded tim
     'plugins/adlc-codex/hooks/generated-glob-match.mjs',
     'plugins/adlc-claude-code/hooks/generated-glob-match.mjs',
     'plugins/adlc-copilot/hooks/generated-glob-match.mjs',
-    'plugins/adlc-gemini/generated-glob-match.mjs',
     'packages/tickets/lib/generated-glob-match.mjs',
   ]) {
     const { globMatch } = await import(join(ROOT, copy));

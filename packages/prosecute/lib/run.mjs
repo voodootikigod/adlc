@@ -422,6 +422,8 @@ function usageCarrierFor({ pass, revision, packetHash, recorded }) {
 export function runProsecution(input, {
   ticket,
   key = null,
+  publicKey,
+  trustedDir,
   dir = ADLC_DIR,
   target = input?.target ?? 'working tree',
   base = 'main',
@@ -652,7 +654,7 @@ export function runProsecution(input, {
     // Trust-root tier: a clean same-model P5 is not sufficient. Require a
     // cross-model adversarial approve from a DISTINCT provider, bound to this
     // revision. Missing -> gate-fail (exit 2), never a silent pass.
-    if (requireCrossModel && !hasCrossModelApprove({ dir, ticket, revision: resolvedRevision, authorProvider, key })) {
+    if (requireCrossModel && !hasCrossModelApprove({ dir, ticket, revision: resolvedRevision, authorProvider, key, publicKey, trustedDir })) {
       writeEvidence('p5-cross-model-missing', {
         ticket,
         target,

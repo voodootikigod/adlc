@@ -18,7 +18,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { join, dirname, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AMBIENT_SESSION_ENV_VARS, buildSegmentEnv, packageHasTests, packageSegments, SCRUBBED_ENV_VARS, shouldScrubEnvValue } from '../run-tests.mjs';
+import { AMBIENT_SESSION_ENV_VARS, buildSegmentEnv, packageHasTests, packageSegments, SCRUBBED_ENV_VARS, SEGMENTS, shouldScrubEnvValue } from '../run-tests.mjs';
 
 const REPO_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
@@ -43,6 +43,7 @@ test('the sensitive set includes the six trust-root/override variables plus the 
       'ADLC_CURSOR_SESSION_ID',
       'ADLC_GATE_MOCK_RESPONSE',
       'ADLC_MANIFEST_KEY',
+      'ADLC_MANIFEST_PRIVATE_KEY',
       'ADLC_RAILS_BYPASS',
       'ADLC_SESSION_ID',
       'AGY_SESSION_ID',
@@ -60,6 +61,8 @@ test('the sensitive set includes the six trust-root/override variables plus the 
 test('ambient session and conversation IDs are scrubbed from segment env (both non-empty and empty)', () => {
   assert.equal(shouldScrubEnvValue('ADLC_MANIFEST_KEY', ''), false);
   assert.equal(shouldScrubEnvValue('ADLC_MANIFEST_KEY', 'secret'), true);
+  assert.equal(shouldScrubEnvValue('ADLC_MANIFEST_PRIVATE_KEY', ''), false);
+  assert.equal(shouldScrubEnvValue('ADLC_MANIFEST_PRIVATE_KEY', 'ed25519-priv:secret'), true);
   for (const name of AMBIENT_SESSION_ENV_VARS) {
     assert.equal(shouldScrubEnvValue(name, ''), true);
     assert.equal(shouldScrubEnvValue(name, 'session-123'), true);
@@ -101,11 +104,21 @@ test("an explicitly-empty KEY is PRESERVED; empty OTHER variables are scrubbed",
   // '' preservation is a key-specific contract (presence blocks the .env.local
   // loader). The rest have presence-checked consumers — ADLC_GATE_MOCK_RESPONSE=''
   // could still select a mock path — so present-but-empty is scrubbed for them.
-  const { env, scrubbed } = buildSegmentEnv({ ADLC_MANIFEST_KEY: '', RAILS_BASE: '', ADLC_GATE_MOCK_RESPONSE: '' });
+  const { env, scrubbed } = buildSegmentEnv({
+    ADLC_MANIFEST_KEY: '',
+    ADLC_MANIFEST_PRIVATE_KEY: '',
+    RAILS_BASE: '',
+    ADLC_GATE_MOCK_RESPONSE: '',
+  });
   assert.equal(env.ADLC_MANIFEST_KEY, '', "'' key must survive: it blocks .env.local fallback by PRESENCE");
+  assert.equal(env.ADLC_MANIFEST_PRIVATE_KEY, '', "'' private key must survive: it blocks .env.local fallback by PRESENCE");
   assert.equal(Object.hasOwn(env, 'RAILS_BASE'), false);
   assert.equal(Object.hasOwn(env, 'ADLC_GATE_MOCK_RESPONSE'), false, "an empty mock seam must not reach segments");
   assert.deepEqual([...scrubbed].sort(), ['ADLC_GATE_MOCK_RESPONSE', 'RAILS_BASE']);
+
+  const nonEmpty = buildSegmentEnv({ ADLC_MANIFEST_PRIVATE_KEY: 'ed25519-priv:leaked' });
+  assert.equal(Object.hasOwn(nonEmpty.env, 'ADLC_MANIFEST_PRIVATE_KEY'), false);
+  assert.deepEqual(nonEmpty.scrubbed, ['ADLC_MANIFEST_PRIVATE_KEY']);
 });
 
 test('unset variables stay absent and produce no notice', () => {
@@ -248,4 +261,10 @@ test('packageSegments includes cli-test and adapter-test globs and skips package
   assert.match(segs[0][1], /adapter-test\/\*\.test\.mjs/);
   assert.doesNotMatch(segs[1][1], /cli-test/);
   assert.doesNotMatch(segs[1][1], /adapter-test/);
+});
+
+test('SEGMENTS includes hook-bundle drift check command', () => {
+  const hookDrift = SEGMENTS.find(([name]) => name === 'hook-bundle drift');
+  assert.ok(hookDrift, 'expected hook-bundle drift segment');
+  assert.equal(hookDrift[1], 'node scripts/build-hooks.mjs --check');
 });

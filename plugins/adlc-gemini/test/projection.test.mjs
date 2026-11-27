@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
-import { decide } from '../hooks/adlc-rails-guard.mjs';
+import { decide } from '../hooks/adlc-rails-guard.bundle.mjs';
 
 // Projection-shape contract tests (adlc#142, antigravity-booster#11).
 //
@@ -70,7 +70,7 @@ test('single-ticket projection WITH a dangling edge: current fail-closed deny-al
   // not distinguish deny-all from healthy enforcement.
   const railWrite = call('write_to_file', { TargetFile: join(root, 'src', 'frozen.js') });
   assert.equal(railWrite.allow_tool, false);
-  assert.match(railWrite.deny_reason, /failed to validate/i);
+  assert.match(railWrite.deny_reason, /validation failed|failed to validate/i);
 
   // The tell-tale of deny-all: an in-scope, NON-RAIL write that the no-edges case
   // above allowed is ALSO denied here — the dangling edge trips the fail-closed
@@ -81,7 +81,7 @@ test('single-ticket projection WITH a dangling edge: current fail-closed deny-al
     false,
     'a dangling edge must fail closed and deny even a non-rail, in-scope write'
   );
-  assert.match(nonRailWrite.deny_reason, /failed to validate.*failing closed/i);
+  assert.match(nonRailWrite.deny_reason, /(?:validation failed|failed to validate).*failing closed/i);
 
   // The deny-all is scoped to MUTATING tool calls: read-only tools are classified
   // before preconditions run, so a read of the same path is still allowed. This

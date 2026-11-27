@@ -146,7 +146,8 @@ jobs:
           git -C ./_attestations config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           for attempt in 1 2 3 4 5; do
             (cd ./_pr && node "$GITHUB_WORKSPACE/packages/prosecute/bin/adlc-prosecute.mjs" mirror-attestations \
-              --attestation-store "$GITHUB_WORKSPACE/_attestations/attestations.jsonl" --dir .adlc)
+              --attestation-store "$GITHUB_WORKSPACE/_attestations/attestations.jsonl" --dir .adlc \
+              --trusted-dir "$GITHUB_WORKSPACE/.adlc")
             if [ -f ./_attestations/attestations.jsonl ]; then
               git -C ./_attestations add attestations.jsonl
             fi
@@ -180,4 +181,5 @@ jobs:
           # --attestation-store points OUTSIDE ./_pr (see the sibling-worktree note above).
           node "$GITHUB_WORKSPACE/packages/prosecute/bin/adlc-prosecute.mjs" tier-check \
             --base "$BASE_SHA" --author-provider "$ADLC_AUTHOR_PROVIDER" --dir .adlc \
+            --trusted-dir "$GITHUB_WORKSPACE/.adlc" \
             --attestation-store "$GITHUB_WORKSPACE/_attestations/attestations.jsonl"

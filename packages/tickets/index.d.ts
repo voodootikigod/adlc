@@ -247,13 +247,18 @@ export function ulidOf(segmentName: string): string;
 export function readForestEntries(dir: string): Record<string, unknown>[];
 export function readOwnChains(dir: string, options?: { cwd?: string; allowRecovery?: boolean; key?: string | null }): Record<string, unknown>[][];
 export function forestChainsIntact(dir: string, options?: { key?: string | null }): boolean;
-export function entrySigValid(key: string, entry: Record<string, unknown>): boolean;
+export const ADMIN_PUB_FILENAME: 'admin.pub';
+export function readAdminPublicKey(dir: string):
+  | { status: 'absent'; path: string }
+  | { status: 'ok'; path: string; publicKey: string }
+  | { status: 'error'; path: string; reason: string };
+export function entrySigValid(key: string | null, entry: Record<string, unknown>, opts?: { publicKey?: string | null }): boolean;
 export function canonicalEntryBytes(entry: Record<string, unknown>): string;
 export function segmentPath(dir: string, name: string): string;
 export function lineagePath(dir: string): string;
 export function verifyChain(
   nonEmpty: ReadonlyArray<{ line: string; lineNo: number }>,
-  opts: { key: string | null; requireSignatures: boolean; anchorOnFirst: boolean }
+  opts: { key: string | null; publicKey?: string | null; requireSignatures: boolean; anchorOnFirst: boolean }
 ): {
   valid: boolean;
   message: string;
@@ -267,7 +272,7 @@ export function verifyChain(
 };
 export function verifyManifestForest(
   dir?: string,
-  opts?: { requireSignatures?: boolean; requireEntries?: boolean; key?: string | null }
+  opts?: { requireSignatures?: boolean; requireEntries?: boolean; key?: string | null; publicKey?: string | null }
 ): {
   valid: boolean;
   message: string;

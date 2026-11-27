@@ -23,6 +23,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export const MANIFEST_KEY = 'ADLC_MANIFEST_KEY';
+export const PRIVATE_KEY_ENV = 'ADLC_MANIFEST_PRIVATE_KEY';
 
 // True when we are running under continuous integration and must NOT read a key from a file.
 export function isCIEnv(env = process.env) {
@@ -49,24 +50,30 @@ export function readKeyFromEnvText(text, key = MANIFEST_KEY) {
   return null;
 }
 
-// Populate env[ADLC_MANIFEST_KEY] from `<cwd>/.env.local` iff (a) not in CI, (b) the var is not
-// already DEFINED in the environment, and (c) the file provides a non-empty value. Returns true
-// iff it set the value. cwd/env/isCI are injectable for tests; by default they reflect the process.
+// Populate env[ADLC_MANIFEST_PRIVATE_KEY] (preferentially) or env[ADLC_MANIFEST_KEY] from
+// `<cwd>/.env.local` iff (a) not in CI, (b) neither var is already DEFINED in the environment
+// (presence wins, so an explicitly empty ADLC_MANIFEST_PRIVATE_KEY='' or ADLC_MANIFEST_KEY=''
+// stays fail-closed), and (c) the file provides a non-empty value. Returns true iff it set a value.
 export function loadManifestKeyFromEnvLocal({ cwd = process.cwd(), env = process.env, isCI = isCIEnv(env) } = {}) {
   if (isCI) return false;                                          // (3) never read a file key in CI
   // (2) never override an already-DEFINED value — presence, not truthiness. An EXPLICITLY EMPTY
-  // key (`ADLC_MANIFEST_KEY=''`) is a deliberate "no key → fail closed" and must win over the
-  // file, exactly like a non-empty one. Using length>0 here would let .env.local overwrite an
-  // empty exported/secret value and, outside GitHub, could feed a file key into a gate run.
-  if (Object.hasOwn(env, MANIFEST_KEY)) return false;
+  // key (`ADLC_MANIFEST_PRIVATE_KEY=''` or `ADLC_MANIFEST_KEY=''`) is a deliberate "no key → fail
+  // closed" and must win over the file, exactly like a non-empty one.
+  if (Object.hasOwn(env, PRIVATE_KEY_ENV) || Object.hasOwn(env, MANIFEST_KEY)) return false;
   const file = join(cwd, '.env.local');
   if (!existsSync(file)) return false;
-  let val;
+  let text;
   try {
-    val = readKeyFromEnvText(readFileSync(file, 'utf8'));          // (1) only ADLC_MANIFEST_KEY
+    text = readFileSync(file, 'utf8');
   } catch {
     return false;                                                 // unreadable file → no-op, stay fail-closed
   }
+  const privVal = readKeyFromEnvText(text, PRIVATE_KEY_ENV);
+  if (privVal !== null && privVal !== '') {
+    env[PRIVATE_KEY_ENV] = privVal;
+    return true;
+  }
+  const val = readKeyFromEnvText(text, MANIFEST_KEY);             // (1) only manifest key vars
   if (val === null || val === '') return false;
   env[MANIFEST_KEY] = val;
   return true;

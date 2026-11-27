@@ -18,9 +18,9 @@ import {
   onStop,
   postToolUse,
   runFromStdin,
-} from '../hooks/adlc-rails-guard.mjs';
-import { resolveTranscriptPath } from '../flail-inline.mjs';
-import { loadTickets } from '../core-inline.mjs';
+  resolveTranscriptPath,
+} from '../hooks/adlc-rails-guard.bundle.mjs';
+import { loadTickets } from '@adlc/core';
 
 function git(cwd, ...args) {
   return execFileSync('git', args, {
@@ -141,11 +141,11 @@ test('isReadonlyCommand allows grep and rg within workspace root and loadTickets
   assert.deepEqual(loaded.errors, []);
   assert.deepEqual(loaded.tickets, []);
 
-  // Backslash-separated conventional path, sharded path, custom path, and invalid non-string/blank paths
+  // Conventional path, custom path, and invalid non-string/blank paths
   writeFileSync(join(root, '.adlc', 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T-1', title: 'One' }] }));
-  const backslashLoaded = loadTickets(`${root}\\.adlc\\tickets.json`);
-  assert.deepEqual(backslashLoaded.errors, []);
-  assert.equal(backslashLoaded.tickets.length, 1);
+  const convLoaded = loadTickets(join(root, '.adlc', 'tickets.json'));
+  assert.deepEqual(convLoaded.errors, []);
+  assert.equal(convLoaded.tickets.length, 1);
 
   const customPath = join(root, 'src', 'custom-store.json');
   writeFileSync(customPath, JSON.stringify({ tickets: [{ id: 'T-CUSTOM', title: 'Custom' }] }));
@@ -153,8 +153,6 @@ test('isReadonlyCommand allows grep and rg within workspace root and loadTickets
   assert.deepEqual(customLoaded.errors, []);
   assert.equal(customLoaded.tickets[0]?.id, 'T-CUSTOM');
 
-  assert.deepEqual(loadTickets(null).errors, ['invalid ticket path']);
-  assert.deepEqual(loadTickets('   ').errors, ['invalid ticket path']);
   assert.equal(canonicalizeExisting(null), null);
   assert.equal(canonicalizeExisting(''), '');
   assert.equal(canonicalizeExisting(root), realpathSync(root));

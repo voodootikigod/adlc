@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import { tmp } from '@adlc/core/test-kit';
-import { onStop, preInvocation, runFromStdin } from '../hooks/adlc-rails-guard.mjs';
+import { onStop, preInvocation, runFromStdin } from '../hooks/adlc-rails-guard.bundle.mjs';
 import { plainWorkspaceEnv } from './plain-workspace-env.mjs';
 
 const FOREIGN_LEDGER = '{"not":"a ledger entry for this workspace"}\n';

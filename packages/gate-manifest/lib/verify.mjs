@@ -17,8 +17,9 @@ export { verifyChain };
  * @param {boolean} [opts.requireSignatures=true]  see verifyChain
  * @param {boolean} [opts.requireEntries=false]    when true, fail closed on an empty or absent ledger
  * @param {string|null} [opts.key]                 explicit signing key (validated via validateKeyParam)
+ * @param {string|null} [opts.publicKey]           explicit Ed25519 SPKI PEM public key (undefined auto-reads <dir>/admin.pub; null disables)
  */
-export function verify(dir = ADLC_DIR, { requireSignatures = true, requireEntries = false, key: keyParam } = {}) {
+export function verify(dir = ADLC_DIR, { requireSignatures = true, requireEntries = false, key: keyParam, publicKey } = {}) {
   const key = validateKeyParam(keyParam);
-  return verifyManifestForest(dir, { requireSignatures, requireEntries, key });
+  return verifyManifestForest(dir, { requireSignatures, requireEntries, key, publicKey });
 }

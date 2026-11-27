@@ -17,7 +17,6 @@ const ARTIFACTS = [
     outputs: [
       'plugins/adlc-codex/hooks/generated-ticket-reader.mjs',
       'plugins/adlc-claude-code/hooks/generated-ticket-reader.mjs',
-      'plugins/adlc-gemini/generated-ticket-reader.mjs',
       'plugins/adlc-copilot/hooks/generated-ticket-reader.mjs',
     ],
   },
@@ -28,7 +27,6 @@ const ARTIFACTS = [
       'plugins/adlc-codex/hooks/generated-glob-match.mjs',
       'plugins/adlc-claude-code/hooks/generated-glob-match.mjs',
       'plugins/adlc-copilot/hooks/generated-glob-match.mjs',
-      'plugins/adlc-gemini/generated-glob-match.mjs',
       // @adlc/tickets cannot import @adlc/core — core depends on IT, so the
       // copy goes the same way as the harnesses' rather than inverting that.
       'packages/tickets/lib/generated-glob-match.mjs',
@@ -41,7 +39,6 @@ const ARTIFACTS = [
     outputs: [
       'plugins/adlc-codex/hooks/generated-active-ticket.mjs',
       'plugins/adlc-claude-code/hooks/generated-active-ticket.mjs',
-      'plugins/adlc-gemini/generated-active-ticket.mjs',
       'plugins/adlc-opencode/generated-active-ticket.mjs',
       'plugins/adlc-cursor/generated-active-ticket.mjs',
       'plugins/adlc-pi/lib/generated-active-ticket.mjs',
@@ -79,7 +76,6 @@ const ARTIFACTS = [
     source: 'packages/core/lib/railpath.mjs',
     marker: '// GENERATED-RAILPATH SOURCE.',
     outputs: [
-      'plugins/adlc-gemini/generated-railpath.mjs',
       'plugins/adlc-codex/hooks/generated-railpath.mjs',
       'plugins/adlc-copilot/hooks/generated-railpath.mjs',
     ],
@@ -88,7 +84,6 @@ const ARTIFACTS = [
     source: 'packages/core/lib/workspace-root.mjs',
     marker: '// GENERATED-WORKSPACE-ROOT SOURCE.',
     outputs: [
-      'plugins/adlc-gemini/generated-workspace-root.mjs',
       'plugins/adlc-claude-code/hooks/generated-workspace-root.mjs',
       'plugins/adlc-codex/hooks/generated-workspace-root.mjs',
       'plugins/adlc-copilot/hooks/generated-workspace-root.mjs',

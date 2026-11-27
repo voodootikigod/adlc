@@ -6,6 +6,14 @@ import { conflict } from './errors.mjs';
 import { sha256, canonicalJson } from './canonical.mjs';
 import { fsyncDirectory } from './durability.mjs';
 import { isSegmentedRepo, resolveOpenSegment, readForestEntries, forestChainsIntact, segmentPath, lineagePath, entrySigValid } from './manifest-segments.mjs';
+import {
+  ADMIN_PUB_FILENAME,
+  SIG_ALG_ED25519,
+  isEd25519PrivateKey,
+  derivePublicKeyPem,
+  signEntryEd25519,
+  readAdminPublicKey,
+} from './manifest-primitives.mjs';
 import { validateKeyParam } from './key-contract.mjs';
 
 const sleep = (milliseconds) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
@@ -127,7 +135,20 @@ function findMatchingEvidence(entries, { gate, data, operation, action, ticketId
  * itself (protects the segment's bytes against anything else that might
  * ever write to it directly).
  */
+function assertEd25519KeyMatchesAdminPub(dir, key) {
+  if (!isEd25519PrivateKey(key)) return;
+  const derivedPub = derivePublicKeyPem(key);
+  const adminPub = readAdminPublicKey(dir);
+  if (adminPub.status === 'error') {
+    throw conflict('INVALID_MANIFEST', `${ADMIN_PUB_FILENAME}: ${adminPub.reason}`);
+  }
+  if (adminPub.status === 'ok' && adminPub.publicKey !== derivedPub) {
+    throw conflict('KEY_MISMATCH', `Ed25519 private key does not match ${ADMIN_PUB_FILENAME}`);
+  }
+}
+
 function recordSegmentedTicketEvidence(dir, { gate, data, transactionId, operation, action, ticketId, ticketHash, storeHash, archiveHash, key, acceptLegacyMatch = false }) {
+  assertEd25519KeyMatchesAdminPub(dir, key);
   return withManifestLock(lineagePath(dir), () => {
     // Adversarial-review finding: a corrupted OTHER segment (crash, manual
     // edit, or a malicious branch) must not let a ticket transaction finalize
@@ -178,7 +199,12 @@ function recordSegmentedTicketEvidence(dir, { gate, data, transactionId, operati
       };
       if (key) {
         entry.sigVersion = 2;
-        entry.sig = signV2(key, entry);
+        if (isEd25519PrivateKey(key)) {
+          entry.sigAlg = SIG_ALG_ED25519;
+          entry.sig = signEntryEd25519(key, entry);
+        } else {
+          entry.sig = signV2(key, entry);
+        }
       }
       const descriptor = openSync(targetPath, 'a');
       try {
@@ -257,6 +283,7 @@ export function recordTicketEvidence(root, {
   if (isSegmentedRepo(dir)) {
     return recordSegmentedTicketEvidence(dir, { gate, data, transactionId, operation, action, ticketId, ticketHash, storeHash, archiveHash, key: signingKey, acceptLegacyMatch });
   }
+  assertEd25519KeyMatchesAdminPub(dir, signingKey);
   const path = join(root, '.adlc/manifest.jsonl');
   return withManifestLock(path, () => {
     const content = existsSync(path) ? readFileSync(path, 'utf8') : '';
@@ -321,7 +348,15 @@ export function recordTicketEvidence(root, {
       files: {},
       prev: previous ? sha256(previous) : null,
     };
-    if (signingKey) entry.sig = sign(signingKey, entry);
+    if (signingKey) {
+      if (isEd25519PrivateKey(signingKey)) {
+        entry.sigVersion = 2;
+        entry.sigAlg = SIG_ALG_ED25519;
+        entry.sig = signEntryEd25519(signingKey, entry);
+      } else {
+        entry.sig = sign(signingKey, entry);
+      }
+    }
     const descriptor = openSync(path, 'a');
     try {
       writeFileSync(descriptor, `${JSON.stringify(entry)}\n`);

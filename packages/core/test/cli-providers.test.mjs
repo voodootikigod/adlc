@@ -122,6 +122,7 @@ test('claudeCliSend spawns claude binary with json format and stdin prompt, stri
     HOME: '/mock/home',
     PATH: '/mock/path',
     ADLC_MANIFEST_KEY: 'secret-manifest-key',
+    ADLC_MANIFEST_PRIVATE_KEY: 'ed25519-priv:secret-ed25519-key',
     ADLC_ADMIN_TOKEN: 'secret-admin-token',
     __adlcCliSpawn: mockSpawn,
   };
@@ -133,6 +134,7 @@ test('claudeCliSend spawns claude binary with json format and stdin prompt, stri
   assert.equal(typeof capturedSpawnOpts.cwd, 'string');
   assert.notEqual(capturedSpawnOpts.cwd, process.cwd());
   assert.equal(capturedSpawnOpts.env.ADLC_MANIFEST_KEY, undefined);
+  assert.equal(capturedSpawnOpts.env.ADLC_MANIFEST_PRIVATE_KEY, undefined);
   assert.equal(capturedSpawnOpts.env.ADLC_ADMIN_TOKEN, undefined);
   assert.equal(capturedSpawnOpts.env.HOME, '/mock/home');
   assert.equal(capturedSpawnOpts.env.PATH, '/mock/path');

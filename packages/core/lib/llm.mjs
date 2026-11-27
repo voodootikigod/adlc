@@ -20,7 +20,9 @@ import {
   CODEX_CLI_MODELS,
   claudeCliSend,
   codexCliSend,
+  sanitizeProviderEnv,
 } from './cli-providers.mjs';
+export { inferModelProviderFamily } from './model-family.mjs';
 
 // agy's timeout marker is its ENTIRE output on failure. Matching it as a
 // bare substring would false-trip whenever a model quotes the phrase in a
@@ -68,7 +70,7 @@ function agySend({ apiKey, model, system, prompt, timeoutMs }, env = process.env
     ? timeoutMs
     : parseAgyTimeoutMs(timeoutSpec) + 5_000;
   return new Promise((resolve, reject) => {
-    const p = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const p = spawn(bin, args, { stdio: 'pipe', env: sanitizeProviderEnv(env) });
     let out = '';
     let err = '';
     let settled = false;

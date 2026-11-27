@@ -13,9 +13,10 @@ import {
   analyzeFlail,
   createFlailTracker,
   MAX_SCAN_BYTES,
-} from '../flail-inline.mjs';
-import { createPersistentTracker } from '../build-gate-inline.mjs';
-import { runFromStdin, printStatus } from '../hooks/adlc-rails-guard.mjs';
+  createPersistentTracker,
+  runFromStdin,
+  printStatus,
+} from '../hooks/adlc-rails-guard.bundle.mjs';
 
 test('normalizeError strips line numbers, hex, quotes, absolute paths, and digits', () => {
   const raw1 = 'Error: Failed to build target "/Users/test/app.js" at line 42 (0xDEADBEEF)';

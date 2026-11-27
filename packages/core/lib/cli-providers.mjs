@@ -28,6 +28,17 @@ export function normalizeCliAnthropicUsage(u) {
   };
 }
 
+export function sanitizeProviderEnv(envSource = process.env) {
+  const env = {};
+  for (const [k, v] of Object.entries(envSource ?? {})) {
+    if (k === 'ADLC_MANIFEST_KEY' || k === 'ADLC_MANIFEST_PRIVATE_KEY' || k.startsWith('ADLC_ADMIN_')) continue;
+    env[k] = v;
+  }
+  if (!env.HOME && process.env.HOME) env.HOME = process.env.HOME;
+  if (!env.PATH && process.env.PATH) env.PATH = process.env.PATH;
+  return env;
+}
+
 function runCliCommand(bin, args, input, opts = {}) {
   const envSource = opts.env ?? process.env;
   const isTest = envSource.NODE_ENV === 'test' || process.env.NODE_ENV === 'test';
@@ -35,13 +46,7 @@ function runCliCommand(bin, args, input, opts = {}) {
     ? envSource.__adlcCliSpawn
     : spawn;
 
-  const env = {};
-  for (const [k, v] of Object.entries(envSource)) {
-    if (k === 'ADLC_MANIFEST_KEY' || k.startsWith('ADLC_ADMIN_')) continue;
-    env[k] = v;
-  }
-  if (!env.HOME && process.env.HOME) env.HOME = process.env.HOME;
-  if (!env.PATH && process.env.PATH) env.PATH = process.env.PATH;
+  const env = sanitizeProviderEnv(envSource);
 
   const timeoutMs = Number.isFinite(opts?.timeoutMs) && opts.timeoutMs > 0 ? opts.timeoutMs : 120_000;
   const isolatedCwd = mkdtempSync(join(tmpdir(), 'adlc-cli-cwd-'));

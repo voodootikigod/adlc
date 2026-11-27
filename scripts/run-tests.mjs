@@ -43,7 +43,7 @@ const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 //   ADLC_GATE_MOCK_RESPONSE — a test seam that, exported ambiently, makes LLM-backed
 //     gates return canned verdicts instead of exercising the real path.
 // Tests that NEED one of these set their own value inline and are unaffected.
-export const PRESERVE_EMPTY = new Set(['ADLC_MANIFEST_KEY']);
+export const PRESERVE_EMPTY = new Set(['ADLC_MANIFEST_KEY', 'ADLC_MANIFEST_PRIVATE_KEY']);
 export const AMBIENT_SESSION_ENV_VARS = [
   'GEMINI_CONVERSATION_ID',
   'JETSKI_CONVERSATION_ID',
@@ -56,6 +56,7 @@ export const AMBIENT_SESSION_ENV_VARS = [
 ];
 export const SCRUBBED_ENV_VARS = [
   'ADLC_MANIFEST_KEY',
+  'ADLC_MANIFEST_PRIVATE_KEY',
   'RAILS_BASE',
   'BASE_REF',
   'ADLC_RAILS_BYPASS',
@@ -166,6 +167,7 @@ export function packageSegments({ existsSync: exists = existsSync, readdirSync: 
 
 export const SEGMENTS = [
   ['generated-reader drift', 'node scripts/ticket-readers/generate.mjs --check'],
+  ['hook-bundle drift', 'node scripts/build-hooks.mjs --check'],
   ...packageSegments(),
   // The autopilot's AC coverage gate executes every registered criterion and applies each
   // mutation fixture (~3 min): enforced here in CI, opt-in per package so the per-mutant runs

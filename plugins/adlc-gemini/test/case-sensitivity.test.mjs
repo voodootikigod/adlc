@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
-import { isCaseInsensitiveFs, checkRail } from '../rails-checker.mjs';
+import { isCaseInsensitiveFs, checkRail } from '../hooks/adlc-rails-guard.bundle.mjs';
 
 const ENF = { ADLC_P4_ENFORCEMENT: '1' };
 

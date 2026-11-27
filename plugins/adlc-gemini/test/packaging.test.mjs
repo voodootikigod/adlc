@@ -10,11 +10,12 @@
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
+import { spawnHook, spawnHookAsync } from './helpers/run-hook.mjs';
 
 // Every fixture the factories below mint; removed once this file's tests finish.
 const fixtureDirs = new Set();
@@ -99,7 +100,7 @@ test('AC3: no @adlc/* runtime dependency (agy copies without node_modules)', () 
 
 test('AC2: files allowlist ships the runtime surface, plugin.json, and never test/', () => {
   const files = pkg.files ?? [];
-  for (const entry of ['agents/', 'bin/', 'build-gate-inline.mjs', 'commands/', 'constants.mjs', 'core-inline.mjs', 'flail-inline.mjs', 'hooks/', 'hooks.json', 'rails-checker.mjs', 'skills/', 'plugin.json', 'README.md', 'LICENSE']) {
+  for (const entry of ['agents/', 'bin/', 'commands/', 'constants.mjs', 'hooks/', 'hooks.json', 'skills/', 'plugin.json', 'README.md', 'LICENSE']) {
     assert.ok(files.includes(entry), `files must include ${entry}`);
   }
   assert.ok(!files.some((f) => f.replace(/^\.\//, '').startsWith('test')), 'files must not include test/');
@@ -114,7 +115,7 @@ test('AC2: npm pack --dry-run ships the runtime surface, plugin.json, and NO tes
   for (const dir of ['agents/', 'bin/', 'commands/', 'hooks/', 'skills/']) {
     assert.ok(paths.some((p) => p.startsWith(dir)), `pack must include ${dir}`);
   }
-  for (const file of ['bin/cli.mjs', 'build-gate-inline.mjs', 'constants.mjs', 'core-inline.mjs', 'flail-inline.mjs', 'hooks.json', 'rails-checker.mjs', 'plugin.json', 'README.md', 'LICENSE']) {
+  for (const file of ['bin/cli.mjs', 'constants.mjs', 'hooks/adlc-rails-guard.cjs', 'hooks/adlc-rails-guard.bundle.mjs', 'hooks.json', 'plugin.json', 'README.md', 'LICENSE']) {
     assert.ok(paths.includes(file), `pack must include ${file}`);
   }
   assert.ok(!paths.some((p) => p.startsWith('test/')), `pack must NOT include test/: ${paths.filter((p) => p.startsWith('test/')).join(', ')}`);
@@ -161,22 +162,21 @@ test('AC4: packed tarball extracted outside the repo imports rails-checker with 
 
     // Every module the plugin's own manifest points agy at must both ship and
     // resolve — including each module they import transitively.
-    const entryPoints = ['rails-checker.mjs', 'core-inline.mjs', pkg.gemini.hooks.replace(/^\.\//, '')];
+    const entryPoints = ['hooks/adlc-rails-guard.cjs', 'hooks/adlc-rails-guard.bundle.mjs', pkg.gemini.hooks.replace(/^\.\//, '')];
     for (const entry of entryPoints) {
       assert.ok(existsSync(join(pkgRoot, entry)), `tarball must ship ${entry}`);
     }
 
     // Importing is the real gate: a relative import of an unshipped module
     // throws ERR_MODULE_NOT_FOUND here, which is exactly the 1.4.1 break.
-    const res = spawnSync(
-      'node',
-      ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(pkgRoot, 'rails-checker.mjs')).href)})`],
+    const res = spawnHook(
+      ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(pkgRoot, 'hooks', 'adlc-rails-guard.bundle.mjs')).href)})`],
       { encoding: 'utf8', timeout: 30_000, cwd: pkgRoot }
     );
     assert.equal(
       res.status,
       0,
-      `packed rails-checker.mjs must import standalone with no node_modules — a relative import is missing from the files allowlist:\n${res.stderr}`
+      `packed hooks/adlc-rails-guard.bundle.mjs must import standalone with no node_modules:\n${res.stderr}`
     );
   } finally {
     rmSync(work, { recursive: true, force: true });
@@ -249,7 +249,7 @@ function runCliSealed(args, { agyScript, seedTarget, extraEnv } = {}) {
 
   const env = { ...sealedEnv(home, pathValue), ...(extraEnv ?? {}) };
 
-  const res = spawnSync(process.execPath, [join(pkgDir, 'bin', 'cli.mjs'), ...args], {
+  const res = spawnHook([join(pkgDir, 'bin', 'cli.mjs'), ...args], {
     encoding: 'utf8',
     timeout: 20_000,
     env,
@@ -314,7 +314,7 @@ test('bin/cli.mjs ignores a repo-local node_modules/.bin/agy (npx PATH hijack)',
     // Exactly npm exec's layout: the project's .bin FIRST, the real one behind it.
     const env = sealedEnv(home, `${evilBin}:${realBin}:/usr/bin:/bin`);
 
-    const res = spawnSync(process.execPath, [join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
+    const res = spawnHook([join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
       encoding: 'utf8',
       timeout: 20_000,
       env,
@@ -363,7 +363,7 @@ test('bin/cli.mjs self-reinstall from the installed copy does not erase the plug
     writeFileSync(join(target, 'bin', 'cli.mjs'), readFileSync(join(pkgDir, 'bin', 'cli.mjs')));
     writeFileSync(join(target, 'plugin.json'), '{"name":"adlc-gemini"}\n');
 
-    const res = spawnSync(process.execPath, [join(target, 'bin', 'cli.mjs'), 'install'], {
+    const res = spawnHook([join(target, 'bin', 'cli.mjs'), 'install'], {
       encoding: 'utf8',
       timeout: 20_000,
       env: sealedEnv(home, '/usr/bin:/bin'), // no agy → the direct-copy branch
@@ -524,7 +524,7 @@ test('bin/cli.mjs SIGKILLs a surviving agy WORKER even when the leader exits on 
     );
     chmodSync(join(binDir, 'agy'), 0o755);
 
-    const res = spawnSync(process.execPath, [join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
+    const res = spawnHook([join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
       encoding: 'utf8',
       timeout: 60_000,
       env: { ...sealedEnv(home, `${binDir}:/usr/bin:/bin`), ADLC_AGY_TIMEOUT_MS: '1000' },
@@ -582,7 +582,7 @@ test('bin/cli.mjs forwards Ctrl-C to the detached agy group and cleans staging',
     const stagingRoot = join(work, 'staging');
     mkdirSync(stagingRoot, { recursive: true });
 
-    const child = spawn(process.execPath, [join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
+    const child = spawnHookAsync([join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
       env: {
         ...sealedEnv(home, `${binDir}:/usr/bin:/bin`),
         TMPDIR: stagingRoot,
@@ -651,7 +651,7 @@ test('bin/cli.mjs Ctrl-C kills a SIGTERM-IGNORING worker after the leader exits'
     );
     chmodSync(join(binDir, 'agy'), 0o755);
 
-    const child = spawn(process.execPath, [join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
+    const child = spawnHookAsync([join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
       env: { ...sealedEnv(home, `${binDir}:/usr/bin:/bin`), ADLC_AGY_TIMEOUT_MS: '60000' },
       stdio: 'ignore',
     });
@@ -705,7 +705,7 @@ test('bin/cli.mjs Ctrl-C during the VERSION PROBE reaps the worker and reports c
     const stagingRoot = join(work, 'staging');
     mkdirSync(stagingRoot, { recursive: true });
 
-    const child = spawn(process.execPath, [join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
+    const child = spawnHookAsync([join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
       env: {
         ...sealedEnv(home, `${binDir}:/usr/bin:/bin`),
         TMPDIR: stagingRoot,
@@ -769,7 +769,7 @@ test('bin/cli.mjs does not delete staging while a cancelled agy worker still rea
     );
     chmodSync(join(binDir, 'agy'), 0o755);
 
-    const child = spawn(process.execPath, [join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
+    const child = spawnHookAsync([join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
       env: { ...sealedEnv(home, `${binDir}:/usr/bin:/bin`), ADLC_AGY_TIMEOUT_MS: '60000' },
       stdio: 'ignore',
     });
@@ -823,7 +823,7 @@ test('bin/cli.mjs ignores RELATIVE PATH entries when resolving agy', () => {
         chmodSync(abs, 0o755);
       }
 
-      const res = spawnSync(process.execPath, [join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
+      const res = spawnHook([join(pkgDir, 'bin', 'cli.mjs'), 'install'], {
         encoding: 'utf8',
         timeout: 20_000,
         cwd,
@@ -945,7 +945,7 @@ test('bin/cli.mjs hands agy a plugin path containing no "@"', () => {
     writeFileSync(join(binDir, 'agy'), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\nexit 0\n`);
     chmodSync(join(binDir, 'agy'), 0o755);
 
-    const res = spawnSync('node', [join(scopedRoot, 'bin', 'cli.mjs'), 'install'], {
+    const res = spawnHook([join(scopedRoot, 'bin', 'cli.mjs'), 'install'], {
       encoding: 'utf8',
       timeout: 20_000,
       env: sealedEnv(join(work, 'home'), `${binDir}:${process.env.PATH}`),
@@ -989,7 +989,7 @@ test('bin/cli.mjs still stages @-free when TMPDIR itself contains an "@"', () =>
     writeFileSync(join(binDir, 'agy'), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\nexit 0\n`);
     chmodSync(join(binDir, 'agy'), 0o755);
 
-    const res = spawnSync('node', [join(scopedRoot, 'bin', 'cli.mjs'), 'install'], {
+    const res = spawnHook([join(scopedRoot, 'bin', 'cli.mjs'), 'install'], {
       encoding: 'utf8',
       timeout: 60_000,
       env: { ...sealedEnv(join(work, 'home'), `${binDir}:${process.env.PATH}`), TMPDIR: hostileTmp },

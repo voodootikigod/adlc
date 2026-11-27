@@ -9,13 +9,15 @@ import { sha256 } from '@adlc/core';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
 import { verifyEntrySig } from '@adlc/gate-manifest/lib/sign.mjs';
 import { verify as verifyManifest } from '@adlc/gate-manifest/lib/verify.mjs';
-import { discoverSegments, segmentPath } from '@adlc/tickets/lib/manifest-primitives.mjs';
+import { resolveKeyFromEnv } from '@adlc/tickets/lib/key-contract.mjs';
+import { discoverSegments, readAdminPublicKey, segmentPath } from '@adlc/tickets/lib/manifest-primitives.mjs';
 import { enclosingAdlcRoot, readActiveTicketRails } from './pretool.mjs';
 import { harvestTranscriptUsage } from './spend-harvest.mjs';
 
 export const MAX_MANIFEST_FILE_BYTES = 4 * 1024 * 1024;
-export const MAX_MANIFEST_SEGMENTS = 64;
-export const MAX_MANIFEST_LINES = 50_000;
+export const MAX_MANIFEST_TOTAL_BYTES = 64 * 1024 * 1024;
+export const MAX_MANIFEST_SEGMENTS = 10_000;
+export const MAX_MANIFEST_LINES = 250_000;
 
 function readBoundedRegularFile(filePath, maxBytes = MAX_MANIFEST_FILE_BYTES) {
   const flags =
@@ -26,16 +28,16 @@ function readBoundedRegularFile(filePath, maxBytes = MAX_MANIFEST_FILE_BYTES) {
   try {
     fd = openSync(filePath, flags);
   } catch (err) {
-    if (err?.code === 'ENOENT') return { status: 'absent', content: null };
-    return { status: 'error', reason: `cannot open ${filePath}: ${err?.message ?? String(err)}` };
+    if (err?.code === 'ENOENT') return { status: 'absent', content: null, bytesRead: 0 };
+    return { status: 'error', reason: `cannot open ${filePath}: ${err?.message ?? String(err)}`, bytesRead: 0 };
   }
   try {
     const st = fstatSync(fd);
     if (!st.isFile()) {
-      return { status: 'error', reason: `${filePath} is not a regular file` };
+      return { status: 'error', reason: `${filePath} is not a regular file`, bytesRead: 0 };
     }
     if (st.size > maxBytes) {
-      return { status: 'error', reason: `${filePath} exceeds ${maxBytes}-byte manifest scan bound` };
+      return { status: 'error', reason: `${filePath} exceeds ${maxBytes}-byte manifest scan bound`, bytesRead: 0 };
     }
     const buf = Buffer.allocUnsafe(st.size);
     let offset = 0;
@@ -44,7 +46,7 @@ function readBoundedRegularFile(filePath, maxBytes = MAX_MANIFEST_FILE_BYTES) {
       if (n <= 0) break;
       offset += n;
     }
-    return { status: 'ok', content: buf.toString('utf8', 0, offset) };
+    return { status: 'ok', content: buf.toString('utf8', 0, offset), bytesRead: offset };
   } finally {
     closeSync(fd);
   }
@@ -52,8 +54,8 @@ function readBoundedRegularFile(filePath, maxBytes = MAX_MANIFEST_FILE_BYTES) {
 
 function parseStrictJsonl(filePath, { maxBytes = MAX_MANIFEST_FILE_BYTES, remainingLines }) {
   const read = readBoundedRegularFile(filePath, maxBytes);
-  if (read.status === 'absent') return { ok: true, entries: [], linesRead: 0, error: null };
-  if (read.status !== 'ok') return { ok: false, entries: [], linesRead: 0, error: read.reason };
+  if (read.status === 'absent') return { ok: true, entries: [], linesRead: 0, bytesRead: 0, error: null };
+  if (read.status !== 'ok') return { ok: false, entries: [], linesRead: 0, bytesRead: 0, error: read.reason };
 
   const entries = [];
   let linesRead = 0;
@@ -62,20 +64,20 @@ function parseStrictJsonl(filePath, { maxBytes = MAX_MANIFEST_FILE_BYTES, remain
     if (!trimmed) continue;
     linesRead += 1;
     if (linesRead > remainingLines) {
-      return { ok: false, entries: [], linesRead, error: `manifest scan exceeded ${MAX_MANIFEST_LINES}-line bound` };
+      return { ok: false, entries: [], linesRead, bytesRead: read.bytesRead, error: `manifest scan exceeded ${MAX_MANIFEST_LINES}-line bound` };
     }
     let obj;
     try {
       obj = JSON.parse(trimmed);
     } catch {
-      return { ok: false, entries: [], linesRead, error: `malformed JSONL line in ${filePath}` };
+      return { ok: false, entries: [], linesRead, bytesRead: read.bytesRead, error: `malformed JSONL line in ${filePath}` };
     }
     if (!obj || typeof obj !== 'object') {
-      return { ok: false, entries: [], linesRead, error: `non-object JSONL entry in ${filePath}` };
+      return { ok: false, entries: [], linesRead, bytesRead: read.bytesRead, error: `non-object JSONL entry in ${filePath}` };
     }
     entries.push(obj);
   }
-  return { ok: true, entries, linesRead, error: null };
+  return { ok: true, entries, linesRead, bytesRead: read.bytesRead, error: null };
 }
 
 /**
@@ -101,20 +103,32 @@ export function hasManifestEvidence(
     ticketHash = null,
     env = process.env,
     maxBytes = MAX_MANIFEST_FILE_BYTES,
+    maxTotalBytes = MAX_MANIFEST_TOTAL_BYTES,
     maxSegments = MAX_MANIFEST_SEGMENTS,
   } = opts;
-  const key = opts.key !== undefined ? opts.key : env?.ADLC_MANIFEST_KEY;
   if (!root) return { found: false, matchingEntries: [], manifestSegments: [], error: null };
-  if (typeof key !== 'string' || key.length === 0) {
+  const rawKey = opts.key !== undefined ? opts.key : resolveKeyFromEnv(env);
+  const key = typeof rawKey === 'string' && rawKey.length > 0 ? rawKey : null;
+  const adlcDir = join(root, '.adlc');
+  let effectivePublicKey = null;
+  if (opts.publicKey !== undefined) {
+    effectivePublicKey = typeof opts.publicKey === 'string' && opts.publicKey.length > 0 ? opts.publicKey : null;
+  } else {
+    const adminPub = readAdminPublicKey(adlcDir);
+    if (adminPub.status === 'error') {
+      return { found: false, matchingEntries: [], manifestSegments: [], error: `admin.pub: ${adminPub.reason}` };
+    }
+    effectivePublicKey = adminPub.publicKey;
+  }
+  if (!key && !effectivePublicKey) {
     return {
       found: false,
       matchingEntries: [],
       manifestSegments: [],
-      error: 'ADLC_MANIFEST_KEY is required to verify manifest evidence',
+      error: 'ADLC_MANIFEST_KEY (or .adlc/admin.pub) is required to verify manifest evidence',
     };
   }
 
-  const adlcDir = join(root, '.adlc');
   const rootManifest = join(adlcDir, 'manifest.jsonl');
   const { valid: segments, invalid } = discoverSegments(adlcDir);
   if (invalid.length > 0) {
@@ -135,30 +149,37 @@ export function hasManifestEvidence(
   }
 
   let remainingLines = MAX_MANIFEST_LINES;
+  let remainingBytes = maxTotalBytes;
   const allEntries = [];
   const filesToScan = [rootManifest, ...segments.map((seg) => segmentPath(adlcDir, seg))];
 
   for (const filePath of filesToScan) {
-    const parsed = parseStrictJsonl(filePath, { maxBytes, remainingLines });
+    const parsed = parseStrictJsonl(filePath, { maxBytes: Math.min(maxBytes, remainingBytes), remainingLines });
     if (!parsed.ok) {
       return { found: false, matchingEntries: [], manifestSegments: segments, error: parsed.error };
     }
     remainingLines -= parsed.linesRead;
+    remainingBytes -= parsed.bytesRead;
     allEntries.push(...parsed.entries);
   }
 
   if (allEntries.length > 0) {
-    const forestCheck = verifyManifest(adlcDir, { requireSignatures: false, requireEntries: false, key });
+    const forestCheck = verifyManifest(adlcDir, {
+      requireSignatures: false,
+      requireEntries: false,
+      key,
+      publicKey: effectivePublicKey,
+    });
     if (!forestCheck.valid) {
       const reason = Array.isArray(forestCheck.errors) && forestCheck.errors.length > 0
         ? forestCheck.errors[0]
-        : 'manifest forest verification failed';
+        : (forestCheck.message ?? 'manifest forest verification failed');
       return { found: false, matchingEntries: [], manifestSegments: segments, error: reason };
     }
   }
 
   const matchingEntries = allEntries.filter((entry) => {
-    if (!verifyEntrySig(key, entry)) return false;
+    if (!verifyEntrySig(key, entry, { publicKey: effectivePublicKey })) return false;
     if (entry.data?.sessionTelemetry === true || typeof entry.data?.transcriptSha256 === 'string') return false;
     if (gate && entry.gate !== gate) return false;
     if (ticketId && entry.ticket !== ticketId) return false;
@@ -213,7 +234,8 @@ export function evaluateStop(opts = {}) {
     phaseGate = 'p4',
     sessionId = null,
   } = opts;
-  const key = opts.key !== undefined ? opts.key : (env?.ADLC_MANIFEST_KEY ?? null);
+  const rawKey = opts.key !== undefined ? opts.key : resolveKeyFromEnv(env);
+  const key = typeof rawKey === 'string' && rawKey.length > 0 ? rawKey : null;
   const root = enclosingAdlcRoot(cwd, { outerRoot });
   const loaded = !ticket && root ? readActiveTicketRails(root, { env }) : null;
   if (loaded && !loaded.ok && requireEvidence) {
@@ -236,6 +258,7 @@ export function evaluateStop(opts = {}) {
         revision,
         ticketHash,
         key,
+        ...(opts.publicKey !== undefined ? { publicKey: opts.publicKey } : {}),
         env,
       })
     : { found: false, matchingEntries: [], manifestSegments: [], error: null };

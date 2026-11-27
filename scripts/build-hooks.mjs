@@ -26,7 +26,14 @@ export const SUPPORTED_FORMATS = Object.freeze(['esm', 'cjs']);
  *
  * @type {readonly Array<{ name: string, entry: string, output: string, format?: 'esm' | 'cjs' }>}
  */
-export const DEFAULT_HOOK_TARGETS = Object.freeze([]);
+export const DEFAULT_HOOK_TARGETS = Object.freeze([
+  {
+    name: 'adlc-gemini',
+    entry: 'packages/hook-engine/lib/cli-gemini.mjs',
+    output: 'plugins/adlc-gemini/hooks/adlc-rails-guard.bundle.mjs',
+    format: 'esm',
+  },
+]);
 
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, 'utf8'));

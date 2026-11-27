@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractToolName, extractFilePaths } from '../hooks/adlc-rails-guard.mjs';
+import { extractToolName, extractFilePaths } from '../hooks/adlc-rails-guard.bundle.mjs';
 
 const writePayload = { toolCall: { name: 'write_to_file', args: { TargetFile: '/repo/src/a.js', CodeContent: 'x', Overwrite: true } } };
 const viewPayload  = { toolCall: { name: 'view_file', args: { AbsolutePath: '/repo/src/a.js' } } };
