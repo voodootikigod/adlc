@@ -137,14 +137,41 @@ function p5CompletionIntegrityErrors(entries, entry, ticket, revision) {
   return errors;
 }
 
+const P5_EPOCH_TYPES = new Set([
+  'p5-pass-completed',
+  'p5-dry-pass',
+  'p5-finding-verified',
+  'p5-finding-needs-human',
+  'p5-finding-killed',
+  'p5-complete',
+]);
+
+function entryEffectiveRevision(entry) {
+  if (entry?.revision !== undefined) return entry.revision;
+  return typeof entry?.data?.revision === 'string' && entry.data.revision.length > 0
+    ? entry.data.revision
+    : undefined;
+}
+
+function entryEffectiveDry(entry) {
+  return entry?.dry !== undefined ? entry.dry : entry?.data?.dry;
+}
+
+function matchesEffectiveRevision(entry, revision) {
+  return revision === undefined || entryEffectiveRevision(entry) === revision;
+}
+
+function findingObject(entry) {
+  return entry?.finding ?? entry?.data?.finding;
+}
+
 function findingId(entry) {
-  return typeof entry.finding?.id === 'string' && entry.finding.id.length > 0
-    ? entry.finding.id
-    : null;
+  const f = findingObject(entry);
+  return typeof f?.id === 'string' && f.id.length > 0 ? f.id : null;
 }
 
 function findingIdentity(entry) {
-  const finding = entry.finding;
+  const finding = findingObject(entry);
   if (!finding || typeof finding !== 'object') return null;
   return sha256(canonicalJson({
     id: finding.id ?? null,
@@ -162,7 +189,7 @@ function openP5FindingErrors(entries, ticket, revision, completionIndex) {
   const errors = [];
   entries.forEach((entry, index) => {
     const type = entryType(entry);
-    if (!openTypes.has(type) || !matchesTicket(entry, ticket) || !matchesRevision(entry, revision)) return;
+    if (!openTypes.has(type) || !matchesTicket(entry, ticket) || !matchesEffectiveRevision(entry, revision)) return;
     const id = findingId(entry);
     if (!id) {
       errors.push(`P5 evidence is contradictory: unresolved ${type} without finding.id`);
@@ -172,7 +199,7 @@ function openP5FindingErrors(entries, ticket, revision, completionIndex) {
     const killedBeforeCompletion = entries.slice(index + 1, completionIndex).some((candidate) =>
       entryType(candidate) === 'p5-finding-killed' &&
       matchesTicket(candidate, ticket) &&
-      matchesRevision(candidate, revision) &&
+      matchesEffectiveRevision(candidate, revision) &&
       findingIdentity(candidate) === identity
     );
     if (!killedBeforeCompletion) {
@@ -363,14 +390,14 @@ function coldstartIntegrityErrors(entries, ticket, cwd, dir, phase) {
 function latestRailCheckEntry(entries, ticket, revision, allowUnrevisioned = false) {
   return entries
     .filter((entry) => entryType(entry) === 'rails-check' && matchesTicket(entry, ticket))
-    .filter((entry) => (allowUnrevisioned && entry?.revision === undefined) || matchesRevision(entry, revision))
+    .filter((entry) => (allowUnrevisioned && entryEffectiveRevision(entry) === undefined) || matchesEffectiveRevision(entry, revision))
     .at(-1);
 }
 
 function hollowTestIntegrityErrors(entries, ticket, revision, allowUnrevisioned = true) {
   const latestHollow = entries
     .filter((entry) => entryType(entry) === 'hollow-test' && matchesTicket(entry, ticket))
-    .filter((entry) => (allowUnrevisioned && entry?.revision === undefined) || matchesRevision(entry, revision))
+    .filter((entry) => (allowUnrevisioned && entryEffectiveRevision(entry) === undefined) || matchesEffectiveRevision(entry, revision))
     .at(-1);
   const hollowSurvivors = Number(latestHollow?.survived ?? latestHollow?.data?.survived ?? latestHollow?.data?.summary?.survived ?? 0);
   return hollowSurvivors > 0 ? [`hollow-test recorded ${hollowSurvivors} surviving mutant(s)`] : [];
@@ -379,29 +406,33 @@ function hollowTestIntegrityErrors(entries, ticket, revision, allowUnrevisioned 
 function p4IntegrityErrors(entries, ticket, revision, cwd, allowUnrevisioned = false) {
   const entry = latestRailCheckEntry(entries, ticket, revision, allowUnrevisioned);
   if (!entry) return [];
+  const rc =
+    allowUnrevisioned && entry.railsDiffEmpty === undefined && entry.data && typeof entry.data === 'object' && !Array.isArray(entry.data)
+      ? entry.data
+      : entry;
   const errors = [];
-  if (entry.railsDiffEmpty !== true) {
+  if (rc.railsDiffEmpty !== true) {
     errors.push('P4 evidence is incomplete: rails-check missing railsDiffEmpty=true');
   }
-  if (entry.suppressionsClean !== true) {
+  if (rc.suppressionsClean !== true) {
     errors.push('P4 evidence is incomplete: rails-check missing suppressionsClean=true');
   }
-  if (!entry.railFiles || typeof entry.railFiles !== 'object' || Array.isArray(entry.railFiles)) {
+  if (!rc.railFiles || typeof rc.railFiles !== 'object' || Array.isArray(rc.railFiles)) {
     errors.push('P4 evidence is incomplete: rails-check missing railFiles hash snapshot');
     return errors;
   }
-  const railPaths = Object.keys(entry.railFiles);
+  const railPaths = Object.keys(rc.railFiles);
   if (railPaths.length === 0) {
     errors.push('P4 evidence is incomplete: rails-check railFiles snapshot is empty');
     return errors;
   }
   const currentHashes = hashFiles(railPaths, (path) => readFileSync(resolve(cwd, path)));
   for (const path of railPaths) {
-    if (typeof entry.railFiles[path] !== 'string') {
+    if (typeof rc.railFiles[path] !== 'string') {
       errors.push(`P4 evidence is incomplete: rails-check missing hash for ${path}`);
       continue;
     }
-    if (currentHashes[path] !== entry.railFiles[path]) {
+    if (currentHashes[path] !== rc.railFiles[path]) {
       errors.push(`P4 evidence is stale: rail file hash changed after rails-check: ${path}`);
     }
   }
@@ -548,9 +579,9 @@ export function assertPhase(
     const trivialEntries = entries.filter(matchesTrivialScope);
     const ignoredPaths = manifestArtifactPaths(normalizedCwd, normalizedDir);
     const latestTrivialPass = trivialEntries
-      .filter((entry) => entryType(entry) === 'p5-pass-completed' && Boolean(entry?.revision))
+      .filter((entry) => entryType(entry) === 'p5-pass-completed' && Boolean(entryEffectiveRevision(entry)))
       .at(-1);
-    const recordedPassRev = latestTrivialPass?.revision ?? null;
+    const recordedPassRev = entryEffectiveRevision(latestTrivialPass) ?? null;
     const liveRev = explicitRevision
       ? null
       : resolveLiveP5WorktreeRevision({
@@ -586,12 +617,12 @@ export function assertPhase(
 
     const lastOtherRevPassIdx = trivialEntries.findLastIndex(
       (entry) =>
-        (entryType(entry) === 'p5-pass-completed' || entryType(entry) === 'p5-complete') &&
-        Boolean(entry?.revision) &&
-        !matchesRevision(entry, resolvedRev),
+        P5_EPOCH_TYPES.has(entryType(entry)) &&
+        Boolean(entryEffectiveRevision(entry)) &&
+        !matchesEffectiveRevision(entry, resolvedRev),
     );
     const epochEntries = trivialEntries.filter((entry, idx) =>
-      entry?.revision !== undefined ? matchesRevision(entry, resolvedRev) : idx > lastOtherRevPassIdx,
+      entryEffectiveRevision(entry) !== undefined ? matchesEffectiveRevision(entry, resolvedRev) : idx > lastOtherRevPassIdx,
     );
 
     const p4Errors = p4IntegrityErrors(epochEntries, ticket, resolvedRev, normalizedCwd, true);
@@ -636,11 +667,11 @@ export function assertPhase(
     const passesAtRev = epochEntries.filter(
       (entry) =>
         entryType(entry) === 'p5-pass-completed' &&
-        Boolean(entry?.revision) &&
-        matchesRevision(entry, resolvedRev),
+        Boolean(entryEffectiveRevision(entry)) &&
+        matchesEffectiveRevision(entry, resolvedRev),
     );
     const latestPassAtRev = passesAtRev.at(-1);
-    if (passesAtRev.length > 0 && latestPassAtRev?.dry !== true) {
+    if (passesAtRev.length > 0 && entryEffectiveDry(latestPassAtRev) !== true) {
       return {
         ok: false,
         operational: false,
@@ -653,7 +684,7 @@ export function assertPhase(
     }
 
     const present = new Set();
-    if (latestPassAtRev?.dry === true) {
+    if (entryEffectiveDry(latestPassAtRev) === true) {
       present.add('p5-pass-completed');
     }
     for (const entry of epochEntries) {
@@ -785,16 +816,18 @@ export function assertPhase(
     ? entries.findLastIndex(
         (entry) =>
           matchesTicket(entry, ticket) &&
-          entryType(entry) === 'p5-complete' &&
-          Boolean(entry?.revision) &&
-          !matchesRevision(entry, resolvedRevision),
+          P5_EPOCH_TYPES.has(entryType(entry)) &&
+          Boolean(entryEffectiveRevision(entry)) &&
+          !matchesEffectiveRevision(entry, resolvedRevision),
       )
     : -1;
   const boundedEpochEntries = phase === 'bounded'
     ? entries.filter(
         (entry, idx) =>
           matchesTicket(entry, ticket) &&
-          (entry?.revision !== undefined ? matchesRevision(entry, resolvedRevision) : idx > lastOtherRevBoundedCompleteIdx),
+          (entryEffectiveRevision(entry) !== undefined
+            ? matchesEffectiveRevision(entry, resolvedRevision)
+            : idx > lastOtherRevBoundedCompleteIdx),
       )
     : entries;
   const p4Errors = phase === 'p4' || phase === 'bounded'
@@ -896,7 +929,7 @@ export function assertPhase(
         if (!matchesTicket(entry, ticket)) return false;
         const type = entryType(entry);
         if (phase === 'bounded' && !REVISION_BOUND_TYPES.has(type)) {
-          if (entry?.revision !== undefined) return matchesRevision(entry, resolvedRevision);
+          if (entryEffectiveRevision(entry) !== undefined) return matchesEffectiveRevision(entry, resolvedRevision);
           if (type === 'rails-red') return true;
           return idx > lastOtherRevBoundedCompleteIdx;
         }

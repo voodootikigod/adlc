@@ -303,6 +303,59 @@ describe('assertPhase track modes and witnessed fresh-context gates', () => {
     assert.equal(replayCheck.ok, false);
     assert.deepEqual(replayCheck.missing.sort(), ['hollow-test', 'rails-check']);
 
+    // Satisfies ticketless trivial via standard gate-manifest record CLI (entry.data.revision / entry.data.dry / entry.data.railFiles)
+    const cliTrivDir = join(cwd, '.adlc-triv-cli');
+    mkdirSync(cliTrivDir, { recursive: true });
+    const manifestCli = resolve(dirname(fileURLToPath(import.meta.url)), '../../gate-manifest/bin/gate-manifest.mjs');
+    assert.equal(
+      spawnSync(
+        process.execPath,
+        [
+          manifestCli,
+          'record',
+          'rails-check',
+          '--dir',
+          cliTrivDir,
+          '--data',
+          JSON.stringify({ railsDiffEmpty: true, suppressionsClean: true, railFiles: { 'test/r.test.mjs': sha256(readFileSync(railFile)) } }),
+        ],
+        { cwd, encoding: 'utf8' },
+      ).status,
+      0,
+    );
+    assert.equal(
+      spawnSync(process.execPath, [manifestCli, 'record', 'hollow-test', '--dir', cliTrivDir, '--data', JSON.stringify({ survived: 0 })], {
+        cwd,
+        encoding: 'utf8',
+      }).status,
+      0,
+    );
+    assert.equal(
+      spawnSync(
+        process.execPath,
+        [manifestCli, 'record', 'p5-pass-completed', '--dir', cliTrivDir, '--data', JSON.stringify({ revision: rev, dry: true })],
+        { cwd, encoding: 'utf8' },
+      ).status,
+      0,
+    );
+    const cliTrivRun = spawnSync(process.execPath, [RUNNER_BIN, 'run', 'trivial', '--dir', cliTrivDir, '--revision', rev], {
+      cwd,
+      encoding: 'utf8',
+    });
+    assert.equal(cliTrivRun.status, 0, cliTrivRun.stderr + cliTrivRun.stdout);
+
+    // Bounded track rejects stale pre-fix hollow-test and rails-check after a failed p5-pass-completed at R1
+    const bReplayDir = join(cwd, '.adlc-bounded-replay');
+    mkdirSync(bReplayDir, { recursive: true });
+    appendEntry({ gate: 'rails-red', ticket: 'T1' }, bReplayDir);
+    appendEntry({ gate: 'hollow-test', ticket: 'T1' }, bReplayDir);
+    appendEntry({ type: 'rails-check', ticket: 'T1', railsDiffEmpty: true, suppressionsClean: true, railFiles: { 'test/r.test.mjs': sha256(readFileSync(railFile)) } }, bReplayDir);
+    appendEntry({ type: 'p5-pass-completed', ticket: 'T1', revision: rev, dry: false, lens: 'correctness' }, bReplayDir);
+    writeFullP5(bReplayDir, { ticket: 'T1', revision: rev2, cwd });
+    const bStale = assertPhase('bounded', { dir: bReplayDir, ticket: 'T1', revision: rev2, cwd });
+    assert.equal(bStale.ok, false);
+    assert.deepEqual(bStale.missing.sort(), ['hollow-test', 'rails-check']);
+
     // Rejects historical ticketed entries when trivial runs ticketless
     const ticketedOnlyDir = join(cwd, '.adlc-triv-ticketed');
     mkdirSync(ticketedOnlyDir, { recursive: true });
