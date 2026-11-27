@@ -3,6 +3,7 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { launchHook } from "./helpers/run-hook.mjs";
 import { EventEmitter, once } from "node:events";
 import {
   existsSync,
@@ -107,7 +108,7 @@ ${
 }
 
 function launch(t, env) {
-  const child = spawn(process.execPath, [WRAPPER], {
+  const child = launchHook([WRAPPER], {
     cwd: join(HERE, ".."),
     env: {
       ...process.env,

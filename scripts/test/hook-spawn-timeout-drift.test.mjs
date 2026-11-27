@@ -92,31 +92,7 @@ const RAILED_EXCEPTIONS = new Map([
  * spawn. Nothing may be added. A directory converting its first file copies
  * helpers/run-hook.mjs from a hooks/test directory.
  */
-const PENDING_CONVERSION = new Map([
-  ['plugins/adlc-copilot/test/rails-guard-contract.test.mjs', 2],
-  ['plugins/adlc-cursor/test/audit.test.mjs', 3],
-  ['plugins/adlc-cursor/test/build-gate.test.mjs', 2],
-  ['plugins/adlc-cursor/test/mcp-roots-proxy-lifecycle.test.mjs', 1],
-  ['plugins/adlc-cursor/test/mcp-wrapper.test.mjs', 1],
-  ['plugins/adlc-cursor/test/packaging.test.mjs', 1],
-  ['plugins/adlc-cursor/test/pretool-dispatch.test.mjs', 2],
-  ['plugins/adlc-cursor/test/rails-guard.test.mjs', 2],
-  ['plugins/adlc-cursor/test/scaffold-target.test.mjs', 1],
-  ['plugins/adlc-cursor/test/scaffold.test.mjs', 1],
-  ['plugins/adlc-cursor/test/session-start.test.mjs', 2],
-  ['plugins/adlc-cursor/test/shell-advisory.test.mjs', 2],
-  ['plugins/adlc-herdr/test/action-dispatch.test.mjs', 1],
-  ['plugins/adlc-herdr/test/ambiguous-width-env.test.mjs', 1],
-  ['plugins/adlc-herdr/test/board-e2e.test.mjs', 2],
-  ['plugins/adlc-herdr/test/manifest.test.mjs', 2],
-  ['plugins/adlc-herdr/test/on-event-e2e.test.mjs', 2],
-  ['plugins/adlc-herdr/test/show-ticket.test.mjs', 1],
-  ['plugins/adlc-herdr/test/watcher-e2e.test.mjs', 1],
-  ['plugins/adlc-opencode/test/entry-guard.test.mjs', 6],
-  ['plugins/adlc-pi/test/commands.test.mjs', 3],
-  ['plugins/adlc-pi/test/handoff-deny.test.mjs', 2],
-  ['plugins/adlc-pi/test/packaging.test.mjs', 3],
-]);
+const PENDING_CONVERSION = new Map();
 
 /** Every `.mjs` under dir, recursively, repo-relative. */
 function mjsFilesUnder(dir) {

@@ -10,7 +10,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
-import { spawn, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
+import { spawnHookAsync } from './helpers/run-hook.mjs';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -60,7 +61,7 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 async function runWatcherBriefly(extraEnv = {}) {
-  const child = spawn(process.execPath, [script], {
+  const child = spawnHookAsync([script], {
     env: {
       ...process.env,
       PATH: `${dir}:${process.env.PATH}`,

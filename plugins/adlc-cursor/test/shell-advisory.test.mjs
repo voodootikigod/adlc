@@ -4,7 +4,7 @@
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { runHook } from './helpers/run-hook.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -158,7 +158,7 @@ test('the source never emits a deny and documents the bypassability honestly', (
 test('wire format: the real script allows and carries the advisory on stdout', () => {
   const root = fixture({ tickets: RAILED });
   try {
-    const out = execFileSync(process.execPath, [SCRIPT], {
+    const out = runHook([SCRIPT], {
       cwd: root,
       env: { ...process.env, ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' },
       input: JSON.stringify({ command: 'echo x > src/frozen.js', workspace_roots: [root] }),
@@ -172,7 +172,7 @@ test('wire format: the real script allows and carries the advisory on stdout', (
 test('wire format: malformed stdin still allows (advisory never fails closed)', () => {
   const root = fixture({ tickets: RAILED });
   try {
-    const out = execFileSync(process.execPath, [SCRIPT], {
+    const out = runHook([SCRIPT], {
       cwd: root,
       env: { ...process.env, ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' },
       input: '{ not json',

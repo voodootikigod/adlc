@@ -9,7 +9,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnHook } from './helpers/run-hook.mjs';
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'scaffold-cli.mjs');
 
 function runScaffold(target, { home = target, extraArgs = [] } = {}) {
-  return spawnSync(process.execPath, [CLI, target, ...extraArgs], {
+  return spawnHook([CLI, target, ...extraArgs], {
     encoding: 'utf8',
     env: { ...process.env, HOME: home },
   });

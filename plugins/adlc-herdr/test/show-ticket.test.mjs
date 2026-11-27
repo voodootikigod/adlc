@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync, chmodSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawnHook } from './helpers/run-hook.mjs';
 import { fileURLToPath } from 'node:url';
 
 const script = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'show-ticket.mjs');
@@ -21,7 +21,7 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-const run = (args) => spawnSync(process.execPath, [script, ...args], {
+const run = (args) => spawnHook([script, ...args], {
   encoding: 'utf8',
   timeout: 10_000,
   input: '\n', // the trailing "press Enter" read

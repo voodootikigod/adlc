@@ -7,7 +7,7 @@
 // A subprocess can.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnHook } from './helpers/run-hook.mjs';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,7 +30,7 @@ function renderIn(env) {
     });
     process.stdout.write(JSON.stringify(out.split('\\n').map((l) => l.replace(/\\x1b\\[[0-9;]*m/g, ''))));
   `;
-  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+  const result = spawnHook(['--input-type=module', '-e', script], {
     encoding: 'utf8',
     env: { ...process.env, ...env },
   });

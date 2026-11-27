@@ -13,6 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnHook } from './helpers/run-hook.mjs';
 import { cpSync, existsSync, readdirSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
@@ -238,7 +239,7 @@ test('AC4: packed tarball extracted outside the repo runs adlc-cursor-scaffold s
     // 4. Run the packed bin standalone against a fresh temp target repo.
     const binPath = join(pkgRoot, pkg.bin[Object.keys(pkg.bin)[0]]);
     assert.ok(existsSync(binPath), 'bin entry point exists in the extracted tarball');
-    const res = spawnSync('node', [binPath, targetRepo], { encoding: 'utf8', timeout: 30_000 });
+    const res = spawnHook([binPath, targetRepo], { encoding: 'utf8', timeout: 30_000 });
     assert.equal(res.status, 0, `standalone scaffold run failed:\n${res.stdout}\n${res.stderr}`);
 
     // 5. Assert the real scaffold output landed in the target repo.

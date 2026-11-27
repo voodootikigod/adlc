@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { runHook } from './helpers/run-hook.mjs';
 import { mkdirSync, writeFileSync, symlinkSync, readFileSync } from 'node:fs';
 import { dirname, join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -400,7 +400,7 @@ test('(multi-root relative) a RELATIVE ../ traversal into a DIFFERENT-DEPTH sibl
 test('(malformed payload) the hook script fails CLOSED on unparseable JSON under enforcement, OPEN otherwise', (t) => {
   const root = fixture(t, { tickets: RAILED });
   const run = (env) => {
-    const out = execFileSync(process.execPath, [GUARD_SCRIPT], { input: '{ this is : not json', cwd: root, env: { ...process.env, ...env } }).toString();
+    const out = runHook([GUARD_SCRIPT], { input: '{ this is : not json', cwd: root, env: { ...process.env, ...env } }).toString();
     return JSON.parse(out).permission;
   };
   assert.equal(run({ ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' }), 'deny', 'malformed payload must fail closed under enforcement');
@@ -421,7 +421,7 @@ test('(multi-root ..) a non-normalized path is attributed to the repo it RESOLVE
 
 test('wire format: the real script reads stdin JSON and writes a {permission} verdict', (t) => {
   const root = fixture(t, { tickets: RAILED });
-  const out = execFileSync(process.execPath, [GUARD_SCRIPT], {
+  const out = runHook([GUARD_SCRIPT], {
     // The root comes from the payload, as Cursor supplies it — never from the
     // hook's cwd (see rails-guard-no-root.test.mjs).
     input: JSON.stringify({ ...payload('Write', 'src/frozen.js'), workspace_roots: [root] }),

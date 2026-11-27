@@ -12,7 +12,7 @@
 //   * internal errors deny (application-level fail-safe), they do not crash.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnHook } from './helpers/run-hook.mjs';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -33,7 +33,7 @@ function fixture(fn, { select = true, ticket = TICKET } = {}) {
 /** Run the hook with a Copilot-shaped preToolUse stdin payload. */
 function runCopilot(root, { toolName, toolArgs, env = {} } = {}) {
   const { ADLC_P4_ENFORCEMENT: _e, ADLC_TICKET: _t, ADLC_TICKETS: _ts, ADLC_TICKET_STORE: _s, ...base } = process.env;
-  return spawnSync(process.execPath, [HOOK], {
+  return spawnHook([HOOK], {
     cwd: root,
     env: { ...base, ...env },
     input: JSON.stringify({ toolName, toolArgs: JSON.stringify(toolArgs), cwd: root }),
@@ -128,7 +128,7 @@ test('malformed ticket store → fail-safe DENY, never a non-zero crash', () => 
 
 test('never exits non-zero even on a garbage payload', () => {
   fixture((root) => {
-    const result = spawnSync(process.execPath, [HOOK], {
+    const result = spawnHook([HOOK], {
       cwd: root,
       env: (() => { const { ADLC_P4_ENFORCEMENT: _e, ...b } = process.env; return b; })(),
       input: 'not json at all',
