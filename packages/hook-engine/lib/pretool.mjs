@@ -6,7 +6,6 @@
 import { isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  activeTickets,
   classifyShellCommand,
   collectPatchPaths,
   extractToolWorkdir,
@@ -17,8 +16,7 @@ import {
   resolveRailPath,
 } from '@adlc/core';
 import {
-  detectTicketStore,
-  resolveActiveTicketAgainst,
+  readActiveRailIndex,
   resolveActiveTicketId as resolveCanonicalActiveTicketId,
 } from '@adlc/tickets';
 
@@ -173,64 +171,12 @@ export function resolveActiveTicketId(root, env = process.env) {
 
 export function readActiveTicketRails(root, { storeOverride = null, env = process.env } = {}) {
   const cleanEnv = env.ADLC_TICKET ? { ...env } : env;
-  if (!root) return { ok: true, tickets: [], activeTicket: null, rails: [], boundTicket: false, error: null };
-  let snapshot;
-  try {
-    const store = detectTicketStore({ root, ticketStore: storeOverride ?? undefined, allowRecovery: true, env: cleanEnv });
-    snapshot = store.load();
-  } catch (err) {
-    return {
-      ok: false,
-      tickets: [],
-      activeTicket: null,
-      rails: [],
-      boundTicket: false,
-      error: `ticket store unreadable: ${err?.message ?? String(err)}`,
-    };
-  }
-
-  const tickets = snapshot.tickets ?? [];
-  const active = activeTickets(tickets);
-  const resolved = resolveActiveTicketAgainst(snapshot, { root, env: cleanEnv });
-  if (!resolved.ok) {
-    return {
-      ok: false,
-      tickets: [],
-      activeTicket: null,
-      rails: [],
-      boundTicket: false,
-      error: `invalid active ticket selection: ${resolved.message ?? 'conflict'}`,
-    };
-  }
-
-  if (resolved.value !== null) {
-    const selected = resolved.value.ticket;
-    if (selected.completed === true) {
-      return {
-        ok: false,
-        tickets: [],
-        activeTicket: null,
-        rails: [],
-        boundTicket: false,
-        error: `active ticket "${selected.id}" is already completed`,
-      };
-    }
-    const rails = Array.isArray(selected.rails)
-      ? selected.rails.filter((r) => typeof r === 'string' && r.trim()).map((r) => r.trim())
-      : [];
-    return { ok: true, tickets: active, activeTicket: selected, rails, boundTicket: true, error: null };
-  }
-
-  const activeTicket = active[0] ?? null;
-  const railSet = new Set();
-  for (const t of active) {
-    if (Array.isArray(t.rails)) {
-      for (const r of t.rails) {
-        if (typeof r === 'string' && r.trim()) railSet.add(r.trim());
-      }
-    }
-  }
-  return { ok: true, tickets: active, activeTicket, rails: [...railSet], boundTicket: false, error: null };
+  const { ok, tickets, activeTicket, rails, boundTicket, error } = readActiveRailIndex(root, {
+    storeOverride,
+    env: cleanEnv,
+    writeCache: false,
+  });
+  return { ok, tickets, activeTicket, rails, boundTicket, error };
 }
 
 function extractFilePathsFromInput(toolInput) {

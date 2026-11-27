@@ -2862,6 +2862,9 @@ var MANIFEST_BASENAMES = Object.freeze(["package.json", "plugin.json", "marketpl
 // packages/tickets/lib/rail-existence.mjs
 var GIT_MAX_BUFFER2 = 256 * 1024 * 1024;
 
+// packages/tickets/lib/rail-index.mjs
+var MAX_INDEX_BYTES = 1024 * 1024;
+
 // packages/tickets/lib/prompt.mjs
 import { createInterface } from "node:readline/promises";
 
@@ -3933,7 +3936,7 @@ function readActiveTicketPointer2(root = ".") {
   if (usedKey !== CANONICAL_ID_KEY) value.deprecatedAlias = usedKey;
   return ok(value);
 }
-function resolveActiveTicketId({ root = ".", env = process.env } = {}) {
+function resolveActiveTicketId2({ root = ".", env = process.env } = {}) {
   const pointer = readActiveTicketPointer2(root);
   if (!pointer.ok) return pointer;
   const envId = trimmed(env.ADLC_TICKET) || null;
@@ -3951,7 +3954,7 @@ function resolveActiveTicketId({ root = ".", env = process.env } = {}) {
   });
 }
 function resolveActiveTicketAgainst2(snapshot, { root = ".", env = process.env, allowLegacyPointer = false } = {}) {
-  const resolved = resolveActiveTicketId({ root, env });
+  const resolved = resolveActiveTicketId2({ root, env });
   if (!resolved.ok) return resolved;
   if (resolved.value === null) return ok(null);
   const { id, pointerPresent, ticketHash: ticketHash2, legacyString, deprecatedAlias } = resolved.value;

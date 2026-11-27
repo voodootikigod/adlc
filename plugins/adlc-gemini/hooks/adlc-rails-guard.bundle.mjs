@@ -5,8 +5,8 @@ import { fileURLToPath as fileURLToPath4 } from "node:url";
 
 // packages/hook-engine/lib/gemini-guard.mjs
 import { fileURLToPath as fileURLToPath3 } from "node:url";
-import { existsSync as existsSync15, realpathSync as realpathSync6, lstatSync as lstatSync15 } from "node:fs";
-import { dirname as dirname11, isAbsolute as isAbsolute11, join as join18, parse as parse2, relative as relative9, resolve as resolve10 } from "node:path";
+import { existsSync as existsSync15, realpathSync as realpathSync6, lstatSync as lstatSync16 } from "node:fs";
+import { dirname as dirname12, isAbsolute as isAbsolute11, join as join19, parse as parse2, relative as relative9, resolve as resolve10 } from "node:path";
 import { homedir as homedir5 } from "node:os";
 
 // packages/core/lib/llm.mjs
@@ -1033,7 +1033,7 @@ import { basename as basename2, dirname as dirname8 } from "node:path";
 // packages/tickets/lib/transaction.mjs
 import { existsSync as existsSync8, readFileSync as readFileSync7 } from "node:fs";
 import { basename, dirname as dirname7, isAbsolute as isAbsolute2, join as join10, relative as relative2, resolve as resolve4 } from "node:path";
-import { randomUUID as randomUUID3 } from "node:crypto";
+import { randomUUID as randomUUID4 } from "node:crypto";
 
 // packages/tickets/lib/lock.mjs
 import { existsSync as existsSync2, mkdirSync, readFileSync as readFileSync2, renameSync, rmSync as rmSync2, writeFileSync } from "node:fs";
@@ -1194,7 +1194,7 @@ function releaseTicketLock(lock, { removeLock = rmSync2 } = {}) {
 
 // packages/tickets/lib/evidence.mjs
 import { closeSync as closeSync5, existsSync as existsSync6, fsyncSync as fsyncSync2, mkdirSync as mkdirSync4, openSync as openSync5, readFileSync as readFileSync5, unlinkSync as unlinkSync3, writeFileSync as writeFileSync4 } from "node:fs";
-import { createHmac as createHmac2, randomUUID as randomUUID2 } from "node:crypto";
+import { createHmac as createHmac2, randomUUID as randomUUID3 } from "node:crypto";
 import { hostname as hostname2 } from "node:os";
 import { dirname as dirname6, join as join8 } from "node:path";
 
@@ -1213,6 +1213,7 @@ import {
   unlinkSync,
   writeFileSync as writeFileSync2
 } from "node:fs";
+import { randomUUID as randomUUID2 } from "node:crypto";
 import { dirname as dirname4, resolve as resolve2 } from "node:path";
 function fsyncFile(path) {
   const descriptor = openSync2(path, "r+");
@@ -1276,6 +1277,40 @@ function durableWrite(path, content) {
     closeSync2(descriptor);
   }
   fsyncDirectory(dirname4(resolve2(path)));
+}
+function writeFileAtomic(filePath, content, options = {}) {
+  let st = null;
+  try {
+    st = lstatSync3(filePath);
+  } catch {
+  }
+  if (st && st.isSymbolicLink()) {
+    throw new Error("refusing to write through symlink: " + filePath);
+  }
+  const mode = options.mode ?? (st ? st.mode & 511 : 384);
+  const tmpPath = `${filePath}.tmp-${process.pid}-${randomUUID2()}`;
+  let fd = null;
+  let closed = false;
+  try {
+    fd = openSync2(tmpPath, "wx", mode);
+    writeFileSync2(fd, content);
+    fsyncSync(fd);
+    closeSync2(fd);
+    closed = true;
+    renameSync2(tmpPath, filePath);
+  } catch (err) {
+    if (fd !== null && !closed) {
+      try {
+        closeSync2(fd);
+      } catch {
+      }
+    }
+    try {
+      unlinkSync(tmpPath);
+    } catch {
+    }
+    throw err;
+  }
 }
 function durableCopy(source, target) {
   copyFileSync(source, target);
@@ -2454,7 +2489,7 @@ var sleep2 = (milliseconds) => Atomics.wait(new Int32Array(new SharedArrayBuffer
 function withManifestLock(path, fn, { retries = 400, delayMs = 5 } = {}) {
   const lockPath = `${path}.lock`;
   mkdirSync4(dirname6(path), { recursive: true });
-  const owner = { version: 1, token: randomUUID2(), pid: process.pid, hostname: hostname2(), startedAt: (/* @__PURE__ */ new Date()).toISOString() };
+  const owner = { version: 1, token: randomUUID3(), pid: process.pid, hostname: hostname2(), startedAt: (/* @__PURE__ */ new Date()).toISOString() };
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     let descriptor;
     try {
@@ -2855,7 +2890,7 @@ function bypassAuditPlan(before, { operation, evidenceRequired, key, allowUnsign
 function applyLegacyTransaction(store, tickets, { expectedSnapshotHash, operation = "update", evidenceRequired = false, ticketId = null, beforeTicketId = null, root = ".", faultInjector = null, lock: existingLock = null, key = null, allowUnsigned = false } = {}) {
   key = validateKeyParam(key);
   validateTickets(tickets);
-  const transactionId = randomUUID3();
+  const transactionId = randomUUID4();
   const lock = existingLock ?? acquireTicketLock(root, { transactionId, command: `ticket:${operation}` });
   const transactionRoot = join10(root, TRANSACTION_DIRECTORY, transactionId);
   try {
@@ -3026,6 +3061,141 @@ var MANIFEST_BASENAMES = Object.freeze(["package.json", "plugin.json", "marketpl
 // packages/tickets/lib/rail-existence.mjs
 var GIT_MAX_BUFFER2 = 256 * 1024 * 1024;
 
+// packages/tickets/lib/rail-index.mjs
+import { lstatSync as lstatSync9, readFileSync as readFileSync9, readdirSync as readdirSync5 } from "node:fs";
+import { dirname as dirname9, join as join12 } from "node:path";
+var ACTIVE_RAIL_INDEX_FILE = ".adlc/.active-rail-index.json";
+var MAX_INDEX_BYTES = 1024 * 1024;
+function cleanRails(rails) {
+  if (!Array.isArray(rails)) return [];
+  return rails.filter((r) => typeof r === "string" && r.trim()).map((r) => r.trim());
+}
+function filterActiveTickets(tickets) {
+  const done = new Set(tickets.filter((t) => t.completed === true).map((t) => t.id));
+  if (done.size === 0) return tickets;
+  return tickets.filter((t) => !done.has(t.id)).map(
+    (t) => Array.isArray(t.edges) && t.edges.some((e) => done.has(e.to)) ? { ...t, edges: t.edges.filter((e) => !done.has(e.to)) } : t
+  );
+}
+function mergeActiveRails(active) {
+  const railSet = /* @__PURE__ */ new Set();
+  for (const t of active) {
+    for (const r of cleanRails(t.rails)) railSet.add(r);
+  }
+  return [...railSet];
+}
+function failResult(error) {
+  return { ok: false, tickets: [], activeTicket: null, rails: [], boundTicket: false, source: "error", error };
+}
+function computeDirectoryStoreFingerprint(storePath) {
+  try {
+    const dirStat = lstatSync9(storePath);
+    if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) return null;
+    const entries = readdirSync5(storePath, { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    let sawManifest = false;
+    const lines = [];
+    for (const entry of entries) {
+      if (entry.isSymbolicLink() || !entry.isFile()) return null;
+      if (entry.name === ".store.json") sawManifest = true;
+      else if (!entry.name.endsWith(".json")) return null;
+      const stat = lstatSync9(join12(storePath, entry.name));
+      if (stat.isSymbolicLink() || !stat.isFile()) return null;
+      lines.push(`${entry.name}:${stat.size}:${stat.mtimeMs}`);
+    }
+    if (!sawManifest) return null;
+    return sha256(lines.join("\n"));
+  } catch {
+    return null;
+  }
+}
+function tryReadCachedIndex(root, expectedFingerprint) {
+  try {
+    const indexPath = join12(root, ACTIVE_RAIL_INDEX_FILE);
+    const parentStat = lstatSync9(dirname9(indexPath));
+    if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) return null;
+    const stat = lstatSync9(indexPath);
+    if (stat.isSymbolicLink() || !stat.isFile() || stat.size > MAX_INDEX_BYTES) return null;
+    const doc = JSON.parse(readFileSync9(indexPath, "utf8"));
+    if (!doc || typeof doc !== "object" || Array.isArray(doc)) return null;
+    if (doc.version !== 1 || doc.storeFingerprint !== expectedFingerprint) return null;
+    if (!Array.isArray(doc.rails) || !Array.isArray(doc.activeTickets)) return null;
+    if (!doc.rails.every((r) => typeof r === "string")) return null;
+    return { ok: true, tickets: doc.activeTickets, activeTicket: doc.activeTickets[0] ?? null, rails: doc.rails, boundTicket: false, source: "index-cache", error: null };
+  } catch {
+    return null;
+  }
+}
+function tryWriteCachedIndex(root, fingerprint, activeTickets2, rails) {
+  try {
+    const indexPath = join12(root, ACTIVE_RAIL_INDEX_FILE);
+    const parentStat = lstatSync9(dirname9(indexPath));
+    if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) return;
+    writeFileAtomic(indexPath, `${JSON.stringify({ version: 1, storeFingerprint: fingerprint, activeTickets: activeTickets2, rails })}
+`);
+  } catch {
+  }
+}
+function readActiveRailIndex(root, { storeOverride = null, env = process.env, writeCache = false } = {}) {
+  if (!root) return { ok: true, tickets: [], activeTicket: null, rails: [], boundTicket: false, source: "none", error: null };
+  let store;
+  try {
+    store = detectTicketStore({ root, ticketStore: storeOverride ?? void 0, allowRecovery: true, env });
+  } catch (err) {
+    return failResult(`ticket store unreadable: ${err?.message ?? String(err)}`);
+  }
+  const resolvedId = resolveActiveTicketId({ root, env });
+  if (!resolvedId.ok) return failResult(`invalid active ticket selection: ${resolvedId.message ?? "conflict"}`);
+  const isDirectoryStore = store instanceof DirectoryTicketStore && typeof store.loadOne === "function";
+  if (resolvedId.value?.id && isDirectoryStore) {
+    const { id, pointerPresent, ticketHash: pinnedHash, legacyString } = resolvedId.value;
+    let ticket;
+    try {
+      ticket = store.loadOne(id);
+    } catch (err) {
+      return failResult(`ticket store unreadable: ${err?.message ?? String(err)}`);
+    }
+    if (ticket === null) return failResult(`invalid active ticket selection: active ticket "${id}" not found`);
+    if (pointerPresent) {
+      const expected = ticketHash(ticket);
+      if (!pinnedHash) {
+        const detail = legacyString ? "a legacy bare-string pointer pins no ticketHash" : `${CURRENT_TICKET_FILE} pins no ticketHash`;
+        return failResult(`invalid active ticket selection: ${detail}; expected ticketHash "${expected}"`);
+      }
+      if (pinnedHash !== expected) {
+        return failResult(`invalid active ticket selection: active ticket "${id}" changed after selection (pointer pins ${pinnedHash}, store has ${expected})`);
+      }
+    }
+    if (ticket.completed === true) return failResult(`active ticket "${ticket.id}" is already completed`);
+    return { ok: true, tickets: [ticket], activeTicket: ticket, rails: cleanRails(ticket.rails), boundTicket: true, source: "loadOne", error: null };
+  }
+  let fp = null;
+  if (resolvedId.value === null && isDirectoryStore) {
+    fp = computeDirectoryStoreFingerprint(store.path);
+    if (fp !== null) {
+      const cached = tryReadCachedIndex(root, fp);
+      if (cached) return cached;
+    }
+  }
+  let snapshot;
+  try {
+    snapshot = store.load();
+  } catch (err) {
+    return failResult(`ticket store unreadable: ${err?.message ?? String(err)}`);
+  }
+  const active = filterActiveTickets(snapshot.tickets ?? []);
+  const resolved = resolveActiveTicketAgainst(snapshot, { root, env });
+  if (!resolved.ok) return failResult(`invalid active ticket selection: ${resolved.message ?? "conflict"}`);
+  if (resolved.value !== null) {
+    const selected = resolved.value.ticket;
+    if (selected.completed === true) return failResult(`active ticket "${selected.id}" is already completed`);
+    return { ok: true, tickets: active, activeTicket: selected, rails: cleanRails(selected.rails), boundTicket: true, source: "full-load", error: null };
+  }
+  const rails = mergeActiveRails(active);
+  const activeTicket = active[0] ?? null;
+  if (writeCache && fp) tryWriteCachedIndex(root, fp, active, rails);
+  return { ok: true, tickets: active, activeTicket, rails, boundTicket: false, source: "full-load", error: null };
+}
+
 // packages/tickets/lib/prompt.mjs
 import { createInterface } from "node:readline/promises";
 
@@ -3080,13 +3250,6 @@ var TICKET_TRUST_ROOT_RAILS = Object.freeze([
   ".adlc/tickets/**",
   ".adlc/current-ticket.json"
 ]);
-function activeTickets(tickets) {
-  const done = new Set(tickets.filter((t) => t.completed === true).map((t) => t.id));
-  if (done.size === 0) return tickets;
-  return tickets.filter((t) => !done.has(t.id)).map(
-    (t) => Array.isArray(t.edges) && t.edges.some((e) => done.has(e.to)) ? { ...t, edges: t.edges.filter((e) => !done.has(e.to)) } : t
-  );
-}
 
 // packages/core/lib/revision.mjs
 var GIT_MAX_BUFFER3 = 64 * 1024 * 1024;
@@ -3456,8 +3619,8 @@ function classifyShellCommand(text) {
 }
 
 // packages/core/lib/railpath.mjs
-import { lstatSync as lstatSync9, readlinkSync, realpathSync } from "node:fs";
-import { isAbsolute as isAbsolute4, join as join12, parse, relative as relative3 } from "node:path";
+import { lstatSync as lstatSync10, readlinkSync, realpathSync } from "node:fs";
+import { isAbsolute as isAbsolute4, join as join13, parse, relative as relative3 } from "node:path";
 var MAX_SYMLINK_HOPS = 40;
 function realpathOr(p) {
   try {
@@ -3471,7 +3634,7 @@ function segmentsOf(p) {
 }
 function lstatOrNull(p) {
   try {
-    return lstatSync9(p);
+    return lstatSync10(p);
   } catch {
     return null;
   }
@@ -3492,10 +3655,10 @@ function walk(start, segments) {
     const seg = queue.shift();
     if (seg === ".") continue;
     if (seg === "..") {
-      cur = join12(cur, "..");
+      cur = join13(cur, "..");
       continue;
     }
-    const next = join12(cur, seg);
+    const next = join13(cur, seg);
     const st = exists ? lstatOrNull(next) : null;
     if (st?.isSymbolicLink()) {
       const target = ++hops > MAX_SYMLINK_HOPS ? null : readlinkOrNull(next);
@@ -3512,7 +3675,7 @@ function walk(start, segments) {
 function resolveRailPath(filePath, root) {
   const realRoot = realpathOr(root);
   const start = isAbsolute4(filePath) ? parse(filePath).root : realRoot;
-  const final = walk(start, segmentsOf(filePath)) ?? (isAbsolute4(filePath) ? filePath : join12(realRoot, filePath));
+  const final = walk(start, segmentsOf(filePath)) ?? (isAbsolute4(filePath) ? filePath : join13(realRoot, filePath));
   return relative3(realRoot, final).split("\\").join("/");
 }
 
@@ -4016,9 +4179,9 @@ var SHAPE_RULES = SECRET_PATTERNS.filter(([pattern]) => pattern !== INLINE_ASSIG
 var MASK_RULES = [...ASSIGNMENT_RULES, ...SHAPE_RULES];
 
 // packages/core/lib/workspace-root.mjs
-import { existsSync as existsSync11, lstatSync as lstatSync10, readFileSync as readFileSync9, readlinkSync as readlinkSync2, realpathSync as realpathSync2, statSync } from "node:fs";
+import { existsSync as existsSync11, lstatSync as lstatSync11, readFileSync as readFileSync10, readlinkSync as readlinkSync2, realpathSync as realpathSync2, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename as basename3, dirname as dirname9, isAbsolute as isAbsolute5, join as join13, relative as relative4, resolve as resolve6 } from "node:path";
+import { basename as basename3, dirname as dirname10, isAbsolute as isAbsolute5, join as join14, relative as relative4, resolve as resolve6 } from "node:path";
 var GITDIR_POINTER_MAX_BYTES = 4096;
 var SHELL_WORKDIR_KEYS = Object.freeze([
   "Cwd",
@@ -4045,9 +4208,9 @@ var WORKDIR_CONTAINERS = Object.freeze([
 ]);
 function readSmallRegularFile(filePath) {
   try {
-    const st = lstatSync10(filePath);
+    const st = lstatSync11(filePath);
     if (!st.isFile() || st.size > GITDIR_POINTER_MAX_BYTES) return null;
-    return readFileSync9(filePath, "utf8");
+    return readFileSync10(filePath, "utf8");
   } catch {
     return null;
   }
@@ -4103,19 +4266,19 @@ function canonicalizePath(targetPath) {
   for (let guard = 0; guard < 64; guard += 1) {
     try {
       const realBase = realpathSync2(cur);
-      return pending.length === 0 ? realBase : join13(realBase, ...pending);
+      return pending.length === 0 ? realBase : join14(realBase, ...pending);
     } catch {
       if (seen.has(cur)) return abs;
       seen.add(cur);
       try {
-        if (lstatSync10(cur).isSymbolicLink()) {
-          cur = resolve6(dirname9(cur), readlinkSync2(cur));
+        if (lstatSync11(cur).isSymbolicLink()) {
+          cur = resolve6(dirname10(cur), readlinkSync2(cur));
           continue;
         }
       } catch {
       }
-      const parent = dirname9(cur);
-      if (parent === cur) return pending.length === 0 ? cur : join13(cur, ...pending);
+      const parent = dirname10(cur);
+      if (parent === cur) return pending.length === 0 ? cur : join14(cur, ...pending);
       pending.unshift(basename3(cur));
       cur = parent;
     }
@@ -4130,22 +4293,22 @@ function isPathInside(childPath, parentPath) {
 }
 function inspectGitCheckout(dir) {
   if (typeof dir !== "string" || !dir.trim()) return null;
-  const gitEntry = join13(dir, ".git");
+  const gitEntry = join14(dir, ".git");
   let stats;
   try {
-    stats = lstatSync10(gitEntry);
+    stats = lstatSync11(gitEntry);
   } catch {
     return null;
   }
   if (stats.isDirectory()) {
-    if (!existsSync11(join13(gitEntry, "HEAD"))) return null;
+    if (!existsSync11(join14(gitEntry, "HEAD"))) return null;
     const realGitDir = canonicalizePath(gitEntry);
     return { kind: "repo", gitDir: realGitDir, commonGitDir: realGitDir };
   }
   if (!stats.isFile() || stats.size > GITDIR_POINTER_MAX_BYTES) return null;
   let content;
   try {
-    content = readFileSync9(gitEntry, "utf8");
+    content = readFileSync10(gitEntry, "utf8");
   } catch {
     return null;
   }
@@ -4158,26 +4321,26 @@ function inspectGitCheckout(dir) {
   try {
     const realGitDir = realpathSync2(resolvedGitDir);
     const realDir = realpathSync2(dir);
-    const backRaw = readSmallRegularFile(join13(realGitDir, "gitdir"));
-    const commonRaw = readSmallRegularFile(join13(realGitDir, "commondir"));
+    const backRaw = readSmallRegularFile(join14(realGitDir, "gitdir"));
+    const commonRaw = readSmallRegularFile(join14(realGitDir, "commondir"));
     if (backRaw && commonRaw) {
       const backTrimmed = backRaw.trim();
       const commonTrimmed = commonRaw.trim();
       if (backTrimmed && commonTrimmed) {
-        const realBackDir = realpathSync2(dirname9(resolve6(realGitDir, backTrimmed)));
+        const realBackDir = realpathSync2(dirname10(resolve6(realGitDir, backTrimmed)));
         const realCommon = realpathSync2(resolve6(realGitDir, commonTrimmed));
-        const realWorktrees = realpathSync2(join13(realCommon, "worktrees"));
+        const realWorktrees = realpathSync2(join14(realCommon, "worktrees"));
         const relWt = relative4(realWorktrees, realGitDir);
         const underWorktrees = relWt !== "" && !relWt.startsWith("..") && !isAbsolute5(relWt);
-        if (realBackDir === realDir && underWorktrees && existsSync11(join13(realCommon, "HEAD"))) {
+        if (realBackDir === realDir && underWorktrees && existsSync11(join14(realCommon, "HEAD"))) {
           return { kind: "worktree", gitDir: realGitDir, commonGitDir: realCommon };
         }
       }
-      if (existsSync11(join13(realGitDir, "HEAD")) || existsSync11(join13(realGitDir, "commondir"))) {
+      if (existsSync11(join14(realGitDir, "HEAD")) || existsSync11(join14(realGitDir, "commondir"))) {
         return { kind: "gitfile", gitDir: realGitDir, commonGitDir: null };
       }
     }
-    if (existsSync11(join13(realGitDir, "HEAD")) || existsSync11(join13(realGitDir, "commondir"))) {
+    if (existsSync11(join14(realGitDir, "HEAD")) || existsSync11(join14(realGitDir, "commondir"))) {
       return { kind: "gitfile", gitDir: realGitDir, commonGitDir: null };
     }
   } catch {
@@ -4188,9 +4351,9 @@ function inspectGitCheckout(dir) {
 function hasTicketStoreAt(dir, storeOverride = null) {
   if (typeof dir !== "string" || !dir.trim()) return false;
   if (typeof storeOverride === "string" && storeOverride.trim() && !isAbsolute5(storeOverride)) {
-    return existsSync11(join13(dir, storeOverride.trim()));
+    return existsSync11(join14(dir, storeOverride.trim()));
   }
-  return existsSync11(join13(dir, ".adlc", "tickets", ".store.json")) || existsSync11(join13(dir, ".adlc", "tickets.json"));
+  return existsSync11(join14(dir, ".adlc", "tickets", ".store.json")) || existsSync11(join14(dir, ".adlc", "tickets.json"));
 }
 function hasExternalAbsoluteStore(storeOverride) {
   return typeof storeOverride === "string" && storeOverride.trim().length > 0 && isAbsolute5(storeOverride.trim()) && existsSync11(storeOverride.trim());
@@ -4217,11 +4380,11 @@ function findInnermostCheckoutRoot(startPath, options = {}) {
     if (!isDir) {
       let isSym = false;
       try {
-        isSym = lstatSync10(startLexical).isSymbolicLink();
+        isSym = lstatSync11(startLexical).isSymbolicLink();
       } catch {
         isSym = false;
       }
-      startLexical = isSym ? dirname9(canonicalizePath(startLexical)) : dirname9(startLexical);
+      startLexical = isSym ? dirname10(canonicalizePath(startLexical)) : dirname10(startLexical);
     }
   }
   if (pluginDir && isPathInside(startLexical, pluginDir)) return null;
@@ -4247,7 +4410,7 @@ function findInnermostCheckoutRoot(startPath, options = {}) {
       info,
       checkout: info?.kind === "repo" || info?.kind === "worktree"
     });
-    const parent = dirname9(rawCur);
+    const parent = dirname10(rawCur);
     if (parent === rawCur || atHome && !rememberedRoots) break;
     rawCur = parent;
   }
@@ -4494,59 +4657,12 @@ function resolveActiveTicketId2(root, env = process.env) {
 }
 function readActiveTicketRails(root, { storeOverride = null, env = process.env } = {}) {
   const cleanEnv = env.ADLC_TICKET ? { ...env } : env;
-  if (!root) return { ok: true, tickets: [], activeTicket: null, rails: [], boundTicket: false, error: null };
-  let snapshot;
-  try {
-    const store = detectTicketStore({ root, ticketStore: storeOverride ?? void 0, allowRecovery: true, env: cleanEnv });
-    snapshot = store.load();
-  } catch (err) {
-    return {
-      ok: false,
-      tickets: [],
-      activeTicket: null,
-      rails: [],
-      boundTicket: false,
-      error: `ticket store unreadable: ${err?.message ?? String(err)}`
-    };
-  }
-  const tickets = snapshot.tickets ?? [];
-  const active = activeTickets(tickets);
-  const resolved = resolveActiveTicketAgainst(snapshot, { root, env: cleanEnv });
-  if (!resolved.ok) {
-    return {
-      ok: false,
-      tickets: [],
-      activeTicket: null,
-      rails: [],
-      boundTicket: false,
-      error: `invalid active ticket selection: ${resolved.message ?? "conflict"}`
-    };
-  }
-  if (resolved.value !== null) {
-    const selected = resolved.value.ticket;
-    if (selected.completed === true) {
-      return {
-        ok: false,
-        tickets: [],
-        activeTicket: null,
-        rails: [],
-        boundTicket: false,
-        error: `active ticket "${selected.id}" is already completed`
-      };
-    }
-    const rails = Array.isArray(selected.rails) ? selected.rails.filter((r) => typeof r === "string" && r.trim()).map((r) => r.trim()) : [];
-    return { ok: true, tickets: active, activeTicket: selected, rails, boundTicket: true, error: null };
-  }
-  const activeTicket = active[0] ?? null;
-  const railSet = /* @__PURE__ */ new Set();
-  for (const t of active) {
-    if (Array.isArray(t.rails)) {
-      for (const r of t.rails) {
-        if (typeof r === "string" && r.trim()) railSet.add(r.trim());
-      }
-    }
-  }
-  return { ok: true, tickets: active, activeTicket, rails: [...railSet], boundTicket: false, error: null };
+  const { ok: ok2, tickets, activeTicket, rails, boundTicket, error } = readActiveRailIndex(root, {
+    storeOverride,
+    env: cleanEnv,
+    writeCache: false
+  });
+  return { ok: ok2, tickets, activeTicket, rails, boundTicket, error };
 }
 function extractFilePathsFromInput(toolInput) {
   if (!toolInput || typeof toolInput !== "object") return [];
@@ -4681,13 +4797,13 @@ import {
   openSync as openSync6,
   readSync as readSync4,
   closeSync as closeSync6,
-  lstatSync as lstatSync11,
+  lstatSync as lstatSync12,
   fstatSync as fstatSync3,
-  readdirSync as readdirSync5,
+  readdirSync as readdirSync6,
   realpathSync as realpathSync3,
   constants as fsConstants4
 } from "node:fs";
-import { join as join14, relative as relative5, isAbsolute as isAbsolute7, basename as basename4 } from "node:path";
+import { join as join15, relative as relative5, isAbsolute as isAbsolute7, basename as basename4 } from "node:path";
 import { homedir as homedir2 } from "node:os";
 import { createHash as createHash3 } from "node:crypto";
 var DEFAULT_FLAIL_THRESHOLD = 3;
@@ -4751,7 +4867,7 @@ function detectEditChurn(logLines, threshold = DEFAULT_FLAIL_THRESHOLD) {
 }
 function checkRegularTranscriptInside(candidatePath, realRoot) {
   try {
-    const lst = lstatSync11(candidatePath);
+    const lst = lstatSync12(candidatePath);
     if (lst.isSymbolicLink() || !lst.isFile()) return null;
     const real = realpathSync3(candidatePath);
     const rel = relative5(realRoot, real);
@@ -4764,24 +4880,24 @@ function findNestedTranscript(dir, cid, realAppRoot, depth, state) {
   if (depth > MAX_BRAIN_SEARCH_DEPTH || state.visited >= MAX_BRAIN_DIRS_VISITED) return null;
   state.visited += 1;
   try {
-    const lst = lstatSync11(dir);
+    const lst = lstatSync12(dir);
     if (lst.isSymbolicLink() || !lst.isDirectory()) return null;
   } catch {
     return null;
   }
   for (const fname of TRANSCRIPT_FILES) {
-    const found = checkRegularTranscriptInside(join14(dir, cid, ".system_generated", "logs", fname), realAppRoot);
+    const found = checkRegularTranscriptInside(join15(dir, cid, ".system_generated", "logs", fname), realAppRoot);
     if (found) return found;
   }
   let entries;
   try {
-    entries = readdirSync5(dir, { withFileTypes: true });
+    entries = readdirSync6(dir, { withFileTypes: true });
   } catch {
     return null;
   }
   for (const entry of entries) {
     if (entry.isSymbolicLink() || !entry.isDirectory() || entry.name === cid || entry.name === ".system_generated") continue;
-    const found = findNestedTranscript(join14(dir, entry.name), cid, realAppRoot, depth + 1, state);
+    const found = findNestedTranscript(join15(dir, entry.name), cid, realAppRoot, depth + 1, state);
     if (found) return found;
   }
   return null;
@@ -4792,8 +4908,8 @@ function resolveTranscriptPath({ payload, conversationId, env = process.env } = 
     env?.ANTIGRAVITY_APP_DATA_DIR,
     env?.JETSKI_APP_DATA_DIR,
     env?.GEMINI_CLI_DATA_DIR,
-    join14(effectiveHome, ".gemini", "antigravity-cli"),
-    join14(effectiveHome, ".gemini", "jetski")
+    join15(effectiveHome, ".gemini", "antigravity-cli"),
+    join15(effectiveHome, ".gemini", "jetski")
   ].filter((d) => typeof d === "string" && d.trim()))];
   const direct = payload?.transcriptPath ?? payload?.transcript_path ?? payload?.logPath ?? payload?.log_path;
   const cidFromPayload = payload?.conversationId ?? payload?.conversation_id ?? payload?.conversationID ?? payload?.sessionID ?? payload?.sessionId ?? payload?.params?.conversationId ?? payload?.params?.conversation_id;
@@ -4827,9 +4943,9 @@ function resolveTranscriptPath({ payload, conversationId, env = process.env } = 
     } catch {
       continue;
     }
-    const brainDir = join14(appDir, "brain");
+    const brainDir = join15(appDir, "brain");
     for (const fname of TRANSCRIPT_FILES) {
-      const found = checkRegularTranscriptInside(join14(brainDir, cid, ".system_generated", "logs", fname), realAppRoot);
+      const found = checkRegularTranscriptInside(join15(brainDir, cid, ".system_generated", "logs", fname), realAppRoot);
       if (found) return found;
     }
     const nested = findNestedTranscript(brainDir, cid, realAppRoot, 0, { visited: 0 });
@@ -5012,9 +5128,9 @@ function flailMessage({ path, count }) {
 }
 
 // packages/hook-engine/lib/command-verify.mjs
-import { existsSync as existsSync12, lstatSync as lstatSync12, realpathSync as realpathSync4 } from "node:fs";
+import { existsSync as existsSync12, lstatSync as lstatSync13, realpathSync as realpathSync4 } from "node:fs";
 import { homedir as homedir3, tmpdir as tmpdir2 } from "node:os";
-import { basename as basename5, dirname as dirname10, isAbsolute as isAbsolute8, join as join15, relative as relative6, resolve as resolve8 } from "node:path";
+import { basename as basename5, dirname as dirname11, isAbsolute as isAbsolute8, join as join16, relative as relative6, resolve as resolve8 } from "node:path";
 var TRUST_ROOT_RAILS = [
   ".adlc",
   ".adlc/**",
@@ -5229,11 +5345,11 @@ function isCaseInsensitiveFs(root, fns) {
   if (!fns && caseSensitivityCache.has(root)) return caseSensitivityCache.get(root);
   let res = false;
   try {
-    const target = ex(join15(root, ".adlc")) ? join15(root, ".adlc") : root;
+    const target = ex(join16(root, ".adlc")) ? join16(root, ".adlc") : root;
     const leaf = basename5(target);
     const flipped = [...leaf].map((c) => c.toLowerCase() === c.toUpperCase() ? c : c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase()).join("");
     if (flipped !== leaf) {
-      const cand = join15(dirname10(target), flipped);
+      const cand = join16(dirname11(target), flipped);
       res = ex(cand) && rp(cand) === rp(target);
     }
   } catch {
@@ -5345,7 +5461,7 @@ function hasShellTrustRootSecretAccess(cmd, { root = process.cwd(), cwd = root, 
     const lex = canonicalizePath(abs);
     let real = lex;
     try {
-      if (existsSync12(abs) || lstatSync12(abs).isSymbolicLink()) real = realpathSync4(abs);
+      if (existsSync12(abs) || lstatSync13(abs).isSymbolicLink()) real = realpathSync4(abs);
     } catch {
     }
     if (isSecretStatePath(abs, env) || isSecretStatePath(lex, env) || isSecretStatePath(real, env)) return true;
@@ -5361,7 +5477,7 @@ function hasShellSymlinkOrSecretEscape(cmd, { root = process.cwd(), cwd = root, 
   for (const { rawToken: t, isOutRedirect, isCommandToken } of collectShellCandidateTokens(cmd)) {
     const abs = isAbsolute8(t) ? t : resolve8(effCwd, t);
     try {
-      const isSym = lstatSync12(abs).isSymbolicLink();
+      const isSym = lstatSync13(abs).isSymbolicLink();
       if (isSym || existsSync12(abs)) {
         const can = realpathSync4(abs);
         if (isSecretStatePath(can, env)) return true;
@@ -5370,7 +5486,7 @@ function hasShellSymlinkOrSecretEscape(cmd, { root = process.cwd(), cwd = root, 
       }
     } catch {
       try {
-        if (lstatSync12(abs).isSymbolicLink()) return true;
+        if (lstatSync13(abs).isSymbolicLink()) return true;
       } catch {
       }
     }
@@ -5413,14 +5529,14 @@ function isReadonlyCommand(cmd, { root = process.cwd(), cwd = root, env = proces
       const rel = relative6(root, res);
       if (rel.startsWith("..") || isAbsolute8(rel) || isTrustRootSecretAccess(res)) return false;
       try {
-        if (existsSync12(res) || lstatSync12(res).isSymbolicLink()) {
+        if (existsSync12(res) || lstatSync13(res).isSymbolicLink()) {
           const real = realpathSync4(res);
           const rr = relative6(root, real);
           if (rr.startsWith("..") || isAbsolute8(rr) || isTrustRootSecretAccess(real)) return false;
         }
       } catch {
         try {
-          if (lstatSync12(res).isSymbolicLink()) return false;
+          if (lstatSync13(res).isSymbolicLink()) return false;
         } catch {
         }
       }
@@ -5460,15 +5576,15 @@ function isVerificationCommand(cmd, { root, workdirAnchorBase = null, toolArgs, 
   }
   const isNodeBin = tokens.length >= 2 && (/^node$/i.test(tokens[0]) || isTrustedNodeExec(tokens[0].replace(/\\/g, "/")));
   if (isNodeBin && tokens[1] === "--test" && (tokens.length === 2 || tokens.length === 3 && /^(test|tests|spec)\/?$/i.test(tokens[2]))) {
-    return !(root && ["node", "node.exe", join15("node_modules", ".bin", "node"), join15("node_modules", ".bin", "node.exe")].some((p) => existsSync12(join15(root, p))));
+    return !(root && ["node", "node.exe", join16("node_modules", ".bin", "node"), join16("node_modules", ".bin", "node.exe")].some((p) => existsSync12(join16(root, p))));
   }
   return false;
 }
 
 // packages/hook-engine/lib/session-tracker.mjs
 import { createHash as createHash4, createHmac as createHmac3, randomBytes as randomBytes2 } from "node:crypto";
-import { existsSync as existsSync13, readFileSync as readFileSync10, writeFileSync as writeFileSync5, renameSync as renameSync3, mkdirSync as mkdirSync5, statSync as statSync2, rmSync as rmSync4, lstatSync as lstatSync13, unlinkSync as unlinkSync4, openSync as openSync7, readSync as readSync5, writeSync, closeSync as closeSync7, fstatSync as fstatSync4, readdirSync as readdirSync6, realpathSync as realpathSync5, constants as fsConstants5 } from "node:fs";
-import { isAbsolute as isAbsolute9, join as join16, relative as relative7 } from "node:path";
+import { existsSync as existsSync13, readFileSync as readFileSync11, writeFileSync as writeFileSync5, renameSync as renameSync3, mkdirSync as mkdirSync5, statSync as statSync2, rmSync as rmSync4, lstatSync as lstatSync14, unlinkSync as unlinkSync4, openSync as openSync7, readSync as readSync5, writeSync, closeSync as closeSync7, fstatSync as fstatSync4, readdirSync as readdirSync7, realpathSync as realpathSync5, constants as fsConstants5 } from "node:fs";
+import { isAbsolute as isAbsolute9, join as join17, relative as relative7 } from "node:path";
 var DEFAULT_DEPTH_THRESHOLD = 50;
 var MAX_TRACKED_SESSIONS = 100;
 var LOCK_TTL_MS = 5e3;
@@ -5484,8 +5600,8 @@ var inMemorySessionSnapshots = /* @__PURE__ */ new Map();
 function ticketStoreExists(root, env = process.env) {
   if (!root || typeof root !== "string") return false;
   const ov = env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null;
-  if (ov && typeof ov === "string" && ov.trim() && existsSync13(isAbsolute9(ov.trim()) ? ov.trim() : join16(root, ov.trim()))) return true;
-  return existsSync13(join16(root, ".adlc", "tickets.json")) || existsSync13(join16(root, ".adlc", "tickets", ".store.json"));
+  if (ov && typeof ov === "string" && ov.trim() && existsSync13(isAbsolute9(ov.trim()) ? ov.trim() : join17(root, ov.trim()))) return true;
+  return existsSync13(join17(root, ".adlc", "tickets.json")) || existsSync13(join17(root, ".adlc", "tickets", ".store.json"));
 }
 var loadStoreSnapshot = (root, env = process.env) => detectTicketStore({ root, ticketStore: env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || void 0, allowRecovery: true, env }).load();
 function sleepSyncWithJitter(baseMs = 5) {
@@ -5597,26 +5713,26 @@ function resolveSessionId({ payload, env = process.env } = {}) {
 }
 function readValidKeyFile(p, uid) {
   if (!existsSync13(p)) return null;
-  const st = lstatSync13(p);
+  const st = lstatSync14(p);
   if (!st.isFile() || st.isSymbolicLink() || st.size > 1024 || uid !== null && st.uid !== uid || (st.mode & 63) !== 0) return null;
-  const raw = readFileSync10(p, "utf8").trim();
+  const raw = readFileSync11(p, "utf8").trim();
   return raw.length >= 32 ? raw : null;
 }
 function getMasterKeyRaw(env = process.env) {
   const h = resolveUserHome(env);
   const uid = typeof process.getuid === "function" ? process.getuid() : null;
   try {
-    return readValidKeyFile(join16(h, ".config", "adlc", "secrets", ".auth-key"), uid) ?? readValidKeyFile(join16(h, ".adlc", ".master-key"), uid);
+    return readValidKeyFile(join17(h, ".config", "adlc", "secrets", ".auth-key"), uid) ?? readValidKeyFile(join17(h, ".adlc", ".master-key"), uid);
   } catch {
     return null;
   }
 }
 function rotateMasterKey(env = process.env) {
   const h = resolveUserHome(env);
-  const dir = join16(h, ".config", "adlc", "secrets");
-  const file = join16(dir, ".auth-key");
+  const dir = join17(h, ".config", "adlc", "secrets");
+  const file = join17(dir, ".auth-key");
   try {
-    const l = join16(h, ".adlc", ".master-key");
+    const l = join17(h, ".adlc", ".master-key");
     if (existsSync13(l)) unlinkSync4(l);
   } catch {
   }
@@ -5638,8 +5754,8 @@ function getOrCreateSessionSecret(root, env = process.env) {
   if (loadedSecretCache.has(key)) return loadedSecretCache.get(key);
   let mk = getMasterKeyRaw(env);
   if (!mk) {
-    const dir = join16(h, ".config", "adlc", "secrets");
-    const file = join16(dir, ".auth-key");
+    const dir = join17(h, ".config", "adlc", "secrets");
+    const file = join17(dir, ".auth-key");
     try {
       if (!existsSync13(dir)) mkdirSync5(dir, { recursive: true, mode: 448 });
       const nk = randomBytes2(32).toString("hex");
@@ -5682,14 +5798,14 @@ function getTestFilesMap(root) {
     next.add(real);
     let entries;
     try {
-      entries = readdirSync6(dir, { withFileTypes: true });
+      entries = readdirSync7(dir, { withFileTypes: true });
     } catch {
       return;
     }
     for (const e of entries) {
-      const fp = join16(dir, e.name);
+      const fp = join17(dir, e.name);
       try {
-        if (lstatSync13(fp).isSymbolicLink()) {
+        if (lstatSync14(fp).isSymbolicLink()) {
           const r = relative7(realRoot, realpathSync5(fp));
           if (r.startsWith("..") || isAbsolute9(r)) continue;
         }
@@ -5698,7 +5814,7 @@ function getTestFilesMap(root) {
           if (!IGNORED.has(e.name)) scan(fp, depth + 1, next);
         } else if (st.isFile()) {
           const rp = relative7(root, fp).replace(/\\/g, "/");
-          if (isNodeTestFile(e.name, rp)) map[rp] = createHash4("sha256").update(readFileSync10(fp)).digest("hex");
+          if (isNodeTestFile(e.name, rp)) map[rp] = createHash4("sha256").update(readFileSync11(fp)).digest("hex");
         }
       } catch {
       }
@@ -5731,7 +5847,7 @@ function verifyPreExistingTestFiles(root, initialTestFiles, ticket = null) {
 }
 var lockStat = (d) => {
   try {
-    const st = lstatSync13(d);
+    const st = lstatSync14(d);
     return { ino: st.ino, mtimeMs: st.mtimeMs };
   } catch {
     return null;
@@ -5739,7 +5855,7 @@ var lockStat = (d) => {
 };
 var readOwnerRaw = (d) => {
   try {
-    return readFileSync10(join16(d, "owner.json"), "utf8");
+    return readFileSync11(join17(d, "owner.json"), "utf8");
   } catch {
     return null;
   }
@@ -5784,7 +5900,7 @@ function computeBaselineSig(sessionID, s, root, env) {
   return createHmac3("sha256", k).update(JSON.stringify({ sessionID, t: s?.initialActiveTicket ?? null, h: s?.initialStoreHash ?? null, p: s?.initialPointer ?? null, tr: s?.initialTranscript ?? null, tf: s?.initialTestFiles ?? null, depth: s?.depth ?? 0, totalCalls: s?.totalCalls ?? 0, mutatingCalls: s?.mutatingCalls ?? 0, compacted: Boolean(s?.compacted), ended: Boolean(s?.ended), inv: Boolean(s?.invalidated), edits: Array.isArray(s?.edits) ? s.edits : [], warned: Array.isArray(s?.warned) ? s.warned : [], flailStatus: s?.flailStatus ? { verdict: s.flailStatus.verdict ?? "", summary: s.flailStatus.summary ?? "" } : null, lastTranscriptSize: s?.lastTranscriptSize ?? null, lastTranscriptHash: s?.lastTranscriptHash ?? null, lastExitCode: typeof s?.lastExitCode === "number" ? s.lastExitCode : null, ledgerSeq: s?.ledgerSeq ?? 0, ledgerMac: s?.ledgerMac ?? null })).digest("hex");
 }
 function openVerifiedRegular(filePath, maxBytes) {
-  const ls = lstatSync13(filePath);
+  const ls = lstatSync14(filePath);
   if (ls.isSymbolicLink() || !ls.isFile() || ls.size > maxBytes) return null;
   const fd = openSync7(filePath, fsConstants5.O_RDONLY | fsConstants5.O_NONBLOCK | (fsConstants5.O_NOFOLLOW ?? 0));
   try {
@@ -5803,11 +5919,11 @@ function openVerifiedRegular(filePath, maxBytes) {
   }
 }
 function createPersistentTracker(root = process.cwd(), env = process.env) {
-  const adlcDir = join16(root, ".adlc");
-  const storePath = join16(adlcDir, "sessions.json");
-  const ledgerPath = join16(adlcDir, "session-ledger.jsonl");
-  const lockDir = join16(adlcDir, "sessions.lock");
-  const ownerFile = join16(lockDir, "owner.json");
+  const adlcDir = join17(root, ".adlc");
+  const storePath = join17(adlcDir, "sessions.json");
+  const ledgerPath = join17(adlcDir, "session-ledger.jsonl");
+  const lockDir = join17(adlcDir, "sessions.lock");
+  const ownerFile = join17(lockDir, "owner.json");
   const lockFailures = /* @__PURE__ */ new Set();
   const snapKey = (sid) => `${root}:${sid}`;
   const corruptStore = () => Object.assign(/* @__PURE__ */ Object.create(null), { _corrupted: true });
@@ -5844,7 +5960,7 @@ function createPersistentTracker(root = process.cwd(), env = process.env) {
       return fn();
     } finally {
       try {
-        if (existsSync13(ownerFile) && JSON.parse(readFileSync10(ownerFile, "utf8")).nonce === nonce) {
+        if (existsSync13(ownerFile) && JSON.parse(readFileSync11(ownerFile, "utf8")).nonce === nonce) {
           const t = `${lockDir}.rel-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
           renameSync3(lockDir, t);
           rmSync4(t, { recursive: true, force: true });
@@ -5926,8 +6042,8 @@ function createPersistentTracker(root = process.cwd(), env = process.env) {
         const op = openVerifiedRegular(ledgerPath, HARD_MAX_LEDGER_BYTES);
         if (!op) {
           try {
-            const ls = lstatSync13(ledgerPath);
-            if (!ls.isSymbolicLink() && ls.isFile() && ls.size > HARD_MAX_LEDGER_BYTES) writeFileSync5(join16(adlcDir, ".ledger-quarantine"), JSON.stringify({ quarantinedAt: Date.now(), reason: "oversized_corrupt_ledger" }), { mode: 384 });
+            const ls = lstatSync14(ledgerPath);
+            if (!ls.isSymbolicLink() && ls.isFile() && ls.size > HARD_MAX_LEDGER_BYTES) writeFileSync5(join17(adlcDir, ".ledger-quarantine"), JSON.stringify({ quarantinedAt: Date.now(), reason: "oversized_corrupt_ledger" }), { mode: 384 });
           } catch {
           }
           return null;
@@ -6009,7 +6125,7 @@ function createPersistentTracker(root = process.cwd(), env = process.env) {
         const sorted = keys.filter((k) => k !== curSid).sort((a, b) => Boolean(data[a]?.ended) === Boolean(data[b]?.ended) ? (data[a]?.updatedAt ?? 0) - (data[b]?.updatedAt ?? 0) : data[a]?.ended ? -1 : 1);
         for (const k of sorted.slice(0, keys.length - MAX_TRACKED_SESSIONS)) delete data[k];
       }
-      if (existsSync13(storePath) && lstatSync13(storePath).isSymbolicLink()) return;
+      if (existsSync13(storePath) && lstatSync14(storePath).isSymbolicLink()) return;
       const tmp = `${storePath}.tmp.${process.pid}.${Date.now()}`;
       writeFileSync5(tmp, JSON.stringify(data, null, 2));
       renameSync3(tmp, storePath);
@@ -6059,9 +6175,9 @@ function createPersistentTracker(root = process.cwd(), env = process.env) {
         s.initialActiveTicket = activeTicketId;
         s.initialStoreHash = storeHash2 ?? null;
         s.initialTestFiles = getTestFilesMap(root);
-        const cf = join16(root, ".adlc", "current-ticket.json");
+        const cf = join17(root, ".adlc", "current-ticket.json");
         if (existsSync13(cf)) try {
-          const st = lstatSync13(cf);
+          const st = lstatSync14(cf);
           ptr = { exists: true, ino: st.ino, dev: st.dev, size: st.size };
           s.initialPointer = ptr;
         } catch {
@@ -6072,7 +6188,7 @@ function createPersistentTracker(root = process.cwd(), env = process.env) {
     recordTranscript(sid, tp) {
       if (!tp) return;
       try {
-        const st = lstatSync13(tp);
+        const st = lstatSync14(tp);
         mutate(sid, (s) => {
           const h = computePrefixHash(tp, st.size);
           if (!s.initialTranscript) s.initialTranscript = { path: tp.slice(0, 512), ino: st.ino, dev: st.dev, hash: h, size: st.size };
@@ -6086,7 +6202,7 @@ function createPersistentTracker(root = process.cwd(), env = process.env) {
     recordToolResult(sid, { exitCode, transcriptPath } = {}) {
       let st = null;
       if (transcriptPath) try {
-        st = lstatSync13(transcriptPath);
+        st = lstatSync14(transcriptPath);
       } catch {
       }
       mutate(sid, (s) => {
@@ -6138,8 +6254,8 @@ function createPersistentTracker(root = process.cwd(), env = process.env) {
       return s ? { initial: s.initialTranscript ?? null, lastHash: s.lastTranscriptHash ?? null, lastSize: s.lastTranscriptSize ?? null } : null;
     },
     hasSnapshot: (sid) => Boolean(sid && inMemorySessionSnapshots.has(snapKey(sid))),
-    isCorrupted: () => existsSync13(join16(adlcDir, ".ledger-quarantine")) || Boolean(readStore()._corrupted),
-    isInvalidated: (sid) => Boolean(sid && (existsSync13(join16(adlcDir, ".ledger-quarantine")) || readStore()[sid]?.invalidated || inMemorySessionSnapshots.get(snapKey(sid))?.invalidated || replayLedger()?.[sid]?.invalidated)),
+    isCorrupted: () => existsSync13(join17(adlcDir, ".ledger-quarantine")) || Boolean(readStore()._corrupted),
+    isInvalidated: (sid) => Boolean(sid && (existsSync13(join17(adlcDir, ".ledger-quarantine")) || readStore()[sid]?.invalidated || inMemorySessionSnapshots.get(snapKey(sid))?.invalidated || replayLedger()?.[sid]?.invalidated)),
     validateBaseline(sid) {
       if (!sid) return true;
       const store = readStore();
@@ -6206,7 +6322,7 @@ function checkBuildGate({ sessionID, tracker, root = process.cwd(), env = proces
   const { tier } = computeRiskTier(ticket);
   const depth = tracker?.depth?.(sessionID) ?? 0;
   if (sessionID && sessionID !== "default_session" && depth === 0) {
-    const tp = resolveTranscriptPath({ conversationId: sessionID, env }) || (existsSync13(join16(root, "transcript.jsonl")) ? join16(root, "transcript.jsonl") : null);
+    const tp = resolveTranscriptPath({ conversationId: sessionID, env }) || (existsSync13(join17(root, "transcript.jsonl")) ? join17(root, "transcript.jsonl") : null);
     if (tp && parseTranscriptRecords(tp).some((r) => (r?.tool_calls ?? (r?.toolCall ? [r.toolCall] : [])).some((c) => {
       const n = c?.name ?? "";
       const a = c?.args ?? {};
@@ -6222,8 +6338,8 @@ function checkBuildGate({ sessionID, tracker, root = process.cwd(), env = proces
 }
 
 // packages/hook-engine/lib/gemini-stop-verify.mjs
-import { existsSync as existsSync14, lstatSync as lstatSync14 } from "node:fs";
-import { isAbsolute as isAbsolute10, join as join17, relative as relative8, resolve as resolve9 } from "node:path";
+import { existsSync as existsSync14, lstatSync as lstatSync15 } from "node:fs";
+import { isAbsolute as isAbsolute10, join as join18, relative as relative8, resolve as resolve9 } from "node:path";
 import { homedir as homedir4 } from "node:os";
 var GLOB_SAFE_RE = /^[a-zA-Z0-9._/*?[\]{}@+!-]+$/;
 function sanitizeField(value, maxLen = 128) {
@@ -6262,7 +6378,7 @@ function checkTranscriptIntegrity(transcriptPath, tracker, sessionID, cont) {
     return cont("Session transcript path changed during session.");
   }
   try {
-    const curStat = lstatSync14(transcriptPath);
+    const curStat = lstatSync15(transcriptPath);
     if (initialTranscript && (curStat.ino !== initialTranscript.ino || curStat.dev !== initialTranscript.dev)) {
       return cont("Session transcript file identity (inode/device) changed during session.");
     }
@@ -6307,9 +6423,9 @@ function evaluateGeminiStop(payload, { env = process.env, helpers } = {}) {
     let records = [];
     if (tp) {
       try {
-        const before = lstatSync14(tp);
+        const before = lstatSync15(tp);
         records = parseTranscriptRecords(tp, { readFull: true });
-        const after = lstatSync14(tp);
+        const after = lstatSync15(tp);
         if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
           records = parseTranscriptRecords(tp, { readFull: true });
         }
@@ -6470,7 +6586,7 @@ function evaluateGeminiStop(payload, { env = process.env, helpers } = {}) {
       return { decision: "stop" };
     }
     const trackedInitialPointer = tr.initialPointer?.(sid) ?? null;
-    if (trackedInitialPointer?.exists && !existsSync14(join17(root, ".adlc", "current-ticket.json"))) {
+    if (trackedInitialPointer?.exists && !existsSync14(join18(root, ".adlc", "current-ticket.json"))) {
       return cont("Active ticket pointer (.adlc/current-ticket.json) was removed during session.");
     }
     let ticket = null;
@@ -6501,8 +6617,8 @@ function evaluateGeminiStop(payload, { env = process.env, helpers } = {}) {
     if (trackedDepth === 0 && mutatingCallSeq > 0 && trackedInitialTicket) {
       return cont("Untracked tool execution records detected in transcript during Stop verification.");
     }
-    const sessionsFile = join17(root, ".adlc", "sessions.json");
-    const ledgerFile = join17(root, ".adlc", "session-ledger.jsonl");
+    const sessionsFile = join18(root, ".adlc", "sessions.json");
+    const ledgerFile = join18(root, ".adlc", "session-ledger.jsonl");
     const hasInfra = existsSync14(sessionsFile) || existsSync14(ledgerFile) || Boolean(tr.hasSnapshot?.(sid)) || Boolean(trackedInitialTicket) || trackedDepth > 0 || trackedTotal > 0;
     if (!hasInfra && mutatingCallSeq > 0) {
       return cont("Session tracking store was missing or deleted during verification.");
@@ -6529,7 +6645,7 @@ function evaluateGeminiStop(payload, { env = process.env, helpers } = {}) {
 }
 
 // packages/hook-engine/lib/gemini-guard.mjs
-var PLUGIN_ROOT = dirname11(dirname11(fileURLToPath3(import.meta.url)));
+var PLUGIN_ROOT = dirname12(dirname12(fileURLToPath3(import.meta.url)));
 var TOOLCALL_KEYS = ["toolCall", "tool_call", "tool"];
 var NAME_KEYS = ["name", "toolName", "tool_name"];
 var ARGS_KEYS = ["args", "arguments", "params", "parameters", "input", "tool_input"];
@@ -6558,8 +6674,8 @@ var nonPluginCwd = () => {
 var loadStoreReadOnly2 = (root, env) => detectTicketStore({ root, ticketStore: env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || void 0, allowRecovery: true, env }).load();
 function storeExists(root, env) {
   const ov = env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null;
-  if (ov && typeof ov === "string" && ov.trim() && existsSync15(isAbsolute11(ov.trim()) ? ov.trim() : join18(root, ov.trim()))) return true;
-  return existsSync15(join18(root, ".adlc", "tickets.json")) || existsSync15(join18(root, ".adlc", "tickets", ".store.json"));
+  if (ov && typeof ov === "string" && ov.trim() && existsSync15(isAbsolute11(ov.trim()) ? ov.trim() : join19(root, ov.trim()))) return true;
+  return existsSync15(join19(root, ".adlc", "tickets.json")) || existsSync15(join19(root, ".adlc", "tickets", ".store.json"));
 }
 var canonicalizeExisting = (p) => !p || typeof p !== "string" ? p : canonicalizePath(p);
 var extractCwdFromArgs = (args) => extractToolWorkdir(args);
@@ -6629,17 +6745,17 @@ function findAdlcRoot(absPath, env = process.env) {
     if (gitRoot) return gitRoot;
     let cur = absPath;
     try {
-      if (!lstatSync15(absPath).isDirectory()) cur = dirname11(absPath);
+      if (!lstatSync16(absPath).isDirectory()) cur = dirname12(absPath);
     } catch {
-      cur = dirname11(absPath);
+      cur = dirname12(absPath);
     }
     const { root: fsRoot } = parse2(cur);
     const normHome = homeDir ? realpathOr3(resolve10(homeDir)) : null;
     while (true) {
       if (normHome && realpathOr3(cur) === normHome) break;
-      if (existsSync15(join18(cur, ".adlc"))) return cur;
+      if (existsSync15(join19(cur, ".adlc"))) return cur;
       if (cur === fsRoot) break;
-      cur = dirname11(cur);
+      cur = dirname12(cur);
     }
     return null;
   }
@@ -6659,10 +6775,10 @@ function anchorPath(rawPath, payload, env = null) {
   const ws = WORKSPACE_KEYS.flatMap((k) => Array.isArray(payload?.[k]) ? payload[k] : []).find((s) => typeof s === "string" && s.trim()) ?? [payload?.cwd, payload?.workingDirectory, payload?.working_directory, payload?.workspaceRoot, env?.AGY_WORKSPACE, env?.ANTIGRAVITY_WORKSPACE, env?.GEMINI_WORKSPACE, env?.PROJECT_ROOT, env?.WORKSPACE_ROOT].find((s) => typeof s === "string" && s.trim());
   if (ws) {
     const absWs = isAbsolute11(ws) ? ws : resolve10(nonPluginCwd() ?? process.cwd(), ws);
-    if (typeof wd === "string" && wd.trim() && norm !== wd.trim().replace(/\\/g, "/")) return { abs: join18(isAbsolute11(wd.trim()) ? wd.trim() : resolve10(absWs, wd.trim()), norm), anchored: true };
-    return { abs: join18(absWs, norm), anchored: true };
+    if (typeof wd === "string" && wd.trim() && norm !== wd.trim().replace(/\\/g, "/")) return { abs: join19(isAbsolute11(wd.trim()) ? wd.trim() : resolve10(absWs, wd.trim()), norm), anchored: true };
+    return { abs: join19(absWs, norm), anchored: true };
   }
-  if (typeof wd === "string" && wd.trim() && isAbsolute11(wd.trim())) return { abs: norm === wd.trim().replace(/\\/g, "/") ? wd.trim() : join18(wd.trim(), norm), anchored: true };
+  if (typeof wd === "string" && wd.trim() && isAbsolute11(wd.trim())) return { abs: norm === wd.trim().replace(/\\/g, "/") ? wd.trim() : join19(wd.trim(), norm), anchored: true };
   return { abs: null, anchored: false };
 }
 function railPreconditions({ root = process.cwd(), env = process.env } = {}) {
@@ -6693,7 +6809,7 @@ function railPreconditions({ root = process.cwd(), env = process.env } = {}) {
     if (isAbsolute11(raw)) {
       const rel = relative9(root, raw);
       if (!rel.startsWith("..")) custom.push(rel, `${rel}/**`);
-    } else custom.push(join18(root, raw), `${join18(root, raw)}/**`);
+    } else custom.push(join19(root, raw), `${join19(root, raw)}/**`);
   }
   return { state: "active", rails: [...declared, ...TRUST_ROOT_RAILS, ...custom], activeId: active.id };
 }
@@ -6701,7 +6817,7 @@ function checkRail({ filePath, tool, toolArgs = null, root = process.cwd(), env 
   if (classifyTool(tool, toolArgs) === "readonly") return { decision: "allow", reason: `tool "${tool}" is read-only` };
   const pre = railPreconditions({ root, env });
   if (pre.state !== "active") return { decision: pre.state === "deny" ? "deny" : "allow", reason: pre.reason };
-  const abs = isAbsolute11(filePath) ? filePath : join18(root, filePath);
+  const abs = isAbsolute11(filePath) ? filePath : join19(root, filePath);
   const cands = /* @__PURE__ */ new Set([relative9(root, abs).replace(/\\/g, "/"), resolveRailPath(filePath, root), abs.replace(/\\/g, "/"), realpathOr3(filePath).replace(/\\/g, "/")]);
   const insens = isCaseInsensitiveFsFn(root);
   for (const p of cands) {
@@ -6773,7 +6889,7 @@ function resolveWorkspaceRoot(payload, env = process.env) {
   const upg = (c) => preferInnermostCheckout(c, dyn, { storeOverride, homeDir, pluginDir: PLUGIN_ROOT, allowFileStart: true, preserveSpelling: true }) ?? c;
   const cands = [payload?.cwd, payload?.workingDirectory, payload?.working_directory, payload?.workspaceRoot, ...WORKSPACE_KEYS.flatMap((k) => Array.isArray(payload?.[k]) ? payload[k] : [payload?.[k]]), env?.AGY_WORKSPACE, env?.ANTIGRAVITY_WORKSPACE, env?.GEMINI_WORKSPACE, env?.PROJECT_ROOT, env?.WORKSPACE_ROOT, env === process.env ? nonPluginCwd() : null, env?.PWD, env?.INIT_CWD, ...wds.filter(isAbsolute11)].filter((s) => typeof s === "string" && s.trim());
   for (const c of cands) {
-    const f = findAdlcRoot(isAbsolute11(c.trim()) ? c.trim() : join18(baseCwd, c.trim()), env);
+    const f = findAdlcRoot(isAbsolute11(c.trim()) ? c.trim() : join19(baseCwd, c.trim()), env);
     if (f) return upg(f);
   }
   return null;
@@ -7007,7 +7123,7 @@ function onStop(payload, { env = process.env } = {}) {
   });
 }
 function printStatus(root = process.cwd(), env = process.env, payload = {}) {
-  const r = findAdlcRoot(isAbsolute11(root) ? root : join18(process.cwd(), root), env) ?? root;
+  const r = findAdlcRoot(isAbsolute11(root) ? root : join19(process.cwd(), root), env) ?? root;
   const a = resolveActiveTicketId2(r, env);
   const tr = createPersistentTracker(r, env);
   const sid = resolveSessionId({ payload, env });
@@ -7022,13 +7138,13 @@ Session Compacted: ${tr.isCompacted(sid)}
 Flail Status: ${fl.verdict.toUpperCase()}${fl.summary ? ` (${fl.summary})` : ""}`);
 }
 function printDoctor(root = process.cwd(), env = process.env) {
-  const r = findAdlcRoot(isAbsolute11(root) ? root : join18(process.cwd(), root), env) ?? root;
+  const r = findAdlcRoot(isAbsolute11(root) ? root : join19(process.cwd(), root), env) ?? root;
   console.log(`--- ADLC Gemini Doctor ---
 Node Version: ${process.version}
 Root Directory: ${r}
 ADLC Ticket Store Present: ${storeExists(r, env)}
 Active Ticket: ${resolveActiveTicketId2(r, env).id ?? "NONE"}
-CI Rail Guard Workflow: ${existsSync15(join18(r, ".github/workflows/adlc-rails-guard.yml")) ? "PRESENT" : "MISSING"}`);
+CI Rail Guard Workflow: ${existsSync15(join19(r, ".github/workflows/adlc-rails-guard.yml")) ? "PRESENT" : "MISSING"}`);
 }
 
 // packages/hook-engine/lib/protocol-adapters.mjs

@@ -20,6 +20,7 @@ export * from './lib/doctor.mjs';
 export * from './lib/provenance.mjs';
 export * from './lib/pointer.mjs';
 export * from './lib/pointer-write.mjs';
+export * from './lib/rail-index.mjs';
 export * from './lib/prompt.mjs';
 export * from './lib/evidence.mjs';
 export * from './lib/manifest-segments.mjs';

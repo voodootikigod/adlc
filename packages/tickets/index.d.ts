@@ -186,6 +186,23 @@ export function resolveActiveTicketAgainst(
 /** Writes the canonical `{id, ticketHash}` pointer atomically; returns its path. */
 export function writeActiveTicket(root: string, pointer: { id: string; ticketHash: string }): string;
 
+// ---- O(1) active-rail hook index ----
+export const ACTIVE_RAIL_INDEX_FILE: '.adlc/.active-rail-index.json';
+export function computeDirectoryStoreFingerprint(storePath: string): string | null;
+export type ActiveRailIndexResult = {
+  ok: boolean;
+  tickets: readonly Readonly<Ticket>[];
+  activeTicket: Readonly<Ticket> | null;
+  rails: string[];
+  boundTicket: boolean;
+  source: 'none' | 'loadOne' | 'index-cache' | 'full-load' | 'error';
+  error: string | null;
+};
+export function readActiveRailIndex(
+  root: string | null | undefined,
+  options?: { storeOverride?: string | null; env?: Record<string, string | undefined>; writeCache?: boolean },
+): ActiveRailIndexResult;
+
 export type EditorRunner = (editor: string, path: string) => void;
 export function splitEditorCommand(editor: unknown): string[];
 export const spawnEditor: EditorRunner;
@@ -213,6 +230,24 @@ export function recoverDirectoryTransaction(store: LegacyTicketStore | Directory
 export function initializeDirectoryStore(path: string): void;
 export function initializeTicketStores(root?: string): Record<string, unknown>;
 export function archiveTicket(store: DirectoryTicketStore, archivePath: string, id: string, options?: Record<string, unknown>): { active: TicketSnapshot; archived: Ticket };
+export type SkippedArchiveTicket = { id: string; reason: 'inbound-active-edge'; referencedBy: string[] };
+export type ArchiveCompletedResult =
+  | { dryRun: true; archivedIds: string[]; skippedIds: SkippedArchiveTicket[]; remainingCount: number; expectedSnapshotHash: string }
+  | { dryRun: false; applied: boolean; archivedIds: string[]; skippedIds: SkippedArchiveTicket[]; remainingCount: number; storeHash: string; active: TicketSnapshot };
+export function archiveCompletedTickets(
+  activeStore: DirectoryTicketStore,
+  archivePath: string,
+  options?: {
+    expectedSnapshotHash?: string;
+    reason?: string;
+    sourceRevision?: string | null;
+    root?: string;
+    authorized?: boolean;
+    write?: boolean;
+    key?: string | null;
+    allowUnsigned?: boolean;
+  },
+): ArchiveCompletedResult;
 export function restoreTicket(store: DirectoryTicketStore, archivePath: string, id: string, options?: Record<string, unknown>): { active: TicketSnapshot; ticket: Ticket };
 export function migrationPlan(root?: string): Record<string, unknown>;
 export function migrateLegacyStore(root?: string, options?: { write?: boolean; yes?: boolean; requireClean?: boolean; faultInjector?: (step: string, context: unknown) => void; key?: string | null; allowUnsigned?: boolean }): Record<string, unknown>;

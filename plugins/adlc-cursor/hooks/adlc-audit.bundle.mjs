@@ -3199,6 +3199,20 @@ var init_pointer_write = __esm({
   }
 });
 
+// packages/tickets/lib/rail-index.mjs
+var MAX_INDEX_BYTES;
+var init_rail_index = __esm({
+  "packages/tickets/lib/rail-index.mjs"() {
+    init_define_ADLC_MCP_BUILD_METADATA();
+    init_canonical();
+    init_durability();
+    init_pointer();
+    init_store();
+    init_directory();
+    MAX_INDEX_BYTES = 1024 * 1024;
+  }
+});
+
 // packages/tickets/lib/prompt.mjs
 import { createInterface } from "node:readline/promises";
 var init_prompt = __esm({
@@ -3251,6 +3265,7 @@ var init_tickets = __esm({
     init_provenance();
     init_pointer();
     init_pointer_write();
+    init_rail_index();
     init_prompt();
     init_evidence();
     init_manifest_segments();
@@ -4637,7 +4652,7 @@ function readActiveTicketPointer2(root = ".") {
   if (usedKey !== CANONICAL_ID_KEY) value.deprecatedAlias = usedKey;
   return ok(value);
 }
-function resolveActiveTicketId({ root = ".", env = process.env } = {}) {
+function resolveActiveTicketId2({ root = ".", env = process.env } = {}) {
   const pointer = readActiveTicketPointer2(root);
   if (!pointer.ok) return pointer;
   const envId = trimmed(env.ADLC_TICKET) || null;
@@ -4655,7 +4670,7 @@ function resolveActiveTicketId({ root = ".", env = process.env } = {}) {
   });
 }
 function resolveActiveTicketAgainst2(snapshot, { root = ".", env = process.env, allowLegacyPointer = false } = {}) {
-  const resolved = resolveActiveTicketId({ root, env });
+  const resolved = resolveActiveTicketId2({ root, env });
   if (!resolved.ok) return resolved;
   if (resolved.value === null) return ok(null);
   const { id, pointerPresent, ticketHash: ticketHash2, legacyString, deprecatedAlias } = resolved.value;
