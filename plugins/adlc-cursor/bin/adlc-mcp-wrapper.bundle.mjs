@@ -2516,17 +2516,21 @@ function normalizeCliAnthropicUsage(u) {
     cachedTokens: Number((u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cachedTokens ?? 0))
   };
 }
-function runCliCommand(bin, args, input, opts = {}) {
-  const envSource = opts.env ?? process.env;
-  const isTest = envSource.NODE_ENV === "test" || process.env.NODE_ENV === "test";
-  const spawnFn = isTest && typeof envSource.__adlcCliSpawn === "function" ? envSource.__adlcCliSpawn : spawn;
+function sanitizeProviderEnv(envSource = process.env) {
   const env = {};
-  for (const [k, v] of Object.entries(envSource)) {
-    if (k === "ADLC_MANIFEST_KEY" || k.startsWith("ADLC_ADMIN_")) continue;
+  for (const [k, v] of Object.entries(envSource ?? {})) {
+    if (k === "ADLC_MANIFEST_KEY" || k === "ADLC_MANIFEST_PRIVATE_KEY" || k.startsWith("ADLC_ADMIN_")) continue;
     env[k] = v;
   }
   if (!env.HOME && process.env.HOME) env.HOME = process.env.HOME;
   if (!env.PATH && process.env.PATH) env.PATH = process.env.PATH;
+  return env;
+}
+function runCliCommand(bin, args, input, opts = {}) {
+  const envSource = opts.env ?? process.env;
+  const isTest = envSource.NODE_ENV === "test" || process.env.NODE_ENV === "test";
+  const spawnFn = isTest && typeof envSource.__adlcCliSpawn === "function" ? envSource.__adlcCliSpawn : spawn;
+  const env = sanitizeProviderEnv(envSource);
   const timeoutMs = Number.isFinite(opts?.timeoutMs) && opts.timeoutMs > 0 ? opts.timeoutMs : 12e4;
   const isolatedCwd = mkdtempSync(join10(tmpdir(), "adlc-cli-cwd-"));
   const cleanupCwd = () => {
@@ -2660,7 +2664,7 @@ function agySend({ apiKey, model, system, prompt, timeoutMs }, env = process.env
 ${prompt}` : prompt;
   const hostTimeoutMs = typeof timeoutMs === "number" && timeoutMs > 0 ? timeoutMs : parseAgyTimeoutMs(timeoutSpec) + 5e3;
   return new Promise((resolve7, reject) => {
-    const p = spawn2(bin, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const p = spawn2(bin, args, { stdio: "pipe", env: sanitizeProviderEnv(env) });
     let out = "";
     let err = "";
     let settled = false;

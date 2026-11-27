@@ -185,7 +185,7 @@ function agySend({ apiKey, model, system, prompt, timeoutMs }, env = process.env
 ${prompt}` : prompt;
   const hostTimeoutMs = typeof timeoutMs === "number" && timeoutMs > 0 ? timeoutMs : parseAgyTimeoutMs(timeoutSpec) + 5e3;
   return new Promise((resolve11, reject) => {
-    const p = spawn2(bin, args, { stdio: ["pipe", "pipe", "pipe"], env: sanitizeProviderEnv(env) });
+    const p = spawn2(bin, args, { stdio: "pipe", env: sanitizeProviderEnv(env) });
     let out = "";
     let err = "";
     let settled = false;
