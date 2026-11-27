@@ -20,7 +20,7 @@ export const ARTIFACT_GATE_MAP = Object.freeze({
 });
 
 const VALID_VERDICTS = new Set(['approve', 'needs-attention']);
-const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024; // 2 MiB
+const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024;
 
 function resolveTrustedPubKey({ publicKey, trustedDir } = {}) {
   if (publicKey !== undefined) {

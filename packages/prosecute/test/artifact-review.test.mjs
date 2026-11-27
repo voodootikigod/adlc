@@ -270,6 +270,26 @@ test('CLI review-artifact records, checks, detects stale/revoked/unsigned, and s
   assert.equal(okCheck.status, 0, okCheck.stderr);
   assert.equal(JSON.parse(okCheck.stdout).approved, true);
 
+  // Explicit --base <older-sha> binds to that base commit rather than HEAD (kills values.base && 'HEAD' mutant).
+  const initialSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
+  writeFileSync(join(repo, 'other.txt'), 'move HEAD\n');
+  execFileSync('git', ['add', 'other.txt'], { cwd: repo, stdio: 'pipe' });
+  execFileSync('git', ['commit', '-m', 'second commit'], { cwd: repo, stdio: 'pipe' });
+  const baseRec = runCli(
+    ['review-artifact', '--artifact', 'spec.md', '--kind', 'spec', '--ticket', 'T-1', '--provider', 'claude', '--verdict', 'approve', '--base', initialSha, '--json'],
+    repo,
+    { ADLC_MANIFEST_KEY: TEST_HMAC_KEY },
+  );
+  assert.equal(baseRec.status, 0, baseRec.stderr);
+  assert.equal(JSON.parse(baseRec.stdout).data.baseSha, initialSha);
+
+  // --help documents review-artifact CLI syntax & revision format.
+  const helpOut = runCli(['--help'], repo);
+  assert.equal(helpOut.status, 0);
+  assert.ok(helpOut.stdout.includes('review-artifact --artifact <file>'));
+  assert.ok(helpOut.stdout.includes('[--model <m>]'));
+  assert.ok(helpOut.stdout.includes('artifact:<kind>:<baseSha>:<contentHash>'));
+
   // --check without key exits 2 (cannot verify).
   const noKeyCheck = runCli(
     ['review-artifact', '--check', '--artifact', 'spec.md', '--kind', 'spec', '--ticket', 'T-1', '--json'],
