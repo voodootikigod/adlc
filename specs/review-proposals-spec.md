@@ -54,9 +54,9 @@ graph TD
 
 - **Scope**: `packages/core/lib/model-family.mjs`, `packages/core/lib/llm.mjs`, `packages/core/index.mjs`, `packages/core/index.d.ts`, `packages/core/test/llm.test.mjs`, `packages/prosecute/lib/cross-model.mjs`, `packages/prosecute/test/vendor-family-provenance.test.mjs`, `packages/prosecute/test/cross-model-carry-forward.test.mjs`
 - **Rails**: `package.json`, `CODEOWNERS`, `.adlc/config.json`, `.github/workflows/ci.yml`, `docs/ci/rails-guard.yml`, `scripts/rails-guard-ci.mjs`, `scripts/preflight.mjs`, `scripts/check-reviewer-directed-comments.mjs`, `scripts/toolkit-floor.json`, `scripts/toolkit-floor-check.mjs`, `packages/rails-guard/lib/ci/trust-roots.mjs`
-- **Edges**: None
+- **Edges**: `T-REV-05`
 - **Tier**: frontier
-- **Pool Hint**: claude
+- **Pool Hint**: gemini
 - **Objectives**:
   - Create `packages/core/lib/model-family.mjs` (< 100 lines, pure, zero runtime dependencies) exporting `inferModelProviderFamily(modelId)` (re-exported from `packages/core/lib/llm.mjs`, `packages/core/index.mjs`, and `packages/core/index.d.ts` so `llm.mjs` does not grow):
     - Normalize `modelId` via NFKC + lowercase + whitespace stripping; map `claude*` / `anthropic*` -> `'anthropic'`, `gemini*` / `gemma*` -> `'google'`, and `gpt*` / `o1*` / `o3*` / `o4*` / `codex*` -> `'openai'`; return `''` for unknown or empty inputs.
@@ -74,7 +74,7 @@ graph TD
 
 - **Scope**: `packages/tickets/lib/key-contract.mjs`, `packages/tickets/lib/manifest-crypto.mjs`, `packages/tickets/lib/manifest-primitives.mjs`, `packages/tickets/lib/manifest-segments.mjs`, `packages/tickets/lib/evidence.mjs`, `packages/tickets/test/manifest-crypto.test.mjs`
 - **Rails**: `package.json`, `CODEOWNERS`, `.adlc/config.json`, `.github/workflows/ci.yml`, `docs/ci/rails-guard.yml`, `scripts/rails-guard-ci.mjs`, `scripts/preflight.mjs`, `scripts/check-reviewer-directed-comments.mjs`, `scripts/toolkit-floor.json`, `scripts/toolkit-floor-check.mjs`, `packages/rails-guard/lib/ci/trust-roots.mjs`, `packages/tickets/package.json`
-- **Edges**: None
+- **Edges**: `T-REV-03`
 - **Tier**: frontier
 - **Pool Hint**: gemini
 - **Objectives**:
@@ -100,7 +100,7 @@ graph TD
 
 - **Scope**: `packages/gate-manifest/lib/sign.mjs`, `packages/gate-manifest/lib/record.mjs`, `packages/gate-manifest/lib/segment-writer.mjs`, `packages/gate-manifest/lib/verify.mjs`, `packages/gate-manifest/lib/enable.mjs`, `packages/gate-manifest/lib/key-ceremony.mjs`, `packages/gate-manifest/bin/gate-manifest.mjs`, `packages/gate-manifest/test/ed25519-manifest.test.mjs`
 - **Rails**: `package.json`, `CODEOWNERS`, `.adlc/config.json`, `.github/workflows/ci.yml`, `docs/ci/rails-guard.yml`, `scripts/rails-guard-ci.mjs`, `scripts/preflight.mjs`, `scripts/check-reviewer-directed-comments.mjs`, `scripts/toolkit-floor.json`, `scripts/toolkit-floor-check.mjs`, `packages/rails-guard/lib/ci/trust-roots.mjs`
-- **Edges**: `T-REV-02`
+- **Edges**: `T-REV-05`
 - **Tier**: frontier
 - **Pool Hint**: gemini
 - **Objectives**:
@@ -120,9 +120,9 @@ graph TD
 
 - **Scope**: `packages/hook-engine/lib/protocol-adapters.mjs`, `packages/hook-engine/lib/pretool.mjs`, `packages/hook-engine/lib/flail-transcript.mjs`, `packages/hook-engine/lib/session-tracker.mjs`, `packages/hook-engine/lib/command-verify.mjs`, `packages/hook-engine/lib/gemini-guard.mjs`, `packages/hook-engine/lib/cli-gemini.mjs`, `packages/hook-engine/index.mjs`, `packages/hook-engine/test/protocol-adapters.test.mjs`, `packages/hook-engine/test/gemini-guard.test.mjs`
 - **Rails**: `package.json`, `CODEOWNERS`, `.adlc/config.json`, `.github/workflows/ci.yml`, `docs/ci/rails-guard.yml`, `scripts/rails-guard-ci.mjs`, `scripts/preflight.mjs`, `scripts/check-reviewer-directed-comments.mjs`, `scripts/toolkit-floor.json`, `scripts/toolkit-floor-check.mjs`, `packages/rails-guard/lib/ci/trust-roots.mjs`
-- **Edges**: None
+- **Edges**: `T-REV-05`
 - **Tier**: frontier
-- **Pool Hint**: claude
+- **Pool Hint**: gemini
 - **Objectives**:
   - Fix `packages/hook-engine/lib/protocol-adapters.mjs` (< 300 lines):
     - Extract nested `toolCall.{name, args}` / `tool_call.{toolName, arguments, params, parameters, input, tool_input}` in `normalizeHookInput()`, map `'preinvocation'` -> `'session-start'`, and extract `workspacePaths` / `workspace_paths` / `workspaceRoots` / `conversationId` / `conversation_id`.
@@ -147,7 +147,7 @@ graph TD
 
 - **Scope**: `packages/hook-engine/lib/stop.mjs`, `packages/hook-engine/test/posttool-stop-session.test.mjs`, `packages/hook-engine/test/stop.test.mjs`, `packages/prosecute/lib/cross-model.mjs`, `packages/prosecute/lib/attestation-store.mjs`, `packages/prosecute/lib/run.mjs`, `packages/prosecute/lib/load-env-local.mjs`, `packages/prosecute/bin/adlc-prosecute.mjs`, `packages/prosecute/test/ed25519-cross-model.test.mjs`, `packages/prosecute/test/cross-model-gate-workflow.test.mjs`, `.github/workflows/cross-model-gate.yml`
 - **Rails**: `package.json`, `CODEOWNERS`, `.adlc/config.json`, `.github/workflows/ci.yml`, `docs/ci/rails-guard.yml`, `scripts/rails-guard-ci.mjs`, `scripts/preflight.mjs`, `scripts/check-reviewer-directed-comments.mjs`, `scripts/toolkit-floor.json`, `scripts/toolkit-floor-check.mjs`, `packages/rails-guard/lib/ci/trust-roots.mjs`
-- **Edges**: `T-REV-01`, `T-REV-03`, `T-REV-04`
+- **Edges**: `T-REV-06`
 - **Tier**: frontier
 - **Pool Hint**: gemini
 - **Objectives**:
@@ -172,12 +172,12 @@ graph TD
 
 - **Scope**: `scripts/build-hooks.mjs`, `scripts/run-tests.mjs`, `scripts/ticket-readers/generate.mjs`, `scripts/gemini-install-smoke.mjs`, `scripts/test/run-tests.test.mjs`, `scripts/test/ticket-reader-generation.test.mjs`, `scripts/test/ticket-store-boundary.test.mjs`, `scripts/test/hook-spawn-timeout-drift.test.mjs`, `packages/tickets/test/pointer.test.mjs`, `packages/prosecute/lib/tier.mjs`, `packages/prosecute/test/tier-plugin-and-scripts.test.mjs`, `plugins/adlc-gemini/**`
 - **Rails**: `package.json`, `CODEOWNERS`, `.adlc/config.json`, `.github/workflows/ci.yml`, `docs/ci/rails-guard.yml`, `scripts/rails-guard-ci.mjs`, `scripts/preflight.mjs`, `scripts/check-reviewer-directed-comments.mjs`, `scripts/toolkit-floor.json`, `scripts/toolkit-floor-check.mjs`, `packages/rails-guard/lib/ci/trust-roots.mjs`
-- **Edges**: `T-REV-05`
+- **Edges**: None
 - **Tier**: frontier
-- **Pool Hint**: claude
+- **Pool Hint**: gemini
 - **Objectives**:
   - Scrub `ADLC_MANIFEST_PRIVATE_KEY` in `scripts/run-tests.mjs`: add `'ADLC_MANIFEST_PRIVATE_KEY'` to both `PRESERVE_EMPTY` and `SCRUBBED_ENV_VARS` (mirroring `'ADLC_MANIFEST_KEY'` so ambient private keys never leak into or alter test segments while an explicit empty `''` is preserved), and assert this in `scripts/test/run-tests.test.mjs`.
-  - Register `plugins/adlc-gemini/hooks/adlc-rails-guard.bundle.mjs` (entry: `packages/hook-engine/lib/cli-gemini.mjs`, format `'esm'`) in `DEFAULT_HOOK_TARGETS` inside `scripts/build-hooks.mjs`, run `node scripts/build-hooks.mjs` to emit the standalone Node >=18 bundle, and add `['hook-bundle drift', 'node scripts/build-hooks.mjs --check']` to `SEGMENTS` in `scripts/run-tests.mjs`.
+  - Register `plugins/adlc-gemini/hooks/adlc-rails-guard.bundle.mjs` (entry: `packages/hook-engine/lib/cli-gemini.mjs` created upstream by `T-REV-04`, which exports `main`, `decide`, `preInvocation`, `postToolUse`, `onStop`, `runFromStdin`, `printStatus`, `printDoctor`, `checkRail`, `findAdlcRoot`, `anchorPath`, `extractToolName`, `extractArgs`, `extractFilePaths`, `canonicalizeExisting`, and all re-exported flail/session/command helpers; format `'esm'`) in `DEFAULT_HOOK_TARGETS` inside `scripts/build-hooks.mjs`, run `node scripts/build-hooks.mjs` to emit the standalone Node >=18 bundle, and add `['hook-bundle drift', 'node scripts/build-hooks.mjs --check']` to `SEGMENTS` in `scripts/run-tests.mjs`.
   - Delete `plugins/adlc-gemini`'s `6,469` LOC of duplicate inline and generated files:
     - Remove `plugins/adlc-gemini/build-gate-inline.mjs`, `plugins/adlc-gemini/flail-inline.mjs`, `plugins/adlc-gemini/core-inline.mjs`, `plugins/adlc-gemini/rails-checker.mjs`, `plugins/adlc-gemini/hooks/adlc-rails-guard.mjs`, `plugins/adlc-gemini/generated-active-ticket.mjs`, `plugins/adlc-gemini/generated-glob-match.mjs`, `plugins/adlc-gemini/generated-railpath.mjs`, `plugins/adlc-gemini/generated-ticket-reader.mjs`, and `plugins/adlc-gemini/generated-workspace-root.mjs`.
     - Update `plugins/adlc-gemini/hooks/adlc-rails-guard.cjs` to dynamically `import('./adlc-rails-guard.bundle.mjs')` and invoke `main()`, and update `plugins/adlc-gemini/package.json` `"files"` allowlist to ship `hooks/` (`adlc-rails-guard.cjs` + `adlc-rails-guard.bundle.mjs`) without referencing deleted inline/generated files.
