@@ -11,7 +11,8 @@ import { detectTicketStore } from '@adlc/tickets';
 import { resolveActiveTicketId } from './pretool.mjs';
 import { flailMessage, resolveTranscriptPath, parseTranscriptSteps, parseTranscriptRecords } from './flail-transcript.mjs';
 import { TRUST_ROOT_RAILS, classifyTool, isShellTool, hasCommandLineArgs, hasCodeExecutionArgs, extractCommandString, isCaseInsensitiveFs, isSecretStatePath, isTrustRootOrSecretPath, isUnauthorizedWorkspaceEscape, isTrustRootSecretAccess, hasShellTrustRootSecretAccess, hasShellSymlinkOrSecretEscape, isReadonlyCommand, isVerificationCommand, resolveUserHome } from './command-verify.mjs';
-import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId, computePrefixHash, hasDiscoverableTests, getOrCreateSessionSecret, getMasterKeyRaw, rotateMasterKey, verifyPreExistingTestFiles } from './session-tracker.mjs';
+import { checkBuildGate, checkFlail, createPersistentTracker, resolveSessionId, getOrCreateSessionSecret, getMasterKeyRaw, rotateMasterKey } from './session-tracker.mjs';
+import { evaluateGeminiStop, sanitizeField, sanitizeGlobList } from './gemini-stop-verify.mjs';
 
 const PLUGIN_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const TOOLCALL_KEYS = ['toolCall', 'tool_call', 'tool'];
@@ -235,6 +236,13 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
         const { abs, anchored } = anchorPath(raw, payload, env);
         if (!anchored) { if (enforcing) return forceAsk(`unanchorable relative path "${raw}"`, env); continue; }
         const can = canonicalizeExisting(abs); const b = declaredOuterWorkspace(payload, abs) ?? wsRoot;
+        if (enforcing && ov && typeof ov === 'string' && ov.trim()) {
+          const ovAbs = isAbsolute(ov.trim()) ? ov.trim() : resolve(wsRoot ?? b ?? process.cwd(), ov.trim());
+          const ovCan = canonicalizeExisting(ovAbs);
+          if (abs === ovAbs || can === ovCan || isPathInside(abs, ovAbs) || isPathInside(can, ovCan)) {
+            return deny('frozen rail — direct modification of external ticket store is strictly prohibited');
+          }
+        }
         if (enforcing && b && !isPathInside(can, b)) return forceAsk(`target path "${raw}" mutates outside workspace`, env);
         const eff = findAdlcRoot(can, env) ?? findAdlcRoot(abs, env); if (!eff) continue;
         for (const fp of [can, abs]) { const v = checkRail({ filePath: fp, tool, toolArgs: args, root: eff, env }); if (v.decision === 'deny') return deny(`frozen rail — ${v.reason}`); }
@@ -259,8 +267,9 @@ export function decide(payload, { env = process.env, trackerCache } = {}) {
         if (hasShellTrustRootSecretAccess(cmd, { root: b ?? ec, cwd: ec, env }) || hasShellSymlinkOrSecretEscape(cmd, { root: b ?? ec, cwd: ec, env })) return deny('shell access to master key, trust-root secrets, or escaping symlink is strictly prohibited');
         if (enforcing && isUnauthorizedWorkspaceEscape(cmd, { root: b, cwd: ec })) return forceAsk('shell command accesses filesystem paths outside workspace', env);
         if (enforcing) {
+          const verRoot = (cw ? (findAdlcRoot(ec, env) ?? ec) : null) ?? wsRoot ?? b ?? ec;
           const ro = isReadonlyCommand(cmd, { root: b ?? ec, cwd: ec, env });
-          const ver = isVerificationCommand(cmd, { root: b ?? ec, workdirAnchorBase: b, toolArgs: args, allowImplicitCwd: hasUnambiguousWorkspaceCwd(payload, env, b ?? ec) });
+          const ver = isVerificationCommand(cmd, { root: verRoot, workdirAnchorBase: b, toolArgs: args, allowImplicitCwd: hasUnambiguousWorkspaceCwd(payload, env, verRoot) });
           if (!ro && !ver) return forceAsk(`ambiguous mutating shell command requires confirmation: ${cmd.slice(0, 120)}`, env);
         }
         return pass();
@@ -283,33 +292,54 @@ export function runFromStdin(raw, envArg = process.env) {
   if (!isToolPayload(payload)) return enf ? deny('unparseable tool payload while enforcing — failing closed') : pass();
   const toolName = extractToolName(payload); const trackerCache = new Map();
   if (!toolName) return decide(payload, { env, trackerCache });
+  const wsRoot = resolveWorkspaceRoot(payload, env);
   const args = extractArgs(payload); const cls = classifyTool(toolName, args); const sid = resolveSessionId({ payload, env });
-  const wsRoot = resolveWorkspaceRoot(payload, env); const roots = new Set([wsRoot].filter(Boolean));
-  for (const p of extractFilePaths(payload)) { const { abs } = anchorPath(p, payload, env); if (abs) { const r = findAdlcRoot(abs, env); if (r) roots.add(r); } }
+  const cmdCwd = extractCwdFromArgs(args);
+  const cmdCwdRoot = cmdCwd && isAbsolute(cmdCwd) ? findAdlcRoot(cmdCwd, env) : null;
+  const pathRoots = new Set();
+  for (const p of extractFilePaths(payload)) { const { abs } = anchorPath(p, payload, env); if (abs) { const r = findAdlcRoot(abs, env); if (r) pathRoots.add(r); } }
+  const roots = new Set(cmdCwdRoot ? [cmdCwdRoot, ...pathRoots] : (pathRoots.size ? [...pathRoots] : [wsRoot].filter(Boolean)));
   const tp = resolveTranscriptPath({ payload, conversationId: sid, env });
+  if (!roots.size && tp) {
+    const trRoot = discoverRootFromTranscriptRecords(parseTranscriptRecords(tp), env, { anchorBase: declaredOuterWorkspace(payload) }) ?? findAdlcRoot(tp, env);
+    if (trRoot) roots.add(trRoot);
+  }
   const isShell = isShellTool(toolName, args); const cmd = extractCommandString(args);
-  const isMut = isShell ? (!isReadonlyCommand(cmd, { root: wsRoot ?? process.cwd(), env }) && !isVerificationCommand(cmd, { root: wsRoot, toolArgs: args })) : cls !== 'readonly';
+  const verTarget = cmdCwdRoot ?? wsRoot ?? [...roots][0] ?? process.cwd();
+  const isMut = isShell ? (!isReadonlyCommand(cmd, { root: verTarget, cwd: cmdCwd && isAbsolute(cmdCwd) ? cmdCwd : verTarget, env }) && !isVerificationCommand(cmd, { root: verTarget, workdirAnchorBase: declaredOuterWorkspace(payload, verTarget), toolArgs: args })) : cls !== 'readonly';
   for (const r of roots) {
     const tr = createPersistentTracker(r, env); trackerCache.set(r, tr);
     tr.recordToolCall(sid, { isMutating: isMut }); if (tp) tr.recordTranscript(sid, tp);
     const active = resolveActiveTicketId(r, env); if (active.id) try { tr.recordActiveTicket(sid, active.id, loadStoreReadOnly(r, env)?.hash); } catch {}
   }
   const v = decide(payload, { env, trackerCache });
-  if (v.allow_tool === false) for (const r of roots) trackerCache.get(r)?.revertToolCall?.(sid, { isMutating: isMut });
+  if (v.decision === 'deny') for (const r of roots) trackerCache.get(r)?.revertToolCall?.(sid, { isMutating: isMut });
   return v;
 }
 
 export function preInvocation(payload, { env = process.env } = {}) {
   try {
-    const root = resolveWorkspaceRoot(payload, env); if (!root) return { injectSteps: [] };
-    const active = resolveActiveTicketId(root, env); if (!active.id || active.conflict || !/^[a-zA-Z0-9_-]+$/.test(active.id)) return { injectSteps: [] };
-    const snap = loadStoreReadOnly(root, env); const ticket = snap.get(active.id); if (!ticket) return { injectSteps: [] };
-    const tr = createPersistentTracker(root, env); const sid = resolveSessionId({ payload, env });
-    tr.recordActiveTicket(sid, active.id, snap.hash);
-    const tp = resolveTranscriptPath({ payload, conversationId: sid, env }); if (tp) tr.recordTranscript(sid, tp);
-    const rails = [...new Set([...(ticket.rails ?? []), ...TRUST_ROOT_RAILS])].join(', ');
-    const scope = Array.isArray(ticket.scope) && ticket.scope.length ? ticket.scope.join(', ') : 'unrestricted';
-    return { injectSteps: [{ ephemeralMessage: `[ADLC Context] Active Ticket: ${active.id} | Enforcement: ${env.ADLC_P4_ENFORCEMENT === '1' ? 'ACTIVE' : 'INACTIVE (advisory)'} | Scope: ${scope} | Frozen Rails: ${rails}` }] };
+    let root = resolveWorkspaceRoot(payload, env);
+    const sid = resolveSessionId({ payload, env });
+    const tp = resolveTranscriptPath({ payload, conversationId: sid, env });
+    if (tp) {
+      const trRoot = discoverRootFromTranscriptRecords(parseTranscriptRecords(tp, { readFull: true }), env, { anchorBase: declaredOuterWorkspace(payload, root) }) ?? findAdlcRoot(tp, env);
+      const multi = WORKSPACE_KEYS.flatMap((k) => (Array.isArray(payload?.[k]) ? payload[k] : [])).filter((s) => typeof s === 'string' && s.trim());
+      if (!root || (trRoot && multi.length > 1 && multi.some((w) => canonPath(w) === canonPath(trRoot)))) root = trRoot;
+      else if (trRoot) root = preferInnermostCheckout(root, [trRoot], { storeOverride: env?.ADLC_TICKET_STORE || env?.ADLC_TICKETS || null, homeDir: resolveUserHome(env) || homedir(), pluginDir: PLUGIN_ROOT, preserveSpelling: true }) ?? root;
+    }
+    if (!root) return { injectSteps: [] };
+    const active = resolveActiveTicketId(root, env);
+    const cleanId = sanitizeField(active.id, 64);
+    if (!cleanId || cleanId !== active.id || active.conflict || !/^[a-zA-Z0-9_-]+$/.test(cleanId)) return { injectSteps: [] };
+    const snap = loadStoreReadOnly(root, env); const ticket = snap.get(cleanId); if (!ticket) return { injectSteps: [] };
+    const tr = createPersistentTracker(root, env);
+    tr.recordActiveTicket(sid, cleanId, snap.hash);
+    if (tp) tr.recordTranscript(sid, tp);
+    const rails = [...new Set([...sanitizeGlobList(ticket.rails), ...TRUST_ROOT_RAILS])].join(', ');
+    const cleanScope = sanitizeGlobList(ticket.scope);
+    const scope = cleanScope.length ? cleanScope.join(', ') : 'unrestricted';
+    return { injectSteps: [{ ephemeralMessage: `[ADLC Context] Active Ticket: ${cleanId} | Enforcement: ${env.ADLC_P4_ENFORCEMENT === '1' ? 'ACTIVE' : 'INACTIVE (advisory)'} | Scope: ${scope} | Frozen Rails: ${rails}` }] };
   } catch { return { injectSteps: [] }; }
 }
 
@@ -319,11 +349,13 @@ export function postToolUse(payload, { env = process.env } = {}) {
     const rawOut = (typeof payload?.output === 'string' ? payload.output + '\n' : '') + JSON.stringify(payload ?? {});
     const mk = getMasterKeyRaw(env);
     if (mk && rawOut.includes(mk)) { rotateMasterKey(env); createPersistentTracker(resolveWorkspaceRoot(payload, env) ?? process.cwd(), env)?.invalidateSession?.(sid); }
-    const wsRoot = resolveWorkspaceRoot(payload, env);
+    const tp = resolveTranscriptPath({ payload, conversationId: sid, env });
+    let wsRoot = resolveWorkspaceRoot(payload, env);
+    if (!wsRoot && tp) wsRoot = discoverRootFromTranscriptRecords(parseTranscriptRecords(tp), env, { anchorBase: declaredOuterWorkspace(payload) }) ?? findAdlcRoot(tp, env);
     if (wsRoot) {
       const tr = createPersistentTracker(wsRoot, env);
       const ec = payload?.exit_code ?? payload?.exitCode ?? payload?.result?.exitCode ?? payload?.toolResult?.exitCode;
-      tr.recordToolResult(sid, { exitCode: typeof ec === 'number' ? ec : null, transcriptPath: resolveTranscriptPath({ payload, conversationId: sid, env }) });
+      tr.recordToolResult(sid, { exitCode: typeof ec === 'number' ? ec : null, transcriptPath: tp });
       const sec = getOrCreateSessionSecret(wsRoot, env); if (sec && rawOut.includes(sec)) tr.invalidateSession?.(sid);
     }
   } catch {}
@@ -331,53 +363,22 @@ export function postToolUse(payload, { env = process.env } = {}) {
 }
 
 export function onStop(payload, { env = process.env } = {}) {
-  const cont = (reason) => ({ decision: 'continue', reason: `ADLC Rails-Guard: ${reason}` });
-  try {
-    if (env?.ADLC_P4_ENFORCEMENT !== '1') return { decision: 'stop' };
-    const sid = resolveSessionId({ payload, env }); let root = resolveWorkspaceRoot(payload, env);
-    const tp = resolveTranscriptPath({ payload, conversationId: sid, env });
-    const records = tp ? parseTranscriptRecords(tp, { readFull: true }) : [];
-    if (!root && records.length) root = discoverRootFromTranscriptRecords(records, env, { anchorBase: declaredOuterWorkspace(payload) });
-    if (!root) return cont('Repository workspace root cannot be resolved under enforcement during Stop verification.');
-    const tr = createPersistentTracker(root, env);
-    if (tr.isInvalidated?.(sid)) return cont('Session invalidated due to secret disclosure.');
-    if (tr.isCorrupted?.()) return cont('Session tracking store was corrupted or unreadable under enforcement.');
-    if (tr.validateBaseline && !tr.validateBaseline(sid)) return cont('Session baseline signature mismatch or missing tracking entry.');
-    if (tr.validateLedger && !tr.validateLedger(sid)) return cont('Session ledger integrity verification failed.');
-    const active = resolveActiveTicketId(root, env);
-    if (active.conflict) return cont('Active ticket state conflict detected during Stop verification.');
-    const initId = tr.initialTicket(sid) ?? active.id;
-    if (!tp || !records.length) return initId ? cont('Session transcript is missing or unreadable under enforcement.') : { decision: 'stop' };
-    if (initId && active.id !== initId) return cont(`Active ticket ID changed from ${initId} to ${active.id ?? 'none'} during session.`);
-    const ti = tr.lastTranscript?.(sid);
-    if (ti?.initial?.hash && ti.initial.size > 0 && computePrefixHash(tp, ti.initial.size) !== ti.initial.hash) return cont('Session transcript prefix content was modified during session.');
-    let seq = 0; let lastMut = -1; let lastTest = -1; let pkgMut = false; let shellMut = false;
-    for (const r of records) {
-      if (!r || typeof r !== 'object' || Array.isArray(r) || r.__oversized || r.__unparseable) return cont('Corrupted or oversized transcript records detected during Stop verification.');
-      for (const c of extractToolCalls(r)) {
-        seq++; const name = extractToolName({ toolCall: c }); const args = extractArgs({ toolCall: c }); const fps = extractFilePaths({ toolCall: c });
-        if (!isShellTool(name, args) && classifyTool(name, args) !== 'readonly') {
-          if (fps.some((p) => /(^|[/\\])\.(adlc|booster)([/\\]|$)/i.test(p) || isTrustRootOrSecretPath(p, env))) return cont('Trust-root store or secret was modified during session.');
-          lastMut = seq; if (fps.some((p) => /(^|[/\\])(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/i.test(p))) pkgMut = true;
-        } else if (isShellTool(name, args)) {
-          const cmd = extractCommandString(args);
-          if (isVerificationCommand(cmd, { root, toolArgs: args, allowImplicitCwd: hasUnambiguousWorkspaceCwd(payload, env, root), packageManifestMutated: pkgMut, shellMutated: shellMut })) {
-            const ec = r?.exit_code ?? r?.exitCode ?? c?.exitCode; const st = String(r?.status ?? c?.status ?? '').toLowerCase();
-            if ((ec === 0 || st === 'done' || st === 'success' || r?.success === true) && hasDiscoverableTests(root)) lastTest = seq;
-          } else if (!isReadonlyCommand(cmd, { root, env })) { lastMut = seq; shellMut = true; }
-        }
-      }
-    }
-    let ticket = null;
-    if (active.id) {
-      try { ticket = loadStoreReadOnly(root, env).get(active.id); if (!ticket) return cont(`Active ticket ${active.id} not found in validated ticket store.`); }
-      catch { return cont('Corrupt or unreadable ticket store during Stop verification.'); }
-    }
-    if (lastMut !== -1 && (lastTest === -1 || lastMut > lastTest)) return cont('Active ticket has unverified file edits. Verification/test commands must be run after the last edit before completing.');
-    const testCheck = verifyPreExistingTestFiles(root, tr.initialTestFiles?.(sid), ticket);
-    if (!testCheck.ok) return { decision: 'continue', reason: testCheck.reason };
-    tr.markSessionEnded?.(sid); return { decision: 'stop' };
-  } catch { return env?.ADLC_P4_ENFORCEMENT === '1' ? cont('Internal error evaluating Stop hook under enforcement.') : { decision: 'stop' }; }
+  return evaluateGeminiStop(payload, {
+    env,
+    helpers: {
+      PLUGIN_ROOT,
+      resolveWorkspaceRoot,
+      declaredOuterWorkspace,
+      discoverRootFromTranscriptRecords,
+      hasUnambiguousWorkspaceCwd,
+      extractToolCalls,
+      extractToolName,
+      extractArgs,
+      extractFilePaths,
+      findAdlcRoot,
+      canonicalizeExisting,
+    },
+  });
 }
 
 export function printStatus(root = process.cwd(), env = process.env, payload = {}) {

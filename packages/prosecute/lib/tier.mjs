@@ -76,7 +76,6 @@ const TRUST_ROOT_FILES = [
   'scripts/test/tmp-fixture-boundary.test.mjs',
   // Harness plugin rails-checker modules and hook manifests (T-P06 / S7).
   'plugins/adlc-cursor/rails-checker.mjs',
-  'plugins/adlc-gemini/rails-checker.mjs',
   'plugins/adlc-opencode/rails-checker.mjs',
   'plugins/adlc-cursor/hooks.json',
   'plugins/adlc-gemini/hooks.json',

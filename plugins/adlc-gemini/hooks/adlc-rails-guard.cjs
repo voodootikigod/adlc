@@ -13,7 +13,7 @@ function failSafe(reason) {
     allow_tool: false,
     deny_reason: 'ADLC rails-guard: ' + reason,
   } : {
-    decision: 'allow',
+    decision: 'pass',
     allow_tool: true,
   });
 }
@@ -33,9 +33,9 @@ async function readStdinBounded(maxBytes) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-/* The adapter is always the sibling module; nothing in the environment selects it. */
+/* The adapter is always the sibling compiled bundle; nothing in the environment selects it. */
 function resolveAdapterPath() {
-  return __dirname + '/adlc-rails-guard.mjs';
+  return __dirname + '/adlc-rails-guard.bundle.mjs';
 }
 
 var subcmd = process.argv[2];
@@ -69,7 +69,7 @@ if (subcmd === 'status' || subcmd === 'doctor') {
         require('node:fs').writeFileSync(shmDir + '/posttooluse-crash-' + process.pid, 'posttooluse error');
       }
     } catch (_) {}
-    emit({ decision: 'allow', allow_tool: true });
+    emit({ decision: 'pass', allow_tool: true });
   };
   process.on('uncaughtException', postFail);
   process.on('unhandledRejection', postFail);

@@ -11,12 +11,18 @@ import {
   DEFAULT_HOOK_TARGETS,
 } from '../build-hooks.mjs';
 
-test('default buildHooks smoke-compiles hook-engine in memory for both ESM and CJS without writing inside packages/', () => {
+test('default buildHooks compiles DEFAULT_HOOK_TARGETS and smoke-compiles empty targets for both ESM and CJS', () => {
   assert.ok(Array.isArray(DEFAULT_HOOK_TARGETS));
-  const esm = buildHooks({ check: true, write: false });
+  assert.ok(DEFAULT_HOOK_TARGETS.some((t) => t.output === 'plugins/adlc-gemini/hooks/adlc-rails-guard.bundle.mjs'));
+  const defaultCheck = buildHooks({ check: true, write: false });
+  assert.equal(defaultCheck.ok, true);
+  assert.deepEqual(defaultCheck.drifted, []);
+  assert.ok(defaultCheck.bundles['plugins/adlc-gemini/hooks/adlc-rails-guard.bundle.mjs']?.length > 1000);
+
+  const esm = buildHooks({ targets: [], check: true, write: false });
   assert.equal(esm.ok, true);
   assert.ok(esm.bundles['hook-engine.bundle.mjs']?.length > 1000);
-  const cjs = buildHooks({ check: true, write: false, formatOverride: 'cjs' });
+  const cjs = buildHooks({ targets: [], check: true, write: false, formatOverride: 'cjs' });
   assert.equal(cjs.ok, true);
   assert.ok(cjs.bundles['hook-engine.bundle.cjs']?.length > 1000);
 });

@@ -12,9 +12,13 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { tmp } from '@adlc/core/test-kit';
-import { getMasterKeyRaw, getOrCreateSessionSecret } from '../build-gate-inline.mjs';
-import { resolveTranscriptPath } from '../flail-inline.mjs';
-import { getTrustRootSecretHomes, isTrustRootOrSecretPath } from '../hooks/adlc-rails-guard.mjs';
+import {
+  getMasterKeyRaw,
+  getOrCreateSessionSecret,
+  resolveTranscriptPath,
+  getTrustRootSecretHomes,
+  isTrustRootOrSecretPath,
+} from '../hooks/adlc-rails-guard.bundle.mjs';
 
 const PLUGIN = join(dirname(fileURLToPath(import.meta.url)), '..');
 const HOME_VAR = process.platform === 'win32' ? 'USERPROFILE' : 'HOME';
@@ -108,7 +112,7 @@ test('the .cjs shim resolves the adapter beside itself', (t) => {
   const dir = tmp(t, 'gemini-shim-sibling-');
   copyFileSync(join(PLUGIN, 'hooks', 'adlc-rails-guard.cjs'), join(dir, 'adlc-rails-guard.cjs'));
   writeFileSync(
-    join(dir, 'adlc-rails-guard.mjs'),
+    join(dir, 'adlc-rails-guard.bundle.mjs'),
     'export function postToolUse() { return { decision: "sibling-adapter", allow_tool: true }; }\n',
   );
   const res = spawnHook([join(dir, 'adlc-rails-guard.cjs'), 'posttooluse'], {

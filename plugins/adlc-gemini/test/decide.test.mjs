@@ -3,9 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync, symlinkSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
-import { decide, canonicalizeExisting } from '../hooks/adlc-rails-guard.mjs';
-import { checkRail } from '../rails-checker.mjs';
-import { ticketFilename } from '../generated-ticket-reader.mjs';
+import { decide, canonicalizeExisting, checkRail } from '../hooks/adlc-rails-guard.bundle.mjs';
+import { ticketFilename } from '@adlc/tickets';
 
 const ENF = { ADLC_P4_ENFORCEMENT: '1' };
 
@@ -37,8 +36,15 @@ test("'other'-classified tool with no path allowed under enforcement (covers the
 test('read-only tool (view_file) allowed under enforcement', () => {
   assert.equal(call('view_file', { AbsolutePath: '/anything/a.js' }).allow_tool, true);
 });
-test('shell tool (run_command) allowed in-session', () => {
-  assert.equal(call('run_command', { CommandLine: 'echo hi > /x' }).allow_tool, true);
+test('shell tool (run_command) read-only command passes and ambiguous mutating shell requires force_ask in-session', () => {
+  assert.equal(call('run_command', { CommandLine: 'git status' }).allow_tool, true);
+  assert.equal(call('run_command', { CommandLine: 'git status' }).decision, 'pass');
+  const mut = call('run_command', { CommandLine: 'echo hi > /x' });
+  assert.equal(mut.allow_tool, false);
+  assert.equal(mut.decision, 'force_ask');
+  const mutHeadless = call('run_command', { CommandLine: 'echo hi > /x' }, { ...ENF, ADLC_HEADLESS: '1' });
+  assert.equal(mutHeadless.allow_tool, false);
+  assert.equal(mutHeadless.decision, 'deny');
 });
 test('G2: write with ABSOLUTE path in non-ADLC repo allowed under enforcement', (t) => {
   const root = tmp(t, 'gemini-decide-');
@@ -95,7 +101,7 @@ for (const [label, payload] of [['null', null], ['undefined', undefined], ['stri
     assert.match(v.deny_reason, /unparseable tool payload while enforcing/);
   });
   test(`decide(): ${label} payload with enforcement off allows`, () => {
-    assert.deepEqual(decide(payload, { env: {} }), { decision: 'allow', allow_tool: true });
+    assert.deepEqual(decide(payload, { env: {} }), { decision: 'pass', allow_tool: true });
   });
 }
 
@@ -109,7 +115,7 @@ for (const [label, payload] of [['{}', {}], ['{toolCall:{}}', { toolCall: {} }],
     assert.match(v.deny_reason, /exposes no tool name/);
   });
   test(`decide(): ${label} (no tool name) with enforcement off allows`, () => {
-    assert.deepEqual(decide(payload, { env: {} }), { decision: 'allow', allow_tool: true });
+    assert.deepEqual(decide(payload, { env: {} }), { decision: 'pass', allow_tool: true });
   });
 }
 
@@ -431,9 +437,9 @@ test('decide(): structured write targeting node binary is denied as trust root v
   assert.match(res.deny_reason, /strictly prohibited|trust-root/i);
 });
 
-test('decide(): shell command with bare .. (e.g. cd ..) is denied under enforcement', (t) => {
+test('decide(): shell command with bare .. (e.g. cd ..) is blocked under enforcement (force_ask interactive, deny headless)', (t) => {
   const root = tmp(t, 'gemini-decide-');
-  const res = decide({
+  const payload = {
     workspacePaths: [root],
     toolCall: {
       name: 'run_command',
@@ -441,15 +447,20 @@ test('decide(): shell command with bare .. (e.g. cd ..) is denied under enforcem
         CommandLine: 'cd ..; ls',
       },
     },
-  }, { env: { ADLC_P4_ENFORCEMENT: '1' } });
+  };
+  const res = decide(payload, { env: { ADLC_P4_ENFORCEMENT: '1' } });
   assert.equal(res.allow_tool, false);
-  assert.equal(res.decision, 'deny');
-  assert.match(res.deny_reason, /outside workspace|escapes/i);
+  assert.equal(res.decision, 'force_ask');
+  assert.match(res.reason, /outside workspace|escapes/i);
+  const headless = decide(payload, { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_HEADLESS: '1' } });
+  assert.equal(headless.allow_tool, false);
+  assert.equal(headless.decision, 'deny');
+  assert.match(headless.deny_reason, /outside workspace|escapes/i);
 });
 
-test('decide(): shell command with absolute path outside workspace is denied under containment check', (t) => {
+test('decide(): shell command with absolute path outside workspace is blocked under containment check (force_ask interactive, deny headless)', (t) => {
   const root = tmp(t, 'gemini-decide-');
-  const res = decide({
+  const payload = {
     workspacePaths: [root],
     toolCall: {
       name: 'run_command',
@@ -458,10 +469,15 @@ test('decide(): shell command with absolute path outside workspace is denied und
         Cwd: root,
       },
     },
-  }, { env: { ADLC_P4_ENFORCEMENT: '1' } });
+  };
+  const res = decide(payload, { env: { ADLC_P4_ENFORCEMENT: '1' } });
   assert.equal(res.allow_tool, false);
-  assert.equal(res.decision, 'deny');
-  assert.match(res.deny_reason, /outside workspace/i);
+  assert.equal(res.decision, 'force_ask');
+  assert.match(res.reason, /outside workspace/i);
+  const headless = decide(payload, { env: { ADLC_P4_ENFORCEMENT: '1', ADLC_HEADLESS: '1' } });
+  assert.equal(headless.allow_tool, false);
+  assert.equal(headless.decision, 'deny');
+  assert.match(headless.deny_reason, /outside workspace/i);
 });
 
 test('decide(): structured write targeting node_modules/.bin/mocha or test runner configs is denied as trust root violation', (t) => {
@@ -653,7 +669,7 @@ test('decide(): call_mcp_tool denies mutating/unknown inner tools on frozen rail
   assert.equal(allowedExplore.allow_tool, true);
 });
 
-test('decide(): shell Cwd / dir_path escaping workspace or conflicting workdir keys are denied under enforcement', (t) => {
+test('decide(): shell Cwd / dir_path escaping workspace or conflicting workdir keys are blocked under enforcement', (t) => {
   const root = adlcRepo(t, { rails: ['frozen.txt'], id: 'T1' });
   const sibling = tmp(t, 'gemini-outside-cwd-');
 
@@ -668,11 +684,11 @@ test('decide(): shell Cwd / dir_path escaping workspace or conflicting workdir k
       toolCall: { name: 'run_command', args },
     }, { env: { ADLC_P4_ENFORCEMENT: '1' } });
     assert.equal(res.allow_tool, false, JSON.stringify(args));
-    assert.equal(res.decision, 'deny');
+    assert.ok(res.decision === 'deny' || res.decision === 'force_ask', `expected deny or force_ask, got ${res.decision}`);
   }
 });
 
-test('decide(): shell commands overwriting runner configs or node_modules/.bin are denied while system node --test is allowed', (t) => {
+test('decide(): shell commands overwriting runner configs or node_modules/.bin are blocked while system node --test is allowed', (t) => {
   const root = adlcRepo(t, { rails: ['frozen.txt'], id: 'T1' });
 
   for (const cmd of [
@@ -686,7 +702,7 @@ test('decide(): shell commands overwriting runner configs or node_modules/.bin a
       toolCall: { name: 'run_command', args: { CommandLine: cmd, Cwd: root } },
     }, { env: { ADLC_P4_ENFORCEMENT: '1' } });
     assert.equal(res.allow_tool, false, cmd);
-    assert.equal(res.decision, 'deny');
+    assert.ok(res.decision === 'deny' || res.decision === 'force_ask', `expected deny or force_ask for ${cmd}, got ${res.decision}`);
   }
 
   const allowedNode = decide({

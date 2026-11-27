@@ -2,17 +2,13 @@
 // secret management, build-gate/flail checks, and scope-aware test verification.
 
 import { createHash, createHmac, randomBytes } from 'node:crypto';
-import {
-  existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync, lstatSync,
-  unlinkSync, openSync, readSync, writeSync, closeSync, fstatSync, readdirSync, realpathSync, constants as fsConstants,
-} from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync, rmSync, lstatSync, unlinkSync, openSync, readSync, writeSync, closeSync, fstatSync, readdirSync, realpathSync, constants as fsConstants } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
 import { globMatch } from '@adlc/core';
 import { detectTicketStore } from '@adlc/tickets';
 import { resolveActiveTicketId } from './pretool.mjs';
 import { detectEditChurn, analyzeFlail, resolveTranscriptPath, parseTranscriptSteps, parseTranscriptRecords } from './flail-transcript.mjs';
 import { isShellTool, classifyTool, extractCommandString, TRUST_ROOT_RAILS, resolveUserHome } from './command-verify.mjs';
-
 export { resolveUserHome };
 export const DEFAULT_DEPTH_THRESHOLD = 50;
 export const MAX_TRACKED_SESSIONS = 100;
@@ -21,7 +17,6 @@ export const TRUST_ROOT_PATHS = ['.adlc/tickets.json', '.adlc/tickets/**', '.adl
 export const MANIFEST_PATH = '.adlc/manifest.jsonl';
 export const HIGH_RISK_CATEGORIES = new Set(['contract', 'architecture']);
 export const MAX_TRANSCRIPT_HASH_BYTES = 16 * 1024 * 1024;
-
 const HARD_MAX_LEDGER_BYTES = 2 * 1024 * 1024;
 const MAX_LEDGER_RECORD_BYTES = 16 * 1024;
 const ZERO_MAC = '0'.repeat(64);
@@ -259,7 +254,11 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       if (!existsSync(adlcDir)) mkdirSync(adlcDir, { recursive: true });
       let lastSeq = 0; let lastMac = ZERO_MAC;
       if (existsSync(ledgerPath)) {
-        const op = openVerifiedRegular(ledgerPath, HARD_MAX_LEDGER_BYTES); if (!op) return null;
+        const op = openVerifiedRegular(ledgerPath, HARD_MAX_LEDGER_BYTES);
+        if (!op) {
+          try { const ls = lstatSync(ledgerPath); if (!ls.isSymbolicLink() && ls.isFile() && ls.size > HARD_MAX_LEDGER_BYTES) writeFileSync(join(adlcDir, '.ledger-quarantine'), JSON.stringify({ quarantinedAt: Date.now(), reason: 'oversized_corrupt_ledger' }), { mode: 0o600 }); } catch {}
+          return null;
+        }
         try { if (op.size > 0) { const rs = Math.min(op.size, 64 * 1024); const buf = Buffer.alloc(rs); readSync(op.fd, buf, 0, rs, op.size - rs); const lines = buf.toString('utf8').split('\n').filter(Boolean); const last = lines.length ? JSON.parse(lines[lines.length - 1]) : null; if (last && typeof last.seq === 'number' && typeof last.mac === 'string') { lastSeq = last.seq; lastMac = last.mac; } } }
         finally { try { closeSync(op.fd); } catch {} }
       }
@@ -351,7 +350,7 @@ export function createPersistentTracker(root = process.cwd(), env = process.env)
       if (!ticketStoreExists(root, env)) return true;
       if (!existsSync(ledgerPath)) { if (!existsSync(storePath)) return true; const st = readStore(); const e = sid ? st[sid] : null; return !st._corrupted && !(e && (e.ledgerSeq > 0 || e.depth > 0 || e.totalCalls > 0)); }
       const rep = replayLedger(); if (!rep || rep._corrupted) return false;
-      if (sid) { const st = readStore(); if (st._corrupted) return false; const e = st[sid]; const r = rep[sid]; if (e && r && ((r.ledgerSeq ?? 0) !== (e.ledgerSeq ?? 0) || (r.depth ?? 0) !== (e.depth ?? 0) || (r.totalCalls ?? 0) !== (e.totalCalls ?? 0) || (r.mutatingCalls ?? 0) !== (e.mutatingCalls ?? 0) || r.invalidated || e.invalidated)) return false; }
+      if (sid) { const st = readStore(); if (st._corrupted) return false; const e = st[sid]; const r = rep[sid]; if (e && r && ((r.ledgerSeq ?? 0) !== (e.ledgerSeq ?? 0) || (r.depth ?? 0) !== (e.depth ?? 0) || (r.totalCalls ?? 0) !== (e.totalCalls ?? 0) || (r.mutatingCalls ?? 0) !== (e.mutatingCalls ?? 0) || (r.initialActiveTicket ?? null) !== (e.initialActiveTicket ?? null) || (r.initialStoreHash ?? null) !== (e.initialStoreHash ?? null) || r.invalidated || e.invalidated)) return false; }
       return true;
     },
   };

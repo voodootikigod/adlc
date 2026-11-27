@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
 import { copyFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import { tmp } from '@adlc/core/test-kit';
-import { runFromStdin } from '../hooks/adlc-rails-guard.mjs';
+import { runFromStdin } from '../hooks/adlc-rails-guard.bundle.mjs';
+import { runHook } from './helpers/run-hook.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SHIM = join(HERE, '..', 'hooks', 'adlc-rails-guard.cjs');
@@ -62,15 +62,15 @@ test('runFromStdin: non-object JSON payloads with enforcement off allow', () => 
   assert.equal(runFromStdin('123', {}).allow_tool, true);
   assert.equal(runFromStdin('[]', {}).allow_tool, true);
 });
-test('shim: exits 0 and prints an allow verdict for a read tool', () => {
-  const out = execFileSync(process.execPath, [SHIM], {
+test('shim: exits 0 and prints a pass verdict for a read tool', () => {
+  const out = runHook([SHIM], {
     input: JSON.stringify({ toolCall: { name: 'view_file', args: { AbsolutePath: '/x' } } }),
     env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' }, encoding: 'utf8',
   });
-  assert.deepEqual(JSON.parse(out), { decision: 'allow', allow_tool: true });
+  assert.deepEqual(JSON.parse(out), { decision: 'pass', allow_tool: true });
 });
 test('shim: empty stdin under enforcement fails closed with allow_tool: false', () => {
-  const out = execFileSync(process.execPath, [SHIM], {
+  const out = runHook([SHIM], {
     input: '',
     env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' }, encoding: 'utf8',
   });
@@ -78,7 +78,7 @@ test('shim: empty stdin under enforcement fails closed with allow_tool: false', 
   assert.equal(JSON.parse(out).decision, 'deny');
 });
 test('shim: scalar JSON under enforcement fails closed with allow_tool: false', () => {
-  const out = execFileSync(process.execPath, [SHIM], {
+  const out = runHook([SHIM], {
     input: 'null',
     env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' }, encoding: 'utf8',
   });
@@ -86,11 +86,11 @@ test('shim: scalar JSON under enforcement fails closed with allow_tool: false', 
   assert.equal(JSON.parse(out).decision, 'deny');
 });
 test('shim: broken ESM module path under enforcement → exit 0 AND fail-closed payload', (t) => {
-  // execFileSync only throws on non-zero exit; since the shim always exits 0,
+  // runHook only throws on non-zero exit; since the shim always exits 0,
   // it returns stdout normally here — exit 0 is implicitly covered because a
-  // future regression that exits non-zero would make execFileSync throw and
+  // future regression that exits non-zero would make runHook throw and
   // fail this test. The point of this test is the payload assertion below.
-  const out = execFileSync(process.execPath, [shimWithoutAdapter(t)], {
+  const out = runHook([shimWithoutAdapter(t)], {
     input: '{}', encoding: 'utf8',
     env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' },
   });
@@ -99,11 +99,11 @@ test('shim: broken ESM module path under enforcement → exit 0 AND fail-closed 
   assert.equal(v.decision, 'deny');
   assert.ok(/ADLC rails-guard:\s*load\/exec/i.test(v.deny_reason ?? ''));
 });
-test('shim: broken ESM module path with enforcement OFF → exit 0 AND allow', (t) => {
+test('shim: broken ESM module path with enforcement OFF → exit 0 AND pass', (t) => {
   const env = { ...process.env };
   delete env.ADLC_P4_ENFORCEMENT;
-  const out = execFileSync(process.execPath, [shimWithoutAdapter(t)], {
+  const out = runHook([shimWithoutAdapter(t)], {
     input: '{}', encoding: 'utf8', env,
   });
-  assert.deepEqual(JSON.parse(out), { decision: 'allow', allow_tool: true });
+  assert.deepEqual(JSON.parse(out), { decision: 'pass', allow_tool: true });
 });

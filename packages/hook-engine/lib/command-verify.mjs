@@ -317,10 +317,13 @@ export function isVerificationCommand(cmd, { root, workdirAnchorBase = null, too
   if (typeof cwd === 'string' && cwd) {
     if (!root || !realRoot || relative(realRoot, realpathOr(isAbsolute(cwd) ? cwd : resolve(wdBase, cwd))) !== '') return false;
   } else if (!allowImplicitCwd || !realRoot) return false;
+  const tokens = tokenizeCommand(trimmed);
   if (realRoot) {
-    for (const raw of tokenizeCommand(trimmed)) {
+    for (let i = 0; i < tokens.length; i++) {
+      const raw = tokens[i];
       const tok = raw.includes('=') ? raw.slice(raw.indexOf('=') + 1) : raw;
       if (tok.startsWith('~')) return false;
+      if (i === 0 && isTrustedNodeExec(tok.replace(/\\/g, '/'))) continue;
       if (tok.startsWith('/') || tok.startsWith('\\') || tok.includes('/') || tok.includes('\\') || tok.includes('..')) {
         const rel = relative(realRoot, realpathOr((tok.startsWith('/') || tok.startsWith('\\')) ? tok : resolve(root, tok)));
         if (rel.startsWith('..') || isAbsolute(rel)) return false;
@@ -331,7 +334,8 @@ export function isVerificationCommand(cmd, { root, workdirAnchorBase = null, too
   if (!packageManifestMutated && !shellMutated) {
     if (/^(npm\s+(test|run\s+(test|preflight))|((adlc|npx\s+--no-install\s+adlc)\s+(hollow-test|rails-guard|preflight))|npx\s+--no-install\s+(mocha|jest|vitest))\s*$/i.test(trimmed)) return true;
   }
-  if (/^node\s+--test(\s+(test|tests|spec)\/?)?\s*$/i.test(trimmed)) {
+  const isNodeBin = tokens.length >= 2 && (/^node$/i.test(tokens[0]) || isTrustedNodeExec(tokens[0].replace(/\\/g, '/')));
+  if (isNodeBin && tokens[1] === '--test' && (tokens.length === 2 || (tokens.length === 3 && /^(test|tests|spec)\/?$/i.test(tokens[2])))) {
     return !(root && ['node', 'node.exe', join('node_modules', '.bin', 'node'), join('node_modules', '.bin', 'node.exe')].some((p) => existsSync(join(root, p))));
   }
   return false;

@@ -31,7 +31,6 @@ const REPO = join(dirname(fileURLToPath(import.meta.url)), '../../..');
 const GENERATED_READERS = [
   'plugins/adlc-codex/hooks/generated-active-ticket.mjs',
   'plugins/adlc-claude-code/hooks/generated-active-ticket.mjs',
-  'plugins/adlc-gemini/generated-active-ticket.mjs',
   'plugins/adlc-opencode/generated-active-ticket.mjs',
   'plugins/adlc-cursor/generated-active-ticket.mjs',
   'plugins/adlc-pi/lib/generated-active-ticket.mjs',
@@ -323,7 +322,7 @@ test('reader agreement: bridge vectors agree across every reader in both modes',
  */
 const CONFLICT_ADAPTERS = [
   { name: '@adlc/build-gate', path: 'packages/build-gate/lib/active-ticket.mjs', call: (fn, root, env) => fn({ dir: root, env }) },
-  { name: 'adlc-gemini', path: 'plugins/adlc-gemini/rails-checker.mjs', call: (fn, root, env) => fn(root, env) },
+  { name: 'adlc-gemini', path: 'packages/hook-engine/lib/pretool.mjs', call: (fn, root, env) => fn(root, env) },
   { name: 'adlc-cursor', path: 'plugins/adlc-cursor/rails-checker.mjs', call: (fn, root, env) => fn(root, env) },
   { name: 'adlc-opencode', path: 'plugins/adlc-opencode/rails-checker.mjs', call: (fn, root, env) => fn(root, env) },
 ];

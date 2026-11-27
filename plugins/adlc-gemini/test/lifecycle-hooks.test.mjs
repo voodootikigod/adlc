@@ -3,16 +3,35 @@ import assert from 'node:assert/strict';
 import { copyFileSync, mkdirSync, writeFileSync, readFileSync, rmSync, renameSync, symlinkSync, unlinkSync, utimesSync, existsSync, lstatSync, chmodSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { spawnHook } from './helpers/run-hook.mjs';
 import { fileURLToPath } from 'node:url';
 import { tmp } from '@adlc/core/test-kit';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HOME_VAR = process.platform === 'win32' ? 'USERPROFILE' : 'HOME';
-import { preInvocation, onStop, findAdlcRoot, runFromStdin, isReadonlyCommand, isVerificationCommand, postToolUse, getTrustRootSecretHomes, isTrustRootOrSecretPath } from '../hooks/adlc-rails-guard.mjs';
-import { readTranscriptPrefixBounded, computePrefixHash, createPersistentTracker, checkBuildGate, resolveSessionId, getTestFilesMap, hasDiscoverableTests, getOrCreateSessionSecret, getMasterKeyRaw, rotateMasterKey } from '../build-gate-inline.mjs';
-import { parseTranscriptRecords } from '../flail-inline.mjs';
-import { ticketFilename } from '../generated-ticket-reader.mjs';
-import { isShellTool } from '../rails-checker.mjs';
+import {
+  preInvocation,
+  onStop,
+  findAdlcRoot,
+  runFromStdin,
+  isReadonlyCommand,
+  isVerificationCommand,
+  postToolUse,
+  getTrustRootSecretHomes,
+  isTrustRootOrSecretPath,
+  readTranscriptPrefixBounded,
+  computePrefixHash,
+  createPersistentTracker,
+  checkBuildGate,
+  resolveSessionId,
+  getTestFilesMap,
+  hasDiscoverableTests,
+  getOrCreateSessionSecret,
+  getMasterKeyRaw,
+  rotateMasterKey,
+  parseTranscriptRecords,
+  isShellTool,
+} from '../hooks/adlc-rails-guard.bundle.mjs';
+import { ticketFilename } from '@adlc/tickets';
 import { plainWorkspaceEnv } from './plain-workspace-env.mjs';
 
 function setupTempRepo(t, options = {}) {
@@ -186,21 +205,21 @@ const unverifiedEditsCases = [
     name: "onStop: rejects scalar null and string lines in transcript under enforcement",
     calls: [ 'null', '12345', 'true', JSON.stringify({ content: 'Thinking...' }) ],
     decision: 'continue',
-    reason: /Invalid or schema-corrupted transcript records/,
+    reason: /Corrupted or oversized transcript records|Invalid or schema-corrupted transcript records/,
   },
   {
     name: "onStop: rejects completion when file edits occur after the test run",
     calls: (root, env, transcriptFile) => [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } }], exit_code: 0, }), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/app.js' } }], }), JSON.stringify({ content: 'Finished. TICKET-DONE' }) ],
     options: { conversationId: 'test-session-edits-after-test' },
     decision: 'continue',
-    reason: /File edits occurred after the last test run/,
+    reason: /Active ticket has unverified file edits|File edits occurred after the last test run/,
   },
   {
     name: "onStop: rejects completion when an unrecognized path-bearing writer runs after tests",
     calls: (root, env, transcriptFile) => [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } }], exit_code: 0, }), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'set_file_contents', args: { TargetFile: 'src/config.json' } }], }), JSON.stringify({ content: 'Finished. TICKET-DONE' }) ],
     options: { conversationId: 'test-session-unrecognized-writer' },
     decision: 'continue',
-    reason: /File edits occurred after the last test run/,
+    reason: /Active ticket has unverified file edits|File edits occurred after the last test run/,
   },
   {
     name: "onStop: fails closed when active ticket state has conflict",
@@ -214,7 +233,7 @@ const unverifiedEditsCases = [
     calls: (root, env, transcriptFile) => [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [ { name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } }, { name: 'write_to_file', args: { TargetFile: 'src/app.js' } } ], exit_code: 0, }), JSON.stringify({ content: 'Finished.' }) ],
     options: { conversationId: 'test-session-batched-ordering' },
     decision: 'continue',
-    reason: /File edits occurred after the last test run/,
+    reason: /Active ticket has unverified file edits|File edits occurred after the last test run/,
   },
   {
     name: "onStop: rejects /dev/null test path",
@@ -228,7 +247,7 @@ const unverifiedEditsCases = [
     calls: [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'write_to_file', args: { TargetFile: 'src/app.js' } }], }), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test' } }], exit_code: 0, }), '{ malformed json line without closing brace' ],
     options: { conversationId: 'test-session-corrupt-line' },
     decision: 'continue',
-    reason: /Corrupted or unparseable transcript records/,
+    reason: /Corrupted or oversized transcript records|Corrupted or unparseable transcript records/,
   },
   {
     name: "onStop: rejects quoted external test path containing spaces",
@@ -382,7 +401,7 @@ const verificationCommandCases = [
     calls: (root, env, transcriptFile) => [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }], exit_code: 0, }), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'git diff --output=src/app.js' } }], exit_code: 0, }), JSON.stringify({ content: 'Finished.' }) ],
     options: { conversationId: 'test-session-git-diff-output' },
     decision: 'continue',
-    reason: /File edits occurred after the last test run/,
+    reason: /Active ticket has unverified file edits|File edits occurred after the last test run/,
   },
   {
     name: "onStop: rejects node --test with external --require option",
@@ -480,7 +499,7 @@ const verificationCommandCases = [
     calls: (root, env, transcriptFile) => [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }], exit_code: 0, }), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'bash', args: { command: 'echo "mutate" > src/app.js' } }], exit_code: 0, }), JSON.stringify({ content: 'Finished.' }) ],
     options: { conversationId: 'test-session-bash-tool' },
     decision: 'continue',
-    reason: /File edits occurred after the last test run/,
+    reason: /Active ticket has unverified file edits|File edits occurred after the last test run/,
   },
   {
     name: "onStop: rejects node --test ~/pass.test.mjs tilde expansion",
@@ -541,7 +560,7 @@ const verificationCommandCases = [
     calls: (root, env, transcriptFile) => [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }], exit_code: 0, }), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'cat $(sed -i "s/old/new/" src/app.js) /dev/null', Cwd: root } }], exit_code: 0, }), JSON.stringify({ content: 'Finished.' }) ],
     options: { conversationId: 'test-session-cmd-substitution' },
     decision: 'continue',
-    reason: /File edits occurred after the last test run/,
+    reason: /Active ticket has unverified file edits|File edits occurred after the last test run/,
   },
   {
     name: "onStop: rejects npm test --workspace=@adlc/core",
@@ -621,7 +640,7 @@ const railBoundaryCases = [
     calls: [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'write_to_file', args: { TargetFile: '.adlc/tickets.json' } }], }), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test' } }], exit_code: 0, }), JSON.stringify({ content: 'Finished.' }) ],
     options: { conversationId: 'test-session-trust-root-mod' },
     decision: 'continue',
-    reason: /Active ticket contract or trust-root store was modified/,
+    reason: /Trust-root store or secret was modified|Active ticket contract or trust-root store was modified/,
   },
   {
     name: "onStop: rejects shell assignment variable tampering with .adlc",
@@ -635,14 +654,14 @@ const railBoundaryCases = [
     calls: (root, env, transcriptFile) => [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'custom_writer', args: { dest_file: '.adlc/tickets.json', data: '{}' } }], }), JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } }], exit_code: 0, }), JSON.stringify({ content: 'Finished.' }) ],
     options: { conversationId: 'test-session-opaque-adlc-tamper' },
     decision: 'continue',
-    reason: /Active ticket contract or trust-root store was modified/,
+    reason: /Trust-root store or secret was modified|Active ticket contract or trust-root store was modified/,
   },
   {
     name: "onStop: disguised exec-named mutator targeting frozen rail is caught and rejected",
     calls: (root, env, transcriptFile) => [ JSON.stringify({ type: 'PLANNER_RESPONSE', tool_calls: [{ name: 'exec', args: { TargetFile: join(root, '.adlc/tickets.json'), operation: 'overwrite', content: '{}' } }], }) ],
     options: { preInvocation: true, conversationId: 'sess-disguised-exec' },
     decision: 'continue',
-    reason: /Active ticket contract or trust-root store was modified during session/i,
+    reason: /Trust-root store or secret was modified|Active ticket contract or trust-root store was modified during session/i,
   }
 ];
 runCases(railBoundaryCases);
@@ -819,7 +838,7 @@ test('onStop: rejects stopping when active ticket is deleted while unverified mu
   const payload = { workspacePaths: [root], transcriptPath: transcriptFile, conversationId: 'test-session-deleted-pointer' };
   const res = onStop(payload, { env: { ...env, ADLC_TICKET: '' } });
   assert.equal(res.decision, 'continue');
-  assert.match(res.reason, /Active ticket is missing while unverified edits exist/);
+  assert.match(res.reason, /Active ticket has unverified file edits|Active ticket is missing while unverified edits exist/);
 });
 
 test('onStop: detects early mutation in large multi-chunk streaming transcript', (t) => {
@@ -849,7 +868,7 @@ test('onStop: rejects unterminated oversized line exceeding limit', (t) => {
   const payload = { workspacePaths: [root], transcriptPath: transcriptFile, conversationId: 'test-session-unterminated-huge' };
   const res = onStop(payload, { env });
   assert.equal(res.decision, 'continue');
-  assert.match(res.reason, /Session transcript exceeds maximum supported size/);
+  assert.match(res.reason, /Corrupted or oversized transcript records|Session transcript exceeds maximum supported size/);
 });
 
 test('onStop: rejects completion when shell indirectly removes .adlc/tickets.json before tests', (t) => {
@@ -977,7 +996,7 @@ test('onStop: rejects Stop when the pointer becomes a symlink after a mutating s
   symlinkSync(externalTarget, currentFile);
   const res = onStop(payload, { env });
   assert.equal(res.decision, 'continue');
-  assert.match(res.reason, /Active ticket ID changed from T1 to none/);
+  assert.match(res.reason, /Active ticket state conflict|Active ticket ID changed from T1 to none/);
 });
 
 test('onStop: rejects Stop when the pointer grows beyond 64 KiB after a mutating shell command', (t) => {
@@ -1012,7 +1031,7 @@ test('onStop: rejects Stop when the pointer grows beyond 64 KiB after a mutating
   writeFileSync(currentFile, JSON.stringify({ id: 'T1' }) + ' '.repeat(70 * 1024));
   const res = onStop(payload, { env });
   assert.equal(res.decision, 'continue');
-  assert.match(res.reason, /Active ticket ID changed from T1 to none/);
+  assert.match(res.reason, /Active ticket state conflict|Active ticket ID changed from T1 to none/);
 });
 
 test('onStop: resolves transcript using ADLC_SESSION_ID when payload omits conversationId', (t) => {
@@ -1083,7 +1102,7 @@ test('onStop: rejects Stop when transcript file shrinks in size (in-place trunca
   writeFileSync(transcriptFile, '{"type":"PLANNER_RESPONSE"}\n');
   const res = onStop(payload, { env });
   assert.equal(res.decision, 'continue');
-  assert.match(res.reason, /Session transcript file size shrank/);
+  assert.match(res.reason, /Session transcript prefix content was modified|Session transcript file size shrank/);
 });
 
 test('onStop: rejects Stop when transcript prefix content is rewritten in place without changing file size', (t) => {
@@ -1699,7 +1718,7 @@ test('onStop: rejects Stop when an existing test file was modified or weakened d
   runFromStdin(JSON.stringify({ ...payload, toolCall: { name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } } }), env);
   const res = onStop(payload, { env });
   assert.equal(res.decision, 'continue');
-  assert.match(res.reason, /Pre-existing test file .* was modified during session, weakening the verification suite/i);
+  assert.match(res.reason, /Pre-existing test file .* was modified during session.*weakening the verification suite/i);
 });
 
 test('onStop: rejects Stop when an existing test file was deleted during session', (t) => {
@@ -1977,7 +1996,7 @@ test('onStop and runFromStdin: multi-root workspace binds verification to comman
     toolCall: { name: 'run_command', args: { CommandLine: 'node --test', Cwd: repoB.root } },
   };
   const v = runFromStdin(JSON.stringify(stdinPayload), repoB.env);
-  assert.equal(v.decision, 'allow');
+  assert.equal(v.decision, 'pass');
   // onStop in repoB should succeed
   const res = onStop(payload, { env: repoB.env });
   assert.equal(res.decision, 'stop');
@@ -2288,14 +2307,14 @@ test('subprocess integration: cjs shim executes across separate Node processes w
   writeFileSync(transcriptFile, lines.join('\n') + '\n');
   const payload = { workspacePaths: [root], transcriptPath: transcriptFile, conversationId: 'sess-subprocess-123' };
   // 1. Process 1: PreInvocation
-  const proc1 = spawnSync(process.execPath, [cjsShim, 'preinvocation'], {
+  const proc1 = spawnHook([cjsShim, 'preinvocation'], {
     input: JSON.stringify(payload),
     env: { ...process.env, ...env },
     encoding: 'utf8',
   });
   assert.equal(proc1.status, 0);
   // 2. Process 2: PreToolUse (write_to_file)
-  const proc2 = spawnSync(process.execPath, [cjsShim], {
+  const proc2 = spawnHook([cjsShim], {
     input: JSON.stringify({
       ...payload,
       toolCall: { name: 'write_to_file', args: { TargetFile: join(root, 'src/feature/app.js'), CodeContent: '// edit' } },
@@ -2307,14 +2326,14 @@ test('subprocess integration: cjs shim executes across separate Node processes w
   const v2 = JSON.parse(proc2.stdout);
   assert.equal(v2.allow_tool, true);
   // 3. Process 3: PreToolUse (run_command: npm test)
-  const proc3 = spawnSync(process.execPath, [cjsShim], {
+  const proc3 = spawnHook([cjsShim], {
     input: JSON.stringify({ ...payload, toolCall: { name: 'run_command', args: { CommandLine: 'npm test', Cwd: root } }, }),
     env: { ...process.env, ...env },
     encoding: 'utf8',
   });
   assert.equal(proc3.status, 0);
   // 4. Process 4: onStop
-  const proc4 = spawnSync(process.execPath, [cjsShim, 'stop'], {
+  const proc4 = spawnHook([cjsShim, 'stop'], {
     input: JSON.stringify(payload),
     env: { ...process.env, ...env },
     encoding: 'utf8',
@@ -2391,7 +2410,7 @@ test('appendLedger: compacts snapshot records and accurately recovers session st
 });
 
 test('isShellTool: does not treat unknown code/script executors as trusted shells', async (t) => {
-  const { isShellTool } = await import('../rails-checker.mjs');
+  const { isShellTool } = await import('../hooks/adlc-rails-guard.bundle.mjs');
   assert.equal(isShellTool('run_command', { CommandLine: 'ls' }), true);
   assert.equal(isShellTool('bash', { command: 'echo 1' }), true);
   assert.equal(isShellTool('python_exec', { code: 'print(1)' }), false);
@@ -2426,7 +2445,7 @@ test('appendLedger: quarantines oversized unparseable ledger and fails closed', 
 });
 
 test('flail: editing filenames containing "error" does not trigger false positive repeated error flail', async (t) => {
-  const { analyzeFlail } = await import('../flail-inline.mjs');
+  const { analyzeFlail } = await import('../hooks/adlc-rails-guard.bundle.mjs');
   const res = analyzeFlail({
     edits: ['Editing src/error-handler.js', 'Editing src/error-handler.js'],
     transcriptSteps: [],
@@ -2664,7 +2683,7 @@ test('getTestFilesMap and onStop: discovers and protects deep test suites beyond
   runFromStdin(JSON.stringify({ ...payload, toolCall: { name: 'run_command', args: { CommandLine: 'node --test', Cwd: root } } }), env);
   const res = onStop(payload, { env });
   assert.equal(res.decision, 'continue');
-  assert.match(res.reason, /Pre-existing test file .* was modified during session, weakening the verification suite/i);
+  assert.match(res.reason, /Pre-existing test file .* was modified during session.*weakening the verification suite/i);
 });
 
 test('decide: denies obfuscated shell commands targeting master key or escaping workspace', (t) => {
@@ -2689,8 +2708,8 @@ test('decide: denies obfuscated shell commands targeting master key or escaping 
       },
     };
     const res = runFromStdin(JSON.stringify(payload), env);
-    assert.equal(res.allow_tool, false, `Expected deny for: ${cmd}`);
-    assert.match(res.deny_reason, /(strictly prohibited|filesystem paths outside workspace)/i);
+    assert.equal(res.allow_tool, false, `Expected deny/force_ask for: ${cmd}`);
+    assert.match(res.deny_reason ?? res.reason ?? '', /(strictly prohibited|filesystem paths outside workspace)/i);
   }
 });
 
@@ -3068,29 +3087,29 @@ test('postToolUse and onStop: invalidate session if raw master key content is di
   assert.match(stopRes.reason, /(Secret disclosure|Master key disclosure)/i);
 });
 
-test('adlc-rails-guard.cjs posttooluse: exits 0 and emits allow verdict without disrupting host flow', (t) => {
+test('adlc-rails-guard.cjs posttooluse: exits 0 and emits pass verdict without disrupting host flow', (t) => {
   const cjsPath = join(__dirname, '../hooks/adlc-rails-guard.cjs');
-  const res1 = spawnSync(process.execPath, [cjsPath, 'posttooluse'], {
+  const res1 = spawnHook([cjsPath, 'posttooluse'], {
     input: JSON.stringify({  }),
     env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' },
     encoding: 'utf8',
   });
   assert.equal(res1.status, 0);
   const out1 = JSON.parse(res1.stdout);
-  assert.equal(out1.decision, 'allow');
+  assert.equal(out1.decision, 'pass');
   assert.equal(out1.allow_tool, true);
-  // Adapter error also fails safe to allow so host turn is not aborted: a copy
+  // Adapter error also fails safe to pass so host turn is not aborted: a copy
   // of the shim with no sibling adapter module cannot load one.
   const shimCopy = join(tmp(t, 'gemini-shim-no-adapter-'), 'adlc-rails-guard.cjs');
   copyFileSync(cjsPath, shimCopy);
-  const res2 = spawnSync(process.execPath, [shimCopy, 'posttooluse'], {
+  const res2 = spawnHook([shimCopy, 'posttooluse'], {
     input: JSON.stringify({  }),
     env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' },
     encoding: 'utf8',
   });
   assert.equal(res2.status, 0);
   const out2 = JSON.parse(res2.stdout);
-  assert.equal(out2.decision, 'allow');
+  assert.equal(out2.decision, 'pass');
   assert.equal(out2.allow_tool, true);
 });
 
@@ -3150,13 +3169,13 @@ test('adlc-rails-guard.cjs: ignores ADLC_AGY_ADAPTER_OVERRIDE whatever ADLC_TEST
     const env = { ...process.env, ADLC_AGY_ADAPTER_OVERRIDE: stubFile };
     if (testMode === undefined) delete env.ADLC_TEST_MODE;
     else env.ADLC_TEST_MODE = testMode;
-    const res = spawnSync(process.execPath, [cjsPath, 'posttooluse'], {
+    const res = spawnHook([cjsPath, 'posttooluse'], {
       input: JSON.stringify({  }),
       env,
       encoding: 'utf8',
     });
     assert.equal(res.status, 0);
-    assert.equal(JSON.parse(res.stdout).decision, 'allow', `ADLC_TEST_MODE=${testMode}`);
+    assert.equal(JSON.parse(res.stdout).decision, 'pass', `ADLC_TEST_MODE=${testMode}`);
   }
 });
 

@@ -248,9 +248,11 @@ test('onStop allows editing in-scope non-railed pre-existing test files after ve
     JSON.stringify({ toolCall: { name: 'run_command', args: { CommandLine: 'node --test', Cwd: dir } }, exitCode: 0, status: 'DONE' }),
   ].join('\n') + '\n');
 
-  // Record initial baseline via preInvocation
+  // Record initial baseline via preInvocation and execute tool calls via runFromStdin
   const pre = preInvocation({ workspacePaths: [dir], conversationId: sid }, { env });
   assert.equal(pre.injectSteps.length, 1);
+  runFromStdin(JSON.stringify({ workspacePaths: [dir], conversationId: sid, toolCall: { name: 'write_to_file', args: { TargetFile: join(dir, 'test', 'in-scope.test.mjs') } } }), env);
+  runFromStdin(JSON.stringify({ workspacePaths: [dir], conversationId: sid, toolCall: { name: 'run_command', args: { CommandLine: 'node --test', Cwd: dir } } }), env);
 
   // 1. Modify in-scope non-railed pre-existing test file -> onStop ALLOWS ('stop')
   writeFileSync(join(dir, 'test', 'in-scope.test.mjs'), 'export const a = 2;\n');

@@ -4,17 +4,29 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildCursorMcp, CURSOR_HOOK_BUNDLES } from '../build-cursor-mcp.mjs';
+import { buildHooks, DEFAULT_HOOK_TARGETS } from '../build-hooks.mjs';
 
 const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const CURSOR_MCP_BUNDLE = 'plugins/adlc-cursor/bin/adlc-mcp-wrapper.bundle.mjs';
 const CURSOR_GENERATED_BUNDLES = new Set([CURSOR_MCP_BUNDLE, ...CURSOR_HOOK_BUNDLES]);
+const HOOK_ENGINE_GENERATED_BUNDLES = new Set(DEFAULT_HOOK_TARGETS.map((target) => target.output));
 const builtCache = new Map();
+const builtHookCache = new Map();
 
 function getBuiltCursorBundles(root) {
   let cached = builtCache.get(root);
   if (!cached) {
     cached = buildCursorMcp({ root, write: false });
     builtCache.set(root, cached);
+  }
+  return cached;
+}
+
+function getBuiltHookBundles(root) {
+  let cached = builtHookCache.get(root);
+  if (!cached) {
+    cached = buildHooks({ root, write: false });
+    builtHookCache.set(root, cached);
   }
   return cached;
 }
@@ -27,7 +39,7 @@ const APPROVED = new Set([
   'plugins/adlc-copilot/hooks/adlc-rails-guard.mjs',
   'plugins/adlc-cursor/hooks/adlc-pretool.mjs',
   'plugins/adlc-pi/lib/commands.mjs',
-  'plugins/adlc-gemini/build-gate-inline.mjs',
+  'packages/hook-engine/lib/session-tracker.mjs',
   // Reader, not a writer: fleet loads the plan (read-only) and reports the
   // '.adlc/tickets.json' path only in an error string; its writeFileSync/mkdirSync/
   // rmSync calls target sandbox temp dirs (mkdtempSync), never the ticket store.
@@ -69,6 +81,17 @@ export function isVerifiedCursorMcpBundle(name, body, root = ROOT) {
   }
 }
 
+export function isVerifiedHookEngineBundle(name, body, root = ROOT) {
+  if (!HOOK_ENGINE_GENERATED_BUNDLES.has(name)) return false;
+  try {
+    const built = getBuiltHookBundles(root);
+    const expected = built.bundles?.[name];
+    return Boolean(expected) && Buffer.from(body).equals(expected);
+  } catch {
+    return false;
+  }
+}
+
 function filesBelow(path) {
   const files = [];
   for (const entry of readdirSync(path, { withFileTypes: true })) {
@@ -85,6 +108,7 @@ export function isDirectWriterBypass(name, body) {
   const trustRoot = /\.adlc\/tickets(?:\.json|\/)/;
   if (name.startsWith('packages/tickets/') || name.startsWith('scripts/ticket-readers/') || name.includes('/generated-ticket-reader.mjs') || name.endsWith('-install-smoke.mjs')) return false;
   if (isVerifiedCursorMcpBundle(name, body)) return false;
+  if (isVerifiedHookEngineBundle(name, body)) return false;
   return mutation.test(body) && trustRoot.test(body) && !APPROVED.has(name);
 }
 
@@ -96,18 +120,31 @@ export function directWriterBypasses(files) {
 }
 
 /**
- * The generated Cursor MCP bundle inlines @adlc/tickets and @adlc/core, so an
- * unrelated edit to either package makes it stale, and a stale bundle is then
- * reported here as a direct writer. Say so, rather than leaving the author to
- * work out why a generated file they never touched is "bypassing" the boundary.
+ * The generated Cursor MCP and hook-engine bundles inline @adlc/tickets and
+ * @adlc/core, so an unrelated edit to either package makes them stale, and a
+ * stale bundle is then reported here as a direct writer. Say so, rather than
+ * leaving the author to work out why a generated file they never touched is
+ * "bypassing" the boundary.
  */
 export function directWriterBypassMessage(bypasses) {
-  const base = `direct ticket-store writers outside the approved adapters: ${bypasses.join(', ')}`;
-  const staleBundles = bypasses.filter((name) => CURSOR_GENERATED_BUNDLES.has(name));
-  if (!staleBundles.length) return base;
-  return `${base}\n${staleBundles.join(', ')} listed because it no longer matches the official builder output `
-    + '(a bundled @adlc/* source changed, or the bundle was hand-edited): '
-    + 'run `npm run build:cursor-mcp` and commit the regenerated bundles and metadata.';
+  const parts = [`direct ticket-store writers outside the approved adapters: ${bypasses.join(', ')}`];
+  const staleCursorBundles = bypasses.filter((name) => CURSOR_GENERATED_BUNDLES.has(name));
+  if (staleCursorBundles.length) {
+    parts.push(
+      `${staleCursorBundles.join(', ')} listed because it no longer matches the official builder output `
+      + '(a bundled @adlc/* source changed, or the bundle was hand-edited): '
+      + 'run `npm run build:cursor-mcp` and commit the regenerated bundles and metadata.',
+    );
+  }
+  const staleHookBundles = bypasses.filter((name) => HOOK_ENGINE_GENERATED_BUNDLES.has(name));
+  if (staleHookBundles.length) {
+    parts.push(
+      `${staleHookBundles.join(', ')} listed because it no longer matches the official hook-engine builder output `
+      + '(a bundled @adlc/* source changed, or the bundle was hand-edited): '
+      + 'run `node scripts/build-hooks.mjs` and commit the regenerated bundles.',
+    );
+  }
+  return parts.join('\n');
 }
 
 test('production ticket-store filesystem writers are confined to approved adapters', () => {
@@ -186,6 +223,7 @@ export function isPointerParseBypass(name, body) {
   if (POINTER_SOURCES.includes(name) || name.includes('/generated-active-ticket.mjs')) return false;
   if (name.startsWith('scripts/ticket-readers/')) return false;
   if (isVerifiedCursorMcpBundle(name, body)) return false;
+  if (isVerifiedHookEngineBundle(name, body)) return false;
 
   // Proximity, not mere co-occurrence. Naming the pointer is legitimate (it is a
   // rail glob and it appears in messages), and `x.id ?? '?'` is ordinary ticket
@@ -333,4 +371,26 @@ test('the generated Cursor MCP bundle is exempted only when builder-verified', (
     'hand-written hook bundle source must remain subject to the pointer-parse guard',
   );
   assert.match(directWriterBypassMessage([pretoolBundleName]), /npm run build:cursor-mcp/);
+});
+
+test('the generated hook-engine bundle is exempted only when builder-verified', () => {
+  const geminiBundleName = 'plugins/adlc-gemini/hooks/adlc-rails-guard.bundle.mjs';
+  const geminiBundle = readFileSync(join(ROOT, geminiBundleName));
+  assert.equal(isVerifiedHookEngineBundle(geminiBundleName, geminiBundle), true);
+  assert.equal(isDirectWriterBypass(geminiBundleName, geminiBundle), false);
+  assert.equal(isPointerParseBypass(geminiBundleName, geminiBundle.toString('utf8')), false);
+  assert.equal(
+    isVerifiedHookEngineBundle(geminiBundleName, Buffer.concat([geminiBundle, Buffer.from('\n// tampered')])),
+    false,
+    'a tampered hook-engine bundle must lose the generated-bundle exemption',
+  );
+  assert.equal(
+    isDirectWriterBypass(
+      geminiBundleName,
+      "import { writeFileSync } from 'node:fs'; writeFileSync('.adlc/tickets.json', '{}');",
+    ),
+    true,
+    'hand-written hook-engine bundle source must remain subject to the guard',
+  );
+  assert.match(directWriterBypassMessage([geminiBundleName]), /node scripts\/build-hooks\.mjs/);
 });

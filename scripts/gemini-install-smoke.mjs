@@ -28,39 +28,35 @@ if (spec?.matcher !== '.*') fail(`matcher is "${spec?.matcher}", not catch-all`)
 const cmd = spec?.hooks?.[0]?.command ?? '';
 if (!/\$HOME\/\.gemini\/config\/plugins\/adlc-gemini\/hooks\/adlc-rails-guard\.cjs/.test(cmd)) fail(`command is not the $HOME .cjs path: ${cmd}`); else ok('command uses $HOME .cjs path (V9)');
 
-// deny path: only node: + @adlc/core
-const chk = read(join(PLUGIN, 'rails-checker.mjs'));
-const guard = read(join(PLUGIN, 'hooks', 'adlc-rails-guard.mjs'));
-const imports = [...chk.matchAll(/from '([^']+)'/g), ...guard.matchAll(/from '([^']+)'/g)].map((m) => m[1]);
-if (imports.some((s) => !s.startsWith('node:') && !s.startsWith('.') && s !== '@adlc/core')) fail('deny path imports third-party deps'); else ok('deny path: node: + @adlc/core only');
-
 // self-contained portability check: `[agent] plugin install`
 // COPIES this plugin into ~/.gemini/config/plugins/<name>/ WITHOUT node_modules, so
-// ANY runtime import of a workspace package (e.g. '@adlc/core') fails to resolve and
-// the hook fails closed on every tool. The plugin must be fully self-contained —
-// core-inline.mjs — and every import across the deny-path files must be either a
-// node: builtin or a relative (sibling) path.
-const inlineCore = read(join(PLUGIN, 'core-inline.mjs'));
+// ANY runtime import of a workspace package (e.g. '@adlc/*') or third-party dep
+// fails to resolve and the hook fails closed on every tool. The compiled bundle and
+// shim must be fully self-contained (node: builtins or relative imports only).
+const bundle = read(join(PLUGIN, 'hooks', 'adlc-rails-guard.bundle.mjs'));
+const shim = read(join(PLUGIN, 'hooks', 'adlc-rails-guard.cjs'));
 const SELF_CONTAINED_FILES = [
-  ['rails-checker.mjs', chk],
-  ['hooks/adlc-rails-guard.mjs', guard],
-  ['core-inline.mjs', inlineCore],
+  ['hooks/adlc-rails-guard.bundle.mjs', bundle],
+  ['hooks/adlc-rails-guard.cjs', shim],
 ];
 let selfContained = true;
 for (const [label, src] of SELF_CONTAINED_FILES) {
-  if (/from\s+['"]@adlc\/core['"]|require\(\s*['"]@adlc\/core['"]\s*\)/.test(src)) {
-    fail(`${label} imports '@adlc/core' — plugin must be self-contained — copies without node_modules`);
-    selfContained = false;
-  }
-  for (const m of src.matchAll(/from '([^']+)'/g)) {
+  for (const m of src.matchAll(/(?:^|[\s;])import\s+(?:[^'"]*?\s+from\s+)?['"]([^'"]+)['"]/gm)) {
     const spec = m[1];
     if (!spec.startsWith('node:') && !spec.startsWith('.')) {
       fail(`${label} imports non-node/non-relative module "${spec}" — plugin must be self-contained — copies without node_modules`);
       selfContained = false;
     }
   }
+  for (const m of src.matchAll(/\brequire\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+    const spec = m[1];
+    if (!spec.startsWith('node:') && !spec.startsWith('.')) {
+      fail(`${label} requires non-node/non-relative module "${spec}" — plugin must be self-contained — copies without node_modules`);
+      selfContained = false;
+    }
+  }
 }
-if (selfContained) ok('plugin is self-contained (node: + relative imports only, no @adlc/core)');
+if (selfContained) ok('plugin is self-contained (node: + relative imports only, zero @adlc/* or third-party runtime imports)');
 
 // always exit 0 + allow_tool contract: drive the shim with a rail-hit fixture.
 // The fixture is removed whether or not the shim behaves.
@@ -71,8 +67,14 @@ try {
   writeFileSync(join(repo, '.adlc', 'current-ticket.json'), JSON.stringify({ id: 'T1' }));
   mkdirSync(join(repo, 'src'));
   const SHIM = join(PLUGIN, 'hooks', 'adlc-rails-guard.cjs');
+  const smokeHome = join(repo, '.smoke-home');
+  mkdirSync(smokeHome, { recursive: true });
+  const smokeEnv = { ...process.env, ADLC_P4_ENFORCEMENT: '1', HOME: smokeHome, USERPROFILE: smokeHome, ANTIGRAVITY_APP_DATA_DIR: smokeHome };
+  for (const k of ['GEMINI_CONVERSATION_ID', 'JETSKI_CONVERSATION_ID', 'ANTIGRAVITY_CONVERSATION_ID', 'CONVERSATION_ID', 'ADLC_SESSION_ID', 'AGY_SESSION_ID', 'GEMINI_SESSION_ID']) {
+    delete smokeEnv[k];
+  }
   const drive = (name, args) => {
-    const out = execFileSync(process.execPath, [SHIM], { input: JSON.stringify({ toolCall: { name, args } }), env: { ...process.env, ADLC_P4_ENFORCEMENT: '1' }, encoding: 'utf8' });
+    const out = execFileSync(process.execPath, [SHIM], { input: JSON.stringify({ workspacePaths: [repo], toolCall: { name, args } }), env: smokeEnv, encoding: 'utf8' });
     return JSON.parse(out);
   };
   if (drive('write_to_file', { TargetFile: join(repo, 'src', 'frozen.js') }).allow_tool !== false) fail('shim did not DENY a rail write'); else ok('shim denies a frozen-rail write (exit 0 + allow_tool:false)');
