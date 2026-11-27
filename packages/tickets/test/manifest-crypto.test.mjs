@@ -50,12 +50,8 @@ import {
 import { recordTicketEvidence } from '../lib/evidence.mjs';
 import { sha256 } from '../lib/canonical.mjs';
 
-function makeTmpDir(prefix = 'adlc-ed25519-') {
-  return mkdtempSync(join(tmpdir(), prefix));
-}
-
 function withTmpDir(fn) {
-  const dir = makeTmpDir();
+  const dir = mkdtempSync(join(tmpdir(), 'adlc-ed25519-'));
   try {
     return fn(dir);
   } finally {

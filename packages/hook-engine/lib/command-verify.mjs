@@ -58,7 +58,7 @@ export function isSecretStatePath(p, env = process.env) {
     if (norm === `${h}/.adlc` || norm.startsWith(`${h}/.adlc/`) || norm === `${h}/.config/adlc` || norm.startsWith(`${h}/.config/adlc/`)) return true;
   }
   if (/(^|\/|\b)(\.master-key|\.auth-key|\.adlc-secrets|\.adlc-runtime-secrets|\.session-secret|\.store\.json|session-[a-f0-9]+\.secret|\.adlc\/sessions|\.adlc\/session-ledger|\.env\.local)/i.test(norm)) return true;
-  return norm.startsWith('~/.adlc') || norm.startsWith('~/.config/adlc');
+  return /^~\/\.adlc/.test(norm) || norm.startsWith('~/.config/adlc');
 }
 
 export function isTrustRootOrSecretPath(p, env = process.env) {
