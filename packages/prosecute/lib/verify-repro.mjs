@@ -41,7 +41,7 @@ function buildMinimalReproEnv(baseEnv, isolatedHome) {
 }
 
 function resolveExecutable(cmd, workDir, pathEnv) {
-  if (/^-|\0/.test(cmd)) {
+  if (cmd.startsWith('-')) {
     return null;
   }
   const isExecutableFile = (candidate) => {
