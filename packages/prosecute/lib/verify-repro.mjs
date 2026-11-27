@@ -1,7 +1,5 @@
 import { spawnSync } from 'node:child_process';
 import {
-  accessSync,
-  constants as fsConstants,
   cpSync,
   existsSync,
   mkdirSync,
@@ -9,11 +7,10 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
-  statSync,
   symlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import {
   buildSandboxedArgs,
   detectSandbox,
@@ -40,34 +37,16 @@ function buildMinimalReproEnv(baseEnv, isolatedHome) {
   return env;
 }
 
-function resolveExecutable(cmd, workDir, pathEnv) {
-  if (cmd.startsWith('-')) {
-    return null;
-  }
-  const isExecutableFile = (candidate) => {
-    try {
-      const st = statSync(candidate);
-      if (!st.isFile()) return false;
-      if (process.platform !== 'win32') {
-        accessSync(candidate, fsConstants.X_OK);
-      }
-      return true;
-    } catch {
-      return false;
-    }
+function opFailure(msg, status = null, stdout = '', stderr = '') {
+  return {
+    reproduced: false,
+    exitCode: 1,
+    operationalError: true,
+    status,
+    error: msg,
+    stdout: stdout || '',
+    stderr: stderr || `error: ${msg}`,
   };
-
-  if (cmd.includes('/') || cmd.includes('\\')) {
-    const target = isAbsolute(cmd) ? cmd : resolve(workDir, cmd);
-    return isExecutableFile(target) ? target : null;
-  }
-
-  for (const dir of String(pathEnv).split(delimiter)) {
-    if (!dir) continue;
-    const direct = join(dir, cmd);
-    if (isExecutableFile(direct)) return direct;
-  }
-  return null;
 }
 
 function linkWorkspaceSafeNodeModules(root, tempWorkspace, { dereferenceExternal }) {
@@ -100,16 +79,11 @@ function linkWorkspaceSafeNodeModules(root, tempWorkspace, { dereferenceExternal
           !relToRoot.startsWith(`.${sep}`) &&
           relToRoot.split(sep)[0] !== 'node_modules';
         if (pointsInsideRepo) {
-          const linkTarget = join(tempWorkspace, relToRoot);
-          const targetIsDir = statSync(realTarget).isDirectory();
-          const linkType = targetIsDir ? (process.platform === 'win32' ? 'junction' : 'dir') : 'file';
-          symlinkSync(linkTarget, dstPath, linkType);
+          symlinkSync(join(tempWorkspace, relToRoot), dstPath);
         } else if (dereferenceExternal) {
           cpSync(realTarget, dstPath, { recursive: true, dereference: true });
         } else {
-          const targetIsDir = statSync(realTarget).isDirectory();
-          const linkType = targetIsDir ? (process.platform === 'win32' ? 'junction' : 'dir') : 'file';
-          symlinkSync(realTarget, dstPath, linkType);
+          symlinkSync(realTarget, dstPath);
         }
       } catch {
         // ignore broken or unreadable node_modules entries
@@ -138,87 +112,38 @@ export function verifyRepro({
   unsafeNoSandbox = false,
 }) {
   if (typeof cmd !== 'string' || cmd.trim() === '') {
-    return {
-      reproduced: false,
-      exitCode: 1,
-      operationalError: true,
-      status: null,
-      error: 'Empty command provided',
-      stdout: '',
-      stderr: 'error: empty command provided',
-    };
+    return opFailure('Empty command provided');
   }
 
   let argv;
   try {
     argv = tokenizeCommand(cmd);
   } catch (err) {
-    return {
-      reproduced: false,
-      exitCode: 1,
-      operationalError: true,
-      status: null,
-      error: err.message,
-      stdout: '',
-      stderr: `error: command tokenize failed: ${err.message}`,
-    };
+    return opFailure(err.message, null, '', `error: command tokenize failed: ${err.message}`);
   }
 
   if (!argv || argv.length === 0) {
-    return {
-      reproduced: false,
-      exitCode: 1,
-      operationalError: true,
-      status: null,
-      error: 'Empty command provided after tokenization',
-      stdout: '',
-      stderr: 'error: empty command provided',
-    };
+    return opFailure('Empty command provided after tokenization');
   }
 
   const binaryBase = argv[0].toLowerCase().split(/[\\/]/).pop().replace(/\.(?:exe|cmd|bat|com)$/i, '');
-  if (FORBIDDEN_COMMANDS.has(binaryBase)) {
-    return {
-      reproduced: false,
-      exitCode: 1,
-      operationalError: true,
-      status: null,
-      error: `Shell wrapper/eval is forbidden: ${argv[0]}`,
-      stdout: '',
-      stderr: `error: shell wrapper "${argv[0]}" is forbidden for repro verification`,
-    };
+  if (argv[0].startsWith('-') || FORBIDDEN_COMMANDS.has(binaryBase)) {
+    return opFailure(`Shell wrapper/eval or leading-dash executable is forbidden: ${argv[0]}`);
   }
 
   const sandboxType = explicitSandboxType !== undefined ? explicitSandboxType : detectSandbox();
   if (!sandboxType && !unsafeNoSandbox) {
-    const msg =
+    return opFailure(
       'No OS sandbox available (bwrap on Linux, sandbox-exec on macOS). ' +
-      'Pass --unsafe-no-sandbox only inside an isolated VM or container.';
-    return {
-      reproduced: false,
-      exitCode: 1,
-      operationalError: true,
-      status: null,
-      error: msg,
-      stdout: '',
-      stderr: `error: ${msg}`,
-    };
+      'Pass --unsafe-no-sandbox only inside an isolated VM or container.',
+    );
   }
 
   let launcherPath = null;
   if (sandboxType) {
     launcherPath = resolveSandboxBinary(sandboxType);
     if (!launcherPath) {
-      const msg = `No trusted root-owned sandbox binary found for ${sandboxType}`;
-      return {
-        reproduced: false,
-        exitCode: 1,
-        operationalError: true,
-        status: null,
-        error: msg,
-        stdout: '',
-        stderr: `error: ${msg}`,
-      };
+      return opFailure(`No trusted root-owned sandbox binary found for ${sandboxType}`);
     }
   }
 
@@ -282,43 +207,18 @@ export function verifyRepro({
     linkWorkspaceSafeNodeModules(root, tempWorkspace, { dereferenceExternal: !sandboxType });
 
     const isolatedHome = join(tempWorkspace, '.adlc-repro-home');
-    mkdirSync(isolatedHome, { recursive: true });
+    mkdirSync(isolatedHome);
     const childEnv = buildMinimalReproEnv(process.env, isolatedHome);
-
-    if (!resolveExecutable(argv[0], tempWorkspace, childEnv.PATH)) {
-      const msg = `Executable not found: ${argv[0]}`;
-      return {
-        reproduced: false,
-        exitCode: 1,
-        operationalError: true,
-        status: null,
-        error: msg,
-        stdout: '',
-        stderr: `error: ${msg}`,
-      };
-    }
 
     let spawnBin = argv[0];
     let spawnArgs = argv.slice(1);
     if (sandboxType) {
-      try {
-        [spawnBin, ...spawnArgs] = buildSandboxedArgs(sandboxType, tempWorkspace, argv, {
-          workDir: tempWorkspace,
-          cwd: tempWorkspace,
-          repoRoot: root,
-          launcherPath,
-        });
-      } catch (err) {
-        return {
-          reproduced: false,
-          exitCode: 1,
-          operationalError: true,
-          status: null,
-          error: err.message,
-          stdout: '',
-          stderr: `error: ${err.message}`,
-        };
-      }
+      [spawnBin, ...spawnArgs] = buildSandboxedArgs(sandboxType, tempWorkspace, argv, {
+        workDir: tempWorkspace,
+        cwd: tempWorkspace,
+        repoRoot: root,
+        launcherPath,
+      });
     }
 
     const res = spawnSync(spawnBin, spawnArgs, {
@@ -333,27 +233,11 @@ export function verifyRepro({
     if (res.error) {
       const isTimeout = res.error.code === 'ETIMEDOUT' || res.signal === 'SIGTERM';
       const msg = isTimeout ? `Command timed out after ${timeoutMs}ms` : res.error.message;
-      return {
-        reproduced: false,
-        exitCode: 1,
-        operationalError: true,
-        status: res.status,
-        error: msg,
-        stdout: res.stdout || '',
-        stderr: res.stderr || `error: ${msg}`,
-      };
+      return opFailure(msg, res.status, res.stdout, res.stderr);
     }
 
-    if (res.status === 126 || res.status === 127) {
-      return {
-        reproduced: false,
-        exitCode: 1,
-        operationalError: true,
-        status: res.status,
-        error: `Binary execution failed with status ${res.status}`,
-        stdout: res.stdout || '',
-        stderr: res.stderr || `error: command exited with status ${res.status}`,
-      };
+    if (res.status === 126 || res.status === 127 || /^bwrap: execvp /m.test(res.stderr || '')) {
+      return opFailure(`Binary execution failed with status ${res.status}`, res.status, res.stdout, res.stderr);
     }
 
     const status = res.status;

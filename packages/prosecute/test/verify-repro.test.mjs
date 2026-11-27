@@ -138,16 +138,27 @@ test('verifyRepro: scrubs ADLC_MANIFEST_KEY and sensitive candidate env in temp 
   assert.equal(unsafeExtRes.exitCode, 0, unsafeExtRes.stderr);
   assert.equal(readFileSync(join(externalPkgDir, 'ext.mjs'), 'utf8'), 'export const extSafe = 1;\n');
 
-  // Fails closed when OS sandbox is unavailable and unsafeNoSandbox is false
+  // Fails closed when OS sandbox is unavailable and unsafeNoSandbox is omitted (default false)
   const noSbRes = verifyRepro({
     cmd: 'node -e "process.exit(0)"',
     root: fixtureDir,
     sandboxType: null,
-    unsafeNoSandbox: false,
   });
+  assert.equal(noSbRes.reproduced, false);
   assert.equal(noSbRes.operationalError, true);
   assert.equal(noSbRes.exitCode, 1);
   assert.match(noSbRes.error, /No OS sandbox available/);
+
+  // Fails closed when an unsupported/missing sandbox binary is requested
+  const badLauncherRes = verifyRepro({
+    cmd: 'node -e "process.exit(0)"',
+    root: fixtureDir,
+    sandboxType: 'unknown-sandbox',
+  });
+  assert.equal(badLauncherRes.reproduced, false);
+  assert.equal(badLauncherRes.operationalError, true);
+  assert.equal(badLauncherRes.exitCode, 1);
+  assert.match(badLauncherRes.error, /No trusted root-owned sandbox/);
 });
 
 test('verifyRepro: treats signal termination as non-zero failure in both modes', () => {
