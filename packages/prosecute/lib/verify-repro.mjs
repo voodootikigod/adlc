@@ -41,7 +41,7 @@ function buildMinimalReproEnv(baseEnv, isolatedHome) {
 }
 
 function resolveExecutable(cmd, workDir, pathEnv) {
-  if (typeof cmd !== 'string' || cmd.length === 0 || cmd.startsWith('-') || cmd.includes('\0')) {
+  if (cmd.startsWith('-') || cmd.includes('\0')) {
     return null;
   }
   const isExecutableFile = (candidate) => {
@@ -62,18 +62,15 @@ function resolveExecutable(cmd, workDir, pathEnv) {
     return isExecutableFile(target) ? target : null;
   }
 
-  const exts = process.platform === 'win32' ? ['', '.exe', '.cmd', '.bat', '.com'] : [''];
   for (const dir of String(pathEnv).split(delimiter)) {
     if (!dir) continue;
-    for (const ext of exts) {
-      const candidate = join(dir, `${cmd}${ext}`);
-      if (isExecutableFile(candidate)) return candidate;
-    }
+    const direct = join(dir, cmd);
+    if (isExecutableFile(direct)) return direct;
   }
   return null;
 }
 
-function linkWorkspaceSafeNodeModules(root, tempWorkspace, { dereferenceExternal = false } = {}) {
+function linkWorkspaceSafeNodeModules(root, tempWorkspace, { dereferenceExternal }) {
   const rootNm = join(root, 'node_modules');
   const destNm = join(tempWorkspace, 'node_modules');
   if (!existsSync(rootNm) || existsSync(destNm)) return;

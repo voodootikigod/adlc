@@ -37,6 +37,10 @@ test('verifyRepro: rejects non-existent binary or missing command as operational
   assert.equal(res.operationalError, true);
   assert.equal(res.exitCode, 1);
   assert.equal(res.reproduced, false);
+
+  const leadingDash = verifyRepro({ cmd: '-bad-executable --foo' });
+  assert.equal(leadingDash.operationalError, true);
+  assert.equal(leadingDash.exitCode, 1);
 });
 
 test('verifyRepro: distinguishes repro (exit 0) and refutation (exit 2) without expectFail', () => {
