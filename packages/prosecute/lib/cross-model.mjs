@@ -25,7 +25,7 @@ import { record } from '@adlc/gate-manifest/lib/record.mjs';
 // proves each attestation was signed with the CI-only key, so a PR author cannot FORGE
 // a fresh, well-chained approve. The chain check alone left that forge open by design.
 import { verify } from '@adlc/gate-manifest/lib/verify.mjs';
-import { verifyEntrySig } from '@adlc/gate-manifest/lib/sign.mjs';
+import { ADMIN_PUB_FILENAME, readAdminPublicKey, verifyEntrySig } from '@adlc/gate-manifest/lib/sign.mjs';
 import { assertNoTruncation } from './attestation-store.mjs';
 import { validateKeyParam } from '@adlc/tickets/lib/key-contract.mjs';
 // T-MANIFEST-FOREST slice 2: the gate now walks the whole forest (root + segments),
@@ -37,6 +37,18 @@ import { recoverOpenSegment } from '@adlc/gate-manifest/lib/lineage.mjs';
 
 export const CROSS_MODEL_GATE = 'cross-model-review';
 const VALID_VERDICTS = new Set(['approve', 'needs-attention']);
+
+function resolvePublicKey({ dir, publicKey, trustedDir } = {}) {
+  if (publicKey !== undefined) {
+    return { ok: true, publicKey: typeof publicKey === 'string' && publicKey.length > 0 ? publicKey : null };
+  }
+  const keyDir = trustedDir ?? (dir ?? ADLC_DIR);
+  const res = readAdminPublicKey(keyDir);
+  if (res.status === 'error') {
+    return { ok: false, publicKey: null, reason: `${ADMIN_PUB_FILENAME}: ${res.reason}` };
+  }
+  return { ok: true, publicKey: res.publicKey };
+}
 
 function requireNonEmptyString(value, field) {
   if (typeof value !== 'string' || value.trim() === '') {
@@ -185,7 +197,7 @@ function latestEntryForTicket(entries, ticket) {
  * SIGNED entry carrying it forward — laundering a forged claim into a real attestation through
  * whoever holds the signing key.
  */
-export function carryForwardCrossModelReview({ ticket, fromRevision, revision, dir, key, observedEntries } = {}) {
+export function carryForwardCrossModelReview({ ticket, fromRevision, revision, dir, key, publicKey, trustedDir, observedEntries } = {}) {
   key = validateKeyParam(key);
   requireNonEmptyString(ticket, 'ticket');
   requireNonEmptyString(fromRevision, 'fromRevision');
@@ -213,7 +225,12 @@ export function carryForwardCrossModelReview({ ticket, fromRevision, revision, d
   if (!key) {
     throw new Error('carry-forward refused: no signing key available, so the prior entry cannot be signature-verified');
   }
-  if (!manifestChainTrustworthy(dir, key)) {
+  const pub = resolvePublicKey({ dir, publicKey, trustedDir });
+  if (!pub.ok) {
+    throw new Error(`carry-forward refused: ${pub.reason}`);
+  }
+  const effectivePub = pub.publicKey;
+  if (!manifestChainTrustworthy(dir, key, { publicKey: effectivePub })) {
     throw new Error('carry-forward refused: the manifest hash chain does not verify — a broken chain could be hiding a dropped revocation');
   }
   // Scoped to root + THIS checkout's own open segment (T-MANIFEST-FOREST slice 3
@@ -270,7 +287,7 @@ export function carryForwardCrossModelReview({ ticket, fromRevision, revision, d
       'the actual latest entry, or record a fresh distinct-provider review'
     );
   }
-  if (!verifyEntrySig(key, prior)) {
+  if (!verifyEntrySig(key, prior, { publicKey: effectivePub })) {
     throw new Error(
       `carry-forward refused: the prior entry for ${fromRevision} under ticket ${ticket} is not signature-verified ` +
       '— an unsigned or forged entry cannot be carried forward into a newly signed one'
@@ -307,11 +324,11 @@ export function carryForwardCrossModelReview({ ticket, fromRevision, revision, d
   // dropped. Fail closed if any are missing here, or if the store holds a needs-attention for
   // this ticket against the very same change-set digest (under ANY base).
   if (observedEntries !== undefined) {
-    const truncationCheck = assertNoTruncation({ prEntries: entries, observedEntries, revision: fromRevision, key, ticket });
+    const truncationCheck = assertNoTruncation({ prEntries: entries, observedEntries, revision: fromRevision, key, publicKey: effectivePub, ticket });
     const digest = changeSetDigest(revision);
     const observedRevocation = observedEntries.some(
       (entry) =>
-        verifyEntrySig(key, entry) &&
+        verifyEntrySig(key, entry, { publicKey: effectivePub }) &&
         entry?.ticket === ticket &&
         entry?.data?.verdict === 'needs-attention' &&
         changeSetDigest(entry?.data?.revision) === digest
@@ -375,14 +392,14 @@ export function carryForwardCrossModelReview({ ticket, fromRevision, revision, d
 // revision gate omits it). needs-attention is NOT handled here — see
 // revocationCandidate below, which deliberately applies weaker trust requirements
 // (spec §6: a revocation counts regardless of its signature state).
-function candidateReview(entry, { ticket, revision, runAuthor, key }) {
+function candidateReview(entry, { ticket, revision, runAuthor, key, publicKey = null }) {
   if ((entry.gate ?? entry.type) !== CROSS_MODEL_GATE) return null;
-  // #326 hardening — verify the HMAC signature FIRST. The manifest lives in the
+  // #326 hardening — verify the signature FIRST. The manifest lives in the
   // contributor-controlled PR tree, so matching self-reported data fields alone lets a
   // PR author FORGE an approve. The attestation is trusted ONLY if it carries a valid
-  // signature under the key (a CI secret the PR author does not hold). An unsigned,
-  // mis-signed, or wrong-key entry is not a candidate — fail closed.
-  if (!key || !verifyEntrySig(key, entry)) return null;
+  // signature under the key or trusted Ed25519 publicKey. An unsigned, mis-signed, or
+  // wrong-key entry is not a candidate — fail closed.
+  if ((!key && !publicKey) || !verifyEntrySig(key, entry, { publicKey })) return null;
   if (ticket !== undefined && entry.ticket !== ticket) return null;
   const data = entry.data;
   if (!data || typeof data !== 'object') return null;
@@ -509,8 +526,11 @@ function crossModelSatisfied(entries, match) {
 // adversarial review before record-cross-model finally names the real cause. Exposing the
 // predicate lets the CLI attribute the failure correctly; it changes no decision, and the
 // gating call below is unchanged, so nothing here relaxes what is enforced.
-export function manifestChainTrustworthy(dir, key) {
-  return verify(dir, { requireSignatures: false, key: validateKeyParam(key) }).valid === true;
+export function manifestChainTrustworthy(dir, key, { publicKey, trustedDir } = {}) {
+  key = validateKeyParam(key);
+  const pub = resolvePublicKey({ dir, publicKey, trustedDir });
+  if (!pub.ok) return false;
+  return verify(dir, { requireSignatures: false, key, publicKey: pub.publicKey }).valid === true;
 }
 
 // #378 — since manifestChainTrustworthy's requireSignatures:false is now scoped
@@ -520,20 +540,26 @@ export function manifestChainTrustworthy(dir, key) {
 // a NEW failure mode this predicate can report, that unscoped tolerance never
 // could). Callers that attribute the failure to the operator (e.g. tier-check's
 // diagnostic) need to tell these apart rather than always blaming rotation.
-export function manifestChainBreakReason(dir, key) {
-  return verify(dir, { requireSignatures: false, key: validateKeyParam(key) }).break?.reason ?? null;
+export function manifestChainBreakReason(dir, key, { publicKey, trustedDir } = {}) {
+  key = validateKeyParam(key);
+  const pub = resolvePublicKey({ dir, publicKey, trustedDir });
+  if (!pub.ok) return pub.reason;
+  return verify(dir, { requireSignatures: false, key, publicKey: pub.publicKey }).break?.reason ?? null;
 }
 
-export function hasCrossModelApprove({ dir, ticket, revision, authorProvider, key } = {}) {
+export function hasCrossModelApprove({ dir, ticket, revision, authorProvider, key, publicKey, trustedDir } = {}) {
   key = validateKeyParam(key);
-  // No key → the reader cannot verify any attestation's signature → nothing is trusted.
-  if (!ticket || !revision || !authorProvider || !key) return false;
-  if (!manifestChainTrustworthy(dir, key)) return false;
+  const pub = resolvePublicKey({ dir, publicKey, trustedDir });
+  if (!pub.ok) return false;
+  const effectivePub = pub.publicKey;
+  // No verifier → the reader cannot verify any attestation's signature → nothing is trusted.
+  if (!ticket || !revision || !authorProvider || (!key && !effectivePub)) return false;
+  if (!manifestChainTrustworthy(dir, key, { publicKey: effectivePub })) return false;
   // Walks the whole forest (root + segments) — safe now that crossModelSatisfied
   // is order-independent (see its comment): there is no single total order
   // across chains to get wrong.
   const { entries } = readManifestForest(dir);
-  return crossModelSatisfied(entries, { ticket, revision, runAuthor: normalizeProvider(authorProvider), key });
+  return crossModelSatisfied(entries, { ticket, revision, runAuthor: normalizeProvider(authorProvider), key, publicKey: effectivePub });
 }
 
 /**
@@ -560,29 +586,29 @@ export function hasCrossModelApprove({ dir, ticket, revision, authorProvider, ke
  * not be mistaken for a dropped entry in a different author's manifest, which never
  * held it and was never meant to.
  */
-export function evaluateCrossModelRevision({ prEntries, observedEntries, revision, authorProvider, key, ticket } = {}) {
+export function evaluateCrossModelRevision({ prEntries, observedEntries, revision, authorProvider, key, publicKey = null, ticket } = {}) {
   const runAuthor = normalizeProvider(authorProvider);
   const authorScopedObserved = observedEntries !== undefined
     ? scopeObservedEntriesToAuthor(observedEntries, authorProvider)
     : undefined;
   if (ticket !== undefined) {
     if (authorScopedObserved !== undefined) {
-      if (!assertNoTruncation({ prEntries, observedEntries: authorScopedObserved, revision, key, ticket }).ok) {
+      if (!assertNoTruncation({ prEntries, observedEntries: authorScopedObserved, revision, key, publicKey, ticket }).ok) {
         return { satisfied: false, truncationDetected: true };
       }
     }
     return {
-      satisfied: crossModelSatisfied(prEntries, { ticket, revision, runAuthor, key }),
+      satisfied: crossModelSatisfied(prEntries, { ticket, revision, runAuthor, key, publicKey }),
       truncationDetected: false,
     };
   }
   if (authorScopedObserved !== undefined) {
     const observedRevocations = authorScopedObserved.filter((e) => e?.data?.verdict === 'needs-attention');
-    if (!assertNoTruncation({ prEntries, observedEntries: observedRevocations, revision, key }).ok) {
+    if (!assertNoTruncation({ prEntries, observedEntries: observedRevocations, revision, key, publicKey }).ok) {
       return { satisfied: false, truncationDetected: true };
     }
   }
-  const overallSatisfied = crossModelSatisfied(prEntries, { ticket: undefined, revision, runAuthor, key });
+  const overallSatisfied = crossModelSatisfied(prEntries, { ticket: undefined, revision, runAuthor, key, publicKey });
   const candidateTickets = new Set();
   let hasTicketless = false;
   for (const entry of prEntries) {
@@ -593,37 +619,40 @@ export function evaluateCrossModelRevision({ prEntries, observedEntries, revisio
   if (hasTicketless) {
     const prTicketless = prEntries.filter((e) => !e?.ticket);
     const obsTicketless = authorScopedObserved?.filter((e) => !e?.ticket);
-    if (obsTicketless !== undefined && !assertNoTruncation({ prEntries: prTicketless, observedEntries: obsTicketless, revision, key }).ok) {
+    if (obsTicketless !== undefined && !assertNoTruncation({ prEntries: prTicketless, observedEntries: obsTicketless, revision, key, publicKey }).ok) {
       sawTicketTruncation = true;
-    } else if (overallSatisfied && crossModelSatisfied(prTicketless, { ticket: undefined, revision, runAuthor, key })) {
+    } else if (overallSatisfied && crossModelSatisfied(prTicketless, { ticket: undefined, revision, runAuthor, key, publicKey })) {
       return { satisfied: true, truncationDetected: false };
     }
   }
   for (const t of candidateTickets) {
     if (authorScopedObserved !== undefined) {
-      if (!assertNoTruncation({ prEntries, observedEntries: authorScopedObserved, revision, key, ticket: t }).ok) {
+      if (!assertNoTruncation({ prEntries, observedEntries: authorScopedObserved, revision, key, publicKey, ticket: t }).ok) {
         sawTicketTruncation = true;
         continue;
       }
     }
-    if (overallSatisfied && crossModelSatisfied(prEntries, { ticket: t, revision, runAuthor, key })) {
+    if (overallSatisfied && crossModelSatisfied(prEntries, { ticket: t, revision, runAuthor, key, publicKey })) {
       return { satisfied: true, truncationDetected: false };
     }
   }
   if (authorScopedObserved !== undefined && candidateTickets.size === 0 && !hasTicketless) {
-    if (!assertNoTruncation({ prEntries, observedEntries: authorScopedObserved, revision, key }).ok) {
+    if (!assertNoTruncation({ prEntries, observedEntries: authorScopedObserved, revision, key, publicKey }).ok) {
       return { satisfied: false, truncationDetected: true };
     }
   }
   return { satisfied: false, truncationDetected: sawTicketTruncation };
 }
 
-export function hasCrossModelApproveForRevision({ dir, revision, authorProvider, key, observedEntries, ticket } = {}) {
+export function hasCrossModelApproveForRevision({ dir, revision, authorProvider, key, publicKey, trustedDir, observedEntries, ticket } = {}) {
   key = validateKeyParam(key);
-  if (!key) return false;
-  if (!manifestChainTrustworthy(dir, key)) return false;
+  const pub = resolvePublicKey({ dir, publicKey, trustedDir });
+  if (!pub.ok) return false;
+  const effectivePub = pub.publicKey;
+  if (!key && !effectivePub) return false;
+  if (!manifestChainTrustworthy(dir, key, { publicKey: effectivePub })) return false;
   const { entries } = readManifestForest(dir);
-  return evaluateCrossModelRevision({ prEntries: entries, observedEntries, revision, authorProvider, key, ticket }).satisfied;
+  return evaluateCrossModelRevision({ prEntries: entries, observedEntries, revision, authorProvider, key, publicKey: effectivePub, ticket }).satisfied;
 }
 
 /**

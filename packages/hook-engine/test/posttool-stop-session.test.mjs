@@ -122,12 +122,15 @@ test('hasManifestEvidence and evaluateStop require HMAC-signed evidence and boun
     assert.match(oversized.error, /exceeds .*manifest scan bound/);
     rmSync(join(repo, '.adlc', 'manifest.jsonl'), { force: true });
 
-    // Too many manifest segments (>64) fails closed under default 64-segment bound.
+    // 65 segments succeed under the raised 10,000 default, while an explicit maxSegments: 64 bound fails closed.
     for (let i = 0; i < 65; i++) {
       const suffix = String(i).padStart(2, '0');
       writeFileSync(join(repo, '.adlc', 'manifest.d', `seg-${suffix}-01ARZ3NDEKTSV4RRFFQ69G5F${suffix}.jsonl`), '');
     }
-    const tooMany = hasManifestEvidence(repo, { gate: 'prosecute', ticketId: 'T-HIGH', key: TEST_KEY });
+    const underDefault = hasManifestEvidence(repo, { gate: 'prosecute', ticketId: 'T-HIGH', key: TEST_KEY });
+    assert.equal(underDefault.error, null);
+    assert.equal(underDefault.manifestSegments.length, 65);
+    const tooMany = hasManifestEvidence(repo, { gate: 'prosecute', ticketId: 'T-HIGH', key: TEST_KEY, maxSegments: 64 });
     assert.equal(tooMany.found, false);
     assert.match(tooMany.error, /64-segment/);
   } finally {

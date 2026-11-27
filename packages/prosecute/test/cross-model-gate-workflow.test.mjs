@@ -4,10 +4,12 @@
 // rather than only being caught by re-reading the file by hand.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const WORKFLOW_PATH = join(new URL('../../../', import.meta.url).pathname, '.github/workflows/cross-model-gate.yml');
+const BIN_PATH = new URL('../bin/adlc-prosecute.mjs', import.meta.url).pathname;
 const text = readFileSync(WORKFLOW_PATH, 'utf8');
 
 describe('cross-model-gate.yml — #355 truncation anchor structural properties (AC6)', () => {
@@ -73,5 +75,29 @@ describe('cross-model-gate.yml — #355 truncation anchor structural properties 
     const credentialSetupIdx = text.indexOf('AUTHORIZATION: basic');
     const mirrorRunIdx = text.indexOf('mirror-attestations');
     assert.ok(credentialSetupIdx > -1 && mirrorRunIdx > -1 && credentialSetupIdx < mirrorRunIdx);
+  });
+
+  it('passes --trusted-dir "$GITHUB_WORKSPACE/.adlc" to both mirror-attestations and tier-check', () => {
+    const mirrorInvocation = text.slice(text.indexOf('mirror-attestations \\'));
+    assert.match(mirrorInvocation.slice(0, 300), /--trusted-dir "\$GITHUB_WORKSPACE\/\.adlc"/);
+    const gateInvocation = text.slice(text.lastIndexOf('tier-check \\'));
+    assert.match(gateInvocation.slice(0, 300), /--trusted-dir "\$GITHUB_WORKSPACE\/\.adlc"/);
+  });
+
+  it('never references secrets.ADLC_MANIFEST_PRIVATE_KEY or passes ADLC_MANIFEST_PRIVATE_KEY to CI verification', () => {
+    assert.doesNotMatch(text, /secrets\.ADLC_MANIFEST_PRIVATE_KEY/);
+    assert.doesNotMatch(text, /\bADLC_MANIFEST_PRIVATE_KEY\b/);
+  });
+
+  it('maintains CLI flag parity between cross-model-gate.yml and adlc-prosecute --help / parseArgs', () => {
+    const binSource = readFileSync(BIN_PATH, 'utf8');
+    const helpOut = execFileSync(process.execPath, [BIN_PATH, '--help'], {
+      encoding: 'utf8',
+      env: { ...process.env, ADLC_MANIFEST_KEY: '', ADLC_MANIFEST_PRIVATE_KEY: '' },
+    });
+    for (const flag of ['trusted-dir', 'attestation-store', 'base', 'author-provider', 'dir']) {
+      assert.match(binSource, new RegExp(`['"]?${flag}['"]?\\s*:`));
+      assert.match(helpOut, new RegExp(`--${flag}\\b`));
+    }
   });
 });
