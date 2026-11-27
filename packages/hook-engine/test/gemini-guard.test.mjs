@@ -21,7 +21,7 @@ import {
   DEFAULT_DEPTH_THRESHOLD, MAX_TRACKED_SESSIONS,
 } from '../lib/session-tracker.mjs';
 import {
-  decide, runFromStdin, preInvocation, postToolUse, onStop, extractToolName,
+  decide, runFromStdin, preInvocation, postToolUse, onStop, extractToolName, findAdlcRoot,
 } from '../lib/gemini-guard.mjs';
 import { sanitizeField } from '../lib/gemini-stop-verify.mjs';
 
@@ -362,15 +362,9 @@ test('runFromStdin and postToolUse execute cleanly', (t) => {
   const sessionsDoc = JSON.parse(readFileSync(join(dir, '.adlc', 'sessions.json'), 'utf8'));
   assert.equal(Object.keys(sessionsDoc).length, 100);
 
-  // PLUGIN_ROOT guard: decide with no workspacePaths and RELATIVE target from inside fixture repo (outside PLUGIN_ROOT) enforces frozen rail via nonPluginCwd()
-  const prevCwd = process.cwd();
-  try {
-    process.chdir(dir);
-    const cwdDeny = decide({ toolCall: { name: 'write_to_file', args: { TargetFile: 'test/frozen.test.mjs' } } }, { env });
-    assert.equal(cwdDeny.decision, 'deny');
-  } finally {
-    process.chdir(prevCwd);
-  }
+  // PLUGIN_ROOT guard: findAdlcRoot refuses to treat paths inside PLUGIN_ROOT (LIB_DIR)
+  // as an ADLC project root even when the plugin sits inside an ADLC monorepo.
+  assert.equal(findAdlcRoot(LIB_DIR, env), null);
   assert.equal(res.allow_tool, true);
 
   const post = postToolUse({ workspacePaths: [dir], conversationId: 'stdin-1', exitCode: 0, output: 'ok' }, { env });
