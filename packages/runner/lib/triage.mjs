@@ -20,7 +20,7 @@ export const CODE_EXT_RE =
   /\.(?:mjs|cjs|js|jsx|ts|tsx|py|go|rs|java|rb|php|cs|c|cc|cpp|h|hpp|swift|kt)$/i;
 
 export const CONTRACT_SURFACE_RE =
-  /(?:^|\/)package\.json$|\.d\.ts$|(?:^|\/)(?:drizzle|migrations|prisma\/migrations|alembic\/versions|supabase\/migrations)\/|(?:^|\/)openapi(?:\.[a-z0-9]+)?$|(?:^|\/)schema\.(?:prisma|sql|graphql|json|ya?ml)$/i;
+  /(?:^|\/)package\.json$|\.d\.ts$|(?:^|\/)(?:drizzle|migrations|prisma\/migrations|alembic\/versions|supabase\/migrations)\/|(?:^|\/)openapi(?:\.[a-z\d]+)?$|(?:^|\/)schema\.(?:prisma|sql|graphql|json|ya?ml)$/i;
 
 export function nonTestCode(filePath) {
   return CODE_EXT_RE.test(filePath) && !TEST_FILE_RE.test(filePath);

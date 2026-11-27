@@ -85,7 +85,7 @@ try {
 const clusters = buildClusters(findings, minSize);
 
 if (flags['verify-checks']) {
-  verifyLintClusters(clusters, findings, { root: flags.root || process.cwd() });
+  verifyLintClusters(clusters, findings, { root: flags.root });
 }
 
 // --prompt-only: print LLM prompts and exit 0 (after enforcing --gate if requested)
