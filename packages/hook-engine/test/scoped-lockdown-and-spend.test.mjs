@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -61,7 +61,8 @@ test('Objective 1: NON_FS_UI_TOOL_NAMES and boundTicket semantics in evaluatePre
   const boundRepo = makeTestRepo(t, { withActiveTicket: true });
   const unboundRepo = makeTestRepo(t, { withActiveTicket: false });
 
-  // 1. readActiveTicketRails reports boundTicket: true when current-ticket is resolved
+  // 1. readActiveTicketRails reports boundTicket: true when current-ticket is resolved (and ok: true on empty root)
+  assert.equal(readActiveTicketRails('', { env: {} }).ok, true);
   const boundRails = readActiveTicketRails(boundRepo, { env: {} });
   assert.equal(boundRails.boundTicket, true);
   assert.equal(boundRails.activeTicket.id, 'T-ACTIVE');
@@ -229,7 +230,9 @@ test('Objective 3: harvestTranscriptUsage extracts usage from Claude, Codex, Gem
   symlinkSync(claudeFile, linkFile);
   assert.equal(harvestTranscriptUsage(linkFile), null);
 
-  // Missing file or empty file
+  // Missing, null, whitespace, or empty file
+  assert.equal(harvestTranscriptUsage(null), null);
+  assert.equal(harvestTranscriptUsage('   '), null);
   assert.equal(harvestTranscriptUsage(join(dir, 'missing.jsonl')), null);
   const emptyFile = join(dir, 'empty.jsonl');
   writeFileSync(emptyFile, '');
@@ -247,6 +250,16 @@ test('Objective 3: evaluateStop with transcriptPath and recordSessionUsage idemp
   });
   const transcriptPath = join(repo, 'session-transcript.jsonl');
   writeFileSync(transcriptPath, transcriptContent);
+
+  // Default recordSessionUsage (false) harvests usage in memory without writing manifest
+  const resNoRecord = evaluateStop({
+    cwd: repo,
+    env: {},
+    transcriptPath,
+  });
+  assert.equal(resNoRecord.decision, 'allow');
+  assert.equal(resNoRecord.harvestedUsage.calls, 1);
+  assert.equal(existsSync(join(repo, '.adlc', 'manifest.jsonl')), false);
 
   // First stop with recordSessionUsage = true
   const res1 = evaluateStop({

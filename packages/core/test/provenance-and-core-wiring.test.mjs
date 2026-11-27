@@ -175,4 +175,7 @@ test('mutate.generateMutants supports opt-in includeStructural without altering 
   assert.equal(withStructural.length, 1);
   assert.equal(withStructural[0].operator, STRUCTURAL_FALLBACK_OPERATORS[0].name);
   assert.equal(withStructural[0].mutated, 'invokeClient(endpoint, { mode: currentMode });');
+
+  const sixtyLines = Array.from({ length: 60 }, (_, i) => `const b${i} = true;`).join('\n');
+  assert.equal(mutate.generateMutants(sixtyLines).length, 50);
 });

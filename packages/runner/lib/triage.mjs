@@ -14,7 +14,7 @@ import { TRACK_REQUIREMENTS } from './assertions.mjs';
 export const VALID_TRACKS = Object.freeze(['trivial', 'bounded', 'substantial', 'architectural']);
 
 export const TEST_FILE_RE =
-  /(?:^|\/)(?:test|tests|__tests__|cli-test|adapter-test)\/|\.(?:test|spec)\.[a-z0-9]+$|(?:^|\/)test_[^/]+\.py$|_test\.(?:py|go)$/i;
+  /(?:^|\/)(?:test|tests|__tests__|cli-test|adapter-test)\/|\.(?:test|spec)\.[a-z\d]+$|(?:^|\/)test_[^/]+\.py$|_test\.(?:py|go)$/i;
 
 export const CODE_EXT_RE =
   /\.(?:mjs|cjs|js|jsx|ts|tsx|py|go|rs|java|rb|php|cs|c|cc|cpp|h|hpp|swift|kt)$/i;

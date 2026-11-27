@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,40 +56,58 @@ test('verifyLintClusters: demotes lint cluster to spec-gap when baseline root co
 });
 
 test('lesson-foundry --verify-checks CLI integration: demotes false-positive lint to spec-gap and writes template', (t) => {
-  const fixtureDir = mkdtempSync(join(tmpdir(), 'foundry-cli-fixture-'));
-  t.after(() => rmSync(fixtureDir, { recursive: true, force: true }));
+  const cwdDir = mkdtempSync(join(tmpdir(), 'foundry-cli-cwd-'));
+  const repoRootDir = mkdtempSync(join(tmpdir(), 'foundry-cli-root-'));
+  t.after(() => {
+    rmSync(cwdDir, { recursive: true, force: true });
+    rmSync(repoRootDir, { recursive: true, force: true });
+  });
 
-  const dotAdlc = join(fixtureDir, '.adlc');
+  const dotAdlc = join(cwdDir, '.adlc');
   mkdirSync(dotAdlc, { recursive: true });
 
-  // Baseline file matching the quoted token in finding
-  writeFileSync(join(fixtureDir, 'index.mjs'), 'const token = "MY_SPECIAL_TOKEN_ABC";\n', 'utf8');
+  // Baseline file lives ONLY in repoRootDir (not in cwdDir) so --root is load-bearing
+  const uniqueTok = 'ZZ_FIXTURE_ONLY_TOKEN_99182';
+  writeFileSync(join(repoRootDir, 'index.mjs'), `const token = "${uniqueTok}";\n`, 'utf8');
 
-  // Ledger with 2 findings with identical non-quoted tokens so they cluster
   const findingsLines = [
-    JSON.stringify({ file: 'src/a.mjs', ts: '2026-01-01T00:00:00Z', desc: 'prohibited token identifier "MY_SPECIAL_TOKEN_ABC" detected in syntax', category: 'correctness' }),
-    JSON.stringify({ file: 'src/b.mjs', ts: '2026-01-01T00:01:00Z', desc: 'prohibited token identifier "MY_SPECIAL_TOKEN_ABC" detected in syntax', category: 'correctness' }),
+    JSON.stringify({ file: 'src/a.mjs', ts: '2026-01-01T00:00:00Z', desc: `prohibited token identifier "${uniqueTok}" detected in syntax`, category: 'correctness' }),
+    JSON.stringify({ file: 'src/b.mjs', ts: '2026-01-01T00:01:00Z', desc: `prohibited token identifier "${uniqueTok}" detected in syntax`, category: 'correctness' }),
   ].join('\n');
   writeFileSync(join(dotAdlc, 'findings.jsonl'), findingsLines + '\n', 'utf8');
 
-  const outDir = join(fixtureDir, 'lessons');
+  // Without --verify-checks (default false), cluster stays lint and does NOT emit interrogation-template.md
+  const outDefault = join(cwdDir, 'lessons-default');
+  const resDefault = spawnSync(process.execPath, [
+    CLI_PATH,
+    '--ledger', 'findings',
+    '--out-dir', outDefault,
+    '--root', repoRootDir,
+    '--write',
+  ], {
+    cwd: cwdDir,
+    encoding: 'utf8',
+  });
+  assert.equal(resDefault.status, 0, (resDefault.stderr || '') + '\n' + (resDefault.stdout || ''));
+  assert.equal(existsSync(join(outDefault, 'interrogation-template.md')), false);
 
+  const outDir = join(cwdDir, 'lessons');
   const res = spawnSync(process.execPath, [
     CLI_PATH,
     '--ledger', 'findings',
     '--out-dir', outDir,
-    '--root', fixtureDir,
+    '--root', repoRootDir,
     '--verify-checks',
     '--write',
     '--gate',
     '--json',
   ], {
-    cwd: fixtureDir,
+    cwd: cwdDir,
     encoding: 'utf8',
   });
 
-  assert.equal(res.status, 0, (res.stderr || '') + '\n' + (res.stdout || ''));
+  assert.equal(res.status, 0, (res.stderr || '') + '\n' + (resDefault.stdout || ''));
   const templatePath = join(outDir, 'interrogation-template.md');
   const templateContent = readFileSync(templatePath, 'utf8');
-  assert.match(templateContent, /MY_SPECIAL_TOKEN_ABC/);
+  assert.match(templateContent, /ZZ_FIXTURE_ONLY_TOKEN_99182/);
 });

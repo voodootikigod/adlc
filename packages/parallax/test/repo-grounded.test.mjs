@@ -55,6 +55,12 @@ describe('buildRepoFacts', () => {
     const capped = buildRepoFacts(repo, { maxChars: 30 });
     assert.equal(capped.length, 30);
     assert.ok(capped.endsWith('...'));
+
+    const hugeRepo = makeTmpDir(t);
+    writeRel(hugeRepo, 'package.json', JSON.stringify({ name: 'huge', scripts: { test: 't'.repeat(4200) } }));
+    const defaultCapped = buildRepoFacts(hugeRepo);
+    assert.equal(defaultCapped.length, 3800);
+    assert.ok(defaultCapped.endsWith('...'));
   });
 });
 
@@ -139,6 +145,11 @@ describe('parallax CLI --repo and witnessed manifest recording', () => {
         { id: 'T2', title: 'Second', body: 'Second body' },
       ],
     }));
+
+    const helpRes = runBin(BIN, ['--help'], { cwd: dir });
+    assert.equal(helpRes.status, 0);
+    assert.ok(helpRes.stdout.includes('--repo <dir>'));
+    assert.ok(helpRes.stdout.includes('--dir <path>'));
 
     const badRepo = runBin(BIN, ['--request', 'build widget', '--repo', join(dir, 'missing'), '--prompt-only'], { cwd: dir });
     assert.equal(badRepo.status, 1);

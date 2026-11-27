@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,8 +16,14 @@ test('verifyRepro: rejects empty or whitespace command as operational error (exi
   assert.equal(res.reproduced, false);
 });
 
-test('verifyRepro: rejects shell wrapper binaries (sh, bash, zsh, eval) as operational error (exit 1)', () => {
-  for (const sh of ['sh', 'bash', '/bin/bash', 'zsh', 'eval']) {
+test('verifyRepro: rejects shell wrapper binaries (sh, bash, zsh, eval) as operational error (exit 1)', (t) => {
+  const shimDir = mkdtempSync(join(tmpdir(), 'verify-repro-eval-'));
+  t.after(() => rmSync(shimDir, { recursive: true, force: true }));
+  const evalBin = join(shimDir, 'eval');
+  writeFileSync(evalBin, '#!/bin/sh\nexit 0\n');
+  chmodSync(evalBin, 0o755);
+
+  for (const sh of ['sh', 'bash', '/bin/bash', 'zsh', 'eval', evalBin]) {
     const res = verifyRepro({ cmd: `${sh} -c "exit 0"` });
     assert.equal(res.operationalError, true, `expected operational error for ${sh}`);
     assert.equal(res.exitCode, 1);
@@ -86,6 +92,16 @@ test('verifyRepro: scrubs ADLC_MANIFEST_KEY and sensitive candidate env in temp 
 });
 
 test('adlc-prosecute verify-repro CLI dispatch and JSON output', () => {
+  const defaultRes = spawnSync(process.execPath, [
+    CLI_PATH,
+    'verify-repro',
+    '--cmd',
+    'node -e "process.exit(0)"',
+    '--json',
+  ], { encoding: 'utf8' });
+  assert.equal(defaultRes.status, 0);
+  assert.equal(JSON.parse(defaultRes.stdout).reproduced, true);
+
   const res = spawnSync(process.execPath, [
     CLI_PATH,
     'verify-repro',

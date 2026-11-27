@@ -285,6 +285,10 @@ describe('CLI compareSnapshots & end-to-end bin/behavior-diff.mjs', () => {
     assert.equal(parsedBefore.commands[0].stdout.leaked, null);
     assert.equal(reachableCount(parsedBefore), 1);
 
+    const nullSnap = join(dir, 'null-snap.json');
+    writeFileSync(nullSnap, 'null');
+    assert.throws(() => loadSnapshot(nullSnap), /missing required \.routes array/);
+
     const cmpSame = spawnSync(process.execPath, [cliBin, 'compare', snapBefore, snapBefore], { encoding: 'utf8' });
     assert.equal(cmpSame.status, 0, `compare identical failed: ${cmpSame.stderr}`);
 

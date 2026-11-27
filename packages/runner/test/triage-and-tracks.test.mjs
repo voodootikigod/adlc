@@ -149,6 +149,8 @@ describe('scanRepositoryBloat simplify radar', () => {
     writeFileSync(join(root, 'packages/pkg-b/lib/same.mjs'), `${Array.from({ length: 12 }, (_, i) => `const z${i} = solo(${i});`).join('\n')}\n${Array.from({ length: 12 }, (_, i) => `const z${i} = solo(${i});`).join('\n')}\n`);
     writeFileSync(join(root, 'packages/pkg-b/lib/ignore.bundle.mjs'), `${shared12}\nfunction globMatch() {}\n`);
     writeFileSync(join(root, 'packages/pkg-b/test/ignore.mjs'), `${shared12}\nfunction acquireDirLock() {}\n`);
+    mkdirSync(join(root, '.adlc/lessons'), { recursive: true });
+    writeFileSync(join(root, '.adlc/lessons/ignore.mjs'), `${shared12}\nfunction resolveTrustedBinary() {}\n`);
     writeFileSync(join(root, 'packages/core/lib/prims.mjs'), `export function writeFileAtomic() {}\n`);
 
     const report = scanRepositoryBloat({ root });
@@ -194,12 +196,20 @@ describe('assertPhase track modes and witnessed fresh-context gates', () => {
     appendEntry({ type: 'p5-pass-completed', revision: rev, dry: true, lens: 'correctness' }, adlcDir);
     assert.equal(assertPhase('trivial', { dir: adlcDir, cwd, track: 'trivial' }).ok, true);
 
+    const missingTrivDir = join(cwd, '.adlc-triv-missing');
+    mkdirSync(missingTrivDir, { recursive: true });
+    appendEntry({ type: 'rails-check', railsDiffEmpty: true, suppressionsClean: true, railFiles: { 'test/r.test.mjs': sha256(readFileSync(railFile)) } }, missingTrivDir);
+    appendEntry({ gate: 'hollow-test' }, missingTrivDir);
+    assert.deepEqual(assertPhase('trivial', { dir: missingTrivDir, cwd }).missing, ['p5-pass-completed']);
+
     const bDir = join(cwd, '.adlc-bounded');
     mkdirSync(bDir, { recursive: true });
-    const bRev = resolveRevision({ cwd, ignorePaths: [bDir] });
+    const bRev = resolveRevision({ cwd, ignorePaths: [bDir, missingTrivDir] });
+    writeFileSync(join(bDir, 'tickets.json'), JSON.stringify({ tickets: [{ id: 'T1', title: 'fixture', scope: ['src/**'], rails: ['test/**'], edges: [] }] }));
     appendEntry({ gate: 'rails-red', ticket: 'T1' }, bDir);
     appendEntry({ gate: 'hollow-test', ticket: 'T1' }, bDir);
     appendEntry({ type: 'rails-check', ticket: 'T1', railsDiffEmpty: true, suppressionsClean: true, railFiles: { 'test/r.test.mjs': sha256(readFileSync(railFile)) } }, bDir);
+    assert.deepEqual(assertPhase('bounded', { dir: bDir, ticket: 'T1', revision: bRev, cwd }).missing, ['p5-complete']);
     writeFullP5(bDir, { ticket: 'T1', revision: bRev, cwd });
     assert.equal(assertPhase('bounded', { dir: bDir, ticket: 'T1', revision: bRev, cwd, track: 'bounded' }).ok, true);
   });
@@ -216,6 +226,7 @@ describe('assertPhase track modes and witnessed fresh-context gates', () => {
     const sHash = sha256(readFileSync(specPath));
 
     appendEntry({ gate: 'coldstart', ticket: 'T1', data: { promptOnly: true, verdict: JSON.stringify({ gaps: [], ticketHash: tHash }) } }, dir);
+    assert.equal(spawnSync(process.execPath, [RUNNER_BIN, 'run', 'p0', '--dir', dir, '--ticket', 'T1'], { cwd, encoding: 'utf8' }).status, 0);
     assert.equal(spawnSync(process.execPath, [RUNNER_BIN, 'run', 'p0', '--dir', dir, '--ticket', 'T1', '--track', 'substantial'], { cwd, encoding: 'utf8' }).status, 2);
     appendEntry({ gate: 'coldstart', ticket: 'T1', data: { cache: { ticketHash: tHash, model: '', gaps: [] } } }, dir);
     assert.equal(assertPhase('p0', { dir, ticket: 'T1', cwd, requireFreshContext: true }).ok, false);
