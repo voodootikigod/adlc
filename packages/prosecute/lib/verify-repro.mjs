@@ -20,28 +20,23 @@ import {
   git,
   repoRoot,
   resolveSandboxBinary,
+  sanitizeCandidateEnv,
   tokenizeCommand,
 } from '@adlc/core';
 
-const FORBIDDEN_COMMANDS = new Set(['sh', 'bash', 'zsh', 'dash', 'cmd', 'powershell', 'pwsh', 'eval']);
-const SAFE_ENV_KEYS = ['PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TZ', 'SYSTEMROOT', 'COMSPEC', 'PATHEXT'];
+const FORBIDDEN_COMMANDS = new Set(['sh', 'bash', 'zsh', 'eval']);
 
 function buildMinimalReproEnv(baseEnv, isolatedHome) {
   const env = {
+    ...sanitizeCandidateEnv(baseEnv),
     HOME: isolatedHome,
     USERPROFILE: isolatedHome,
+    XDG_CONFIG_HOME: isolatedHome,
     TMPDIR: isolatedHome,
     TMP: isolatedHome,
     TEMP: isolatedHome,
-    NODE_ENV: 'test',
-    CI: '1',
-    NO_COLOR: '1',
   };
-  for (const key of SAFE_ENV_KEYS) {
-    if (typeof baseEnv?.[key] === 'string' && baseEnv[key].length > 0) {
-      env[key] = baseEnv[key];
-    }
-  }
+  delete env.ADLC_MANIFEST_KEY;
   return env;
 }
 

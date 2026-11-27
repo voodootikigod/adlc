@@ -184,6 +184,29 @@ test('adlc-prosecute verify-repro CLI dispatch and JSON output', () => {
   assert.equal(parsed.reproduced, true);
   assert.equal(parsed.exitCode, 0);
   assert.equal(parsed.operationalError, false);
+
+  // CLI fails closed by default when no OS sandbox binary is on PATH, and allows explicit --unsafe-no-sandbox
+  const nodeOnlyBin = mkdtempSync(join(tmpdir(), 'verify-repro-nosb-bin-'));
+  symlinkSync(process.execPath, join(nodeOnlyBin, 'node'));
+  try {
+    const cliNoSb = spawnSync(
+      process.execPath,
+      [CLI_PATH, 'verify-repro', '--cmd', 'node -e "process.exit(0)"', '--json'],
+      { encoding: 'utf8', env: { ...process.env, PATH: nodeOnlyBin } },
+    );
+    assert.equal(cliNoSb.status, 1);
+    assert.equal(JSON.parse(cliNoSb.stdout).operationalError, true);
+
+    const cliExplicitUnsafe = spawnSync(
+      process.execPath,
+      [CLI_PATH, 'verify-repro', '--cmd', 'node -e "process.exit(0)"', '--unsafe-no-sandbox', '--json'],
+      { encoding: 'utf8', env: { ...process.env, PATH: nodeOnlyBin } },
+    );
+    assert.equal(cliExplicitUnsafe.status, 0);
+    assert.equal(JSON.parse(cliExplicitUnsafe.stdout).reproduced, true);
+  } finally {
+    rmSync(nodeOnlyBin, { recursive: true, force: true });
+  }
 });
 
 test('cross-model normalizeProvider maps codex-cli to openai and claude-cli to anthropic', (t) => {
