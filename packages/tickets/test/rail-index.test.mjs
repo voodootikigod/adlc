@@ -297,14 +297,26 @@ test('archiveCompletedTickets dry-run, inbound-edge skipping, batch write, CLI, 
   const freshRoot = makeTempDir(t, 'adlc-oversized-idx-');
   const freshStore = writeDirectory(freshRoot, [ticket('OV1', { rails: ['src/ov.js'] })]);
   const signKey = 'oversized-hmac-key';
-  const oversizedDoc = {
+  const fp = computeDirectoryStoreFingerprint(freshStore);
+  const smallDoc = JSON.parse(JSON.stringify({
     version: 1,
-    storeFingerprint: computeDirectoryStoreFingerprint(freshStore.path),
+    storeFingerprint: fp,
+    activeTickets: [ticket('OV1', { rails: ['src/ov.js'] })],
+    rails: ['src/ov.js'],
+    sigVersion: 2,
+  }));
+  smallDoc.sig = createHmac('sha256', signKey).update(canonicalEntryBytes(smallDoc)).digest('hex');
+  writeFileSync(join(freshRoot, ACTIVE_RAIL_INDEX_FILE), JSON.stringify(smallDoc));
+  const afterSmall = readActiveRailIndex(freshRoot, { env: { ADLC_TICKET: '' }, key: signKey, writeCache: false });
+  assert.equal(afterSmall.source, 'index-cache', 'valid signed small index must hit index-cache');
+  const oversizedDoc = JSON.parse(JSON.stringify({
+    version: 1,
+    storeFingerprint: fp,
     activeTickets: [],
     rails: [],
     sigVersion: 2,
     pad: 'x'.repeat(1024 * 1024 + 64),
-  };
+  }));
   oversizedDoc.sig = createHmac('sha256', signKey).update(canonicalEntryBytes(oversizedDoc)).digest('hex');
   writeFileSync(join(freshRoot, ACTIVE_RAIL_INDEX_FILE), JSON.stringify(oversizedDoc));
   const afterOversized = readActiveRailIndex(freshRoot, { env: { ADLC_TICKET: '' }, key: signKey, writeCache: false });
@@ -328,12 +340,12 @@ test('archiveCompletedTickets dry-run, inbound-edge skipping, batch write, CLI, 
     ticketId: 'C_FREE_1',
     storePath: '.adlc/tickets',
     operations: [
-      { role: 'auxiliary', action: 'write', path: `.adlc/ticket-archive/${ticketFilename('C_FREE_2')}`, filename: ticketFilename('C_FREE_2') },
+      { role: 'auxiliary', action: 'write', target: `.adlc/ticket-archive/${ticketFilename('C_FREE_2')}`, filename: ticketFilename('C_FREE_2') },
     ],
   }));
   assert.throws(
     () => recoverDirectoryTransaction(store, forgedTxId, { root, direction: 'rollback', allowUnsigned: true }),
-    (err) => err.code === 'INVALID_JOURNAL',
+    (err) => err.code === 'INVALID_JOURNAL' && /archive operation target/.test(err.message),
   );
   rmSync(forgedTxDir, { recursive: true, force: true });
 });
