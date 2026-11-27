@@ -242,4 +242,22 @@ test('archiveCompletedTickets dry-run, inbound-edge skipping, batch write, and C
   assert.equal(noop.applied, false);
   assert.deepEqual(noop.archivedIds, []);
   assert.equal(noop.remainingCount, 3);
+
+  // 6. Oversized .active-rail-index.json (> 1 MiB) fails closed to full-load
+  const oversized = JSON.stringify({
+    version: 1,
+    storeFingerprint: computeDirectoryStoreFingerprint(store.path),
+    activeTickets: [],
+    rails: [],
+    pad: 'x'.repeat(1024 * 1024 + 64),
+  });
+  writeFileSync(join(root, ACTIVE_RAIL_INDEX_FILE), oversized);
+  const afterOversized = readActiveRailIndex(root, { env: { ADLC_TICKET: '' }, writeCache: false });
+  assert.equal(afterOversized.ok, true);
+  assert.equal(afterOversized.source, 'full-load');
+
+  // 7. CLI `restore` exercises mutationCommands set membership for 'restore'
+  const cliRestore = runCli(['restore', 'C_FREE_1', '--root', root, '--write', '--authorize', '--allow-unsigned', '--json'], root);
+  assert.equal(cliRestore.status, 0, cliRestore.stderr);
+  assert.equal(store.load().get('C_FREE_1').id, 'C_FREE_1');
 });

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -111,6 +111,7 @@ test('enclosingAdlcRoot and readActiveTicketRails load active ticket rails from 
   const { activeTicket, rails } = readActiveTicketRails(root);
   assert.equal(activeTicket.id, 'T-1');
   assert.deepEqual(rails.sort(), ['packages/core/test/**', 'test/auth.test.mjs']);
+  assert.equal(existsSync(join(root, '.adlc', '.active-rail-index.json')), false, 'readActiveTicketRails stays read-only and never writes the index cache');
   // requireStore defaults to true: a plain git repo with no .adlc store returns null.
   assert.equal(enclosingAdlcRoot(gitOnly), null);
 });
