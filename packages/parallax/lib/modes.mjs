@@ -232,10 +232,11 @@ function buildMockDeps(raw) {
  */
 export async function runDivergenceAnalysis(
   fanPrompt,
-  { n = 3, tier = 'cheap', divergenceTier = 'mid', allowPartialFan = false, deps } = {}
+  { n = 3, tier = 'cheap', divergenceTier = 'mid', allowPartialFan = false, onCompleteMeta, deps } = {}
 ) {
   const llm = resolveDeps(deps);
-  const fanResults = await llm.fan({ prompt: fanPrompt, tier }, n);
+  const metaOpt = onCompleteMeta !== undefined ? { onCompleteMeta } : {};
+  const fanResults = await llm.fan({ prompt: fanPrompt, tier, ...metaOpt }, n);
 
   const { readings, errors } = parseFanResults(fanResults);
 
@@ -250,7 +251,7 @@ export async function runDivergenceAnalysis(
 
   // Run divergence analysis with mid-tier
   const divergencePrompt = buildDivergencePrompt(readings);
-  const divergenceRaw = await llm.complete({ prompt: divergencePrompt, tier: divergenceTier });
+  const divergenceRaw = await llm.complete({ prompt: divergencePrompt, tier: divergenceTier, ...metaOpt });
   const divergenceResult = extractJson(divergenceRaw);
 
   const payloadError = divergencePayloadError(divergenceResult);
@@ -274,7 +275,7 @@ export async function runDivergenceAnalysis(
  * @returns {Promise<{ agreements, divergences, score, readings, errors, requested, used }>}
  */
 export async function runSpecMode(request, opts = {}) {
-  const fanPrompt = buildSpecReaderPrompt(request);
+  const fanPrompt = buildSpecReaderPrompt(request, { repoFacts: opts.repoFacts });
   return runDivergenceAnalysis(fanPrompt, opts);
 }
 
@@ -282,11 +283,14 @@ export async function runSpecMode(request, opts = {}) {
  * EDGE MODE: fan N cheap agents on the pair of tickets, then divergence-analyse.
  * @param {object} ticketA
  * @param {object} ticketB
- * @param {object} opts - { n, tier, allowPartialFan, deps }
+ * @param {object} opts - { n, tier, allowPartialFan, repoFacts, onCompleteMeta, deps }
  * @returns {Promise<{ agreements, divergences, score, readings, errors, requested, used }>}
  */
 export async function runEdgeMode(ticketA, ticketB, opts = {}) {
-  const fanPrompt = buildEdgePrompt(ticketA, ticketB);
+  const fanPrompt = buildEdgePrompt(ticketA, ticketB, {
+    bodyCap: opts.bodyCap,
+    repoFacts: opts.repoFacts,
+  });
   return runDivergenceAnalysis(fanPrompt, opts);
 }
 
@@ -300,16 +304,17 @@ export async function runEdgeMode(ticketA, ticketB, opts = {}) {
  *
  * @param {string} question
  * @param {Array<{path: string, content: string}>} contextFiles
- * @param {object} opts - { n, tier, contextCap, allowPartialFan, deps }
+ * @param {object} opts - { n, tier, contextCap, allowPartialFan, repoFacts, onCompleteMeta, deps }
  * @returns {Promise<{ equivalent, answer, variants, rawAnswers, errors, requested, used }>}
  */
 export async function runRouteMode(question, contextFiles = [], opts = {}) {
-  const { n = 3, tier = 'cheap', allowPartialFan = false, deps } = opts;
+  const { n = 3, tier = 'cheap', allowPartialFan = false, repoFacts, onCompleteMeta, deps } = opts;
   const { contextCap } = opts;
   const llm = resolveDeps(deps);
+  const metaOpt = onCompleteMeta !== undefined ? { onCompleteMeta } : {};
 
-  const answerPrompt = buildRouteAnswerPrompt(question, contextFiles, { contextCap });
-  const fanResults = await llm.fan({ prompt: answerPrompt, tier }, n);
+  const answerPrompt = buildRouteAnswerPrompt(question, contextFiles, { contextCap, repoFacts });
+  const fanResults = await llm.fan({ prompt: answerPrompt, tier, ...metaOpt }, n);
 
   const { rawAnswers, errors } = parseFanAnswers(fanResults);
 
@@ -323,7 +328,7 @@ export async function runRouteMode(question, contextFiles = [], opts = {}) {
   }
 
   const judgePrompt = buildRouteJudgePrompt(question, rawAnswers);
-  const judgeRaw = await llm.complete({ prompt: judgePrompt, tier });
+  const judgeRaw = await llm.complete({ prompt: judgePrompt, tier, ...metaOpt });
   const judgeResult = extractJson(judgeRaw);
 
   const payloadError = judgePayloadError(judgeResult);

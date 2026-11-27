@@ -29,6 +29,7 @@ export async function runRouter(opts = {}) {
     floor = DEFAULT_FLOOR,
     adlcDir = ADLC_DIR,
     ticketId,
+    root,
   } = opts;
 
   // Before anything is read: an empty store returns early below, and a
@@ -64,7 +65,7 @@ export async function runRouter(opts = {}) {
   const priors = buildPriors(entries);
 
   // Assign routes
-  const allAssignments = assignAll(tickets, cpmResult, priors, floor);
+  const allAssignments = assignAll(tickets, cpmResult, priors, floor, { root });
   const assignments = ticketId !== undefined
     ? allAssignments.filter((a) => a.id === ticketId)
     : allAssignments;
