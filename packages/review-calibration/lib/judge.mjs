@@ -187,10 +187,14 @@ export async function calibrateJudge(fixture, judge, { concurrency = DEFAULT_LLM
 /** Known aliases that name the same provider family as `detectProvider`. */
 const PROVIDER_ALIASES = new Map([
   ['claude', 'anthropic'],
+  ['claude-cli', 'anthropic'],
+  ['codex', 'openai'],
+  ['codex-cli', 'openai'],
   ['gpt', 'openai'],
   ['gpt4', 'openai'],
   ['chatgpt', 'openai'],
   ['google', 'gemini'],
+  ['agy', 'gemini'],
 ]);
 
 function normalizeProviderName(name) {

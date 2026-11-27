@@ -9,7 +9,7 @@ import { parallelEligiblePairs, topoWaves, mergeOrder } from './reachability.mjs
 import { pairScore } from './signals.mjs';
 import { walkTree } from './signals.mjs';
 import { createScopeIndex } from './scope-index.mjs';
-import { isGitRepo, coChange, topoSort } from '@adlc/core';
+import { isGitRepo, coChange, topoSort, globMatch } from '@adlc/core';
 
 /**
  * Run the full forecast.
@@ -83,6 +83,23 @@ export async function runForecast(opts) {
     } else if (scopeIndex.files(t.scope).length === 0) {
       warnings.push(`ticket "${t.id}" scope matches 0 files in repo`);
       unscopedTicketIds.add(t.id);
+    }
+  }
+
+  // Warn on declared edge contracts that are not frozen in targetTicket.rails
+  for (const srcTicket of tickets) {
+    for (const edge of srcTicket.edges ?? []) {
+      const contract = typeof edge?.contract === 'string' ? edge.contract.trim() : '';
+      if (!contract) continue;
+      const targetTicket = tickets.find((t) => t.id === edge.to);
+      if (!targetTicket) continue;
+      const targetRails = targetTicket.rails ?? [];
+      const isCovered = targetRails.some((r) => typeof r === 'string' && globMatch(r, contract));
+      if (!isCovered) {
+        warnings.push(
+          `Unrailed edge contract: ${srcTicket.id} -> ${targetTicket.id} contract '${contract}' is not covered by ${targetTicket.id} rails`,
+        );
+      }
     }
   }
 

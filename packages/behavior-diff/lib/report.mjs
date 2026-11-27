@@ -36,9 +36,10 @@ export function renderReport(result) {
     lines.push(`  + ${key}: route added (absent in before, present in after)`);
   }
 
-  // Changed routes
+  // Changed routes / commands
   for (const c of changed) {
-    lines.push(`  ~ ${c.route}:`);
+    const label = c.route ?? (c.id ? `CMD ${c.id}` : 'unknown');
+    lines.push(`  ~ ${label}:`);
     for (const d of c.diffs) {
       lines.push(`      ${renderDiff(d)}`);
     }
@@ -55,24 +56,35 @@ function renderDiff(d) {
   if (d.field === 'status') {
     return `status: ${d.before} → ${d.after}`;
   }
+  if (d.field === 'exitCode') {
+    return `exitCode: ${d.before} → ${d.after}`;
+  }
   if (d.field === 'contentType') {
     return `contentType: "${d.before}" → "${d.after}"`;
+  }
+  if (d.field === 'stdoutFormat') {
+    return `stdoutFormat: "${d.before}" → "${d.after}"`;
   }
   if (d.field === 'error') {
     const before = d.before ?? '(none)';
     const after = d.after ?? '(none)';
     return `error: "${before}" → "${after}"`;
   }
-  if (d.field === 'body') {
+  if (d.field === 'stderr') {
+    const beforeBytes = d.before?.bytes ?? '?';
+    const afterBytes = d.after?.bytes ?? '?';
+    return `stderr: hash changed (${beforeBytes}B → ${afterBytes}B)`;
+  }
+  if (d.field === 'body' || d.field === 'stdout') {
     if (d.type === 'text') {
       const beforeBytes = d.before?.bytes ?? '?';
       const afterBytes = d.after?.bytes ?? '?';
-      return `body (text): hash changed (${beforeBytes}B → ${afterBytes}B)`;
+      return `${d.field} (text): hash changed (${beforeBytes}B → ${afterBytes}B)`;
     }
     if (d.type === 'json') {
       const suppressed = d.capped ? (d.total - d.changes.length) : 0;
       const cappedSuffix = d.capped ? ` +${suppressed} more` : '';
-      const lines = [`body (json): ${d.changes.length} change${d.changes.length !== 1 ? 's' : ''}${cappedSuffix}:`];
+      const lines = [`${d.field} (json): ${d.changes.length} change${d.changes.length !== 1 ? 's' : ''}${cappedSuffix}:`];
       for (const ch of d.changes) {
         lines.push(`        ${renderJsonChange(ch)}`);
       }

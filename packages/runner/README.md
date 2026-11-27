@@ -5,13 +5,35 @@ Artifact-asserting phase runner for ADLC.
 ## Usage
 
 ```sh
+adlc-runner triage --json
+adlc-runner simplify --root . --json
+adlc-runner run trivial --dir .adlc --json
+adlc-runner run bounded --ticket T1 --dir .adlc --json
+adlc-runner run p1 --ticket T1 --track architectural --dir .adlc --json
 adlc-runner run p5 --ticket T1 --dir .adlc --json
 adlc-runner run p6 --ticket T1 --dir .adlc
-# or `adlc run p5 ...` / `adlc accept ...` when the `@adlc/cli` umbrella is installed
+# or `adlc triage ...` / `adlc simplify ...` / `adlc run p5 ...` / `adlc accept ...` when `@adlc/cli` is installed
 ```
 
-Standalone installs (`npm i @adlc/runner`) provide the `adlc-runner` binary; `adlc run` and
-`adlc accept` are the equivalent subcommands when `@adlc/cli` is installed.
+Standalone installs (`npm i @adlc/runner`) provide the `adlc-runner` binary; `adlc run`,
+`adlc accept`, `adlc triage`, and `adlc simplify` are the equivalent subcommands when `@adlc/cli` is installed.
+
+## P0 Triage & Execution Tracks
+
+`adlc triage [--base HEAD] [--files a,b] [--dir .adlc] [--json]` deterministically classifies a
+changeset into one of four ADLC execution tracks (`trivial`, `bounded`, `substantial`, `architectural`)
+using partition count, non-test code line delta, `@adlc/core` risk-tier matches, and contract surface edits:
+
+- `trivial`: `<= 30` code lines and `<= 2` code files in a single partition (`adlc run trivial`: `rails-check`, `hollow-test`, and a revision-matched `dry: true` `p5-pass-completed`; no ticket required).
+- `bounded`: `<= 150` code lines in a single partition with no risk-tier or contract-surface edits (`adlc run bounded --ticket <id>`: `rails-red`, `hollow-test`, `rails-check`, `p5-complete`).
+- `substantial`: multi-partition, `> 150` code lines, risk-tier match, or single-partition contract surface change (`--track substantial` / `--require-fresh-context`: requires witnessed fresh-context `coldstart` and `premortem` records, rejecting `--prompt-only` self-context verdicts).
+- `architectural`: multi-partition contract surface change, or `>= 3` partitions with a risk-tier match (`--track architectural`: adds `parallax` to `p1` and enforces witnessed fresh-context provenance across `coldstart`, `premortem`, and `parallax`).
+
+## P7 Simplify Radar
+
+`adlc simplify [--root .] [--json]` deterministically scans JS/TS source files under `--root`
+(excluding test, build, bundle, and dependency directories) to report 12-line normalized structural
+clones across `>= 2` files (`duplicateBlocks`) and local re-implementations of `@adlc/core` helpers (`coreReinventions`).
 
 The runner does not treat "a command ran" as a gate. It reads `.adlc/manifest.jsonl` plus,
 when manifest forest mode (`gate-manifest enable`) is active, this checkout's own causal

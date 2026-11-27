@@ -4,6 +4,8 @@ import { ADLC_DIR, canonicalJson, hashFiles, loadTickets, sha256 } from '@adlc/c
 // which is only true of a chain this checkout can place in sequence. See
 // own-chain.mjs for why the forest's own order cannot carry that weight.
 import { readOwnManifestChain } from '@adlc/gate-manifest/lib/own-chain.mjs';
+import { normalizeManifestDirAndCwd } from '@adlc/gate-manifest/lib/lineage.mjs';
+import { verify } from '@adlc/gate-manifest/lib/verify.mjs';
 import { specApprovalIntegrityErrors, validateSpecApprovalRecord } from '@adlc/gate-manifest';
 export { specApprovalIntegrityErrors, validateSpecApprovalRecord };
 import { readFileSync } from 'node:fs';
@@ -37,12 +39,32 @@ const PHASE_REQUIREMENTS = {
   p7: ['lesson-foundry', 'rejection-mining', 'skill-rot'],
 };
 
+export const TRACK_REQUIREMENTS = Object.freeze({
+  trivial: ['rails-check', 'hollow-test', 'p5-pass-completed'],
+  bounded: ['rails-red', 'hollow-test', 'rails-check', 'p5-complete'],
+  substantial: ['coldstart', 'premortem', 'rails-red', 'hollow-test', 'rails-check', 'p5-complete'],
+  architectural: ['coldstart', 'premortem', 'parallax', 'rails-red', 'hollow-test', 'rails-check', 'p5-complete'],
+});
+
+export function allTracks() {
+  return ['trivial', 'bounded', 'substantial', 'architectural'];
+}
+
 export function requiresTicket(phase) {
-  return phase === 'p0' || phase === 'p1' || phase === 'p2' || phase === 'p3' || phase === 'p4' || phase === 'p5' || phase === 'p6';
+  return (
+    phase === 'bounded' ||
+    phase === 'p0' ||
+    phase === 'p1' ||
+    phase === 'p2' ||
+    phase === 'p3' ||
+    phase === 'p4' ||
+    phase === 'p5' ||
+    phase === 'p6'
+  );
 }
 
 function requiresRevision(phase) {
-  return phase === 'p5' || phase === 'p6';
+  return phase === 'trivial' || phase === 'bounded' || phase === 'p5' || phase === 'p6';
 }
 
 function p5CompletionIntegrityErrors(entries, entry, ticket, revision) {
@@ -115,14 +137,41 @@ function p5CompletionIntegrityErrors(entries, entry, ticket, revision) {
   return errors;
 }
 
+const P5_EPOCH_TYPES = new Set([
+  'p5-pass-completed',
+  'p5-dry-pass',
+  'p5-finding-verified',
+  'p5-finding-needs-human',
+  'p5-finding-killed',
+  'p5-complete',
+]);
+
+function entryEffectiveRevision(entry) {
+  if (entry?.revision !== undefined) return entry.revision;
+  return typeof entry?.data?.revision === 'string' && entry.data.revision.length > 0
+    ? entry.data.revision
+    : undefined;
+}
+
+function entryEffectiveDry(entry) {
+  return entry?.dry !== undefined ? entry.dry : entry?.data?.dry;
+}
+
+function matchesEffectiveRevision(entry, revision) {
+  return revision === undefined || entryEffectiveRevision(entry) === revision;
+}
+
+function findingObject(entry) {
+  return entry?.finding ?? entry?.data?.finding;
+}
+
 function findingId(entry) {
-  return typeof entry.finding?.id === 'string' && entry.finding.id.length > 0
-    ? entry.finding.id
-    : null;
+  const f = findingObject(entry);
+  return typeof f?.id === 'string' && f.id.length > 0 ? f.id : null;
 }
 
 function findingIdentity(entry) {
-  const finding = entry.finding;
+  const finding = findingObject(entry);
   if (!finding || typeof finding !== 'object') return null;
   return sha256(canonicalJson({
     id: finding.id ?? null,
@@ -140,7 +189,7 @@ function openP5FindingErrors(entries, ticket, revision, completionIndex) {
   const errors = [];
   entries.forEach((entry, index) => {
     const type = entryType(entry);
-    if (!openTypes.has(type) || !matchesTicket(entry, ticket) || !matchesRevision(entry, revision)) return;
+    if (!openTypes.has(type) || !matchesTicket(entry, ticket) || !matchesEffectiveRevision(entry, revision)) return;
     const id = findingId(entry);
     if (!id) {
       errors.push(`P5 evidence is contradictory: unresolved ${type} without finding.id`);
@@ -150,7 +199,7 @@ function openP5FindingErrors(entries, ticket, revision, completionIndex) {
     const killedBeforeCompletion = entries.slice(index + 1, completionIndex).some((candidate) =>
       entryType(candidate) === 'p5-finding-killed' &&
       matchesTicket(candidate, ticket) &&
-      matchesRevision(candidate, revision) &&
+      matchesEffectiveRevision(candidate, revision) &&
       findingIdentity(candidate) === identity
     );
     if (!killedBeforeCompletion) {
@@ -338,39 +387,52 @@ function coldstartIntegrityErrors(entries, ticket, cwd, dir, phase) {
   return errors;
 }
 
-function latestRailCheckEntry(entries, ticket, revision) {
+function latestRailCheckEntry(entries, ticket, revision, allowUnrevisioned = false) {
   return entries
     .filter((entry) => entryType(entry) === 'rails-check' && matchesTicket(entry, ticket))
-    .filter((entry) => matchesRevision(entry, revision))
+    .filter((entry) => (allowUnrevisioned && entryEffectiveRevision(entry) === undefined) || matchesEffectiveRevision(entry, revision))
     .at(-1);
 }
 
-function p4IntegrityErrors(entries, ticket, revision, cwd) {
-  const entry = latestRailCheckEntry(entries, ticket, revision);
+function hollowTestIntegrityErrors(entries, ticket, revision, allowUnrevisioned = true) {
+  const latestHollow = entries
+    .filter((entry) => entryType(entry) === 'hollow-test' && matchesTicket(entry, ticket))
+    .filter((entry) => (allowUnrevisioned && entryEffectiveRevision(entry) === undefined) || matchesEffectiveRevision(entry, revision))
+    .at(-1);
+  const hollowSurvivors = Number(latestHollow?.survived ?? latestHollow?.data?.survived ?? latestHollow?.data?.summary?.survived ?? 0);
+  return hollowSurvivors > 0 ? [`hollow-test recorded ${hollowSurvivors} surviving mutant(s)`] : [];
+}
+
+function p4IntegrityErrors(entries, ticket, revision, cwd, allowUnrevisioned = false) {
+  const entry = latestRailCheckEntry(entries, ticket, revision, allowUnrevisioned);
   if (!entry) return [];
+  const rc =
+    allowUnrevisioned && entry.railsDiffEmpty === undefined && entry.data && typeof entry.data === 'object' && !Array.isArray(entry.data)
+      ? entry.data
+      : entry;
   const errors = [];
-  if (entry.railsDiffEmpty !== true) {
+  if (rc.railsDiffEmpty !== true) {
     errors.push('P4 evidence is incomplete: rails-check missing railsDiffEmpty=true');
   }
-  if (entry.suppressionsClean !== true) {
+  if (rc.suppressionsClean !== true) {
     errors.push('P4 evidence is incomplete: rails-check missing suppressionsClean=true');
   }
-  if (!entry.railFiles || typeof entry.railFiles !== 'object' || Array.isArray(entry.railFiles)) {
+  if (!rc.railFiles || typeof rc.railFiles !== 'object' || Array.isArray(rc.railFiles)) {
     errors.push('P4 evidence is incomplete: rails-check missing railFiles hash snapshot');
     return errors;
   }
-  const railPaths = Object.keys(entry.railFiles);
+  const railPaths = Object.keys(rc.railFiles);
   if (railPaths.length === 0) {
     errors.push('P4 evidence is incomplete: rails-check railFiles snapshot is empty');
     return errors;
   }
   const currentHashes = hashFiles(railPaths, (path) => readFileSync(resolve(cwd, path)));
   for (const path of railPaths) {
-    if (typeof entry.railFiles[path] !== 'string') {
+    if (typeof rc.railFiles[path] !== 'string') {
       errors.push(`P4 evidence is incomplete: rails-check missing hash for ${path}`);
       continue;
     }
-    if (currentHashes[path] !== entry.railFiles[path]) {
+    if (currentHashes[path] !== rc.railFiles[path]) {
       errors.push(`P4 evidence is stale: rail file hash changed after rails-check: ${path}`);
     }
   }
@@ -414,25 +476,238 @@ export function p4EvidenceBindingErrors(entries, ticket, cwd) {
 }
 
 export function requirementsForPhase(phase) {
-  return PHASE_REQUIREMENTS[phase] ?? null;
+  if (Object.hasOwn(PHASE_REQUIREMENTS, phase)) return PHASE_REQUIREMENTS[phase];
+  if (phase === 'trivial' || phase === 'bounded') return TRACK_REQUIREMENTS[phase];
+  return null;
 }
 
 export function allPhases() {
   return Object.keys(PHASE_REQUIREMENTS);
 }
 
-export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = process.cwd() } = {}) {
-  const requirements = requirementsForPhase(phase);
-  if (requirements === null) {
-    return { ok: false, operational: true, phase, errors: [`unknown phase: ${phase}`] };
+const REVISION_BOUND_TYPES = new Set(['p5-pass-completed', 'p5-dry-pass', 'p5-complete', 'p6-acceptance-packet']);
+
+function isWitnessedFreshEntry(entry, gateType) {
+  const data = entry?.data;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  if (data.promptOnly === true) return false;
+  if (data.executionWitnessed === true) return true;
+  if (typeof data.usage?.provider === 'string' && data.usage.provider.length > 0) return true;
+  if (
+    gateType === 'coldstart' &&
+    data.cache &&
+    typeof data.cache === 'object' &&
+    !Array.isArray(data.cache) &&
+    typeof data.cache.ticketHash === 'string' &&
+    data.cache.ticketHash.length > 0 &&
+    typeof data.cache.model === 'string' &&
+    data.cache.model.length > 0 &&
+    Array.isArray(data.cache.gaps)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function freshContextIntegrityErrors(entries, ticket, phase, track) {
+  const label = phase.toUpperCase();
+  const gatesToCheck = [];
+  if (phase === 'p0' || phase === 'p2') {
+    gatesToCheck.push('coldstart');
+  } else if (phase === 'p1') {
+    gatesToCheck.push('premortem');
+    if (track === 'architectural') gatesToCheck.push('parallax');
+  }
+  const errors = [];
+  for (const gateType of gatesToCheck) {
+    const latest = entries
+      .filter((candidate) => entryType(candidate) === gateType && matchesTicket(candidate, ticket))
+      .at(-1);
+    if (!latest) continue;
+    if (!isWitnessedFreshEntry(latest, gateType)) {
+      errors.push(
+        `${label} evidence is rejected: ${gateType} requires witnessed fresh-context provenance (prompt-only, malformed-cache, and field-less records are not accepted)`,
+      );
+    }
+  }
+  return errors;
+}
+
+export function assertPhase(
+  phase,
+  { dir = ADLC_DIR, ticket, revision, key, cwd = process.cwd(), track, requireFreshContext } = {},
+) {
+  const baseRequirements = requirementsForPhase(phase);
+  if (baseRequirements === null) {
+    return { ok: false, operational: true, phase, missing: [], errors: [`unknown phase: ${phase}`] };
+  }
+  if (track !== undefined) {
+    if (!allTracks().includes(track) || ((phase === 'trivial' || phase === 'bounded') && track !== phase)) {
+      return { ok: false, phase, missing: [], errors: ['invalid --track'], operational: true };
+    }
   }
   if (requiresTicket(phase) && !ticket) {
-    return { ok: false, operational: true, phase, errors: [`${phase} requires --ticket`] };
+    return { ok: false, operational: true, phase, missing: [], errors: [`${phase} requires --ticket`] };
   }
 
-  const { entries, skipped, identityError } = readOwnManifestChain(dir, { cwd });
+  const requirements =
+    phase === 'p1' && track === 'architectural'
+      ? [...baseRequirements, 'parallax']
+      : baseRequirements;
+
+  const { dir: normalizedDir, cwd: normalizedCwd } = normalizeManifestDirAndCwd(dir, { cwd });
+  const { entries, skipped, identityError } = readOwnManifestChain(normalizedDir, { cwd: normalizedCwd });
+  if (typeof key === 'string' && key.length > 0 && skipped.length === 0 && !identityError) {
+    const verified = verify(normalizedDir, { requireSignatures: false, key });
+    if (!verified.valid) {
+      return {
+        ok: false,
+        operational: false,
+        phase,
+        ticket,
+        missing: [],
+        errors: [`manifest verification failed: ${verified.message}`],
+      };
+    }
+  }
+
   const hasExplicitRevision = revision !== undefined && revision !== null && String(revision).trim() !== '';
   const explicitRevision = hasExplicitRevision ? String(revision) : undefined;
+
+  if (phase === 'trivial') {
+    const matchesTrivialScope = (entry) => (ticket !== undefined ? entry?.ticket === ticket : !entry?.ticket);
+    const trivialEntries = entries.filter(matchesTrivialScope);
+    const ignoredPaths = manifestArtifactPaths(normalizedCwd, normalizedDir);
+    const latestTrivialPass = trivialEntries
+      .filter((entry) => entryType(entry) === 'p5-pass-completed' && Boolean(entryEffectiveRevision(entry)))
+      .at(-1);
+    const recordedPassRev = entryEffectiveRevision(latestTrivialPass) ?? null;
+    const liveRev = explicitRevision
+      ? null
+      : resolveLiveP5WorktreeRevision({
+          cwd: normalizedCwd,
+          explicitRevision,
+          recordedP5Revision: recordedPassRev,
+          ignorePaths: ignoredPaths,
+        });
+    const resolvedRev = explicitRevision ?? liveRev;
+
+    if (!resolvedRev) {
+      return {
+        ok: false,
+        operational: true,
+        phase,
+        ticket,
+        missing: [],
+        errors: ['trivial requires a git worktree revision or --revision'],
+      };
+    }
+    if (!explicitRevision && recordedPassRev && recordedPassRev !== resolvedRev) {
+      return {
+        ok: false,
+        operational: false,
+        phase,
+        ticket,
+        revision: recordedPassRev,
+        currentRevision: resolvedRev,
+        missing: [],
+        errors: [`P5 evidence is stale: recorded ${recordedPassRev}, current worktree is ${resolvedRev}`],
+      };
+    }
+
+    const lastOtherRevPassIdx = trivialEntries.findLastIndex(
+      (entry) =>
+        P5_EPOCH_TYPES.has(entryType(entry)) &&
+        Boolean(entryEffectiveRevision(entry)) &&
+        !matchesEffectiveRevision(entry, resolvedRev),
+    );
+    const epochEntries = trivialEntries.filter((entry, idx) =>
+      entryEffectiveRevision(entry) !== undefined ? matchesEffectiveRevision(entry, resolvedRev) : idx > lastOtherRevPassIdx,
+    );
+
+    const p4Errors = p4IntegrityErrors(epochEntries, ticket, resolvedRev, normalizedCwd, true);
+    if (p4Errors.length > 0) {
+      return {
+        ok: false,
+        operational: false,
+        phase,
+        ticket,
+        revision: resolvedRev,
+        missing: [],
+        errors: p4Errors,
+      };
+    }
+
+    const openFindings = openP5FindingErrors(trivialEntries, ticket, resolvedRev, trivialEntries.length);
+    if (openFindings.length > 0) {
+      return {
+        ok: false,
+        operational: false,
+        phase,
+        ticket,
+        revision: resolvedRev,
+        missing: [],
+        errors: openFindings,
+      };
+    }
+
+    const hollowErrors = hollowTestIntegrityErrors(epochEntries, ticket, resolvedRev, true);
+    if (hollowErrors.length > 0) {
+      return {
+        ok: false,
+        operational: false,
+        phase,
+        ticket,
+        revision: resolvedRev,
+        missing: [],
+        errors: hollowErrors,
+      };
+    }
+
+    const passesAtRev = epochEntries.filter(
+      (entry) =>
+        entryType(entry) === 'p5-pass-completed' &&
+        Boolean(entryEffectiveRevision(entry)) &&
+        matchesEffectiveRevision(entry, resolvedRev),
+    );
+    const latestPassAtRev = passesAtRev.at(-1);
+    if (passesAtRev.length > 0 && entryEffectiveDry(latestPassAtRev) !== true) {
+      return {
+        ok: false,
+        operational: false,
+        phase,
+        ticket,
+        revision: resolvedRev,
+        missing: [],
+        errors: ['P5 evidence is incomplete: trivial requires the latest p5-pass-completed entry at this revision to have dry=true'],
+      };
+    }
+
+    const present = new Set();
+    if (entryEffectiveDry(latestPassAtRev) === true) {
+      present.add('p5-pass-completed');
+    }
+    for (const entry of epochEntries) {
+      const type = entryType(entry);
+      if (!type || type === 'p5-pass-completed') continue;
+      present.add(type);
+    }
+    const missing = requirements.filter((type) => !present.has(type));
+    return {
+      ok: missing.length === 0 && skipped.length === 0,
+      operational: false,
+      phase,
+      ticket,
+      revision: resolvedRev,
+      required: requirements,
+      present: Array.from(present).sort(),
+      missing,
+      errors: [],
+      skipped,
+      identityError,
+    };
+  }
+
   const latestScopedP5Revision = requiresRevision(phase) ? latestP5Revision(entries, ticket) : null;
   const p5Revision = phase === 'p6' && !explicitRevision ? latestScopedP5Revision : null;
   const assertedP5Entry = requiresRevision(phase)
@@ -477,6 +752,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       ticket,
       revision: assertedRevisionForLiveCheck,
       currentRevision: liveWorktreeRevision,
+      missing: [],
       errors: [`current worktree revision could not be resolved while P5 evidence exists at ${assertedRevisionForLiveCheck}`],
     };
   }
@@ -488,6 +764,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       ticket,
       revision: assertedRevisionForLiveCheck,
       currentRevision: liveWorktreeRevision,
+      missing: [],
       errors: [`P5 evidence is stale: recorded ${assertedRevisionForLiveCheck}, current worktree is ${liveWorktreeRevision}`],
     };
   }
@@ -499,6 +776,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       ticket,
       revision: p5Revision ?? currentRevision,
       currentRevision,
+      missing: [],
       errors: [ticketStaleError],
     };
   }
@@ -510,6 +788,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       ticket,
       revision: p5Revision ?? currentRevision,
       currentRevision,
+      missing: [],
       errors: transcriptErrors,
     };
   }
@@ -521,6 +800,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       ticket,
       revision: p5Revision ?? currentRevision,
       currentRevision,
+      missing: [],
       errors: p5CompletionErrors,
     };
   }
@@ -532,17 +812,37 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
   const p6Errors = phase === 'p6' && assertedP5Entry
     ? p6IntegrityErrors(latestP6Entry(entries, ticket, resolvedRevision), currentBinding)
     : [];
-  const p4Errors = phase === 'p4'
-    ? p4IntegrityErrors(entries, ticket, resolvedRevision, cwd)
+  const lastOtherRevBoundedCompleteIdx = phase === 'bounded'
+    ? entries.findLastIndex(
+        (entry) =>
+          matchesTicket(entry, ticket) &&
+          P5_EPOCH_TYPES.has(entryType(entry)) &&
+          Boolean(entryEffectiveRevision(entry)) &&
+          !matchesEffectiveRevision(entry, resolvedRevision),
+      )
+    : -1;
+  const boundedEpochEntries = phase === 'bounded'
+    ? entries.filter(
+        (entry, idx) =>
+          matchesTicket(entry, ticket) &&
+          (entryEffectiveRevision(entry) !== undefined
+            ? matchesEffectiveRevision(entry, resolvedRevision)
+            : idx > lastOtherRevBoundedCompleteIdx),
+      )
+    : entries;
+  const p4Errors = phase === 'p4' || phase === 'bounded'
+    ? p4IntegrityErrors(phase === 'bounded' ? boundedEpochEntries : entries, ticket, resolvedRevision, cwd, phase === 'bounded')
     : [];
-  // operational: false — an unresolved gap, a rejected verdict, or stale
-  // evidence is a normal, expected GATE rejection with concrete reasons
-  // (exit 2), not an infrastructure failure that couldn't be evaluated at
-  // all (exit 1). Codex cross-model review, round 4 + #764: the CLI's opError-on-
-  // operational path exits 1 for these, which misreports a fixable content
-  // problem as an outage to any automation branching on exit code.
+  const hollowErrors = phase === 'bounded' || phase === 'p3'
+    ? hollowTestIntegrityErrors(phase === 'bounded' ? boundedEpochEntries : entries, ticket, resolvedRevision, true)
+    : [];
+  const enforceFresh =
+    Object.hasOwn(PHASE_REQUIREMENTS, phase) &&
+    (requireFreshContext === true || track === 'substantial' || track === 'architectural');
+  const freshErrors = enforceFresh ? freshContextIntegrityErrors(entries, ticket, phase, track) : [];
+
   const p1Errors = phase === 'p1'
-    ? specApprovalIntegrityErrors(entries, ticket, cwd)
+    ? [...specApprovalIntegrityErrors(entries, ticket, cwd), ...freshErrors]
     : [];
   if (p1Errors.length > 0) {
     return {
@@ -550,11 +850,12 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       operational: false,
       phase,
       ticket,
+      missing: [],
       errors: p1Errors,
     };
   }
   const p0Errors = (phase === 'p0' || phase === 'p2') && ticket
-    ? coldstartIntegrityErrors(entries, ticket, cwd, dir, phase)
+    ? [...coldstartIntegrityErrors(entries, ticket, cwd, dir, phase), ...freshErrors]
     : [];
   if (p0Errors.length > 0) {
     return {
@@ -562,6 +863,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       operational: false,
       phase,
       ticket,
+      missing: [],
       errors: p0Errors,
     };
   }
@@ -573,6 +875,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       ticket,
       revision: resolvedRevision,
       currentRevision,
+      missing: [],
       errors: p6Errors,
     };
   }
@@ -583,7 +886,19 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       phase,
       ticket,
       revision: resolvedRevision,
+      missing: [],
       errors: p4Errors,
+    };
+  }
+  if (hollowErrors.length > 0) {
+    return {
+      ok: false,
+      operational: false,
+      phase,
+      ticket,
+      ...(resolvedRevision ? { revision: resolvedRevision } : {}),
+      missing: [],
+      errors: hollowErrors,
     };
   }
   const p4BindingErrors = phase === 'p4' ? p4EvidenceBindingErrors(entries, ticket, cwd) : [];
@@ -593,6 +908,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       operational: false,
       phase,
       ticket,
+      missing: [],
       errors: p4BindingErrors,
     };
   }
@@ -602,26 +918,28 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
       operational: true,
       phase,
       ticket,
+      missing: [],
       errors: [`${phase} requires a git worktree revision or --revision`],
     };
   }
 
   const present = new Set(
     entries
-      .filter((entry) => matchesTicket(entry, ticket))
-      .filter((entry) => matchesRevision(entry, resolvedRevision))
+      .filter((entry, idx) => {
+        if (!matchesTicket(entry, ticket)) return false;
+        const type = entryType(entry);
+        if (phase === 'bounded' && !REVISION_BOUND_TYPES.has(type)) {
+          if (entryEffectiveRevision(entry) !== undefined) return matchesEffectiveRevision(entry, resolvedRevision);
+          if (type === 'rails-red') return true;
+          return idx > lastOtherRevBoundedCompleteIdx;
+        }
+        return matchesRevision(entry, resolvedRevision);
+      })
       .map((entry) => entryType(entry))
       .filter(Boolean)
   );
   const missing = requirements.filter((type) => !present.has(type));
 
-  // `identityError` alongside `skipped`, not folded into it: own-chain appends
-  // the refusal to BOTH channels (see its contract), and a caller with only the
-  // list cannot tell "we cannot establish which evidence is ours" from "this
-  // line would not parse". bin/adlc.mjs read the whole list as the latter and
-  // told every detached-HEAD checkout its ledger was malformed. `ok` is
-  // deliberately unchanged — a non-empty `skipped` already fails the gate
-  // closed, and this is a diagnostics channel, not a second gate.
   return {
     ok: missing.length === 0 && skipped.length === 0,
     operational: false,
@@ -631,6 +949,7 @@ export function assertPhase(phase, { dir = ADLC_DIR, ticket, revision, cwd = pro
     required: requirements,
     present: Array.from(present).sort(),
     missing,
+    errors: [],
     skipped,
     identityError,
   };

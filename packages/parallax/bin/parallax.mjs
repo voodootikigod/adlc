@@ -2,7 +2,7 @@
 // parallax — measured-ambiguity interrogation (ADLC D3)
 // Thin CLI: parse args, call lib, exit. No business logic here.
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
 import {
   parseArgs,
   pass,
@@ -21,6 +21,7 @@ import {
   buildRouteJudgePrompt,
   buildDivergencePrompt,
 } from '../lib/prompts.mjs';
+import { buildRepoFacts } from '../lib/repo-context.mjs';
 import {
   renderReport,
   renderRouteConflict,
@@ -59,6 +60,8 @@ Flags:
                       ticket's P1 gate
   --ticket <id>       ticket this run is evidence for; binds --record-verdict
   --tickets <path>    tickets file (default .adlc/tickets.json)
+  --repo <dir>        ground prompts in deterministic repository facts from <dir>
+  --dir <path>        .adlc manifest directory (default .adlc)
   --context <file>    context file(s) for --route mode (repeatable)
   --context-cap <n>   max chars embedded per --context file (default 6000)
 
@@ -81,6 +84,8 @@ const { values, positionals } = parseArgs({
     n: { type: 'string', default: '3' },
     'allow-partial-fan': { type: 'boolean', default: false },
     ticket: { type: 'string' },
+    repo: { type: 'string' },
+    dir: { type: 'string', default: '.adlc' },
     threshold: { type: 'string', default: '0.25' },
     tier: { type: 'string' },
     json: { type: 'boolean', default: false },
@@ -136,6 +141,55 @@ if (values['context-cap'] !== undefined) {
   }
 }
 
+let repoFacts;
+if (values.repo !== undefined) {
+  if (!values.repo.trim() || !existsSync(values.repo)) {
+    opError(`repo directory not found: ${values.repo}`);
+  }
+  if (!statSync(values.repo).isDirectory()) {
+    opError(`--repo must be a directory: ${values.repo}`);
+  }
+  repoFacts = buildRepoFacts(values.repo);
+}
+
+const metas = [];
+const onCompleteMeta = (m) => metas.push(m);
+
+async function maybeRecordLiveManifest(mode) {
+  if (values['prompt-only'] || process.env.ADLC_GATE_MOCK_RESPONSE || !values.ticket || metas.length === 0) {
+    return;
+  }
+  const lastMeta = metas[metas.length - 1];
+  const withUsage = metas.filter((m) => m.usage);
+  const summedUsage = withUsage.length > 0
+    ? withUsage.reduce(
+        (acc, m) => ({
+          inputTokens: acc.inputTokens + (m.usage.inputTokens ?? 0),
+          outputTokens: acc.outputTokens + (m.usage.outputTokens ?? 0),
+          cachedTokens: acc.cachedTokens + (m.usage.cachedTokens ?? 0),
+        }),
+        { inputTokens: 0, outputTokens: 0, cachedTokens: 0 },
+      )
+    : null;
+  const { record } = await import('@adlc/gate-manifest/lib/record.mjs');
+  record({
+    gate: 'parallax',
+    ticket: values.ticket,
+    dir: values.dir || '.adlc',
+    key: getKey(),
+    rawData: JSON.stringify({
+      mode,
+      provider: lastMeta.provider,
+      model: lastMeta.model,
+      tier: lastMeta.tier ?? 'mid',
+      attestationMode: lastMeta.attestationMode,
+      executionWitnessed: true,
+      usageStatus: summedUsage ? 'reported' : 'unreported',
+      ...(summedUsage ? { usage: summedUsage } : {}),
+    }),
+  });
+}
+
 // lib/verdict.mjs (and the @adlc/gate-manifest package it pulls in) is
 // imported lazily, only when --record-verdict is actually used, so plain
 // --prompt-only runs never pay for or depend on it.
@@ -168,7 +222,7 @@ async function recordPromptOnlyVerdict(prompts, extra) {
   }
   const { readVerdictSource, recordVerdict } = await import('../lib/verdict.mjs');
   const verdict = await readVerdictSource(values['record-verdict']);
-  const entry = recordVerdict({ ticket: values.ticket, verdict, extra, key: getKey() });
+  const entry = recordVerdict({ ticket: values.ticket, verdict, extra, dir: values.dir || '.adlc', key: getKey() });
   const signed = typeof entry.sig === 'string' ? ' (signed)' : ' (unsigned)';
   console.log(`gate-manifest: recorded seq=${entry.seq} gate=${entry.gate}${signed}`);
   process.exit(isFailingRecordedVerdict(verdict) ? 2 : 0);
@@ -195,7 +249,7 @@ if (values.edge) {
   if (!ticketB) opError(`ticket not found: ${idB}`);
 
   if (values['prompt-only']) {
-    const edgeFanPrompt = buildEdgePrompt(ticketA, ticketB);
+    const edgeFanPrompt = buildEdgePrompt(ticketA, ticketB, { repoFacts });
     const placeholderEdgeReadings = Array.from({ length: n }, (_, i) => ({
       spec: `<reading ${i + 1} spec>`,
       assumptions: [`<assumption ${i + 1}>`],
@@ -216,7 +270,10 @@ if (values.edge) {
       n,
       tier: tierOverride ?? 'cheap',
       allowPartialFan: values['allow-partial-fan'],
+      repoFacts,
+      onCompleteMeta,
     });
+    await maybeRecordLiveManifest('edge');
   } catch (err) {
     opError(err.message);
   }
@@ -255,7 +312,7 @@ if (values.route) {
   }
 
   if (values['prompt-only']) {
-    const answerPrompt = buildRouteAnswerPrompt(question, contextFiles, { contextCap });
+    const answerPrompt = buildRouteAnswerPrompt(question, contextFiles, { contextCap, repoFacts });
     const placeholderAnswers = Array.from({ length: n }, (_, i) => `<answer ${i + 1}>`);
     const judgePrompt = buildRouteJudgePrompt(question, placeholderAnswers);
 
@@ -273,7 +330,10 @@ if (values.route) {
       tier: tierOverride ?? 'cheap',
       contextCap,
       allowPartialFan: values['allow-partial-fan'],
+      repoFacts,
+      onCompleteMeta,
     });
+    await maybeRecordLiveManifest('route');
   } catch (err) {
     opError(err.message);
   }
@@ -342,7 +402,7 @@ if (!request) {
 }
 
 if (values['prompt-only']) {
-  const specFanPrompt = buildSpecReaderPrompt(request);
+  const specFanPrompt = buildSpecReaderPrompt(request, { repoFacts });
   const placeholderSpecReadings = Array.from({ length: n }, (_, i) => ({
     spec: `<reading ${i + 1} spec>`,
     assumptions: [`<assumption ${i + 1}>`],
@@ -363,7 +423,10 @@ try {
     n,
     tier: tierOverride ?? 'cheap',
     allowPartialFan: values['allow-partial-fan'],
+    repoFacts,
+    onCompleteMeta,
   });
+  await maybeRecordLiveManifest('spec');
 } catch (err) {
   opError(err.message);
 }

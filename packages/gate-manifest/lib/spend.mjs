@@ -138,6 +138,23 @@ function totalTokens(bucket) {
   return bucket.inputTokens + bucket.outputTokens;
 }
 
+export function computeBarbellMetrics(aggregate) {
+  const tok = (b) => (b?.inputTokens ?? 0) + (b?.outputTokens ?? 0) + (b?.cachedTokens ?? 0);
+  const p1p2p5 = tok(aggregate?.byPhase?.P1) + tok(aggregate?.byPhase?.P2) + tok(aggregate?.byPhase?.P5);
+  const p4 = tok(aggregate?.byPhase?.P4);
+  const totalTok = tok(aggregate?.total);
+  const totalCalls = aggregate?.total?.calls ?? 0;
+  const unmeasured = aggregate?.unmeasuredCalls ?? 0;
+  const totalInputAndCached = (aggregate?.total?.inputTokens ?? 0) + (aggregate?.total?.cachedTokens ?? 0);
+
+  return {
+    barbellRatio: p4 > 0 ? p1p2p5 / p4 : null,
+    p4Share: totalTok > 0 ? p4 / totalTok : null,
+    cacheHitRate: totalInputAndCached > 0 ? (aggregate?.total?.cachedTokens ?? 0) / totalInputAndCached : null,
+    measuredCallShare: (totalCalls + unmeasured) > 0 ? totalCalls / (totalCalls + unmeasured) : null,
+  };
+}
+
 /**
  * Aggregate token usage recorded in manifest entries by phase and by gate.
  *
@@ -148,6 +165,7 @@ function totalTokens(bucket) {
  *   total:   {calls:number, inputTokens:number, outputTokens:number, cachedTokens:number},
  *   entriesWithUsage: number,
  *   entriesTotal: number,
+ *   metrics: { barbellRatio: number | null, p4Share: number | null, cacheHitRate: number | null, measuredCallShare: number | null },
  * }}
  */
 export function aggregateSpend(entries) {
@@ -184,7 +202,9 @@ export function aggregateSpend(entries) {
     }
   }
 
-  return { byPhase, byGate, total, entriesWithUsage, unmeasuredCalls, entriesTotal: entries.length };
+  const result = { byPhase, byGate, total, entriesWithUsage, unmeasuredCalls, entriesTotal: entries.length };
+  result.metrics = computeBarbellMetrics(result);
+  return result;
 }
 
 /**

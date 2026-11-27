@@ -3,12 +3,148 @@
 // plugins/adlc-cursor/hooks/adlc-stop.mjs
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 import { existsSync as existsSync15 } from "node:fs";
-import { join as join16 } from "node:path";
+import { join as join17 } from "node:path";
 import { spawnSync } from "node:child_process";
 
 // packages/core/lib/llm.mjs
+import { spawn as spawn2 } from "node:child_process";
+import { StringDecoder as StringDecoder2 } from "node:string_decoder";
+
+// packages/core/lib/cli-providers.mjs
 import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+var CLAUDE_CLI_MODELS = Object.freeze({
+  cheap: "claude-haiku-4-5",
+  mid: "claude-sonnet-4-6",
+  frontier: "claude-opus-4-7"
+});
+var CODEX_CLI_MODELS = Object.freeze({
+  cheap: "gpt-5-mini",
+  mid: "gpt-5.1",
+  frontier: "gpt-5.1"
+});
+function normalizeCliAnthropicUsage(u) {
+  if (!u || typeof u !== "object" || Array.isArray(u)) return null;
+  return {
+    inputTokens: Number(u.input_tokens ?? u.inputTokens ?? 0),
+    outputTokens: Number(u.output_tokens ?? u.outputTokens ?? 0),
+    cachedTokens: Number((u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cachedTokens ?? 0))
+  };
+}
+function runCliCommand(bin, args, input, opts = {}) {
+  const envSource = opts.env ?? process.env;
+  const isTest = envSource.NODE_ENV === "test" || process.env.NODE_ENV === "test";
+  const spawnFn = isTest && typeof envSource.__adlcCliSpawn === "function" ? envSource.__adlcCliSpawn : spawn;
+  const env = {};
+  for (const [k, v] of Object.entries(envSource)) {
+    if (k === "ADLC_MANIFEST_KEY" || k.startsWith("ADLC_ADMIN_")) continue;
+    env[k] = v;
+  }
+  if (!env.HOME && process.env.HOME) env.HOME = process.env.HOME;
+  if (!env.PATH && process.env.PATH) env.PATH = process.env.PATH;
+  const timeoutMs = Number.isFinite(opts?.timeoutMs) && opts.timeoutMs > 0 ? opts.timeoutMs : 12e4;
+  const isolatedCwd = mkdtempSync(join(tmpdir(), "adlc-cli-cwd-"));
+  const cleanupCwd = () => {
+    try {
+      rmSync(isolatedCwd, { recursive: true, force: true });
+    } catch {
+    }
+  };
+  return new Promise((resolve8, reject) => {
+    let child;
+    try {
+      child = spawnFn(bin, args, {
+        shell: false,
+        cwd: isolatedCwd,
+        stdio: ["pipe", "pipe", "pipe"],
+        env
+      });
+    } catch (err) {
+      cleanupCwd();
+      return reject(err);
+    }
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+      }
+      cleanupCwd();
+      reject(new Error(`Process timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    const outDecoder = new StringDecoder("utf8");
+    const errDecoder = new StringDecoder("utf8");
+    child.stdout.on("data", (d) => {
+      stdout += outDecoder.write(d);
+    });
+    child.stderr.on("data", (d) => {
+      stderr += errDecoder.write(d);
+    });
+    child.stdin.on("error", () => {
+    });
+    child.stdin.end(input);
+    child.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      cleanupCwd();
+      reject(err);
+    });
+    child.on("close", (code, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      cleanupCwd();
+      stdout += outDecoder.end();
+      stderr += errDecoder.end();
+      if (code !== 0) {
+        return reject(new Error(`Process exited with code ${code ?? signal}: ${stderr || stdout}`));
+      }
+      resolve8(stdout);
+    });
+  });
+}
+async function claudeCliSend(apiKey, model, system, prompt, opts = {}) {
+  const bin = apiKey === "1" || apiKey === "true" ? "claude" : apiKey;
+  const args = ["--print", "--output-format", "json", "--tools", "", "--model", model];
+  const input = system ? `${system}
+
+---
+
+${prompt}` : prompt;
+  const stdout = await runCliCommand(bin, args, input, opts);
+  try {
+    const data = JSON.parse(stdout);
+    if (data && typeof data === "object" && !Array.isArray(data) && typeof data.result === "string") {
+      return {
+        text: data.result,
+        usage: normalizeCliAnthropicUsage(data.usage)
+      };
+    }
+  } catch {
+  }
+  return { text: stdout, usage: null };
+}
+async function codexCliSend(apiKey, model, system, prompt, opts = {}) {
+  const bin = apiKey === "1" || apiKey === "true" ? "codex" : apiKey;
+  const args = ["exec", "--skip-git-repo-check", "--sandbox", "read-only", "-m", model, "-"];
+  const input = system ? `${system}
+
+---
+
+${prompt}` : prompt;
+  const stdout = await runCliCommand(bin, args, input, opts);
+  return { text: stdout, usage: null };
+}
+
+// packages/core/lib/llm.mjs
 function isAgyTimeout(out) {
   const lines = out.split("\n").map((l) => l.trim()).filter(Boolean);
   const last = lines.at(-1) ?? "";
@@ -42,7 +178,7 @@ function agySend({ apiKey, model, system, prompt, timeoutMs }, env = process.env
 ${prompt}` : prompt;
   const hostTimeoutMs = typeof timeoutMs === "number" && timeoutMs > 0 ? timeoutMs : parseAgyTimeoutMs(timeoutSpec) + 5e3;
   return new Promise((resolve8, reject) => {
-    const p = spawn(bin, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const p = spawn2(bin, args, { stdio: ["pipe", "pipe", "pipe"] });
     let out = "";
     let err = "";
     let settled = false;
@@ -56,8 +192,8 @@ ${prompt}` : prompt;
       reject(new Error("agy: timed out waiting for response"));
     }, hostTimeoutMs);
     timer.unref?.();
-    const outDecoder = new StringDecoder("utf8");
-    const errDecoder = new StringDecoder("utf8");
+    const outDecoder = new StringDecoder2("utf8");
+    const errDecoder = new StringDecoder2("utf8");
     p.stdout.on("data", (d) => out += outDecoder.write(d));
     p.stderr.on("data", (d) => err += errDecoder.write(d));
     p.on("error", (e) => {
@@ -212,6 +348,7 @@ var PROVIDERS = [
     // providers win during auto-detection; force with ADLC_PROVIDER=agy.
     name: "agy",
     envKey: "ADLC_AGY",
+    isCli: true,
     models: {
       cheap: "Gemini 3.5 Flash (Medium)",
       mid: "Claude Sonnet 4.6 (Thinking)",
@@ -220,7 +357,25 @@ var PROVIDERS = [
     send: agySend
   }
 ];
+var CLI_PROVIDERS = [
+  {
+    name: "claude-cli",
+    envKey: "ADLC_CLAUDE_CLI",
+    isCli: true,
+    models: CLAUDE_CLI_MODELS,
+    send: ({ apiKey, model, system, prompt, timeoutMs }, env = process.env) => claudeCliSend(apiKey, model, system, prompt, { timeoutMs, env })
+  },
+  {
+    name: "codex-cli",
+    envKey: "ADLC_CODEX_CLI",
+    isCli: true,
+    models: CODEX_CLI_MODELS,
+    send: ({ apiKey, model, system, prompt, timeoutMs }, env = process.env) => codexCliSend(apiKey, model, system, prompt, { timeoutMs, env })
+  }
+];
+var ALL_PROVIDERS = [...PROVIDERS, ...CLI_PROVIDERS];
 var PROVIDER_NAMES = PROVIDERS.map((p) => p.name);
+var CLI_PROVIDER_NAMES = Object.freeze(ALL_PROVIDERS.filter((p) => p.isCli).map((p) => p.name));
 
 // packages/core/lib/git.mjs
 var GIT_MAX_BUFFER = 64 * 1024 * 1024;
@@ -315,7 +470,7 @@ var SECRET_PATTERNS = [
 
 // packages/core/lib/tickets.mjs
 import { existsSync as existsSync11, lstatSync as lstatSync7 } from "node:fs";
-import { dirname as dirname8, isAbsolute as isAbsolute4, join as join9 } from "node:path";
+import { dirname as dirname8, isAbsolute as isAbsolute4, join as join10 } from "node:path";
 
 // packages/tickets/lib/filename.mjs
 function ticketSlug(id) {
@@ -581,11 +736,11 @@ var TicketSnapshot = class {
 
 // packages/tickets/lib/store.mjs
 import { existsSync as existsSync10, lstatSync as lstatSync6, readdirSync as readdirSync4 } from "node:fs";
-import { isAbsolute as isAbsolute3, join as join8, resolve as resolve5 } from "node:path";
+import { isAbsolute as isAbsolute3, join as join9, resolve as resolve5 } from "node:path";
 
 // packages/tickets/lib/stores/directory.mjs
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join as join2, resolve } from "node:path";
 function assertRealDirectory(path) {
   let stat;
   try {
@@ -619,7 +774,7 @@ var DirectoryTicketStore = class {
     if (!manifestEntry || !manifestEntry.isFile() || manifestEntry.isSymbolicLink()) throw invalid("INVALID_MANIFEST", `${this.path}/.store.json must be a regular file`);
     let manifest;
     try {
-      manifest = JSON.parse(readFileSync(join(this.path, ".store.json"), "utf8"));
+      manifest = JSON.parse(readFileSync(join2(this.path, ".store.json"), "utf8"));
     } catch (error) {
       throw invalid("INVALID_MANIFEST", `invalid store manifest: ${error.message}`);
     }
@@ -633,7 +788,7 @@ var DirectoryTicketStore = class {
       if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith(".json")) {
         throw invalid("UNRECOGNIZED_STORE_ENTRY", `unrecognized or unsafe ticket store entry: ${entry.name}`);
       }
-      const fullPath = join(this.path, entry.name);
+      const fullPath = join2(this.path, entry.name);
       const stat = lstatSync(fullPath);
       if (!stat.isFile() || stat.isSymbolicLink()) throw invalid("UNSAFE_SHARD", `${entry.name} must be a regular file`);
       let ticket;
@@ -656,7 +811,7 @@ var DirectoryTicketStore = class {
     if (typeof id !== "string" || id.length === 0) return null;
     assertRealDirectory(this.path);
     const expectedManifest = this.archive ? ARCHIVE_MANIFEST : ACTIVE_MANIFEST;
-    const manifestPath = join(this.path, ".store.json");
+    const manifestPath = join2(this.path, ".store.json");
     let manifestStat;
     try {
       manifestStat = lstatSync(manifestPath);
@@ -677,7 +832,7 @@ var DirectoryTicketStore = class {
       throw invalid("UNSUPPORTED_STORE_FORMAT", `unsupported ticket store manifest (${hint})`, manifest);
     }
     const name = ticketFilename(id);
-    const fullPath = join(this.path, name);
+    const fullPath = join2(this.path, name);
     let stat;
     try {
       stat = lstatSync(fullPath);
@@ -709,14 +864,14 @@ import { basename as basename2, dirname as dirname7 } from "node:path";
 
 // packages/tickets/lib/transaction.mjs
 import { existsSync as existsSync8, readFileSync as readFileSync7 } from "node:fs";
-import { basename, dirname as dirname6, isAbsolute as isAbsolute2, join as join7, relative as relative2, resolve as resolve4 } from "node:path";
+import { basename, dirname as dirname6, isAbsolute as isAbsolute2, join as join8, relative as relative2, resolve as resolve4 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 
 // packages/tickets/lib/lock.mjs
-import { existsSync as existsSync2, mkdirSync, readFileSync as readFileSync2, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync as existsSync2, mkdirSync, readFileSync as readFileSync2, renameSync, rmSync as rmSync2, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
-import { dirname as dirname2, join as join2 } from "node:path";
+import { dirname as dirname2, join as join3 } from "node:path";
 var sleep = (milliseconds) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 function defaultPidAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -764,10 +919,10 @@ function acquireTicketLock(root = ".", {
   procStartTime = defaultProcStartTimeOf,
   host = hostname(),
   writeOwner = writeFileSync,
-  removeLock = rmSync,
+  removeLock = rmSync2,
   makeLockDirectory = mkdirSync
 } = {}) {
-  const path = join2(root, LOCK_DIRECTORY);
+  const path = join3(root, LOCK_DIRECTORY);
   if (!isLockMetadata({ version: 1, pid: process.pid, hostname: "", startedAt: "", command, transactionId })) {
     throw invalid(
       "INVALID_LOCK_OPTIONS",
@@ -792,7 +947,7 @@ function acquireTicketLock(root = ".", {
 `;
       makeLockDirectory(path);
       created = true;
-      writeOwner(join2(path, "owner.json"), serialized, { flag: "wx" });
+      writeOwner(join3(path, "owner.json"), serialized, { flag: "wx" });
       return { path, metadata };
     } catch (error) {
       if (created) {
@@ -807,12 +962,12 @@ function acquireTicketLock(root = ".", {
       }
       if (error.code !== "EEXIST") throw operational("LOCK_FAILED", `cannot acquire ticket lock: ${error.message}`);
       if (staleMs !== void 0) {
-        const currentOwner = readLockMetadata(join2(path, "owner.json"));
+        const currentOwner = readLockMetadata(join3(path, "owner.json"));
         if (isStaleTicketLock(currentOwner, { staleMs, now, isPidAlive, procStartTime, host })) {
           const staleDir = `${path}.stale-${process.pid}-${randomUUID()}`;
           try {
             renameSync(path, staleDir);
-            const movedOwner = readLockMetadata(join2(staleDir, "owner.json"));
+            const movedOwner = readLockMetadata(join3(staleDir, "owner.json"));
             const sameOwner = currentOwner === null ? movedOwner === null : movedOwner !== null && movedOwner.pid === currentOwner.pid && movedOwner.startedAt === currentOwner.startedAt && movedOwner.hostname === currentOwner.hostname;
             if (!sameOwner) {
               try {
@@ -851,12 +1006,12 @@ function readLockMetadata(path) {
   return isLockMetadata(parsed) ? parsed : null;
 }
 function readTicketLock(root = ".") {
-  return readLockMetadata(join2(root, LOCK_DIRECTORY, "owner.json"));
+  return readLockMetadata(join3(root, LOCK_DIRECTORY, "owner.json"));
 }
-function releaseTicketLock(lock, { removeLock = rmSync } = {}) {
+function releaseTicketLock(lock, { removeLock = rmSync2 } = {}) {
   if (!lock?.path) return { released: false, reason: "no-lock" };
   if (!existsSync2(lock.path)) return { released: false, reason: "no-lock" };
-  const owner = readLockMetadata(join2(lock.path, "owner.json"));
+  const owner = readLockMetadata(join3(lock.path, "owner.json"));
   if (!owner) return { released: false, reason: "unverifiable", code: "LOCK_STRANDED", path: lock.path };
   if (owner.pid !== lock.metadata?.pid || owner.startedAt !== lock.metadata?.startedAt) {
     return { released: false, reason: "not-ours", path: lock.path };
@@ -873,7 +1028,7 @@ function releaseTicketLock(lock, { removeLock = rmSync } = {}) {
 import { closeSync as closeSync3, existsSync as existsSync6, fsyncSync as fsyncSync2, mkdirSync as mkdirSync4, openSync as openSync3, readFileSync as readFileSync5, unlinkSync as unlinkSync3, writeFileSync as writeFileSync4 } from "node:fs";
 import { createHmac as createHmac2, randomUUID as randomUUID2 } from "node:crypto";
 import { hostname as hostname2 } from "node:os";
-import { dirname as dirname5, join as join5 } from "node:path";
+import { dirname as dirname5, join as join6 } from "node:path";
 
 // packages/tickets/lib/durability.mjs
 import {
@@ -886,7 +1041,7 @@ import {
   mkdirSync as mkdirSync2,
   openSync,
   renameSync as renameSync2,
-  rmSync as rmSync2,
+  rmSync as rmSync3,
   unlinkSync,
   writeFileSync as writeFileSync2
 } from "node:fs";
@@ -968,13 +1123,13 @@ function durableRename(source, target) {
 }
 function durableRemove(path, options) {
   const parent = dirname3(resolve2(path));
-  rmSync2(path, options);
+  rmSync3(path, options);
   fsyncDirectory(parent);
 }
 
 // packages/tickets/lib/manifest-segments.mjs
 import { existsSync as existsSync5, readFileSync as readFileSync4 } from "node:fs";
-import { join as join4 } from "node:path";
+import { join as join5 } from "node:path";
 
 // packages/tickets/lib/manifest-primitives.mjs
 import {
@@ -992,7 +1147,7 @@ import {
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { randomBytes, createHmac, timingSafeEqual } from "node:crypto";
-import { dirname as dirname4, isAbsolute, join as join3, relative, resolve as resolve3, sep } from "node:path";
+import { dirname as dirname4, isAbsolute, join as join4, relative, resolve as resolve3, sep } from "node:path";
 var SEGMENT_DIRNAME = "manifest.d";
 var SEGMENT_NAME_RE = /^[a-z0-9-]{1,40}-[0-9A-HJKMNP-TV-Z]{26}\.jsonl$/;
 var RESERVED_NAMES = /* @__PURE__ */ new Set([".store.json", ".lineage"]);
@@ -1008,16 +1163,16 @@ var ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 var OVERSIZED_FIRST_ENTRY = /* @__PURE__ */ Symbol("oversized-first-entry");
 var MALFORMED_FIRST_ENTRY = /* @__PURE__ */ Symbol("malformed-first-entry");
 function segmentDirPath(dir = ".adlc") {
-  return join3(dir, SEGMENT_DIRNAME);
+  return join4(dir, SEGMENT_DIRNAME);
 }
 function segmentPath(dir = ".adlc", name) {
-  return join3(segmentDirPath(dir), name);
+  return join4(segmentDirPath(dir), name);
 }
 function markerPath(dir = ".adlc") {
-  return join3(segmentDirPath(dir), MARKER_NAME);
+  return join4(segmentDirPath(dir), MARKER_NAME);
 }
 function lineagePath(dir = ".adlc") {
-  return join3(segmentDirPath(dir), LINEAGE_NAME);
+  return join4(segmentDirPath(dir), LINEAGE_NAME);
 }
 function looksLikeGenuineLedgerLock(path, size) {
   if (size === 0) return true;
@@ -1068,7 +1223,7 @@ function hasActivationMarker(dir = ".adlc") {
   return Boolean(parsed) && typeof parsed === "object" && parsed.format === MARKER_FORMAT && parsed.version === MARKER_VERSION;
 }
 function rootEndsInCutover(dir = ".adlc") {
-  const rootPath = join3(dir, "manifest.jsonl");
+  const rootPath = join4(dir, "manifest.jsonl");
   if (!existsSync4(rootPath)) return false;
   let content;
   try {
@@ -1113,7 +1268,7 @@ function discoverSegments(dir = ".adlc") {
   }
   for (const name of names) {
     if (RESERVED_NAMES.has(name)) continue;
-    const full = join3(segDir, name);
+    const full = join4(segDir, name);
     let st;
     try {
       st = lstatSync3(full);
@@ -1587,7 +1742,7 @@ function seqMap(nonEmpty) {
   return m;
 }
 function verifyManifestForest(dir = ".adlc", { requireSignatures = true, requireEntries = false, key = null } = {}) {
-  const rootRaw = readRawLines(join3(dir, "manifest.jsonl"));
+  const rootRaw = readRawLines(join4(dir, "manifest.jsonl"));
   const { valid: segmentNames, invalid: invalidSegments } = discoverSegments(dir);
   if (invalidSegments.length > 0) {
     const first = invalidSegments[0];
@@ -1751,7 +1906,7 @@ function resolveOpenSegment(dir = ".adlc", opts = {}) {
     }
   }
   const branch = currentBranch(cwd);
-  const rootPath = join3(dir, "manifest.jsonl");
+  const rootPath = join4(dir, "manifest.jsonl");
   let rootLast = null;
   if (existsSync4(rootPath)) {
     const rootLines = readFileSync3(rootPath, "utf8").split("\n").filter((l) => l.trim() !== "");
@@ -1792,7 +1947,7 @@ function forestChainsIntact(dir, { key = null } = {}) {
   return verifyManifestForest(dir, { key, requireSignatures: false }).valid;
 }
 function readForestEntries(dir) {
-  const root = parseLines(readRawLines2(join4(dir, "manifest.jsonl")));
+  const root = parseLines(readRawLines2(join5(dir, "manifest.jsonl")));
   const segments = discoverSegments(dir).valid.flatMap((name) => parseLines(readRawLines2(segmentPath(dir, name))));
   return [...root, ...segments];
 }
@@ -1950,7 +2105,7 @@ function recordTicketEvidence(root, {
   acceptLegacyMatch = false
 } = {}) {
   const signingKey = validateKeyParam(key);
-  const dir = join5(root, ".adlc");
+  const dir = join6(root, ".adlc");
   const data = {
     operation,
     action,
@@ -1974,7 +2129,7 @@ function recordTicketEvidence(root, {
   if (isSegmentedRepo(dir)) {
     return recordSegmentedTicketEvidence(dir, { gate, data, transactionId, operation, action, ticketId, ticketHash: ticketHash2, storeHash: storeHash2, archiveHash, key: signingKey, acceptLegacyMatch });
   }
-  const path = join5(root, ".adlc/manifest.jsonl");
+  const path = join6(root, ".adlc/manifest.jsonl");
   return withManifestLock(path, () => {
     const content = existsSync6(path) ? readFileSync5(path, "utf8") : "";
     const lines = content.split("\n").filter((line) => line.trim());
@@ -2033,7 +2188,7 @@ function recordTicketEvidence(root, {
 
 // packages/tickets/lib/trust-root.mjs
 import { existsSync as existsSync7, lstatSync as lstatSync4, readFileSync as readFileSync6, readdirSync as readdirSync3 } from "node:fs";
-import { join as join6 } from "node:path";
+import { join as join7 } from "node:path";
 var STORE_MARKER = ".store.json";
 function assertNotSymlink(path) {
   let stat;
@@ -2058,8 +2213,8 @@ function storeDeclaresRails(tickets) {
   });
 }
 function archiveDeclaresRails(root) {
-  const directory = join6(root, ARCHIVE_DIRECTORY);
-  const legacy = join6(root, LEGACY_ARCHIVE_FILE);
+  const directory = join7(root, ARCHIVE_DIRECTORY);
+  const legacy = join7(root, LEGACY_ARCHIVE_FILE);
   assertNotSymlink(directory);
   assertNotSymlink(legacy);
   if (existsSync7(directory)) {
@@ -2073,7 +2228,7 @@ function archiveDeclaresRails(root) {
     for (const entry of entries) {
       if (entry.name === STORE_MARKER) {
         try {
-          const marker = JSON.parse(readFileSync6(join6(directory, entry.name), "utf8"));
+          const marker = JSON.parse(readFileSync6(join7(directory, entry.name), "utf8"));
           if (!marker || typeof marker !== "object" || typeof marker.format !== "string") return true;
           sawMarker = true;
         } catch {
@@ -2081,11 +2236,11 @@ function archiveDeclaresRails(root) {
         }
         continue;
       }
-      if (entry.isSymbolicLink()) assertNotSymlink(join6(directory, entry.name));
+      if (entry.isSymbolicLink()) assertNotSymlink(join7(directory, entry.name));
       if (!entry.isFile()) return true;
       let parsed;
       try {
-        parsed = JSON.parse(readFileSync6(join6(directory, entry.name), "utf8"));
+        parsed = JSON.parse(readFileSync6(join7(directory, entry.name), "utf8"));
       } catch {
         return true;
       }
@@ -2105,16 +2260,16 @@ function archiveDeclaresRails(root) {
   return false;
 }
 function manifestRecordsBypass(root) {
-  const rootManifest = join6(root, ".adlc", "manifest.jsonl");
-  const segments = join6(root, ".adlc", "manifest.d");
+  const rootManifest = join7(root, ".adlc", "manifest.jsonl");
+  const segments = join7(root, ".adlc", "manifest.d");
   assertNotSymlink(rootManifest);
   assertNotSymlink(segments);
   const files = [rootManifest];
   if (existsSync7(segments)) {
     try {
       for (const entry of readdirSync3(segments, { withFileTypes: true })) {
-        if (entry.isSymbolicLink()) assertNotSymlink(join6(segments, entry.name));
-        if (entry.isFile() && entry.name.endsWith(".jsonl")) files.push(join6(segments, entry.name));
+        if (entry.isSymbolicLink()) assertNotSymlink(join7(segments, entry.name));
+        if (entry.isFile() && entry.name.endsWith(".jsonl")) files.push(join7(segments, entry.name));
       }
     } catch {
       return true;
@@ -2142,7 +2297,7 @@ function manifestRecordsBypass(root) {
   return false;
 }
 function repoDeclaresRails(root, tickets) {
-  assertNotSymlink(join6(root, ".adlc"));
+  assertNotSymlink(join7(root, ".adlc"));
   return storeDeclaresRails(tickets) || archiveDeclaresRails(root) || manifestRecordsBypass(root);
 }
 function assertWriteIsSignable({ key, allowUnsigned = false } = {}) {
@@ -2188,15 +2343,15 @@ function applyLegacyTransaction(store, tickets, { expectedSnapshotHash, operatio
   validateTickets(tickets);
   const transactionId = randomUUID3();
   const lock = existingLock ?? acquireTicketLock(root, { transactionId, command: `ticket:${operation}` });
-  const transactionRoot = join7(root, TRANSACTION_DIRECTORY, transactionId);
+  const transactionRoot = join8(root, TRANSACTION_DIRECTORY, transactionId);
   try {
     const before = store.load();
     if (expectedSnapshotHash && before.hash !== expectedSnapshotHash) throw conflict("STALE_SNAPSHOT", `expected ${expectedSnapshotHash}, found ${before.hash}`);
     const bypassAudit = transactionChangesAnything(before, tickets, []) ? bypassAuditPlan(before, { operation, evidenceRequired, key, allowUnsigned, root }) : null;
     const target = resolve4(store.path);
     const recordedTarget = journalPath(root, target);
-    const stage = join7(transactionRoot, "stage", basename(store.path));
-    const backup = join7(transactionRoot, "backup", basename(store.path));
+    const stage = join8(transactionRoot, "stage", basename(store.path));
+    const backup = join8(transactionRoot, "backup", basename(store.path));
     durableMkdir(dirname6(stage));
     durableMkdir(dirname6(backup));
     durableWrite(stage, prettyCanonicalJson({ tickets }));
@@ -2226,7 +2381,7 @@ function applyLegacyTransaction(store, tickets, { expectedSnapshotHash, operatio
         afterHash: fileHash(stage)
       }]
     };
-    durableWrite(join7(transactionRoot, "journal.json"), `${JSON.stringify(journal, null, 2)}
+    durableWrite(join8(transactionRoot, "journal.json"), `${JSON.stringify(journal, null, 2)}
 `);
     faultInjector?.("journal-prepared", { transactionId, operations: 1 });
     const temporary = `${target}.txn-${transactionId}`;
@@ -2245,12 +2400,12 @@ function applyLegacyTransaction(store, tickets, { expectedSnapshotHash, operatio
       ...bypassAudit ? { gate: bypassAudit.gate, bypass: true, storeHashBefore: bypassAudit.storeHashBefore } : {}
     });
     journal.state = "complete";
-    durableWrite(join7(transactionRoot, "journal.json"), `${JSON.stringify(journal, null, 2)}
+    durableWrite(join8(transactionRoot, "journal.json"), `${JSON.stringify(journal, null, 2)}
 `);
     durableRemove(transactionRoot, { recursive: true, force: true });
     return after;
   } catch (error) {
-    if (!existsSync8(join7(transactionRoot, "journal.json")) && existsSync8(transactionRoot)) durableRemove(transactionRoot, { recursive: true, force: true });
+    if (!existsSync8(join8(transactionRoot, "journal.json")) && existsSync8(transactionRoot)) durableRemove(transactionRoot, { recursive: true, force: true });
     throw error;
   } finally {
     if (!existingLock) releaseTicketLock(lock);
@@ -2312,9 +2467,9 @@ var LegacyTicketStore = class {
 };
 
 // packages/tickets/lib/store.mjs
-var rooted = (root, path) => isAbsolute3(path) ? path : join8(root, path);
+var rooted = (root, path) => isAbsolute3(path) ? path : join9(root, path);
 function pendingTransactions(root = ".") {
-  const path = join8(root, TRANSACTION_DIRECTORY);
+  const path = join9(root, TRANSACTION_DIRECTORY);
   if (!existsSync10(path)) return [];
   const stat = lstatSync6(path);
   if (stat.isSymbolicLink() || !stat.isDirectory()) throw conflict("RECOVERY_REQUIRED", `${path} is not a safe transaction directory`);
@@ -2340,8 +2495,8 @@ function detectTicketStore(options = {}) {
     if (path.endsWith(".json")) return new LegacyTicketStore(path);
     return new DirectoryTicketStore(path);
   }
-  const legacy = new LegacyTicketStore(join8(root, LEGACY_FILE));
-  const directory = new DirectoryTicketStore(join8(root, ACTIVE_DIRECTORY));
+  const legacy = new LegacyTicketStore(join9(root, LEGACY_FILE));
+  const directory = new DirectoryTicketStore(join9(root, ACTIVE_DIRECTORY));
   if (legacy.exists() && directory.exists()) throw conflict("AMBIGUOUS_STORE", "both .adlc/tickets.json and .adlc/tickets/ exist; complete or roll back migration");
   if (directory.exists()) return directory;
   if (legacy.exists()) return legacy;
@@ -2412,8 +2567,8 @@ var TICKET_TRUST_ROOT_RAILS = Object.freeze([
   ".adlc/current-ticket.json"
 ]);
 function ticketStoreExists(root = ".", override = null) {
-  if (override) return existsSync11(isAbsolute4(override) ? override : join9(root, override));
-  return existsSync11(join9(root, ".adlc/tickets.json")) || existsSync11(join9(root, ".adlc/tickets/.store.json"));
+  if (override) return existsSync11(isAbsolute4(override) ? override : join10(root, override));
+  return existsSync11(join10(root, ".adlc/tickets.json")) || existsSync11(join10(root, ".adlc/tickets/.store.json"));
 }
 
 // packages/core/lib/revision.mjs
@@ -2587,7 +2742,7 @@ var ALL_AGENTS = [...LENSES.map((l) => l.agent), VERIFIER.agent];
 
 // packages/core/lib/railpath.mjs
 import { lstatSync as lstatSync8, readlinkSync, realpathSync } from "node:fs";
-import { isAbsolute as isAbsolute5, join as join10, parse, relative as relative3 } from "node:path";
+import { isAbsolute as isAbsolute5, join as join11, parse, relative as relative3 } from "node:path";
 var MAX_SYMLINK_HOPS = 40;
 function realpathOr(p) {
   try {
@@ -2622,10 +2777,10 @@ function walk(start, segments) {
     const seg = queue.shift();
     if (seg === ".") continue;
     if (seg === "..") {
-      cur = join10(cur, "..");
+      cur = join11(cur, "..");
       continue;
     }
-    const next = join10(cur, seg);
+    const next = join11(cur, seg);
     const st = exists ? lstatOrNull(next) : null;
     if (st?.isSymbolicLink()) {
       const target = ++hops > MAX_SYMLINK_HOPS ? null : readlinkOrNull(next);
@@ -2642,11 +2797,343 @@ function walk(start, segments) {
 function resolveRailPath(filePath, root) {
   const realRoot = realpathOr(root);
   const start = isAbsolute5(filePath) ? parse(filePath).root : realRoot;
-  const final = walk(start, segmentsOf(filePath)) ?? (isAbsolute5(filePath) ? filePath : join10(realRoot, filePath));
+  const final = walk(start, segmentsOf(filePath)) ?? (isAbsolute5(filePath) ? filePath : join11(realRoot, filePath));
   return relative3(realRoot, final).split("\\").join("/");
 }
 
+// packages/core/lib/structural-mutate.mjs
+var EXEMPT_KEYS = /* @__PURE__ */ new Set(["encoding", "recursive", "force"]);
+var NON_CALL_KEYWORDS = /* @__PURE__ */ new Set([
+  "if",
+  "while",
+  "for",
+  "switch",
+  "catch",
+  "with",
+  "function",
+  "return",
+  "throw",
+  "typeof",
+  "void",
+  "delete",
+  "yield",
+  "default",
+  "case",
+  "new"
+]);
+function dropObjectArgKey(line) {
+  if (typeof line !== "string") return null;
+  if (line.includes("\n") || line.includes("\r")) return null;
+  const masked = maskStringLiterals(line);
+  if (masked.includes("...")) return null;
+  let parenDepth = 0;
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  for (let i = 0; i < masked.length; i++) {
+    const ch = masked[i];
+    if (ch === "(") parenDepth++;
+    else if (ch === ")") {
+      parenDepth--;
+      if (parenDepth < 0) return null;
+    } else if (ch === "{") braceDepth++;
+    else if (ch === "}") {
+      braceDepth--;
+      if (braceDepth < 0) return null;
+    } else if (ch === "[") bracketDepth++;
+    else if (ch === "]") {
+      bracketDepth--;
+      if (bracketDepth < 0) return null;
+    }
+  }
+  if (parenDepth !== 0 || braceDepth !== 0 || bracketDepth !== 0) return null;
+  if (/\b(?:const|let|var)\s*\{/.test(masked)) return null;
+  if (/}\s*=/.test(masked)) return null;
+  if (/\b(?:import|export|function)\b/.test(masked)) return null;
+  if (/=>/.test(masked)) return null;
+  for (let i = 0; i < masked.length; i++) {
+    if (masked[i] !== "{") continue;
+    const openBrace = i;
+    let depth = 1;
+    let closeBrace = -1;
+    for (let j = openBrace + 1; j < masked.length; j++) {
+      if (masked[j] === "{") depth++;
+      else if (masked[j] === "}") {
+        depth--;
+        if (depth === 0) {
+          closeBrace = j;
+          break;
+        }
+      }
+    }
+    if (closeBrace === -1) continue;
+    let pDepth = 0, bDepth = 0, brDepth = 0;
+    let enclosingParen = -1;
+    for (let k = openBrace - 1; k >= 0; k--) {
+      const c = masked[k];
+      if (c === ")") pDepth++;
+      else if (c === "(") {
+        if (pDepth === 0 && bDepth === 0 && brDepth === 0) {
+          enclosingParen = k;
+          break;
+        }
+        pDepth--;
+      } else if (c === "}") bDepth++;
+      else if (c === "{") {
+        if (pDepth === 0 && bDepth === 0 && brDepth === 0) break;
+        bDepth--;
+      } else if (c === "]") brDepth++;
+      else if (c === "[") {
+        if (pDepth === 0 && bDepth === 0 && brDepth === 0) break;
+        brDepth--;
+      }
+    }
+    if (enclosingParen === -1) continue;
+    const beforeParen = masked.slice(0, enclosingParen).trimEnd();
+    if (!beforeParen) continue;
+    const calleeMatch = beforeParen.match(/([a-zA-Z_$][\w$]*)$/);
+    if (!calleeMatch && !beforeParen.endsWith(")") && !beforeParen.endsWith("]")) {
+      continue;
+    }
+    if (calleeMatch) {
+      const word = calleeMatch[1];
+      if (NON_CALL_KEYWORDS.has(word)) continue;
+    }
+    if (beforeParen.endsWith(")")) {
+      let d = 0;
+      let matchingP = -1;
+      for (let k = beforeParen.length - 1; k >= 0; k--) {
+        if (beforeParen[k] === ")") d++;
+        else if (beforeParen[k] === "(") {
+          d--;
+          if (d === 0) {
+            matchingP = k;
+            break;
+          }
+        }
+      }
+      if (matchingP > 0) {
+        const priorWord = beforeParen.slice(0, matchingP).trimEnd().match(/([a-zA-Z_$][\w$]*)$/);
+        if (priorWord && NON_CALL_KEYWORDS.has(priorWord[1])) continue;
+      }
+    }
+    const props = [];
+    let segStart = openBrace + 1;
+    let curParen = 0, curBrace = 0, curBracket = 0;
+    for (let j = openBrace + 1; j <= closeBrace; j++) {
+      if (j === closeBrace || curParen === 0 && curBrace === 0 && curBracket === 0 && masked[j] === ",") {
+        const segText = line.slice(segStart, j);
+        const trimmed2 = segText.trim();
+        if (trimmed2.length > 0) {
+          const leadMatch = segText.match(/^\s*/)[0].length;
+          const trailMatch = segText.match(/\s*$/)[0].length;
+          const pStart = segStart + leadMatch;
+          const pEnd = j - trailMatch;
+          let colonIdx = -1;
+          let subP = 0, subB = 0, subBr = 0;
+          for (let m = pStart; m < pEnd; m++) {
+            const ch = masked[m];
+            if (ch === "(") subP++;
+            else if (ch === ")") subP--;
+            else if (ch === "{") subB++;
+            else if (ch === "}") subB--;
+            else if (ch === "[") subBr++;
+            else if (ch === "]") subBr--;
+            else if (ch === ":" && subP === 0 && subB === 0 && subBr === 0) {
+              colonIdx = m;
+              break;
+            }
+          }
+          const rawKey = (colonIdx !== -1 ? line.slice(pStart, colonIdx) : line.slice(pStart, pEnd)).trim();
+          const key = rawKey.replace(/^['"`](.*)['"`]$/, "$1").trim();
+          props.push({ start: pStart, end: pEnd, key });
+        }
+        segStart = j + 1;
+      } else {
+        const ch = masked[j];
+        if (ch === "(") curParen++;
+        else if (ch === ")") curParen--;
+        else if (ch === "{") curBrace++;
+        else if (ch === "}") curBrace--;
+        else if (ch === "[") curBracket++;
+        else if (ch === "]") curBracket--;
+      }
+    }
+    if (props.length < 2) continue;
+    const nonExemptIndices = [];
+    for (let pIdx = 0; pIdx < props.length; pIdx++) {
+      const k = props[pIdx].key;
+      const isExempt = EXEMPT_KEYS.has(k) || isTuningIdentifier(k);
+      if (!isExempt) {
+        nonExemptIndices.push(pIdx);
+      }
+    }
+    if (nonExemptIndices.length < 1) continue;
+    const dropIdx = nonExemptIndices[nonExemptIndices.length - 1];
+    return line.slice(0, openBrace + 1) + " " + props.filter((_, idx) => idx !== dropIdx).map((p) => line.slice(p.start, p.end).trim()).join(", ") + " " + line.slice(closeBrace);
+  }
+  return null;
+}
+var STRUCTURAL_FALLBACK_OPERATORS = Object.freeze([
+  Object.freeze({
+    name: "object-arg-key-drop",
+    apply: dropObjectArgKey
+  })
+]);
+
 // packages/core/lib/mutate.mjs
+function identifierSegments(name) {
+  return String(name).replace(/[_$\d]+/g, " ").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2").trim().split(/\s+/).filter(Boolean).map((s) => s.toLowerCase());
+}
+var DISCRETE_TAIL = /* @__PURE__ */ new Set([
+  "retries",
+  "retry",
+  "tries",
+  "attempts",
+  "attempt",
+  "count",
+  "counts",
+  "limit",
+  "limits",
+  "size",
+  "sizes",
+  "length",
+  "len",
+  "index",
+  "idx",
+  "offset",
+  "code",
+  "codes",
+  "id",
+  "ids",
+  "version",
+  "port",
+  "level",
+  "priority",
+  "depth",
+  "concurrency",
+  "workers",
+  "slots",
+  "page",
+  "pages",
+  "num",
+  "number",
+  "numbers",
+  "items",
+  "rows",
+  "lines",
+  "chars",
+  "columns"
+]);
+var MAGNITUDE_UNIT_TAIL = /* @__PURE__ */ new Set([
+  "ms",
+  "msec",
+  "msecs",
+  "milli",
+  "millis",
+  "millisecond",
+  "milliseconds",
+  "us",
+  "usec",
+  "usecs",
+  "micro",
+  "micros",
+  "microsecond",
+  "microseconds",
+  "ns",
+  "nsec",
+  "nsecs",
+  "nano",
+  "nanos",
+  "nanosecond",
+  "nanoseconds",
+  "byte",
+  "bytes",
+  "kb",
+  "mb",
+  "gb",
+  "tb",
+  "kib",
+  "mib",
+  "gib",
+  "tib",
+  "kbytes",
+  "mbytes",
+  "gbytes"
+]);
+var TUNING_PHRASES = /* @__PURE__ */ new Set([
+  "timeout",
+  "delay",
+  "interval",
+  "backoff",
+  "ttl",
+  "maxage",
+  "keepalive",
+  "maxbuffer",
+  "highwatermark",
+  "maxbytes"
+]);
+function isTuningIdentifier(name) {
+  const segs = identifierSegments(name);
+  if (segs.length === 0) return false;
+  const tail = segs[segs.length - 1];
+  if (DISCRETE_TAIL.has(tail)) return false;
+  if (MAGNITUDE_UNIT_TAIL.has(tail)) return true;
+  for (let i = 0; i < segs.length; i++) {
+    let joined = "";
+    for (let j = i; j < segs.length; j++) {
+      joined += segs[j];
+      if (TUNING_PHRASES.has(joined)) return true;
+    }
+  }
+  return false;
+}
+function maskStringLiterals(line) {
+  let out = "";
+  let quote = null;
+  let escaped = false;
+  let exprDepth = 0;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (exprDepth > 0) {
+      if (ch === "{") exprDepth++;
+      else if (ch === "}") exprDepth--;
+      out += ch;
+      continue;
+    }
+    if (quote) {
+      if (escaped) {
+        out += " ";
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        out += " ";
+        escaped = true;
+        continue;
+      }
+      if (quote === "`" && ch === "$" && line[i + 1] === "{") {
+        out += "${";
+        i++;
+        exprDepth = 1;
+        continue;
+      }
+      if (ch === quote) {
+        out += ch;
+        quote = null;
+        continue;
+      }
+      out += " ";
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+      out += ch;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
 var ARRAY_LITERAL_ELEMENT = String.raw`(?:'[^']*'|"[^"]*"|\`[^\`]*\`|[\w$.]+)`;
 var ARRAY_LITERAL_RE = new RegExp(
   `\\[\\s*(${ARRAY_LITERAL_ELEMENT}(?:\\s*,\\s*${ARRAY_LITERAL_ELEMENT})+)\\s*\\]`
@@ -2660,6 +3147,7 @@ var SECRET_REDACT_RULES = SECRET_PATTERNS.map(([pattern]) => [
   new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`),
   pattern === INLINE_ASSIGNMENT ? "$1[REDACTED]" : "[REDACTED]"
 ]);
+var VALID_ATTESTATION_MODES = Object.freeze(["self-context", "headless-cli", "api"]);
 
 // packages/core/lib/sandbox-runner.mjs
 var SENSITIVE_HOME_DIRS = Object.freeze([
@@ -2815,7 +3303,7 @@ var MASK_RULES = [...ASSIGNMENT_RULES, ...SHAPE_RULES];
 // packages/core/lib/workspace-root.mjs
 import { existsSync as existsSync12, lstatSync as lstatSync9, readFileSync as readFileSync9, readlinkSync as readlinkSync2, realpathSync as realpathSync2, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename as basename3, dirname as dirname9, isAbsolute as isAbsolute6, join as join11, relative as relative4, resolve as resolve6 } from "node:path";
+import { basename as basename3, dirname as dirname9, isAbsolute as isAbsolute6, join as join12, relative as relative4, resolve as resolve6 } from "node:path";
 var GITDIR_POINTER_MAX_BYTES = 4096;
 var SHELL_WORKDIR_KEYS = Object.freeze([
   "Cwd",
@@ -2857,7 +3345,7 @@ function canonicalizePath(targetPath) {
   for (let guard = 0; guard < 64; guard += 1) {
     try {
       const realBase = realpathSync2(cur);
-      return pending.length === 0 ? realBase : join11(realBase, ...pending);
+      return pending.length === 0 ? realBase : join12(realBase, ...pending);
     } catch {
       if (seen.has(cur)) return abs;
       seen.add(cur);
@@ -2869,7 +3357,7 @@ function canonicalizePath(targetPath) {
       } catch {
       }
       const parent = dirname9(cur);
-      if (parent === cur) return pending.length === 0 ? cur : join11(cur, ...pending);
+      if (parent === cur) return pending.length === 0 ? cur : join12(cur, ...pending);
       pending.unshift(basename3(cur));
       cur = parent;
     }
@@ -2884,7 +3372,7 @@ function isPathInside(childPath, parentPath) {
 }
 function inspectGitCheckout(dir) {
   if (typeof dir !== "string" || !dir.trim()) return null;
-  const gitEntry = join11(dir, ".git");
+  const gitEntry = join12(dir, ".git");
   let stats;
   try {
     stats = lstatSync9(gitEntry);
@@ -2892,7 +3380,7 @@ function inspectGitCheckout(dir) {
     return null;
   }
   if (stats.isDirectory()) {
-    if (!existsSync12(join11(gitEntry, "HEAD"))) return null;
+    if (!existsSync12(join12(gitEntry, "HEAD"))) return null;
     const realGitDir = canonicalizePath(gitEntry);
     return { kind: "repo", gitDir: realGitDir, commonGitDir: realGitDir };
   }
@@ -2912,26 +3400,26 @@ function inspectGitCheckout(dir) {
   try {
     const realGitDir = realpathSync2(resolvedGitDir);
     const realDir = realpathSync2(dir);
-    const backRaw = readSmallRegularFile(join11(realGitDir, "gitdir"));
-    const commonRaw = readSmallRegularFile(join11(realGitDir, "commondir"));
+    const backRaw = readSmallRegularFile(join12(realGitDir, "gitdir"));
+    const commonRaw = readSmallRegularFile(join12(realGitDir, "commondir"));
     if (backRaw && commonRaw) {
       const backTrimmed = backRaw.trim();
       const commonTrimmed = commonRaw.trim();
       if (backTrimmed && commonTrimmed) {
         const realBackDir = realpathSync2(dirname9(resolve6(realGitDir, backTrimmed)));
         const realCommon = realpathSync2(resolve6(realGitDir, commonTrimmed));
-        const realWorktrees = realpathSync2(join11(realCommon, "worktrees"));
+        const realWorktrees = realpathSync2(join12(realCommon, "worktrees"));
         const relWt = relative4(realWorktrees, realGitDir);
         const underWorktrees = relWt !== "" && !relWt.startsWith("..") && !isAbsolute6(relWt);
-        if (realBackDir === realDir && underWorktrees && existsSync12(join11(realCommon, "HEAD"))) {
+        if (realBackDir === realDir && underWorktrees && existsSync12(join12(realCommon, "HEAD"))) {
           return { kind: "worktree", gitDir: realGitDir, commonGitDir: realCommon };
         }
       }
-      if (existsSync12(join11(realGitDir, "HEAD")) || existsSync12(join11(realGitDir, "commondir"))) {
+      if (existsSync12(join12(realGitDir, "HEAD")) || existsSync12(join12(realGitDir, "commondir"))) {
         return { kind: "gitfile", gitDir: realGitDir, commonGitDir: null };
       }
     }
-    if (existsSync12(join11(realGitDir, "HEAD")) || existsSync12(join11(realGitDir, "commondir"))) {
+    if (existsSync12(join12(realGitDir, "HEAD")) || existsSync12(join12(realGitDir, "commondir"))) {
       return { kind: "gitfile", gitDir: realGitDir, commonGitDir: null };
     }
   } catch {
@@ -2942,9 +3430,9 @@ function inspectGitCheckout(dir) {
 function hasTicketStoreAt(dir, storeOverride = null) {
   if (typeof dir !== "string" || !dir.trim()) return false;
   if (typeof storeOverride === "string" && storeOverride.trim() && !isAbsolute6(storeOverride)) {
-    return existsSync12(join11(dir, storeOverride.trim()));
+    return existsSync12(join12(dir, storeOverride.trim()));
   }
-  return existsSync12(join11(dir, ".adlc", "tickets", ".store.json")) || existsSync12(join11(dir, ".adlc", "tickets.json"));
+  return existsSync12(join12(dir, ".adlc", "tickets", ".store.json")) || existsSync12(join12(dir, ".adlc", "tickets.json"));
 }
 function hasExternalAbsoluteStore(storeOverride) {
   return typeof storeOverride === "string" && storeOverride.trim().length > 0 && isAbsolute6(storeOverride.trim()) && existsSync12(storeOverride.trim());
@@ -3067,11 +3555,11 @@ function preferInnermostCheckout(outerRoot, dynamicCandidates = [], options = {}
 }
 
 // plugins/adlc-cursor/rails-checker.mjs
-import { isAbsolute as isAbsolute7, join as join13, relative as relative5 } from "node:path";
+import { isAbsolute as isAbsolute7, join as join14, relative as relative5 } from "node:path";
 
 // plugins/adlc-cursor/generated-active-ticket.mjs
 import { lstatSync as lstatSync10, openSync as openSync4, fstatSync, readSync as readSync2, closeSync as closeSync4, constants as fsConstants2 } from "node:fs";
-import { dirname as dirname10, join as join12 } from "node:path";
+import { dirname as dirname10, join as join13 } from "node:path";
 var CURRENT_TICKET_FILE2 = ".adlc/current-ticket.json";
 var MAX_POINTER_BYTES2 = 64 * 1024;
 var ABSENT = /* @__PURE__ */ Symbol("pointer-absent");
@@ -3130,7 +3618,7 @@ function conflictMessage(envId, fileId) {
   return `ADLC_TICKET ("${envId}") conflicts with ${CURRENT_TICKET_FILE2} ("${fileId}"): they name different tickets. The active ticket is per-worktree state \u2014 ADLC supports exactly one active ticket per worktree, and parallel work on a second ticket needs its own worktree (git worktree add <path> -b <branch>), not a second pointer in this one. Failing closed: which ticket governs this build cannot be determined.`;
 }
 function readActiveTicketPointer2(root = ".") {
-  const path = join12(root, CURRENT_TICKET_FILE2);
+  const path = join13(root, CURRENT_TICKET_FILE2);
   const raw = readPointerFileBounded(path);
   if (raw === ABSENT) return ok({ present: false });
   if (raw === null) {
@@ -3317,7 +3805,7 @@ function classifyTool(name) {
   return "other";
 }
 function canonicalizePath2(filePath, root) {
-  const abs = isAbsolute7(filePath) ? filePath : join13(root, filePath);
+  const abs = isAbsolute7(filePath) ? filePath : join14(root, filePath);
   return relative5(root, abs).split("\\").join("/");
 }
 function resolveActiveTicketId2(root, env) {
@@ -3382,12 +3870,12 @@ function checkRail({ filePath, tool, root = process.cwd(), env = process.env }) 
 
 // plugins/adlc-cursor/hooks/adlc-rails-guard.mjs
 import { fileURLToPath as fileURLToPath2 } from "node:url";
-import { isAbsolute as isAbsolute9, resolve as resolve7, relative as relative6, dirname as dirname12, basename as basename4, join as join15 } from "node:path";
+import { isAbsolute as isAbsolute9, resolve as resolve7, relative as relative6, dirname as dirname12, basename as basename4, join as join16 } from "node:path";
 import { realpathSync as realpathSync3, existsSync as existsSync14 } from "node:fs";
 
 // plugins/adlc-cursor/lib/workspace-resolve.mjs
 import { existsSync as existsSync13, mkdirSync as mkdirSync5, readFileSync as readFileSync10, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
-import { dirname as dirname11, isAbsolute as isAbsolute8, join as join14, normalize as normalize2, resolve as pathResolve } from "node:path";
+import { dirname as dirname11, isAbsolute as isAbsolute8, join as join15, normalize as normalize2, resolve as pathResolve } from "node:path";
 
 // plugins/adlc-cursor/lib/session-identity.mjs
 var PAYLOAD_SESSION_KEYS = Object.freeze(["session_id", "sessionId", "conversation_id", "conversationId"]);
@@ -3518,7 +4006,7 @@ function hasExplicitWorkspaceDeclaration(payload) {
   return Boolean(firstString(payload, EXPLICIT_WORKSPACE_KEYS));
 }
 function hasLocalDefaultTicketStore(dir) {
-  return existsSync14(join15(dir, ".adlc", "tickets", ".store.json")) || existsSync14(join15(dir, ".adlc", "tickets.json"));
+  return existsSync14(join16(dir, ".adlc", "tickets", ".store.json")) || existsSync14(join16(dir, ".adlc", "tickets.json"));
 }
 function storeOverrideForNestedProbe(rawOverride, outerDir) {
   if (!rawOverride || typeof rawOverride !== "string" || !rawOverride.trim()) return null;
@@ -3602,7 +4090,7 @@ function envForCheckoutRoot(checkoutRoot, outerAnchor, env) {
     }
     return next;
   }
-  if (!sameAsOuter && (!contains(outerAnchor, checkoutRoot) || existsSync14(join15(checkoutRoot, ".adlc", "current-ticket.json")))) {
+  if (!sameAsOuter && (!contains(outerAnchor, checkoutRoot) || existsSync14(join16(checkoutRoot, ".adlc", "current-ticket.json")))) {
     delete next.ADLC_TICKET;
   }
   for (const key of ["ADLC_TICKET_STORE", "ADLC_TICKETS"]) {
@@ -3836,7 +4324,7 @@ function stopAudit(root, { spawnImpl = spawnSync, env = process.env, base } = {}
     return { skipped: true, warnings: [] };
   }
   const warnings = [];
-  const hasManifest = existsSync15(join16(root, ".adlc", "manifest.jsonl")) || existsSync15(join16(root, ".adlc", "manifest.d"));
+  const hasManifest = existsSync15(join17(root, ".adlc", "manifest.jsonl")) || existsSync15(join17(root, ".adlc", "manifest.d"));
   if (hasManifest) {
     const verify = run(spawnImpl, "adlc", ["gate-manifest", "verify", "--json", "--allow-legacy-unsigned"], root);
     if (!verify.error && verify.status !== 0) {

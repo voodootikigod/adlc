@@ -56,10 +56,12 @@ if (verb === 'capture') {
     opError(`capture failed: ${err.message}`);
   }
 
-  const total = snapshot.routes.length;
+  const routeCount = Array.isArray(snapshot.routes) ? snapshot.routes.length : 0;
+  const commandCount = Array.isArray(snapshot.commands) ? snapshot.commands.length : 0;
+  const total = routeCount + commandCount;
   const ok = reachableCount(snapshot);
-  // Reachability gate: if no route returned a real HTTP response, the target
-  // was unreachable (e.g. server never started). Refuse BEFORE writing --out
+  // Reachability gate: if no route/command returned a real observation, the target
+  // was unreachable (e.g. server never started or binary missing). Refuse BEFORE writing --out
   // so a re-run against a dead target never overwrites an existing baseline
   // snapshot (#586).
   if (ok === 0) {

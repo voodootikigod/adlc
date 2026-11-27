@@ -325,11 +325,20 @@ export async function readVerdictSource(source) {
  * @param {(params: { gate?: string; ticket?: string; rawData: string; dir?: string }) => unknown} options.recordFn
  * @returns {unknown}
  */
+export const VALID_ATTESTATION_MODES = Object.freeze(['self-context', 'headless-cli', 'api']);
+
 export function recordPromptOnlyVerdict({ gate, ticket, verdict, extra = {}, dir, recordFn } = {}) {
   if (typeof recordFn !== 'function') {
     throw new TypeError('recordPromptOnlyVerdict requires a recordFn from @adlc/gate-manifest');
   }
-  const data = { ...extra, promptOnly: true, usageStatus: 'unreported', verdict };
+  const data = {
+    ...extra,
+    promptOnly: true,
+    executionWitnessed: false,
+    attestationMode: 'self-context',
+    usageStatus: 'unreported',
+    verdict,
+  };
   return recordFn({ gate, ticket, rawData: JSON.stringify(data), dir });
 }
 

@@ -30,7 +30,7 @@ if (first === '--version' || first === '-v') {
   process.exit(0);
 }
 
-if (first === 'run' || first === 'accept') {
+if (first === 'run' || first === 'accept' || first === 'triage' || first === 'simplify') {
   const { code, error } = await dispatchRunner(argv);
   if (error) console.error(`error: ${error}`);
   process.exit(code);

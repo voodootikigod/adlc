@@ -25,6 +25,8 @@ import {
   resolveTarget, recordPathFor, writeFileAtomic, sweepStaleTemps,
 } from '../lib/inflight.mjs';
 import { printTable, buildJsonReport } from '../lib/report.mjs';
+import { polyglotLanguage, generatePolyglotMutants, checkPolyglotSyntax, executePolyglotMutant } from '../lib/polyglot.mjs';
+import { auditRailAdequacy } from '../lib/rail-audit.mjs';
 
 // ── arg parsing ─────────────────────────────────────────────────────────────
 
@@ -36,6 +38,9 @@ const { values } = parseArgs({
     'timeout-ms': { type: 'string', default: '120000' },
     target:       { type: 'string', multiple: true },
     rails:        { type: 'string', multiple: true },
+    'audit-rails': { type: 'string', multiple: true },
+    polyglot:     { type: 'boolean', default: false },
+    structural:   { type: 'boolean', default: false },
     // Extra globs to treat as tests, for projects whose convention this tool
     // cannot infer. The built-in rules cover directory segments and the dotted,
     // exact and snake basename forms; HYPHENATED names (foo-test.js, spec-foo.js)
@@ -61,15 +66,16 @@ const { values } = parseArgs({
 });
 
 const USAGE_EXAMPLE = 'hollow-test --test-cmd "node --test test/*.test.mjs" [options]';
-if (values.help || !values['test-cmd']) {
+function printUsage() {
   console.log(`
 hollow-test — diff-scoped mutation gate (ADLC C4)
 
 Usage:
   ${USAGE_EXAMPLE}
+  hollow-test --audit-rails <file> [--audit-rails <file>...] [--json]
 
 Options:
-  --test-cmd <cmd>      (required) Shell command to run the test suite
+  --test-cmd <cmd>      (required for mutation) Shell command to run the test suite
   --base <ref>          Git base ref for diff (default: merge-base with
                         main/master; fails closed if none can be resolved)
   --max <n>             Max mutants across all files (default: 20)
@@ -83,6 +89,13 @@ Options:
   --rails <ticket-file> Path to a ticket JSON file; its declared "rails"
                         globs are expanded against tracked files and added
                         as mutation targets (repeatable).
+  --audit-rails <file>  Audit test rail file(s) for missing assertions,
+                        tautological-only assertions, and unbacked internal
+                        relative module mocks without running --test-cmd
+                        (repeatable).
+  --polyglot            Enable Python (.py), Go (.go), and Rust (.rs) mutation
+                        and isolated temp-file toolchain syntax checks.
+  --structural          Enable structural call-site option-drop fallback mutants.
   --exclude-glob <glob> Exclude matching paths from diff-derived mutation
                         (repeatable; dist/**, build/**, *.bundle.mjs, and
                         *.min.js are excluded by default).
@@ -90,15 +103,60 @@ Options:
   --help                Show this help
 
 Source files: JavaScript (.js/.mjs/.cjs) and the TypeScript family
-(.ts/.mts/.cts/.tsx/.jsx), not declaration files.
+(.ts/.mts/.cts/.tsx/.jsx), not declaration files (plus .py/.go/.rs with --polyglot).
 
 Exit codes:
-  0  All mutants killed (gate passes)
+  0  All mutants killed / rail audit passes (gate passes)
   1  Operational error (dirty tree, not a git repo, bad args, nothing to mutate,
      the in-flight record could not be written)
-  2  One or more mutants survived (hollow coverage)
+  2  One or more mutants survived (hollow coverage) or rail audit failed
 `);
-  process.exit(values.help ? 0 : 1);
+}
+
+if (values.help) {
+  printUsage();
+  process.exit(0);
+}
+
+if (values['audit-rails'] !== undefined) {
+  let report;
+  try {
+    report = auditRailAdequacy(values['audit-rails'], { root: process.cwd() });
+  } catch (err) {
+    opError(err.message);
+  }
+  const hasMutationRun = Boolean(values['test-cmd']);
+  if (!report.ok) {
+    if (values.json) {
+      printJson(report);
+    } else {
+      for (const v of report.violations) {
+        console.log(`[${v.reason}] ${v.file}: ${v.detail}`);
+      }
+    }
+    gateFail(`rail adequacy audit failed (${report.violations.length} violation(s))`);
+  }
+  if (!hasMutationRun) {
+    if (values.json) {
+      printJson(report);
+    } else {
+      console.log(`rail-audit: ${report.audited} rail file(s) passed adequacy audit`);
+    }
+    pass();
+  } else if (!values.json) {
+    console.log(`rail-audit: ${report.audited} rail file(s) passed adequacy audit`);
+  }
+}
+
+if (!values['test-cmd']) {
+  printUsage();
+  process.exit(1);
+}
+
+const polyglot = values.polyglot === true;
+const includeStructural = values.structural === true;
+if (polyglot && process.env.PYTHONDONTWRITEBYTECODE === undefined) {
+  process.env.PYTHONDONTWRITEBYTECODE = '1';
 }
 
 const testCmd   = values['test-cmd'];
@@ -344,7 +402,7 @@ try {
 }
 
 const changedLines = mutate.changedLinesFromDiff(diff);
-const diffEligibleFilesAll = filterTargetFiles(changedLines, { testGlobs, sourceGlobs, excludeGlobs });
+const diffEligibleFilesAll = filterTargetFiles(changedLines, { testGlobs, sourceGlobs, excludeGlobs, polyglot });
 
 // ── comment-only diffs are NOT COVERED, not a failure (#1032) ───────────────
 //
@@ -362,6 +420,7 @@ const diffEligibleFilesAll = filterTargetFiles(changedLines, { testGlobs, source
 const deletedLines = deletedLinesFromDiff(diff);
 const readGit = (args) => git(args, { cwd, stdio: ['ignore', 'pipe', 'ignore'] });
 const commentOnlyFiles = diffEligibleFilesAll.filter((f) => {
+  if (polyglotLanguage(f) !== null) return false;
   const oldSide = deletedLines[f];
   if (oldSide === undefined) return false;
   const newSource = readFileSafe(resolve(root, f));
@@ -550,7 +609,8 @@ const explicitFiles = [...new Set([...explicitTargets, ...railsFiles])];
 // source+JSON rails expansion did all the mutation work and THEN failed,
 // claiming the JSON file produced zero mutants — exactly the behaviour the
 // filtering was added to avoid.
-const mutableExplicitFiles = [...new Set([...explicitTargets, ...railsFiles.filter(isSupportedSourceExtension)])];
+const isSupportedTarget = (f) => isSupportedSourceExtension(f, { polyglot });
+const mutableExplicitFiles = [...new Set([...explicitTargets, ...railsFiles.filter(isSupportedTarget)])];
 
 // ── fail closed: every explicit --target/--rails file must be readable ─────
 // Unlike diff-derived files (which came from a real git diff and should
@@ -621,7 +681,7 @@ for (const f of explicitFiles) delete effectiveChangedLines[f];
 //   --rails   a glob EXPANSION legitimately matches non-source (schemas/**,
 //             JSON, fixtures). Filter those out, say which were dropped, and
 //             fail only if nothing mutable remains.
-const unsupportedTargets = explicitTargets.filter((f) => !isSupportedSourceExtension(f));
+const unsupportedTargets = explicitTargets.filter((f) => !isSupportedTarget(f));
 if (unsupportedTargets.length > 0) {
   opError(
     `--target ${unsupportedTargets.join(', ')} is not a supported source language — ` +
@@ -631,14 +691,14 @@ if (unsupportedTargets.length > 0) {
   );
 }
 
-const droppedRails = railsFiles.filter((f) => !isSupportedSourceExtension(f));
+const droppedRails = railsFiles.filter((f) => !isSupportedTarget(f));
 if (droppedRails.length > 0) {
   console.warn(
     `hollow-test: ${droppedRails.length} --rails match(es) are not a supported source ` +
     `language and will not be mutated: ${droppedRails.join(', ')}`
   );
 }
-const mutableRails = railsFiles.filter(isSupportedSourceExtension);
+const mutableRails = railsFiles.filter(isSupportedTarget);
 if (railsFiles.length > 0 && mutableRails.length === 0) {
   opError(
     `--rails matched ${railsFiles.length} file(s), none of which are a supported ` +
@@ -678,7 +738,19 @@ let typeScriptNotice = null;
 for (const target of fileTargets) {
   // An unreadable file keeps its own reporting path in the mutation loop below
   // (#658); judging its syntax here would misreport it as "does not parse".
-  if (readFileSafe(target.absolutePath) === null) continue;
+  const originalContent = readFileSafe(target.absolutePath);
+  if (originalContent === null) continue;
+  const polyLang = polyglot ? polyglotLanguage(target.file) : null;
+  if (polyLang !== null) {
+    const polySyntax = checkPolyglotSyntax(target.absolutePath, originalContent, polyLang);
+    if (polySyntax.verdict === 'unknown') {
+      opError(polySyntax.detail || `${target.file}: polyglot syntax check unavailable`);
+    }
+    if (polySyntax.verdict !== 'valid') {
+      opError(`${target.file} does not parse unmutated (${polyLang}): ${polySyntax.detail}, so its mutants cannot be judged`);
+    }
+    continue;
+  }
   const problem = syntaxCheckProblem(target.absolutePath);
   if (problem !== null) opError(problem.replace(target.absolutePath, target.file));
   const language = syntaxLanguage(target.absolutePath);
@@ -784,11 +856,18 @@ try {
     // Keep the mutator's existing line/operator order. The quota counts only
     // candidates that reached a syntax-valid test verdict; invalid and
     // undetermined candidates stay visible in results but do not spend a slot.
+    const polyLang = polyglot ? polyglotLanguage(target.file) : null;
     const tryLimit = target.quota * INVALID_TRIES_PER_SLOT;
-    const mutants = mutate.generateMutants(content, {
-      targetLines: target.targetLines,
-      maxMutants: tryLimit,
-    });
+    const mutants = polyLang !== null
+      ? generatePolyglotMutants(content, polyLang, {
+          targetLines: target.targetLines,
+          maxMutants: tryLimit,
+        })
+      : mutate.generateMutants(content, {
+          targetLines: target.targetLines,
+          maxMutants: tryLimit,
+          includeStructural,
+        });
     const targetTestCmd = fileTestMap && typeof fileTestMap[target.file] === 'string'
       ? fileTestMap[target.file]
       : testCmd;
@@ -805,45 +884,83 @@ try {
         continue;
       }
 
-      // Register for emergency restore twice over: in memory for a signal we can
-      // catch, and on disk for one we cannot.
-      //
-      // FAIL CLOSED if the record cannot be written. Swallowing the error would
-      // mutate the file with no way back — precisely the SIGKILL case the record
-      // exists for, silently unprotected. The mutant bytes go in too, so recovery
-      // can PROVE the file is still what we wrote before overwriting it.
-      currentFilePath = target.absolutePath;
-      currentOriginal = content;
-      if (inflightPath !== null) {
-        try {
-          writeRecord(inflightPath, {
-            pid: process.pid,
-            relFile: relative(root, target.absolutePath),
-            original: content,
-            mutated: mutatedContent,
-          });
-        } catch (err) {
-          opError(
-            `could not write the in-flight record (${err.message}) — refusing to mutate ` +
-            `${target.file}, because a run interrupted now could not be recovered`
-          );
+      let trial;
+      if (polyLang !== null) {
+        trial = executePolyglotMutant({
+          target,
+          mutant,
+          content,
+          mutatedContent,
+          polyLang,
+          targetTestCmd,
+          timeoutMs,
+          cwd,
+          runTestFn: runTest,
+          writeFileFn: writeFileAtomic,
+          beforeWrite: () => {
+            currentFilePath = target.absolutePath;
+            currentOriginal = content;
+            if (inflightPath !== null) {
+              try {
+                writeRecord(inflightPath, {
+                  pid: process.pid,
+                  relFile: relative(root, target.absolutePath),
+                  original: content,
+                  mutated: mutatedContent,
+                });
+              } catch (err) {
+                opError(
+                  `could not write the in-flight record (${err.message}) — refusing to mutate ` +
+                  `${target.file}, because a run interrupted now could not be recovered`
+                );
+              }
+            }
+          },
+          afterRestore: () => {
+            currentFilePath = null;
+            currentOriginal = null;
+            clearInflight();
+          },
+        });
+      } else {
+        // Register for emergency restore twice over: in memory for a signal we can
+        // catch, and on disk for one we cannot.
+        //
+        // FAIL CLOSED if the record cannot be written. Swallowing the error would
+        // mutate the file with no way back — precisely the SIGKILL case the record
+        // exists for, silently unprotected. The mutant bytes go in too, so recovery
+        // can PROVE the file is still what we wrote before overwriting it.
+        currentFilePath = target.absolutePath;
+        currentOriginal = content;
+        if (inflightPath !== null) {
+          try {
+            writeRecord(inflightPath, {
+              pid: process.pid,
+              relFile: relative(root, target.absolutePath),
+              original: content,
+              mutated: mutatedContent,
+            });
+          } catch (err) {
+            opError(
+              `could not write the in-flight record (${err.message}) — refusing to mutate ` +
+              `${target.file}, because a run interrupted now could not be recovered`
+            );
+          }
         }
+        trial = await runMutantWithWorker(
+          target.absolutePath,
+          content,
+          mutatedContent,
+          targetTestCmd,
+          timeoutMs,
+          cwd,
+          { tsWorker }
+        );
+        // Trial done; the file is restored, so clear both emergency records.
+        currentFilePath = null;
+        currentOriginal = null;
+        clearInflight();
       }
-
-      const trial = await runMutantWithWorker(
-        target.absolutePath,
-        content,
-        mutatedContent,
-        targetTestCmd,
-        timeoutMs,
-        cwd,
-        { tsWorker }
-      );
-
-      // Trial done; the file is restored, so clear both emergency records.
-      currentFilePath = null;
-      currentOriginal = null;
-      clearInflight();
 
       results.push({
         file: target.file,

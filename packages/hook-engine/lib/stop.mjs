@@ -5,9 +5,13 @@
 import { closeSync, constants as fsConstants, fstatSync, openSync, readSync } from 'node:fs';
 import { join } from 'node:path';
 import { computeRiskTier } from '@adlc/build-gate/lib/risk.mjs';
+import { sha256 } from '@adlc/core';
+import { record } from '@adlc/gate-manifest/lib/record.mjs';
+import { verifyEntrySig } from '@adlc/gate-manifest/lib/sign.mjs';
 import { verify as verifyManifest } from '@adlc/gate-manifest/lib/verify.mjs';
 import { discoverSegments, segmentPath } from '@adlc/tickets/lib/manifest-primitives.mjs';
 import { enclosingAdlcRoot, readActiveTicketRails } from './pretool.mjs';
+import { harvestTranscriptUsage } from './spend-harvest.mjs';
 
 export const MAX_MANIFEST_FILE_BYTES = 4 * 1024 * 1024;
 export const MAX_MANIFEST_SEGMENTS = 64;
@@ -88,16 +92,18 @@ function parseStrictJsonl(filePath, { maxBytes = MAX_MANIFEST_FILE_BYTES, remain
  */
 export function hasManifestEvidence(
   root,
-  {
+  opts = {},
+) {
+  const {
     gate = null,
     ticketId = null,
     revision = null,
     ticketHash = null,
-    key = process.env.ADLC_MANIFEST_KEY ?? null,
+    env = process.env,
     maxBytes = MAX_MANIFEST_FILE_BYTES,
     maxSegments = MAX_MANIFEST_SEGMENTS,
-  } = {},
-) {
+  } = opts;
+  const key = opts.key !== undefined ? opts.key : env?.ADLC_MANIFEST_KEY;
   if (!root) return { found: false, matchingEntries: [], manifestSegments: [], error: null };
   if (typeof key !== 'string' || key.length === 0) {
     return {
@@ -142,7 +148,7 @@ export function hasManifestEvidence(
   }
 
   if (allEntries.length > 0) {
-    const forestCheck = verifyManifest(adlcDir, { requireSignatures: true, requireEntries: false, key });
+    const forestCheck = verifyManifest(adlcDir, { requireSignatures: false, requireEntries: false, key });
     if (!forestCheck.valid) {
       const reason = Array.isArray(forestCheck.errors) && forestCheck.errors.length > 0
         ? forestCheck.errors[0]
@@ -152,6 +158,8 @@ export function hasManifestEvidence(
   }
 
   const matchingEntries = allEntries.filter((entry) => {
+    if (!verifyEntrySig(key, entry)) return false;
+    if (entry.data?.sessionTelemetry === true || typeof entry.data?.transcriptSha256 === 'string') return false;
     if (gate && entry.gate !== gate) return false;
     if (ticketId && entry.ticket !== ticketId) return false;
     if (revision && entry.data?.revision !== revision) return false;
@@ -184,20 +192,30 @@ export function hasManifestEvidence(
  * @param {string | null} [opts.ticketHash]
  * @param {boolean} [opts.requireEvidence]
  * @param {string | null} [opts.key]
- * @returns {{ decision: 'allow' | 'block', reason: string | null, risk: { tier: 'high' | 'normal', signals: string[] }, hasEvidence: boolean, manifestSegments: string[], root: string | null }}
+ * @param {string | null} [opts.transcriptPath]
+ * @param {boolean} [opts.recordSessionUsage]
+ * @param {string} [opts.phaseGate]
+ * @param {string | null} [opts.sessionId]
+ * @returns {{ decision: 'allow' | 'block', reason: string | null, risk: { tier: 'high' | 'normal', signals: string[] }, hasEvidence: boolean, manifestSegments: string[], root: string | null, harvestedUsage?: object | null }}
  */
-export function evaluateStop({
-  cwd = process.cwd(),
-  outerRoot = null,
-  ticket = null,
-  requiredGate = null,
-  revision = null,
-  ticketHash = null,
-  requireEvidence = false,
-  key = process.env.ADLC_MANIFEST_KEY ?? null,
-} = {}) {
+export function evaluateStop(opts = {}) {
+  const {
+    cwd = process.cwd(),
+    outerRoot = null,
+    ticket = null,
+    requiredGate = null,
+    revision = null,
+    ticketHash = null,
+    requireEvidence = false,
+    env = process.env,
+    transcriptPath = null,
+    recordSessionUsage = false,
+    phaseGate = 'p4',
+    sessionId = null,
+  } = opts;
+  const key = opts.key !== undefined ? opts.key : (env?.ADLC_MANIFEST_KEY ?? null);
   const root = enclosingAdlcRoot(cwd, { outerRoot });
-  const loaded = !ticket && root ? readActiveTicketRails(root) : null;
+  const loaded = !ticket && root ? readActiveTicketRails(root, { env }) : null;
   if (loaded && !loaded.ok && requireEvidence) {
     return {
       decision: 'block',
@@ -218,10 +236,102 @@ export function evaluateStop({
         revision,
         ticketHash,
         key,
+        env,
       })
     : { found: false, matchingEntries: [], manifestSegments: [], error: null };
 
-  if (requireEvidence && (evidence.error || !evidence.found)) {
+  const willBlock = Boolean(requireEvidence && (evidence.error || !evidence.found));
+
+  let harvestedUsage = null;
+  if (transcriptPath) {
+    harvestedUsage = harvestTranscriptUsage(transcriptPath);
+    if (!willBlock && recordSessionUsage === true && root && harvestedUsage?.calls > 0) {
+      const adlcDir = join(root, '.adlc');
+      const rootManifest = join(adlcDir, 'manifest.jsonl');
+      const { valid: segments } = discoverSegments(adlcDir);
+      const filesToScan = [rootManifest, ...segments.map((seg) => segmentPath(adlcDir, seg))];
+      const currentSessionKey = sessionId ? `session:${sessionId}` : `transcript:${sha256(transcriptPath)}`;
+      let alreadyRecorded = false;
+      let hasSignedEntry = false;
+      let scanFailed = false;
+      let priorInputTokens = 0;
+      let priorOutputTokens = 0;
+      let priorCachedTokens = 0;
+      for (const filePath of filesToScan) {
+        const parsed = parseStrictJsonl(filePath, { maxBytes: MAX_MANIFEST_FILE_BYTES, remainingLines: MAX_MANIFEST_LINES });
+        if (!parsed.ok) {
+          scanFailed = true;
+          break;
+        }
+        for (const entry of parsed.entries) {
+          if (typeof entry.sig === 'string' && entry.sig.length > 0) {
+            hasSignedEntry = true;
+          }
+          if (entry.data?.transcriptSha256 === harvestedUsage.transcriptSha256) {
+            alreadyRecorded = true;
+          }
+          const sameSession =
+            entry.data?.sessionKey === currentSessionKey ||
+            (sessionId && entry.data?.sessionId === sessionId);
+          if (sameSession && entry.data?.usage && typeof entry.data.usage === 'object') {
+            priorInputTokens += Number(entry.data.usage.inputTokens ?? 0) || 0;
+            priorOutputTokens += Number(entry.data.usage.outputTokens ?? 0) || 0;
+            priorCachedTokens += Number(entry.data.usage.cachedTokens ?? 0) || 0;
+          }
+        }
+      }
+
+      const deltaInput = Math.max(0, (harvestedUsage.usage.inputTokens ?? 0) - priorInputTokens);
+      const deltaOutput = Math.max(0, (harvestedUsage.usage.outputTokens ?? 0) - priorOutputTokens);
+      const deltaCached = Math.max(0, (harvestedUsage.usage.cachedTokens ?? 0) - priorCachedTokens);
+      if (deltaInput === 0 && deltaOutput === 0 && deltaCached === 0) {
+        alreadyRecorded = true;
+      }
+
+      let isKeyedForest = false;
+      const storeRead = readBoundedRegularFile(join(adlcDir, 'manifest.d', '.store.json'));
+      if (storeRead.status === 'error') {
+        scanFailed = true;
+      } else if (storeRead.status === 'ok') {
+        try {
+          const marker = JSON.parse(storeRead.content);
+          if (marker?.auth === 'keyed') isKeyedForest = true;
+        } catch {
+          scanFailed = true;
+        }
+      }
+
+      const hasSigningKey = typeof key === 'string' && key.length > 0;
+      const canAppend = !alreadyRecorded && !scanFailed && (hasSigningKey || (!hasSignedEntry && !isKeyedForest));
+      if (canAppend) {
+        try {
+          record({
+            gate: phaseGate ?? 'p4',
+            ticket: activeTicket?.id,
+            dir: adlcDir,
+            key: hasSigningKey ? key : null,
+            rawData: JSON.stringify({
+              sessionTelemetry: true,
+              sessionKey: currentSessionKey,
+              sessionId: sessionId ?? null,
+              transcriptSha256: harvestedUsage.transcriptSha256,
+              usage: {
+                ...harvestedUsage.usage,
+                inputTokens: deltaInput,
+                outputTokens: deltaOutput,
+                cachedTokens: deltaCached,
+              },
+              usageStatus: 'reported',
+            }),
+          });
+        } catch {
+          // Never allow usage telemetry persistence errors to abort Stop gate evaluation.
+        }
+      }
+    }
+  }
+
+  if (willBlock) {
     const label = requiredGate ? `gate "${requiredGate}"` : 'gate';
     const ticketLabel = activeTicket?.id ? ` for ticket "${activeTicket.id}"` : '';
     const detail = evidence.error
@@ -234,6 +344,7 @@ export function evaluateStop({
       hasEvidence: false,
       manifestSegments: evidence.manifestSegments,
       root,
+      ...(transcriptPath ? { harvestedUsage } : {}),
     };
   }
 
@@ -244,5 +355,6 @@ export function evaluateStop({
     hasEvidence: evidence.found,
     manifestSegments: evidence.manifestSegments,
     root,
+    ...(transcriptPath ? { harvestedUsage } : {}),
   };
 }

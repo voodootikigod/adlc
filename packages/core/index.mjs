@@ -26,6 +26,14 @@ export * from './lib/workspace-root.mjs';
 export { activeTickets } from './lib/tickets.mjs';
 export { isPlainObject, OpError, tokenizeCommand } from './lib/cli.mjs';
 export {
+  CLAUDE_CLI_MODELS,
+  CODEX_CLI_MODELS,
+} from './lib/cli-providers.mjs';
+export {
+  STRUCTURAL_FALLBACK_OPERATORS,
+  dropObjectArgKey,
+} from './lib/structural-mutate.mjs';
+export {
   writeFileAtomic,
   acquireDirLock,
   withDirLock,
@@ -33,6 +41,7 @@ export {
   redactSecrets,
   readVerdictSource,
   recordPromptOnlyVerdict,
+  VALID_ATTESTATION_MODES,
   escapeSeatbeltPath,
 } from './lib/primitives.mjs';
 export {

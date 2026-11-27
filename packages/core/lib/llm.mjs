@@ -15,6 +15,12 @@
 
 import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
+import {
+  CLAUDE_CLI_MODELS,
+  CODEX_CLI_MODELS,
+  claudeCliSend,
+  codexCliSend,
+} from './cli-providers.mjs';
 
 // agy's timeout marker is its ENTIRE output on failure. Matching it as a
 // bare substring would false-trip whenever a model quotes the phrase in a
@@ -260,6 +266,7 @@ const PROVIDERS = [
     // providers win during auto-detection; force with ADLC_PROVIDER=agy.
     name: 'agy',
     envKey: 'ADLC_AGY',
+    isCli: true,
     models: {
       cheap: 'Gemini 3.5 Flash (Medium)',
       mid: 'Claude Sonnet 4.6 (Thinking)',
@@ -269,8 +276,31 @@ const PROVIDERS = [
   },
 ];
 
-/** Names of all known providers, in auto-detect priority order. */
+const CLI_PROVIDERS = [
+  {
+    name: 'claude-cli',
+    envKey: 'ADLC_CLAUDE_CLI',
+    isCli: true,
+    models: CLAUDE_CLI_MODELS,
+    send: ({ apiKey, model, system, prompt, timeoutMs }, env = process.env) =>
+      claudeCliSend(apiKey, model, system, prompt, { timeoutMs, env }),
+  },
+  {
+    name: 'codex-cli',
+    envKey: 'ADLC_CODEX_CLI',
+    isCli: true,
+    models: CODEX_CLI_MODELS,
+    send: ({ apiKey, model, system, prompt, timeoutMs }, env = process.env) =>
+      codexCliSend(apiKey, model, system, prompt, { timeoutMs, env }),
+  },
+];
+
+const ALL_PROVIDERS = [...PROVIDERS, ...CLI_PROVIDERS];
+
+/** Built-in default provider names in auto-detect priority order (see CLI_PROVIDER_NAMES for all CLI providers). */
 export const PROVIDER_NAMES = PROVIDERS.map((p) => p.name);
+/** All subprocess CLI provider names (including agy, claude-cli, and codex-cli). */
+export const CLI_PROVIDER_NAMES = Object.freeze(ALL_PROVIDERS.filter((p) => p.isCli).map((p) => p.name));
 
 /**
  * Detect the first available provider (or the one forced).
@@ -286,14 +316,12 @@ export const PROVIDER_NAMES = PROVIDERS.map((p) => p.name);
  */
 export function detectProvider(env = process.env, forceProvider) {
   const forced = forceProvider || env.ADLC_PROVIDER;
-  const candidates = forced ? PROVIDERS.filter((p) => p.name === forced) : PROVIDERS;
+  const candidates = forced ? ALL_PROVIDERS.filter((p) => p.name === forced) : ALL_PROVIDERS;
   for (const p of candidates) {
     const apiKey = env[p.envKey];
-    // agy is gated on a feature flag (truthy-but-not-"false"); API-key
-    // providers are gated on a non-empty key.
-    if (p.name === 'agy') {
+    if (p.isCli) {
       if (envEnabled(apiKey)) return { ...p, apiKey };
-      if (forced === 'agy') return { ...p, apiKey: '1' }; // explicit force needs no key
+      if (forced === p.name) return { ...p, apiKey: '1' };
     } else if (apiKey) {
       return { ...p, apiKey };
     }
@@ -365,6 +393,16 @@ export async function complete(opts, env = process.env) {
   );
   if (typeof opts.onUsage === 'function' && usage) {
     opts.onUsage({ ...usage, provider: provider.name, model, tier: opts.tier });
+  }
+  if (typeof opts.onCompleteMeta === 'function') {
+    opts.onCompleteMeta({
+      provider: provider.name,
+      model,
+      tier: opts.tier,
+      attestationMode: provider.isCli ? 'headless-cli' : 'api',
+      executionWitnessed: true,
+      usage: usage ?? null,
+    });
   }
   return text;
 }

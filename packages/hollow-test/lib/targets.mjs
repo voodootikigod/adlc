@@ -4,6 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { globMatch } from '@adlc/core';
+import { polyglotLanguage, isPolyglotTestFile } from './polyglot.mjs';
 
 // SOURCE IS AN INCLUDE-LIST, NOT AN EXCLUDE-LIST, AND THIS IS THE ONLY COPY.
 //
@@ -89,11 +90,15 @@ const DECLARATION_RE = /\.d\.[mc]?ts$/i;
  * rail under a test/ directory and broke the documented workflow.
  * @param {string} file repo-relative path
  */
-export function isSupportedSourceExtension(file) {
-  return SOURCE_EXT_RE.test(file) && !DECLARATION_RE.test(file);
+export function isSupportedSourceExtension(file, options) {
+  const allowPolyglot = typeof options === 'object' && options !== null && options.polyglot === true;
+  if (DECLARATION_RE.test(file)) return false;
+  return SOURCE_EXT_RE.test(file) || (allowPolyglot && polyglotLanguage(file) !== null);
 }
 
-export function isMutableSource(file, { testGlobs = [], sourceGlobs = [], excludeGlobs = [] } = {}) {
+export function isMutableSource(file, { testGlobs = [], sourceGlobs = [], excludeGlobs = [], polyglot = false } = {}) {
+  const allowPolyglot = polyglot === true;
+  const matchesExt = (f) => SOURCE_EXT_RE.test(f) || (allowPolyglot && polyglotLanguage(f) !== null);
   // A source declaration can resolve ambiguous test-like names, but cannot turn
   // a declaration file into runtime source: there is no behaviour to mutate.
   if (DECLARATION_RE.test(file)) return false;
@@ -103,10 +108,11 @@ export function isMutableSource(file, { testGlobs = [], sourceGlobs = [], exclud
   // `hollow-test.mjs` are indistinguishable from a test by convention alone, so
   // the only correct answer is to let the project say which it is.
   if (sourceGlobs.some((g) => globMatch(g, file))) {
-    return SOURCE_EXT_RE.test(file);
+    return matchesExt(file);
   }
   if (EXCLUDE_DIR_RE.test(file)) return false;
   if (EXCLUDE_FILE_RE.test(file)) return false;
+  if (allowPolyglot && isPolyglotTestFile(file)) return false;
   if (EXCLUDE_GENERATED_DIR_RE.test(file)) return false;
   if (EXCLUDE_GENERATED_FILE_RE.test(file)) return false;
   // Caller-declared test paths. The built-in rules cannot infer every project's
@@ -115,7 +121,7 @@ export function isMutableSource(file, { testGlobs = [], sourceGlobs = [], exclud
   // consumer whose tests are named `foo-test.js` declares it:
   //   hollow-test --test-glob '**/*-test.js'
   if (testGlobs.some((g) => globMatch(g, file))) return false;
-  return SOURCE_EXT_RE.test(file);
+  return matchesExt(file);
 }
 
 /**
@@ -472,8 +478,8 @@ export function fileChangeIsVersionOnly({ oldSource, newSource, fromVersion, toV
     || (i % 3 === 2 && part === fromVersion && after[i] === toVersion));
 }
 
-export function filterTargetFiles(changedLines, { testGlobs = [], sourceGlobs = [], excludeGlobs = [] } = {}) {
-  return Object.keys(changedLines).filter((f) => isMutableSource(f, { testGlobs, sourceGlobs, excludeGlobs }));
+export function filterTargetFiles(changedLines, { testGlobs = [], sourceGlobs = [], excludeGlobs = [], polyglot = false } = {}) {
+  return Object.keys(changedLines).filter((f) => isMutableSource(f, { testGlobs, sourceGlobs, excludeGlobs, polyglot }));
 }
 
 /**

@@ -69,7 +69,7 @@ function collectPayloadSessionIds(payload) {
 
 // plugins/adlc-cursor/lib/workspace-resolve.mjs
 import { existsSync as existsSync13, mkdirSync as mkdirSync6, readFileSync as readFileSync10, renameSync as renameSync4, writeFileSync as writeFileSync6 } from "node:fs";
-import { dirname as dirname11, isAbsolute as isAbsolute5, join as join12, normalize as normalize2, resolve as pathResolve } from "node:path";
+import { dirname as dirname11, isAbsolute as isAbsolute5, join as join13, normalize as normalize2, resolve as pathResolve } from "node:path";
 
 // packages/tickets/lib/pointer.mjs
 var MAX_POINTER_BYTES = 64 * 1024;
@@ -2187,8 +2187,144 @@ import { createInterface } from "node:readline/promises";
 var MAX_BUFFER = 64 * 1024 * 1024;
 
 // packages/core/lib/llm.mjs
+import { spawn as spawn2 } from "node:child_process";
+import { StringDecoder as StringDecoder2 } from "node:string_decoder";
+
+// packages/core/lib/cli-providers.mjs
 import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync as rmSync3 } from "node:fs";
+import { tmpdir } from "node:os";
+import { join as join9 } from "node:path";
 import { StringDecoder } from "node:string_decoder";
+var CLAUDE_CLI_MODELS = Object.freeze({
+  cheap: "claude-haiku-4-5",
+  mid: "claude-sonnet-4-6",
+  frontier: "claude-opus-4-7"
+});
+var CODEX_CLI_MODELS = Object.freeze({
+  cheap: "gpt-5-mini",
+  mid: "gpt-5.1",
+  frontier: "gpt-5.1"
+});
+function normalizeCliAnthropicUsage(u) {
+  if (!u || typeof u !== "object" || Array.isArray(u)) return null;
+  return {
+    inputTokens: Number(u.input_tokens ?? u.inputTokens ?? 0),
+    outputTokens: Number(u.output_tokens ?? u.outputTokens ?? 0),
+    cachedTokens: Number((u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cachedTokens ?? 0))
+  };
+}
+function runCliCommand(bin, args, input, opts = {}) {
+  const envSource = opts.env ?? process.env;
+  const isTest = envSource.NODE_ENV === "test" || process.env.NODE_ENV === "test";
+  const spawnFn = isTest && typeof envSource.__adlcCliSpawn === "function" ? envSource.__adlcCliSpawn : spawn;
+  const env = {};
+  for (const [k, v] of Object.entries(envSource)) {
+    if (k === "ADLC_MANIFEST_KEY" || k.startsWith("ADLC_ADMIN_")) continue;
+    env[k] = v;
+  }
+  if (!env.HOME && process.env.HOME) env.HOME = process.env.HOME;
+  if (!env.PATH && process.env.PATH) env.PATH = process.env.PATH;
+  const timeoutMs = Number.isFinite(opts?.timeoutMs) && opts.timeoutMs > 0 ? opts.timeoutMs : 12e4;
+  const isolatedCwd = mkdtempSync(join9(tmpdir(), "adlc-cli-cwd-"));
+  const cleanupCwd = () => {
+    try {
+      rmSync3(isolatedCwd, { recursive: true, force: true });
+    } catch {
+    }
+  };
+  return new Promise((resolve6, reject) => {
+    let child;
+    try {
+      child = spawnFn(bin, args, {
+        shell: false,
+        cwd: isolatedCwd,
+        stdio: ["pipe", "pipe", "pipe"],
+        env
+      });
+    } catch (err) {
+      cleanupCwd();
+      return reject(err);
+    }
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+      }
+      cleanupCwd();
+      reject(new Error(`Process timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    const outDecoder = new StringDecoder("utf8");
+    const errDecoder = new StringDecoder("utf8");
+    child.stdout.on("data", (d) => {
+      stdout += outDecoder.write(d);
+    });
+    child.stderr.on("data", (d) => {
+      stderr += errDecoder.write(d);
+    });
+    child.stdin.on("error", () => {
+    });
+    child.stdin.end(input);
+    child.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      cleanupCwd();
+      reject(err);
+    });
+    child.on("close", (code, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      cleanupCwd();
+      stdout += outDecoder.end();
+      stderr += errDecoder.end();
+      if (code !== 0) {
+        return reject(new Error(`Process exited with code ${code ?? signal}: ${stderr || stdout}`));
+      }
+      resolve6(stdout);
+    });
+  });
+}
+async function claudeCliSend(apiKey, model, system, prompt, opts = {}) {
+  const bin = apiKey === "1" || apiKey === "true" ? "claude" : apiKey;
+  const args = ["--print", "--output-format", "json", "--tools", "", "--model", model];
+  const input = system ? `${system}
+
+---
+
+${prompt}` : prompt;
+  const stdout = await runCliCommand(bin, args, input, opts);
+  try {
+    const data = JSON.parse(stdout);
+    if (data && typeof data === "object" && !Array.isArray(data) && typeof data.result === "string") {
+      return {
+        text: data.result,
+        usage: normalizeCliAnthropicUsage(data.usage)
+      };
+    }
+  } catch {
+  }
+  return { text: stdout, usage: null };
+}
+async function codexCliSend(apiKey, model, system, prompt, opts = {}) {
+  const bin = apiKey === "1" || apiKey === "true" ? "codex" : apiKey;
+  const args = ["exec", "--skip-git-repo-check", "--sandbox", "read-only", "-m", model, "-"];
+  const input = system ? `${system}
+
+---
+
+${prompt}` : prompt;
+  const stdout = await runCliCommand(bin, args, input, opts);
+  return { text: stdout, usage: null };
+}
+
+// packages/core/lib/llm.mjs
 function isAgyTimeout(out) {
   const lines = out.split("\n").map((l) => l.trim()).filter(Boolean);
   const last = lines.at(-1) ?? "";
@@ -2222,7 +2358,7 @@ function agySend({ apiKey, model, system, prompt, timeoutMs }, env = process.env
 ${prompt}` : prompt;
   const hostTimeoutMs = typeof timeoutMs === "number" && timeoutMs > 0 ? timeoutMs : parseAgyTimeoutMs(timeoutSpec) + 5e3;
   return new Promise((resolve6, reject) => {
-    const p = spawn(bin, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const p = spawn2(bin, args, { stdio: ["pipe", "pipe", "pipe"] });
     let out = "";
     let err = "";
     let settled = false;
@@ -2236,8 +2372,8 @@ ${prompt}` : prompt;
       reject(new Error("agy: timed out waiting for response"));
     }, hostTimeoutMs);
     timer.unref?.();
-    const outDecoder = new StringDecoder("utf8");
-    const errDecoder = new StringDecoder("utf8");
+    const outDecoder = new StringDecoder2("utf8");
+    const errDecoder = new StringDecoder2("utf8");
     p.stdout.on("data", (d) => out += outDecoder.write(d));
     p.stderr.on("data", (d) => err += errDecoder.write(d));
     p.on("error", (e) => {
@@ -2392,6 +2528,7 @@ var PROVIDERS = [
     // providers win during auto-detection; force with ADLC_PROVIDER=agy.
     name: "agy",
     envKey: "ADLC_AGY",
+    isCli: true,
     models: {
       cheap: "Gemini 3.5 Flash (Medium)",
       mid: "Claude Sonnet 4.6 (Thinking)",
@@ -2400,7 +2537,25 @@ var PROVIDERS = [
     send: agySend
   }
 ];
+var CLI_PROVIDERS = [
+  {
+    name: "claude-cli",
+    envKey: "ADLC_CLAUDE_CLI",
+    isCli: true,
+    models: CLAUDE_CLI_MODELS,
+    send: ({ apiKey, model, system, prompt, timeoutMs }, env = process.env) => claudeCliSend(apiKey, model, system, prompt, { timeoutMs, env })
+  },
+  {
+    name: "codex-cli",
+    envKey: "ADLC_CODEX_CLI",
+    isCli: true,
+    models: CODEX_CLI_MODELS,
+    send: ({ apiKey, model, system, prompt, timeoutMs }, env = process.env) => codexCliSend(apiKey, model, system, prompt, { timeoutMs, env })
+  }
+];
+var ALL_PROVIDERS = [...PROVIDERS, ...CLI_PROVIDERS];
 var PROVIDER_NAMES = PROVIDERS.map((p) => p.name);
+var CLI_PROVIDER_NAMES = Object.freeze(ALL_PROVIDERS.filter((p) => p.isCli).map((p) => p.name));
 
 // packages/core/lib/git.mjs
 var GIT_MAX_BUFFER2 = 64 * 1024 * 1024;
@@ -2424,7 +2579,7 @@ var SECRET_PATTERNS = [
 
 // packages/core/lib/tickets.mjs
 import { existsSync as existsSync11, lstatSync as lstatSync7 } from "node:fs";
-import { dirname as dirname8, isAbsolute as isAbsolute4, join as join9 } from "node:path";
+import { dirname as dirname8, isAbsolute as isAbsolute4, join as join10 } from "node:path";
 
 // packages/core/lib/glob.mjs
 var SLASH2 = "/".charCodeAt(0);
@@ -2437,8 +2592,8 @@ var TICKET_TRUST_ROOT_RAILS = Object.freeze([
   ".adlc/current-ticket.json"
 ]);
 function ticketStoreExists(root = ".", override = null) {
-  if (override) return existsSync11(isAbsolute4(override) ? override : join9(root, override));
-  return existsSync11(join9(root, ".adlc/tickets.json")) || existsSync11(join9(root, ".adlc/tickets/.store.json"));
+  if (override) return existsSync11(isAbsolute4(override) ? override : join10(root, override));
+  return existsSync11(join10(root, ".adlc/tickets.json")) || existsSync11(join10(root, ".adlc/tickets/.store.json"));
 }
 
 // packages/core/lib/revision.mjs
@@ -2530,7 +2685,339 @@ var LENSES = [
 var VERIFIER = { key: "verifier", agent: "prosecutor-verifier", focus: "reproduce/refute a finding" };
 var ALL_AGENTS = [...LENSES.map((l) => l.agent), VERIFIER.agent];
 
+// packages/core/lib/structural-mutate.mjs
+var EXEMPT_KEYS = /* @__PURE__ */ new Set(["encoding", "recursive", "force"]);
+var NON_CALL_KEYWORDS = /* @__PURE__ */ new Set([
+  "if",
+  "while",
+  "for",
+  "switch",
+  "catch",
+  "with",
+  "function",
+  "return",
+  "throw",
+  "typeof",
+  "void",
+  "delete",
+  "yield",
+  "default",
+  "case",
+  "new"
+]);
+function dropObjectArgKey(line) {
+  if (typeof line !== "string") return null;
+  if (line.includes("\n") || line.includes("\r")) return null;
+  const masked = maskStringLiterals(line);
+  if (masked.includes("...")) return null;
+  let parenDepth = 0;
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  for (let i = 0; i < masked.length; i++) {
+    const ch = masked[i];
+    if (ch === "(") parenDepth++;
+    else if (ch === ")") {
+      parenDepth--;
+      if (parenDepth < 0) return null;
+    } else if (ch === "{") braceDepth++;
+    else if (ch === "}") {
+      braceDepth--;
+      if (braceDepth < 0) return null;
+    } else if (ch === "[") bracketDepth++;
+    else if (ch === "]") {
+      bracketDepth--;
+      if (bracketDepth < 0) return null;
+    }
+  }
+  if (parenDepth !== 0 || braceDepth !== 0 || bracketDepth !== 0) return null;
+  if (/\b(?:const|let|var)\s*\{/.test(masked)) return null;
+  if (/}\s*=/.test(masked)) return null;
+  if (/\b(?:import|export|function)\b/.test(masked)) return null;
+  if (/=>/.test(masked)) return null;
+  for (let i = 0; i < masked.length; i++) {
+    if (masked[i] !== "{") continue;
+    const openBrace = i;
+    let depth = 1;
+    let closeBrace = -1;
+    for (let j = openBrace + 1; j < masked.length; j++) {
+      if (masked[j] === "{") depth++;
+      else if (masked[j] === "}") {
+        depth--;
+        if (depth === 0) {
+          closeBrace = j;
+          break;
+        }
+      }
+    }
+    if (closeBrace === -1) continue;
+    let pDepth = 0, bDepth = 0, brDepth = 0;
+    let enclosingParen = -1;
+    for (let k = openBrace - 1; k >= 0; k--) {
+      const c = masked[k];
+      if (c === ")") pDepth++;
+      else if (c === "(") {
+        if (pDepth === 0 && bDepth === 0 && brDepth === 0) {
+          enclosingParen = k;
+          break;
+        }
+        pDepth--;
+      } else if (c === "}") bDepth++;
+      else if (c === "{") {
+        if (pDepth === 0 && bDepth === 0 && brDepth === 0) break;
+        bDepth--;
+      } else if (c === "]") brDepth++;
+      else if (c === "[") {
+        if (pDepth === 0 && bDepth === 0 && brDepth === 0) break;
+        brDepth--;
+      }
+    }
+    if (enclosingParen === -1) continue;
+    const beforeParen = masked.slice(0, enclosingParen).trimEnd();
+    if (!beforeParen) continue;
+    const calleeMatch = beforeParen.match(/([a-zA-Z_$][\w$]*)$/);
+    if (!calleeMatch && !beforeParen.endsWith(")") && !beforeParen.endsWith("]")) {
+      continue;
+    }
+    if (calleeMatch) {
+      const word = calleeMatch[1];
+      if (NON_CALL_KEYWORDS.has(word)) continue;
+    }
+    if (beforeParen.endsWith(")")) {
+      let d = 0;
+      let matchingP = -1;
+      for (let k = beforeParen.length - 1; k >= 0; k--) {
+        if (beforeParen[k] === ")") d++;
+        else if (beforeParen[k] === "(") {
+          d--;
+          if (d === 0) {
+            matchingP = k;
+            break;
+          }
+        }
+      }
+      if (matchingP > 0) {
+        const priorWord = beforeParen.slice(0, matchingP).trimEnd().match(/([a-zA-Z_$][\w$]*)$/);
+        if (priorWord && NON_CALL_KEYWORDS.has(priorWord[1])) continue;
+      }
+    }
+    const props = [];
+    let segStart = openBrace + 1;
+    let curParen = 0, curBrace = 0, curBracket = 0;
+    for (let j = openBrace + 1; j <= closeBrace; j++) {
+      if (j === closeBrace || curParen === 0 && curBrace === 0 && curBracket === 0 && masked[j] === ",") {
+        const segText = line.slice(segStart, j);
+        const trimmed3 = segText.trim();
+        if (trimmed3.length > 0) {
+          const leadMatch = segText.match(/^\s*/)[0].length;
+          const trailMatch = segText.match(/\s*$/)[0].length;
+          const pStart = segStart + leadMatch;
+          const pEnd = j - trailMatch;
+          let colonIdx = -1;
+          let subP = 0, subB = 0, subBr = 0;
+          for (let m = pStart; m < pEnd; m++) {
+            const ch = masked[m];
+            if (ch === "(") subP++;
+            else if (ch === ")") subP--;
+            else if (ch === "{") subB++;
+            else if (ch === "}") subB--;
+            else if (ch === "[") subBr++;
+            else if (ch === "]") subBr--;
+            else if (ch === ":" && subP === 0 && subB === 0 && subBr === 0) {
+              colonIdx = m;
+              break;
+            }
+          }
+          const rawKey = (colonIdx !== -1 ? line.slice(pStart, colonIdx) : line.slice(pStart, pEnd)).trim();
+          const key = rawKey.replace(/^['"`](.*)['"`]$/, "$1").trim();
+          props.push({ start: pStart, end: pEnd, key });
+        }
+        segStart = j + 1;
+      } else {
+        const ch = masked[j];
+        if (ch === "(") curParen++;
+        else if (ch === ")") curParen--;
+        else if (ch === "{") curBrace++;
+        else if (ch === "}") curBrace--;
+        else if (ch === "[") curBracket++;
+        else if (ch === "]") curBracket--;
+      }
+    }
+    if (props.length < 2) continue;
+    const nonExemptIndices = [];
+    for (let pIdx = 0; pIdx < props.length; pIdx++) {
+      const k = props[pIdx].key;
+      const isExempt = EXEMPT_KEYS.has(k) || isTuningIdentifier(k);
+      if (!isExempt) {
+        nonExemptIndices.push(pIdx);
+      }
+    }
+    if (nonExemptIndices.length < 1) continue;
+    const dropIdx = nonExemptIndices[nonExemptIndices.length - 1];
+    return line.slice(0, openBrace + 1) + " " + props.filter((_, idx) => idx !== dropIdx).map((p) => line.slice(p.start, p.end).trim()).join(", ") + " " + line.slice(closeBrace);
+  }
+  return null;
+}
+var STRUCTURAL_FALLBACK_OPERATORS = Object.freeze([
+  Object.freeze({
+    name: "object-arg-key-drop",
+    apply: dropObjectArgKey
+  })
+]);
+
 // packages/core/lib/mutate.mjs
+function identifierSegments(name) {
+  return String(name).replace(/[_$\d]+/g, " ").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2").trim().split(/\s+/).filter(Boolean).map((s) => s.toLowerCase());
+}
+var DISCRETE_TAIL = /* @__PURE__ */ new Set([
+  "retries",
+  "retry",
+  "tries",
+  "attempts",
+  "attempt",
+  "count",
+  "counts",
+  "limit",
+  "limits",
+  "size",
+  "sizes",
+  "length",
+  "len",
+  "index",
+  "idx",
+  "offset",
+  "code",
+  "codes",
+  "id",
+  "ids",
+  "version",
+  "port",
+  "level",
+  "priority",
+  "depth",
+  "concurrency",
+  "workers",
+  "slots",
+  "page",
+  "pages",
+  "num",
+  "number",
+  "numbers",
+  "items",
+  "rows",
+  "lines",
+  "chars",
+  "columns"
+]);
+var MAGNITUDE_UNIT_TAIL = /* @__PURE__ */ new Set([
+  "ms",
+  "msec",
+  "msecs",
+  "milli",
+  "millis",
+  "millisecond",
+  "milliseconds",
+  "us",
+  "usec",
+  "usecs",
+  "micro",
+  "micros",
+  "microsecond",
+  "microseconds",
+  "ns",
+  "nsec",
+  "nsecs",
+  "nano",
+  "nanos",
+  "nanosecond",
+  "nanoseconds",
+  "byte",
+  "bytes",
+  "kb",
+  "mb",
+  "gb",
+  "tb",
+  "kib",
+  "mib",
+  "gib",
+  "tib",
+  "kbytes",
+  "mbytes",
+  "gbytes"
+]);
+var TUNING_PHRASES = /* @__PURE__ */ new Set([
+  "timeout",
+  "delay",
+  "interval",
+  "backoff",
+  "ttl",
+  "maxage",
+  "keepalive",
+  "maxbuffer",
+  "highwatermark",
+  "maxbytes"
+]);
+function isTuningIdentifier(name) {
+  const segs = identifierSegments(name);
+  if (segs.length === 0) return false;
+  const tail = segs[segs.length - 1];
+  if (DISCRETE_TAIL.has(tail)) return false;
+  if (MAGNITUDE_UNIT_TAIL.has(tail)) return true;
+  for (let i = 0; i < segs.length; i++) {
+    let joined = "";
+    for (let j = i; j < segs.length; j++) {
+      joined += segs[j];
+      if (TUNING_PHRASES.has(joined)) return true;
+    }
+  }
+  return false;
+}
+function maskStringLiterals(line) {
+  let out = "";
+  let quote = null;
+  let escaped = false;
+  let exprDepth = 0;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (exprDepth > 0) {
+      if (ch === "{") exprDepth++;
+      else if (ch === "}") exprDepth--;
+      out += ch;
+      continue;
+    }
+    if (quote) {
+      if (escaped) {
+        out += " ";
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        out += " ";
+        escaped = true;
+        continue;
+      }
+      if (quote === "`" && ch === "$" && line[i + 1] === "{") {
+        out += "${";
+        i++;
+        exprDepth = 1;
+        continue;
+      }
+      if (ch === quote) {
+        out += ch;
+        quote = null;
+        continue;
+      }
+      out += " ";
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+      out += ch;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
 var ARRAY_LITERAL_ELEMENT = String.raw`(?:'[^']*'|"[^"]*"|\`[^\`]*\`|[\w$.]+)`;
 var ARRAY_LITERAL_RE = new RegExp(
   `\\[\\s*(${ARRAY_LITERAL_ELEMENT}(?:\\s*,\\s*${ARRAY_LITERAL_ELEMENT})+)\\s*\\]`
@@ -2544,6 +3031,7 @@ var SECRET_REDACT_RULES = SECRET_PATTERNS.map(([pattern]) => [
   new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`),
   pattern === INLINE_ASSIGNMENT ? "$1[REDACTED]" : "[REDACTED]"
 ]);
+var VALID_ATTESTATION_MODES = Object.freeze(["self-context", "headless-cli", "api"]);
 
 // packages/core/lib/sandbox-runner.mjs
 var SENSITIVE_HOME_DIRS = Object.freeze([
@@ -2723,7 +3211,7 @@ var WORKDIR_CONTAINERS = Object.freeze([
 
 // plugins/adlc-cursor/generated-active-ticket.mjs
 import { lstatSync as lstatSync8, openSync as openSync4, fstatSync, readSync as readSync2, closeSync as closeSync4, constants as fsConstants2 } from "node:fs";
-import { dirname as dirname9, join as join10 } from "node:path";
+import { dirname as dirname9, join as join11 } from "node:path";
 var CURRENT_TICKET_FILE2 = ".adlc/current-ticket.json";
 var MAX_POINTER_BYTES2 = 64 * 1024;
 var ABSENT = /* @__PURE__ */ Symbol("pointer-absent");
@@ -2782,7 +3270,7 @@ function conflictMessage(envId, fileId) {
   return `ADLC_TICKET ("${envId}") conflicts with ${CURRENT_TICKET_FILE2} ("${fileId}"): they name different tickets. The active ticket is per-worktree state \u2014 ADLC supports exactly one active ticket per worktree, and parallel work on a second ticket needs its own worktree (git worktree add <path> -b <branch>), not a second pointer in this one. Failing closed: which ticket governs this build cannot be determined.`;
 }
 function readActiveTicketPointer2(root = ".") {
-  const path = join10(root, CURRENT_TICKET_FILE2);
+  const path = join11(root, CURRENT_TICKET_FILE2);
   const raw = readPointerFileBounded(path);
   if (raw === ABSENT) return ok({ present: false });
   if (raw === null) {
@@ -2903,10 +3391,10 @@ import {
   writeFileSync as writeFileSync5
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname as dirname10, join as join11 } from "node:path";
+import { dirname as dirname10, join as join12 } from "node:path";
 function resolveStateDir(env = process.env) {
   const override = typeof env.ADLC_CURSOR_STATE_DIR === "string" && env.ADLC_CURSOR_STATE_DIR.trim() ? env.ADLC_CURSOR_STATE_DIR.trim() : null;
-  return override || join11(homedir(), ".cursor", "adlc");
+  return override || join12(homedir(), ".cursor", "adlc");
 }
 function ensureDir(dir) {
   mkdirSync5(dir, { recursive: true });
@@ -2991,7 +3479,7 @@ function isAdlcBearing(root, env = process.env) {
   if (!root) return false;
   const override = env.ADLC_TICKET_STORE ?? env.ADLC_TICKETS ?? null;
   if (ticketStoreExists(root, override)) return true;
-  return existsSync13(join12(root, ".adlc", "tickets.json")) || existsSync13(join12(root, ".adlc", "tickets")) || existsSync13(join12(root, ".adlc", "ticket-transactions"));
+  return existsSync13(join13(root, ".adlc", "tickets.json")) || existsSync13(join13(root, ".adlc", "tickets")) || existsSync13(join13(root, ".adlc", "ticket-transactions"));
 }
 function classifyRoot(root, env = process.env) {
   let snapshot;
@@ -3097,7 +3585,7 @@ function resolveConsumerWorkspace(payload = {}, env = process.env) {
 }
 var INDEX_NAME = "cursor-session-workspaces.json";
 function sessionIndexPath(env = process.env) {
-  return env.ADLC_CURSOR_SESSION_INDEX?.trim() || join12(resolveStateDir(env), INDEX_NAME);
+  return env.ADLC_CURSOR_SESSION_INDEX?.trim() || join13(resolveStateDir(env), INDEX_NAME);
 }
 function upsertSessionResolution({
   sessionId,

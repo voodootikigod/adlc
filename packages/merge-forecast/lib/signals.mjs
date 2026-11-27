@@ -12,6 +12,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve, dirname, win32 } from 'node:path';
 import { scopesOverlap, pairKey } from '@adlc/core';
 import { createScopeIndex } from './scope-index.mjs';
+import { extractPolyglotSpecifiers, resolvePolyglotCandidates } from './polyglot-imports.mjs';
 
 // ─── Signal 1: Declared scope overlap ────────────────────────────────────────
 
@@ -78,19 +79,9 @@ export function walkTree(root) {
 
 const IMPORT_RE = /(?:import|require|from)\s+['"]([^'"]+)['"]/g;
 
-/**
- * Collect all import/require/from specifiers from a file.
- */
-function extractImports(filePath) {
-  let content;
-  try {
-    content = readFileSync(filePath, 'utf8');
-  } catch {
-    return [];
-  }
+function extractImportsFromContent(content) {
   const specifiers = [];
   let m;
-  IMPORT_RE.lastIndex = 0;
   const re = new RegExp(IMPORT_RE.source, 'g');
   while ((m = re.exec(content)) !== null) {
     specifiers.push(m[1]);
@@ -138,7 +129,14 @@ function getImportCache(index, rootNorm) {
 function resolvedImportCandidates(afNorm, rootNorm, cache) {
   let candidates = cache.get(afNorm);
   if (candidates !== undefined) return candidates;
-  const specifiers = extractImports(join(rootNorm, afNorm));
+  let content;
+  try {
+    content = readFileSync(join(rootNorm, afNorm), 'utf8');
+  } catch {
+    cache.set(afNorm, []);
+    return [];
+  }
+  const specifiers = extractImportsFromContent(content);
   candidates = [];
   for (const spec of specifiers) {
     const resolved = resolveSpecifier(spec, afNorm, rootNorm);
@@ -153,6 +151,11 @@ function resolvedImportCandidates(afNorm, rootNorm, cache) {
       resolved + '/index.mjs',
       resolved + '/index.ts',
     );
+  }
+  for (const polySpec of extractPolyglotSpecifiers(content, afNorm)) {
+    for (const polyCand of resolvePolyglotCandidates(polySpec, afNorm, rootNorm)) {
+      candidates.push(polyCand);
+    }
   }
   cache.set(afNorm, candidates);
   return candidates;
@@ -281,22 +284,37 @@ export function signalNamespaceRoutes(a, b, repoFiles, index = createScopeIndex(
  * across A and B scopes.
  */
 export function signalMigrationCollision(a, b, repoFiles, index = createScopeIndex(repoFiles)) {
-  const migPrefixRe = /(?:^|\/)(?:drizzle|migrations)\/(\d+)_/;
+  const migPrefixRe =
+    /(?:^|\/)(?:drizzle|migrations|prisma\/migrations|alembic\/versions|supabase\/migrations)\/(?:V(\d+)__|(\d+)_)/;
 
-  function migPrefixes(ticket) {
+  function migEntries(ticket) {
     const matchedFiles = index.files(ticket.scope);
-    const prefixes = new Set();
+    const byToken = new Map();
     for (const f of matchedFiles) {
-      const m = f.match(migPrefixRe);
-      if (m) prefixes.add(m[1]);
+      const fNorm = f.replace(/\\/g, '/');
+      const m = fNorm.match(migPrefixRe);
+      if (!m) continue;
+      const token = m[1] ?? m[2];
+      let set = byToken.get(token);
+      if (!set) {
+        set = new Set();
+        byToken.set(token, set);
+      }
+      set.add(fNorm);
     }
-    return prefixes;
+    return byToken;
   }
 
-  const aP = migPrefixes(a);
-  const bP = migPrefixes(b);
-  for (const p of aP) {
-    if (bP.has(p)) return true;
+  const aMap = migEntries(a);
+  const bMap = migEntries(b);
+  for (const [token, aFiles] of aMap) {
+    const bFiles = bMap.get(token);
+    if (!bFiles) continue;
+    for (const fa of aFiles) {
+      for (const fb of bFiles) {
+        if (fa !== fb) return true;
+      }
+    }
   }
   return false;
 }

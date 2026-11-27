@@ -4,6 +4,8 @@
 
 /** All suppression patterns to detect. */
 export const SUPPRESSION_MARKERS = [
+  'pytest.mark.' + 'skip',
+  '@unittest.' + 'skip',
   '.skip(',
   '.only(',
   'xfail',
@@ -12,6 +14,16 @@ export const SUPPRESSION_MARKERS = [
   'eslint-disable',
   '# noqa',
   '#[ignore]',
+  '# type: ' + 'ignore',
+  '# pragma: ' + 'no cover',
+  't.' + 'Skip(',
+  '//' + 'nolint',
+  '#[' + 'allow(',
+  'biome-' + 'ignore',
+  'c8 ' + 'ignore',
+  'v8 ' + 'ignore',
+  'istanbul ' + 'ignore',
+  '.to' + 'do(',
 ];
 
 /**

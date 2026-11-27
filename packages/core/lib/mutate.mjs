@@ -3,6 +3,8 @@
 // Text-based by design: language-agnostic-enough for JS/TS/Python-style code,
 // cheap, and deterministic.
 
+import { STRUCTURAL_FALLBACK_OPERATORS } from './structural-mutate.mjs';
+
 // Loose-equality null checks. Deliberately excludes strict === / !== (which
 // invert-comparison already handles) via negative look-around: a run of
 // exactly two '=' (or '!' + '=') not adjacent to another '='.
@@ -522,9 +524,12 @@ const CLOSED_COMMENT_PREFIX = /^(\s*(?:\/\*(?:(?!\*\/)[\s\S])*?\*\/\s*)+)(?=\S)/
  * (e.g. lines changed in a diff). maxMutants caps output.
  * Returns [{ line, operator, original, mutated }].
  */
-export function generateMutants(content, { targetLines, maxMutants = 50 } = {}) {
+export function generateMutants(content, { targetLines, maxMutants = 50, includeStructural = false } = {}) {
   const lines = content.split('\n');
   const allow = targetLines ? new Set([...targetLines]) : null;
+  const fallbackOps = includeStructural
+    ? [...FALLBACK_OPERATORS, ...STRUCTURAL_FALLBACK_OPERATORS]
+    : FALLBACK_OPERATORS;
   const mutants = [];
   for (let i = 0; i < lines.length && mutants.length < maxMutants; i++) {
     const lineNo = i + 1;
@@ -548,7 +553,7 @@ export function generateMutants(content, { targetLines, maxMutants = 50 } = {}) 
     }
     // Only when nothing above could see this line (#1013).
     if (!producedForLine && mutants.length < maxMutants) {
-      for (const op of FALLBACK_OPERATORS) {
+      for (const op of fallbackOps) {
         const mutatedBody = op.apply(body);
         if (mutatedBody === null || mutatedBody === body) continue;
         mutants.push({ line: lineNo, operator: op.name, original, mutated: prefix + mutatedBody });
