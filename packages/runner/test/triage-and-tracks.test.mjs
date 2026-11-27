@@ -290,6 +290,19 @@ describe('assertPhase track modes and witnessed fresh-context gates', () => {
     appendEntry({ gate: 'hollow-test', data: { survived: 0 } }, adlcDir);
     assert.equal(assertPhase('trivial', { dir: adlcDir, cwd, revision: rev }).ok, true);
 
+    // Rejects replaying rev1's unrevisioned rails-check and hollow-test after advancing to rev2
+    const replayDir = join(cwd, '.adlc-triv-replay');
+    mkdirSync(replayDir, { recursive: true });
+    appendEntry({ type: 'rails-check', railsDiffEmpty: true, suppressionsClean: true, railFiles: { 'test/r.test.mjs': sha256(readFileSync(railFile)) } }, replayDir);
+    appendEntry({ gate: 'hollow-test', data: { survived: 0 } }, replayDir);
+    appendEntry({ type: 'p5-pass-completed', revision: rev, dry: true, lens: 'correctness' }, replayDir);
+    assert.equal(assertPhase('trivial', { dir: replayDir, cwd, revision: rev }).ok, true);
+    const rev2 = 'git-worktree:2222222222222222222222222222222222222222222222222222222222222222';
+    appendEntry({ type: 'p5-pass-completed', revision: rev2, dry: true, lens: 'correctness' }, replayDir);
+    const replayCheck = assertPhase('trivial', { dir: replayDir, cwd, revision: rev2 });
+    assert.equal(replayCheck.ok, false);
+    assert.deepEqual(replayCheck.missing.sort(), ['hollow-test', 'rails-check']);
+
     // Rejects historical ticketed entries when trivial runs ticketless
     const ticketedOnlyDir = join(cwd, '.adlc-triv-ticketed');
     mkdirSync(ticketedOnlyDir, { recursive: true });

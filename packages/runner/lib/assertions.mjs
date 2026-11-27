@@ -584,7 +584,17 @@ export function assertPhase(
       };
     }
 
-    const p4Errors = p4IntegrityErrors(trivialEntries, ticket, resolvedRev, normalizedCwd, true);
+    const lastOtherRevPassIdx = trivialEntries.findLastIndex(
+      (entry) =>
+        (entryType(entry) === 'p5-pass-completed' || entryType(entry) === 'p5-complete') &&
+        Boolean(entry?.revision) &&
+        !matchesRevision(entry, resolvedRev),
+    );
+    const epochEntries = trivialEntries.filter((entry, idx) =>
+      entry?.revision !== undefined ? matchesRevision(entry, resolvedRev) : idx > lastOtherRevPassIdx,
+    );
+
+    const p4Errors = p4IntegrityErrors(epochEntries, ticket, resolvedRev, normalizedCwd, true);
     if (p4Errors.length > 0) {
       return {
         ok: false,
@@ -610,7 +620,7 @@ export function assertPhase(
       };
     }
 
-    const hollowErrors = hollowTestIntegrityErrors(trivialEntries, ticket, resolvedRev, true);
+    const hollowErrors = hollowTestIntegrityErrors(epochEntries, ticket, resolvedRev, true);
     if (hollowErrors.length > 0) {
       return {
         ok: false,
@@ -623,7 +633,7 @@ export function assertPhase(
       };
     }
 
-    const passesAtRev = trivialEntries.filter(
+    const passesAtRev = epochEntries.filter(
       (entry) =>
         entryType(entry) === 'p5-pass-completed' &&
         Boolean(entry?.revision) &&
@@ -646,12 +656,10 @@ export function assertPhase(
     if (latestPassAtRev?.dry === true) {
       present.add('p5-pass-completed');
     }
-    for (const entry of trivialEntries) {
+    for (const entry of epochEntries) {
       const type = entryType(entry);
       if (!type || type === 'p5-pass-completed') continue;
-      if (entry.revision === undefined || matchesRevision(entry, resolvedRev)) {
-        present.add(type);
-      }
+      present.add(type);
     }
     const missing = requirements.filter((type) => !present.has(type));
     return {
@@ -773,11 +781,27 @@ export function assertPhase(
   const p6Errors = phase === 'p6' && assertedP5Entry
     ? p6IntegrityErrors(latestP6Entry(entries, ticket, resolvedRevision), currentBinding)
     : [];
+  const lastOtherRevBoundedCompleteIdx = phase === 'bounded'
+    ? entries.findLastIndex(
+        (entry) =>
+          matchesTicket(entry, ticket) &&
+          entryType(entry) === 'p5-complete' &&
+          Boolean(entry?.revision) &&
+          !matchesRevision(entry, resolvedRevision),
+      )
+    : -1;
+  const boundedEpochEntries = phase === 'bounded'
+    ? entries.filter(
+        (entry, idx) =>
+          matchesTicket(entry, ticket) &&
+          (entry?.revision !== undefined ? matchesRevision(entry, resolvedRevision) : idx > lastOtherRevBoundedCompleteIdx),
+      )
+    : entries;
   const p4Errors = phase === 'p4' || phase === 'bounded'
-    ? p4IntegrityErrors(entries, ticket, resolvedRevision, cwd, phase === 'bounded')
+    ? p4IntegrityErrors(phase === 'bounded' ? boundedEpochEntries : entries, ticket, resolvedRevision, cwd, phase === 'bounded')
     : [];
   const hollowErrors = phase === 'bounded' || phase === 'p3'
-    ? hollowTestIntegrityErrors(entries, ticket, resolvedRevision, true)
+    ? hollowTestIntegrityErrors(phase === 'bounded' ? boundedEpochEntries : entries, ticket, resolvedRevision, true)
     : [];
   const enforceFresh =
     Object.hasOwn(PHASE_REQUIREMENTS, phase) &&
@@ -868,10 +892,13 @@ export function assertPhase(
 
   const present = new Set(
     entries
-      .filter((entry) => matchesTicket(entry, ticket))
-      .filter((entry) => {
-        if (phase === 'bounded' && !REVISION_BOUND_TYPES.has(entryType(entry))) {
-          return entry?.revision === undefined || matchesRevision(entry, resolvedRevision);
+      .filter((entry, idx) => {
+        if (!matchesTicket(entry, ticket)) return false;
+        const type = entryType(entry);
+        if (phase === 'bounded' && !REVISION_BOUND_TYPES.has(type)) {
+          if (entry?.revision !== undefined) return matchesRevision(entry, resolvedRevision);
+          if (type === 'rails-red') return true;
+          return idx > lastOtherRevBoundedCompleteIdx;
         }
         return matchesRevision(entry, resolvedRevision);
       })

@@ -628,6 +628,20 @@ describe('auditRailAdequacy & CLI --audit-rails', () => {
     assert.equal(typeOnlyCheck.ok, false);
     assert.equal(typeOnlyCheck.violations[0].reason, 'mock-only-internal');
 
+    // Unmocked CJS require() and dynamic import() properly back mocked modules
+    writeFileSync(
+      join(dir, 'test/cjs-require-real.test.mjs'),
+      'const svc = require("../lib/service.mjs");\nexpect(svc.calc(2)).toBe(4);\n',
+      'utf8',
+    );
+    writeFileSync(
+      join(dir, 'test/dyn-import-real.test.mjs'),
+      'const svc = await import("../lib/service.mjs" );\nexpect(svc.calc(3)).toBe(6);\n',
+      'utf8',
+    );
+    assert.equal(auditRailAdequacy(['test/mock-unit.test.mjs', 'test/cjs-require-real.test.mjs'], { root: dir }).ok, true);
+    assert.equal(auditRailAdequacy(['test/mock-unit.test.mjs', 'test/dyn-import-real.test.mjs'], { root: dir }).ok, true);
+
     const rawDecoys = auditRailAdequacy(['test/raw_go_decoy_test.go', 'test/raw_rust_decoy.rs'], { root: dir });
     assert.equal(rawDecoys.ok, false);
     assert.deepEqual(rawDecoys.violations.map((v) => v.reason), ['missing-assertions', 'missing-assertions']);

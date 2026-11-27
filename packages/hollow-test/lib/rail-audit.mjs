@@ -189,8 +189,10 @@ function extractRelativeSpecs(clean, code, patterns, { excludeTypeOnly = false }
   for (const re of patterns) {
     for (const m of code.matchAll(re)) {
       if (excludeTypeOnly && isTypeOnlyImportMatch(m[0])) continue;
-      const qIdx = m[0].lastIndexOf(m[1], m[0].length - 2);
-      const spec = clean.slice(m.index + qIdx + 1, m.index + qIdx + 1 + m[2].length);
+      const closeIdx = m[0].lastIndexOf(m[1]);
+      const openIdx = closeIdx > 0 ? m[0].lastIndexOf(m[1], closeIdx - 1) : -1;
+      if (openIdx === -1) continue;
+      const spec = clean.slice(m.index + openIdx + 1, m.index + closeIdx);
       if (/^\.\.?\//.test(spec)) specs.push(spec);
     }
   }
