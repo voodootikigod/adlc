@@ -1,9 +1,11 @@
+import { createHmac } from 'node:crypto';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -17,7 +19,9 @@ import { fileURLToPath } from 'node:url';
 import {
   ACTIVE_RAIL_INDEX_FILE,
   DirectoryTicketStore,
+  TRANSACTION_DIRECTORY,
   archiveCompletedTickets,
+  canonicalEntryBytes,
   computeDirectoryStoreFingerprint,
   pendingTransactions,
   prettyCanonicalJson,
@@ -288,4 +292,48 @@ test('archiveCompletedTickets dry-run, inbound-edge skipping, batch write, CLI, 
   assert.equal(noop.applied, false);
   assert.deepEqual(noop.archivedIds, []);
   assert.equal(noop.remainingCount, 3);
+
+  // 7. Signed oversized .active-rail-index.json (> 1 MiB) is rejected by MAX_INDEX_BYTES -> falls back to full-load
+  const freshRoot = makeTempDir(t, 'adlc-oversized-idx-');
+  const freshStore = writeDirectory(freshRoot, [ticket('OV1', { rails: ['src/ov.js'] })]);
+  const signKey = 'oversized-hmac-key';
+  const oversizedDoc = {
+    version: 1,
+    storeFingerprint: computeDirectoryStoreFingerprint(freshStore.path),
+    activeTickets: [],
+    rails: [],
+    sigVersion: 2,
+    pad: 'x'.repeat(1024 * 1024 + 64),
+  };
+  oversizedDoc.sig = createHmac('sha256', signKey).update(canonicalEntryBytes(oversizedDoc)).digest('hex');
+  writeFileSync(join(freshRoot, ACTIVE_RAIL_INDEX_FILE), JSON.stringify(oversizedDoc));
+  const afterOversized = readActiveRailIndex(freshRoot, { env: { ADLC_TICKET: '' }, key: signKey, writeCache: false });
+  assert.equal(afterOversized.ok, true);
+  assert.equal(afterOversized.source, 'full-load');
+  assert.deepEqual(afterOversized.rails, ['src/ov.js']);
+
+  // 8. CLI `restore` exercises mutationCommands set membership for 'restore'
+  const cliRestore = runCli(['restore', 'C_FREE_1', '--root', root, '--write', '--authorize', '--allow-unsigned', '--json'], root);
+  assert.equal(cliRestore.status, 0, cliRestore.stderr);
+  assert.equal(store.load().get('C_FREE_1').id, 'C_FREE_1');
+
+  // 9. Forged single-ticket archive journal targeting a DIFFERENT archive shard fails recovery (kills isBatchArchive || mutant)
+  const forgedTxId = '11111111-2222-4333-8444-555555555555';
+  const forgedTxDir = join(root, TRANSACTION_DIRECTORY, forgedTxId);
+  mkdirSync(forgedTxDir, { recursive: true });
+  writeFileSync(join(forgedTxDir, 'journal.json'), JSON.stringify({
+    version: 1,
+    transactionId: forgedTxId,
+    operation: 'archive',
+    ticketId: 'C_FREE_1',
+    storePath: '.adlc/tickets',
+    operations: [
+      { role: 'auxiliary', action: 'write', path: `.adlc/ticket-archive/${ticketFilename('C_FREE_2')}`, filename: ticketFilename('C_FREE_2') },
+    ],
+  }));
+  assert.throws(
+    () => recoverDirectoryTransaction(store, forgedTxId, { root, direction: 'rollback', allowUnsigned: true }),
+    (err) => err.code === 'INVALID_JOURNAL',
+  );
+  rmSync(forgedTxDir, { recursive: true, force: true });
 });

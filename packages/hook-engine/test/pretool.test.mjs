@@ -120,7 +120,7 @@ test('enclosingAdlcRoot and readActiveTicketRails load active ticket rails from 
   writeFileSync(join(dirRepo, '.git', 'HEAD'), 'ref: refs/heads/main\n');
   mkdirSync(join(dirRepo, '.adlc', 'tickets'), { recursive: true });
   writeFileSync(join(dirRepo, '.adlc', 'tickets', '.store.json'), JSON.stringify({ format: 'adlc-ticket-directory', version: 1 }));
-  const dirRes = readActiveTicketRails(dirRepo, { env: { ADLC_TICKET: '' } });
+  const dirRes = readActiveTicketRails(dirRepo, { env: { ADLC_TICKET: '', ADLC_MANIFEST_KEY: 'pretool-ro-key' } });
   assert.equal(dirRes.ok, true);
   assert.equal(existsSync(join(dirRepo, '.adlc', '.active-rail-index.json')), false, 'directory-store readActiveTicketRails must not write .active-rail-index.json');
   // requireStore defaults to true: a plain git repo with no .adlc store returns null.
