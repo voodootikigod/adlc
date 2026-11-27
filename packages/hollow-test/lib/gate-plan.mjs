@@ -1,12 +1,70 @@
 // hollow-test/lib/gate-plan.mjs
 // Pure target resolution, diff classification, and mutant budget planning for the mutation gate.
 
-import { existsSync, readdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join, dirname, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { globMatch, resolveRailPath } from '@adlc/core';
 import { isMutableSource } from './targets.mjs';
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+
+const UNSAFE_TEST_TARGET_RE = /[;&|$`<>()\n\r\0'"#~\\{}]/;
+
+function isSafeRelativeTestTarget(rawTarget, root) {
+  if (typeof rawTarget !== 'string') return false;
+  const trimmed = rawTarget.trim();
+  if (trimmed === '' || UNSAFE_TEST_TARGET_RE.test(rawTarget)) return false;
+  for (const part of trimmed.split(/\s+/)) {
+    if (!part || part === '.' || part.startsWith('-') || isAbsolute(part) || /^[A-Za-z]:/.test(part) || part.startsWith('/')) {
+      return false;
+    }
+    const segs = part.split('/');
+    if (segs.includes('..') || segs.includes('')) return false;
+    const resolvedRel = resolveRailPath(part, root);
+    if (
+      !resolvedRel ||
+      resolvedRel === '.' ||
+      resolvedRel.split('/')[0] === '..' ||
+      isAbsolute(resolvedRel) ||
+      /^[A-Za-z]:/.test(resolvedRel)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Resolve a repo-configured test target for `file` from `.adlc/config.json`
+ * (`hollowTest.testMap: { "<glob>": "<relTestTarget>" }`), rejecting `..`,
+ * absolute paths, leading `-` flags, symlink escapes, and shell metacharacters.
+ *
+ * @param {string} file  repo-relative path
+ * @param {string} [root]
+ * @returns {string|null}
+ */
+export function resolveConfiguredTestTarget(file, root = ROOT) {
+  if (typeof file !== 'string' || file === '') return null;
+  const configPath = join(root, '.adlc', 'config.json');
+  if (!existsSync(configPath)) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(configPath, 'utf8'));
+  } catch {
+    return null;
+  }
+  const testMap = parsed?.hollowTest?.testMap;
+  if (!testMap || typeof testMap !== 'object' || Array.isArray(testMap)) return null;
+  const normFile = file.replaceAll('\\', '/');
+  for (const [pattern, rawTarget] of Object.entries(testMap)) {
+    if (typeof pattern !== 'string' || pattern === '') continue;
+    if (!globMatch(pattern, normFile)) continue;
+    if (!isSafeRelativeTestTarget(rawTarget, root)) return null;
+    return rawTarget.trim();
+  }
+  return null;
+}
 
 /**
  * Every source under scripts/** whose basename is `base`, excluding the test
@@ -49,6 +107,8 @@ function sourcesNamed(base, root) {
  * @returns {string|null} a `node --test`-able target, or null if unknown
  */
 export function testTargetFor(file, root = ROOT) {
+  const configured = resolveConfiguredTestTarget(file, root);
+  if (configured !== null) return configured;
   let m;
   if ((m = /^packages\/([^/]+)\//.exec(file))) {
     const globs = [];
