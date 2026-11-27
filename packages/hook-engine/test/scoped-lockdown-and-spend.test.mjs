@@ -11,6 +11,8 @@ import {
   normalizeHookInput,
 } from '../index.mjs';
 import { detectTicketStore } from '@adlc/tickets';
+import { record } from '@adlc/gate-manifest/lib/record.mjs';
+import { verify } from '@adlc/gate-manifest/lib/verify.mjs';
 
 function makeTestRepo(t, { withActiveTicket = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'adlc-he-scoped-'));
@@ -300,4 +302,80 @@ test('Objective 3: evaluateStop with transcriptPath and recordSessionUsage idemp
   assert.equal(entry.data.transcriptSha256, res1.harvestedUsage.transcriptSha256);
   assert.equal(entry.data.usageStatus, 'reported');
   assert.deepEqual(entry.data.usage, res1.harvestedUsage.usage);
+});
+
+test('Objective 3: evaluateStop skips keyless append on signed/keyed manifests and survives record errors', (t) => {
+  const signedRepo = makeTestRepo(t, { withActiveTicket: true });
+  const adlcDir = join(signedRepo, '.adlc');
+  const signingKey = 'local-hmac-test';
+  record({
+    gate: 'p4',
+    ticket: 'T-ACTIVE',
+    dir: adlcDir,
+    key: signingKey,
+    rawData: JSON.stringify({ note: 'signed-baseline' }),
+  });
+
+  const transcriptPath = join(signedRepo, 'session.jsonl');
+  writeFileSync(
+    transcriptPath,
+    JSON.stringify({ id: 'm1', provider: 'claude', model: 'claude-sonnet-4-6', usage: { input_tokens: 50, output_tokens: 10 } }),
+  );
+
+  // Without key on an already-signed manifest: must NOT append unsigned entry and must block when requireEvidence=true
+  const blockedKeyless = evaluateStop({
+    cwd: signedRepo,
+    key: null,
+    transcriptPath,
+    recordSessionUsage: true,
+    requireEvidence: true,
+    requiredGate: 'p4',
+  });
+  assert.equal(blockedKeyless.decision, 'block');
+  assert.equal(readFileSync(join(adlcDir, 'manifest.jsonl'), 'utf8').trim().split('\n').length, 1);
+  assert.equal(verify(adlcDir, { requireSignatures: true, key: signingKey }).valid, true);
+
+  // Keyed forest marker (.adlc/manifest.d/.store.json) also skips keyless append
+  const keyedForestRepo = makeTestRepo(t, { withActiveTicket: true });
+  mkdirSync(join(keyedForestRepo, '.adlc', 'manifest.d'), { recursive: true });
+  writeFileSync(
+    join(keyedForestRepo, '.adlc', 'manifest.d', '.store.json'),
+    JSON.stringify({ version: 1, auth: 'keyed' }),
+  );
+  const kfTranscript = join(keyedForestRepo, 'session.jsonl');
+  writeFileSync(
+    kfTranscript,
+    JSON.stringify({ id: 'm2', provider: 'claude', model: 'claude-sonnet-4-6', usage: { input_tokens: 20, output_tokens: 5 } }),
+  );
+  const kfStop = evaluateStop({
+    cwd: keyedForestRepo,
+    key: null,
+    transcriptPath: kfTranscript,
+    recordSessionUsage: true,
+  });
+  assert.equal(kfStop.decision, 'allow');
+  assert.equal(existsSync(join(keyedForestRepo, '.adlc', 'manifest.jsonl')), false);
+
+  // Detached HEAD with committed segment where record() would throw: evaluateStop catches and still blocks
+  const detachedRepo = makeTestRepo(t, { withActiveTicket: true });
+  writeFileSync(join(detachedRepo, '.git', 'HEAD'), '0123456789abcdef0123456789abcdef01234567\n');
+  mkdirSync(join(detachedRepo, '.adlc', 'manifest.d'), { recursive: true });
+  writeFileSync(
+    join(detachedRepo, '.adlc', 'manifest.d', '01J00000000000000000000000.jsonl'),
+    JSON.stringify({ seq: 1, ts: '2026-01-01T00:00:00Z', gate: 'p4', prev: null, hash: 'abc', branch: 'feat/x', anchor: null }) + '\n',
+  );
+  const detTranscript = join(detachedRepo, 'session.jsonl');
+  writeFileSync(
+    detTranscript,
+    JSON.stringify({ id: 'm3', provider: 'claude', model: 'claude-sonnet-4-6', usage: { input_tokens: 30, output_tokens: 5 } }),
+  );
+  const detStop = evaluateStop({
+    cwd: detachedRepo,
+    key: signingKey,
+    transcriptPath: detTranscript,
+    recordSessionUsage: true,
+    requireEvidence: true,
+    requiredGate: 'p5',
+  });
+  assert.equal(detStop.decision, 'block');
 });

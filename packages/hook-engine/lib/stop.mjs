@@ -240,32 +240,56 @@ export function evaluateStop({
       const { valid: segments } = discoverSegments(adlcDir);
       const filesToScan = [rootManifest, ...segments.map((seg) => segmentPath(adlcDir, seg))];
       let alreadyRecorded = false;
+      let hasSignedEntry = false;
+      let scanFailed = false;
       for (const filePath of filesToScan) {
         const parsed = parseStrictJsonl(filePath, { maxBytes: MAX_MANIFEST_FILE_BYTES, remainingLines: MAX_MANIFEST_LINES });
-        if (parsed.ok) {
-          for (const entry of parsed.entries) {
-            if (entry.data?.transcriptSha256 === harvestedUsage.transcriptSha256) {
-              alreadyRecorded = true;
-              break;
-            }
+        if (!parsed.ok) {
+          scanFailed = true;
+          break;
+        }
+        for (const entry of parsed.entries) {
+          if (typeof entry.sig === 'string' && entry.sig.length > 0) {
+            hasSignedEntry = true;
+          }
+          if (entry.data?.transcriptSha256 === harvestedUsage.transcriptSha256) {
+            alreadyRecorded = true;
           }
         }
-        if (alreadyRecorded) break;
       }
 
-      if (!alreadyRecorded) {
-        record({
-          gate: phaseGate ?? 'p4',
-          ticket: activeTicket?.id,
-          dir: adlcDir,
-          key: key ?? null,
-          rawData: JSON.stringify({
-            sessionId: sessionId ?? null,
-            transcriptSha256: harvestedUsage.transcriptSha256,
-            usage: harvestedUsage.usage,
-            usageStatus: 'reported',
-          }),
-        });
+      let isKeyedForest = false;
+      const storeRead = readBoundedRegularFile(join(adlcDir, 'manifest.d', '.store.json'));
+      if (storeRead.status === 'error') {
+        scanFailed = true;
+      } else if (storeRead.status === 'ok') {
+        try {
+          const marker = JSON.parse(storeRead.content);
+          if (marker?.auth === 'keyed') isKeyedForest = true;
+        } catch {
+          scanFailed = true;
+        }
+      }
+
+      const hasSigningKey = typeof key === 'string' && key.length > 0;
+      const canAppend = !alreadyRecorded && !scanFailed && (hasSigningKey || (!hasSignedEntry && !isKeyedForest));
+      if (canAppend) {
+        try {
+          record({
+            gate: phaseGate ?? 'p4',
+            ticket: activeTicket?.id,
+            dir: adlcDir,
+            key: hasSigningKey ? key : null,
+            rawData: JSON.stringify({
+              sessionId: sessionId ?? null,
+              transcriptSha256: harvestedUsage.transcriptSha256,
+              usage: harvestedUsage.usage,
+              usageStatus: 'reported',
+            }),
+          });
+        } catch {
+          // Never allow usage telemetry persistence errors to abort Stop gate evaluation.
+        }
       }
     }
   }

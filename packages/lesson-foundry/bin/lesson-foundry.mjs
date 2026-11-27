@@ -176,22 +176,8 @@ if (flags.write) {
   }
 }
 
-// Output (human or JSON)
-if (flags.json) {
-  const malformedFailed = flags.gate && skipped > tolerateMalformed;
-  const gateResult = flags.gate
-    ? {
-        unbanked: unbanked.map((c) => c.name),
-        skippedMalformed: skipped,
-        pass: unbanked.length === 0 && !malformedFailed,
-      }
-    : null;
-  printJson(buildJsonResult({
-    clusters, skipped, filtered, plan, gateResult,
-    writeSkipped: flags.write ? writeSkippedPaths : null,
-    refinements: llmRefinements,
-  }));
-} else {
+// Output (human report runs before template append notifications; JSON runs after all writes)
+if (!flags.json) {
   const lines = buildHumanReport({ clusters, skipped, filtered, plan, failedRefinements });
   for (const l of lines) console.log(l);
 }
@@ -250,9 +236,25 @@ if (flags.write) {
   console.log('  (dry-run — add --write to emit files)');
 }
 
-// Exit
+// Re-evaluate unbanked after all writes (both real artifacts and interrogation-template.md)
 if (flags.gate && flags.write) {
   unbanked = findUnbankedClusters(clusters, outDir, existsSync, undefined, undefined, minSize, findings, 0.5);
+}
+
+if (flags.json) {
+  const malformedFailed = flags.gate && skipped > tolerateMalformed;
+  const gateResult = flags.gate
+    ? {
+        unbanked: unbanked.map((c) => c.name),
+        skippedMalformed: skipped,
+        pass: unbanked.length === 0 && !malformedFailed,
+      }
+    : null;
+  printJson(buildJsonResult({
+    clusters, skipped, filtered, plan, gateResult,
+    writeSkipped: flags.write ? writeSkippedPaths : null,
+    refinements: llmRefinements,
+  }));
 }
 
 if (flags.gate && skipped > tolerateMalformed) {

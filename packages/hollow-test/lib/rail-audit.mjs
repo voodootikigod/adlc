@@ -60,8 +60,19 @@ function maskCommentsAndStrings(source, lang) {
   let lastWord = '';
   let wordAfterDot = false;
 
-  const pushBlank = (s) => { for (const c of s) { const b = c === '\n' ? '\n' : ' '; clean += b; code += b; } };
-  const pushStrBody = (s) => { clean += s; for (const c of s) code += c === '\n' ? '\n' : ' '; };
+  const pushBlank = (s) => {
+    for (let k = 0; k < s.length; k += 1) {
+      const b = s[k] === '\n' ? '\n' : ' ';
+      clean += b;
+      code += b;
+    }
+  };
+  const pushStrBody = (s) => {
+    clean += s;
+    for (let k = 0; k < s.length; k += 1) {
+      code += s[k] === '\n' ? '\n' : ' ';
+    }
+  };
   const pushCode = (s) => { clean += s; code += s; };
 
   while (i < source.length) {

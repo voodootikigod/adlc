@@ -106,7 +106,10 @@ test('lesson-foundry --verify-checks CLI integration: demotes false-positive lin
     encoding: 'utf8',
   });
 
-  assert.equal(res.status, 0, (res.stderr || '') + '\n' + (resDefault.stdout || ''));
+  assert.equal(res.status, 0, (res.stderr || '') + '\n' + (res.stdout || ''));
+  const parsedJson = JSON.parse(res.stdout);
+  assert.equal(parsedJson.gate.pass, true);
+  assert.deepEqual(parsedJson.gate.unbanked, []);
   const templatePath = join(outDir, 'interrogation-template.md');
   const templateContent = readFileSync(templatePath, 'utf8');
   assert.match(templateContent, /ZZ_FIXTURE_ONLY_TOKEN_99182/);

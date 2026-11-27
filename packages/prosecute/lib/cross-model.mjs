@@ -63,7 +63,7 @@ export function normalizeProvider(value) {
   if (typeof value !== 'string') return '';
   const folded = value.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
   if (folded === 'claude' || folded === 'anthropic' || /^claude[-.]/.test(folded)) return 'anthropic';
-  if (folded === 'codex' || folded === 'openai' || /^(?:gpt|o1|o3|o4)(?:[-.]|$)/.test(folded)) return 'openai';
+  if (folded === 'codex' || folded === 'openai' || /^(?:codex|gpt|o1|o3|o4)(?:[-.]|$)/.test(folded)) return 'openai';
   if (
     folded === 'gemini' || folded === 'agy' || folded === 'antigravity' || folded === 'google' ||
     /^gemini[-.]/.test(folded)

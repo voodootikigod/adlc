@@ -90,6 +90,27 @@ test('live run() with --ticket records witnessed headless-cli provenance and omi
   assert.equal(entry.data.executionWitnessed, true);
   assert.equal(entry.data.usageStatus, 'unreported');
   assert.equal('usage' in entry.data, false);
+  assert.equal(entry.sig, undefined);
+
+  // Hermetic env boundary: ambient process.env.ADLC_MANIFEST_KEY must not leak when caller supplies custom env without it
+  process.env.ADLC_MANIFEST_KEY = 'ambient-outer-hmac';
+  t.after(() => delete process.env.ADLC_MANIFEST_KEY);
+  const isolatedDir = join(root, 'isolated-adlc');
+  await run({
+    specPath,
+    tier: 'mid',
+    provider: 'codex-cli',
+    ticket: 'T-LIVE-HERMETIC',
+    dir: isolatedDir,
+    json: true,
+    env: {
+      NODE_ENV: 'test',
+      ADLC_CODEX_CLI: '1',
+      __adlcCliSpawn: () => makeCliChild(SAMPLE_CAUSES_JSON),
+    },
+  });
+  const isolatedEntry = JSON.parse(readFileSync(join(isolatedDir, 'manifest.jsonl'), 'utf8').trim());
+  assert.equal(isolatedEntry.sig, undefined);
 });
 
 test('live run() with API provider records usage, signs with key, and skips recording when ticket is omitted', async (t) => {

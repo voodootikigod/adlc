@@ -568,6 +568,15 @@ describe('auditRailAdequacy & CLI --audit-rails', () => {
     assert.equal(regexSmuggle.ok, false);
     assert.equal(regexSmuggle.violations[0].reason, 'mock-only-internal');
 
+    writeFileSync(
+      join(dir, 'test/emoji-offset.test.mjs'),
+      "// 🚀🎉 astral comment\nconst EMOJI = /🚀🎉/u;\nvi.mock('../lib/unbacked.mjs');\nexpect(EMOJI.test('🚀🎉')).toBe(true);\n",
+      'utf8',
+    );
+    const emojiOffset = auditRailAdequacy(['test/emoji-offset.test.mjs'], { root: dir });
+    assert.equal(emojiOffset.ok, false);
+    assert.equal(emojiOffset.violations[0].reason, 'mock-only-internal');
+
     const rawDecoys = auditRailAdequacy(['test/raw_go_decoy_test.go', 'test/raw_rust_decoy.rs'], { root: dir });
     assert.equal(rawDecoys.ok, false);
     assert.deepEqual(rawDecoys.violations.map((v) => v.reason), ['missing-assertions', 'missing-assertions']);

@@ -15,6 +15,10 @@ import { scanRepositoryBloat } from '../lib/simplify.mjs';
 const RUNNER_BIN = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'adlc.mjs');
 const appendEntry = (entry, dir, key = null) => realAppend(entry, dir, { key });
 
+function appendManifestEntryWithTamper(dir) {
+  realAppend({ gate: 'lesson-foundry' }, dir, { key: 'wrong-hmac-test' });
+}
+
 function makeTempDir(t, prefix = 'adlc-triage-') {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -212,6 +216,51 @@ describe('assertPhase track modes and witnessed fresh-context gates', () => {
     assert.deepEqual(assertPhase('bounded', { dir: bDir, ticket: 'T1', revision: bRev, cwd }).missing, ['p5-complete']);
     writeFullP5(bDir, { ticket: 'T1', revision: bRev, cwd });
     assert.equal(assertPhase('bounded', { dir: bDir, ticket: 'T1', revision: bRev, cwd, track: 'bounded' }).ok, true);
+
+    // Rejects [dry:true, dry:false] when latest pass at revision found defects
+    appendEntry({ type: 'p5-pass-completed', revision: rev, dry: false, lens: 'security' }, adlcDir);
+    const nonDryLatest = assertPhase('trivial', { dir: adlcDir, cwd, revision: rev });
+    assert.equal(nonDryLatest.ok, false);
+    assert.match(nonDryLatest.errors.join('\n'), /latest p5-pass-completed/);
+    appendEntry({ type: 'p5-pass-completed', revision: rev, dry: true, lens: 'security' }, adlcDir);
+    assert.equal(assertPhase('trivial', { dir: adlcDir, cwd, revision: rev }).ok, true);
+
+    // Rejects unresolved p5-finding-verified on trivial until killed + fresh dry pass
+    const findingPayload = { id: 'F-1', file: 'src/a.mjs', line_start: 1, line_end: 1, category: 'bug', claim: 'bad', evidence: 'ev' };
+    appendEntry({ type: 'p5-finding-verified', revision: rev, finding: findingPayload }, adlcDir);
+    const withOpenFinding = assertPhase('trivial', { dir: adlcDir, cwd, revision: rev });
+    assert.equal(withOpenFinding.ok, false);
+    assert.match(withOpenFinding.errors.join('\n'), /unresolved p5-finding-verified F-1/);
+    appendEntry({ type: 'p5-finding-killed', revision: rev, finding: findingPayload }, adlcDir);
+    assert.equal(assertPhase('trivial', { dir: adlcDir, cwd, revision: rev }).ok, true);
+
+    // Rejects surviving hollow-test mutants on trivial
+    appendEntry({ gate: 'hollow-test', data: { survived: 2 } }, adlcDir);
+    const withSurvivors = assertPhase('trivial', { dir: adlcDir, cwd, revision: rev });
+    assert.equal(withSurvivors.ok, false);
+    assert.match(withSurvivors.errors.join('\n'), /surviving mutant/);
+    appendEntry({ gate: 'hollow-test', data: { survived: 0 } }, adlcDir);
+    assert.equal(assertPhase('trivial', { dir: adlcDir, cwd, revision: rev }).ok, true);
+
+    // Rejects historical ticketed entries when trivial runs ticketless
+    const ticketedOnlyDir = join(cwd, '.adlc-triv-ticketed');
+    mkdirSync(ticketedOnlyDir, { recursive: true });
+    appendEntry({ type: 'rails-check', ticket: 'T-OLD', railsDiffEmpty: true, suppressionsClean: true, railFiles: { 'test/r.test.mjs': sha256(readFileSync(railFile)) } }, ticketedOnlyDir);
+    appendEntry({ gate: 'hollow-test', ticket: 'T-OLD' }, ticketedOnlyDir);
+    appendEntry({ type: 'p5-pass-completed', ticket: 'T-OLD', revision: rev, dry: true, lens: 'correctness' }, ticketedOnlyDir);
+    assert.equal(assertPhase('trivial', { dir: ticketedOnlyDir, cwd, revision: rev }).ok, false);
+    assert.equal(assertPhase('trivial', { dir: ticketedOnlyDir, cwd, revision: rev, ticket: 'T-OLD' }).ok, true);
+
+    // Default dir='.adlc' with custom cwd verifies <cwd>/.adlc under key
+    const { dir: otherRepo, g: gOther } = makeGitRepo(t);
+    mkdirSync(join(otherRepo, '.adlc'), { recursive: true });
+    writeFileSync(join(otherRepo, 'a.txt'), 'ok\n');
+    gOther('add', '-A');
+    gOther('commit', '-qm', 'init');
+    appendManifestEntryWithTamper(join(otherRepo, '.adlc'));
+    const badSigRes = assertPhase('p7', { cwd: otherRepo, key: 'local-hmac-test' });
+    assert.equal(badSigRes.ok, false);
+    assert.match(badSigRes.errors.join('\n'), /manifest verification failed/);
   });
 
   it('enforces witnessed provenance on substantial, architectural, and requireFreshContext', (t) => {

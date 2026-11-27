@@ -4,6 +4,7 @@ import { ADLC_DIR, canonicalJson, hashFiles, loadTickets, sha256 } from '@adlc/c
 // which is only true of a chain this checkout can place in sequence. See
 // own-chain.mjs for why the forest's own order cannot carry that weight.
 import { readOwnManifestChain } from '@adlc/gate-manifest/lib/own-chain.mjs';
+import { normalizeManifestDirAndCwd } from '@adlc/gate-manifest/lib/lineage.mjs';
 import { verify } from '@adlc/gate-manifest/lib/verify.mjs';
 import { specApprovalIntegrityErrors, validateSpecApprovalRecord } from '@adlc/gate-manifest';
 export { specApprovalIntegrityErrors, validateSpecApprovalRecord };
@@ -514,9 +515,10 @@ export function assertPhase(
       ? [...baseRequirements, 'parallax']
       : baseRequirements;
 
-  const { entries, skipped, identityError } = readOwnManifestChain(dir, { cwd });
+  const { dir: normalizedDir, cwd: normalizedCwd } = normalizeManifestDirAndCwd(dir, { cwd });
+  const { entries, skipped, identityError } = readOwnManifestChain(normalizedDir, { cwd: normalizedCwd });
   if (typeof key === 'string' && key.length > 0 && skipped.length === 0 && !identityError) {
-    const verified = verify(dir, { requireSignatures: false, key });
+    const verified = verify(normalizedDir, { requireSignatures: false, key });
     if (!verified.valid) {
       return {
         ok: false,
@@ -533,15 +535,17 @@ export function assertPhase(
   const explicitRevision = hasExplicitRevision ? String(revision) : undefined;
 
   if (phase === 'trivial') {
-    const ignoredPaths = manifestArtifactPaths(cwd, dir);
-    const latestTrivialPass = entries
-      .filter((entry) => entryType(entry) === 'p5-pass-completed' && matchesTicket(entry, ticket) && Boolean(entry?.revision))
+    const matchesTrivialScope = (entry) => (ticket !== undefined ? entry?.ticket === ticket : !entry?.ticket);
+    const trivialEntries = entries.filter(matchesTrivialScope);
+    const ignoredPaths = manifestArtifactPaths(normalizedCwd, normalizedDir);
+    const latestTrivialPass = trivialEntries
+      .filter((entry) => entryType(entry) === 'p5-pass-completed' && Boolean(entry?.revision))
       .at(-1);
     const recordedPassRev = latestTrivialPass?.revision ?? null;
     const liveRev = explicitRevision
       ? null
       : resolveLiveP5WorktreeRevision({
-          cwd,
+          cwd: normalizedCwd,
           explicitRevision,
           recordedP5Revision: recordedPassRev,
           ignorePaths: ignoredPaths,
@@ -571,7 +575,7 @@ export function assertPhase(
       };
     }
 
-    const p4Errors = p4IntegrityErrors(entries, ticket, resolvedRev, cwd, true);
+    const p4Errors = p4IntegrityErrors(trivialEntries, ticket, resolvedRev, normalizedCwd, true);
     if (p4Errors.length > 0) {
       return {
         ok: false,
@@ -584,15 +588,8 @@ export function assertPhase(
       };
     }
 
-    const passesAtRev = entries.filter(
-      (entry) =>
-        entryType(entry) === 'p5-pass-completed' &&
-        matchesTicket(entry, ticket) &&
-        Boolean(entry?.revision) &&
-        matchesRevision(entry, resolvedRev),
-    );
-    const hasDryPassAtRev = passesAtRev.some((entry) => entry.dry === true);
-    if (passesAtRev.length > 0 && !hasDryPassAtRev) {
+    const openFindings = openP5FindingErrors(trivialEntries, ticket, resolvedRev, trivialEntries.length);
+    if (openFindings.length > 0) {
       return {
         ok: false,
         operational: false,
@@ -600,20 +597,53 @@ export function assertPhase(
         ticket,
         revision: resolvedRev,
         missing: [],
-        errors: ['P5 evidence is incomplete: trivial requires at least one dry=true p5-pass-completed entry'],
+        errors: openFindings,
+      };
+    }
+
+    const latestHollow = trivialEntries
+      .filter((entry) => entryType(entry) === 'hollow-test' && (entry.revision === undefined || matchesRevision(entry, resolvedRev)))
+      .at(-1);
+    const hollowSurvivors = Number(latestHollow?.survived ?? latestHollow?.data?.survived ?? latestHollow?.data?.summary?.survived ?? 0);
+    if (hollowSurvivors > 0) {
+      return {
+        ok: false,
+        operational: false,
+        phase,
+        ticket,
+        revision: resolvedRev,
+        missing: [],
+        errors: [`hollow-test recorded ${hollowSurvivors} surviving mutant(s)`],
+      };
+    }
+
+    const passesAtRev = trivialEntries.filter(
+      (entry) =>
+        entryType(entry) === 'p5-pass-completed' &&
+        Boolean(entry?.revision) &&
+        matchesRevision(entry, resolvedRev),
+    );
+    const latestPassAtRev = passesAtRev.at(-1);
+    if (passesAtRev.length > 0 && latestPassAtRev?.dry !== true) {
+      return {
+        ok: false,
+        operational: false,
+        phase,
+        ticket,
+        revision: resolvedRev,
+        missing: [],
+        errors: ['P5 evidence is incomplete: trivial requires the latest p5-pass-completed entry at this revision to have dry=true'],
       };
     }
 
     const present = new Set();
-    for (const entry of entries) {
-      if (!matchesTicket(entry, ticket)) continue;
+    if (latestPassAtRev?.dry === true) {
+      present.add('p5-pass-completed');
+    }
+    for (const entry of trivialEntries) {
       const type = entryType(entry);
-      if (!type) continue;
-      if (type === 'p5-pass-completed') {
-        if (entry.dry === true && Boolean(entry.revision) && matchesRevision(entry, resolvedRev)) {
-          present.add(type);
-        }
-      } else if (entry.revision === undefined || matchesRevision(entry, resolvedRev)) {
+      if (!type || type === 'p5-pass-completed') continue;
+      if (entry.revision === undefined || matchesRevision(entry, resolvedRev)) {
         present.add(type);
       }
     }

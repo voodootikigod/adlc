@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifyRepro } from '../lib/verify-repro.mjs';
+import { normalizeProvider, recordCrossModelReview } from '../lib/cross-model.mjs';
 
 const CLI_PATH = fileURLToPath(new URL('../bin/adlc-prosecute.mjs', import.meta.url));
 
@@ -129,4 +130,27 @@ test('adlc-prosecute verify-repro CLI dispatch and JSON output', () => {
   assert.equal(parsed.reproduced, true);
   assert.equal(parsed.exitCode, 0);
   assert.equal(parsed.operationalError, false);
+});
+
+test('cross-model normalizeProvider maps codex-cli to openai and claude-cli to anthropic', (t) => {
+  assert.equal(normalizeProvider('codex-cli'), 'openai');
+  assert.equal(normalizeProvider('codex.1'), 'openai');
+  assert.equal(normalizeProvider('codexx'), 'codexx');
+  assert.equal(normalizeProvider('claude-cli'), 'anthropic');
+
+  const dir = mkdtempSync(join(tmpdir(), 'cm-codex-cli-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  assert.throws(
+    () =>
+      recordCrossModelReview({
+        ticket: 'T1',
+        revision: 'rev-1',
+        provider: 'codex-cli',
+        authorProvider: 'openai',
+        verdict: 'approve',
+        dir,
+        key: 'local-hmac-test',
+      }),
+    /distinct from the author/,
+  );
 });
