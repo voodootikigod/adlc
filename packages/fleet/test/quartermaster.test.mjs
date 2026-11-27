@@ -104,35 +104,116 @@ test('a model an adapter CAN force is accepted, and the default sentinel is alwa
   }
 });
 
+const TEST_REGISTRY_PATH = '/operator/quartermaster.json';
+const TEST_REGISTRY = {
+  version: 3,
+  channels: {
+    frontier: { adapter: 'claude-code', model: 'claude-opus-5', transport: 'subscription:anthropic-max', provider: 'anthropic' },
+    'frontier-metered': { adapter: 'claude-code', model: 'claude-opus-5', transport: 'api:anthropic-batch', provider: 'anthropic' },
+    mid: { adapter: 'opencode', model: 'zai/glm-5.2', transport: 'gateway:opencode-go', provider: 'zai' },
+    cheap: { adapter: 'opencode', model: 'deepseek/v4-flash', transport: 'gateway:opencode-go', provider: 'deepseek' },
+  },
+  reviewerGroups: {
+    'cross-model-routine': { quorum: 1, members: [{ adapter: 'opencode', model: 'qwen/qwen3.7-coder', transport: 'gateway:opencode-go', provider: 'alibaba' }] },
+    'cross-model-trust-root': {
+      quorum: 2,
+      members: [
+        { adapter: 'opencode', model: 'moonshot/kimi-k3', transport: 'gateway:opencode-go', provider: 'moonshot' },
+        { adapter: 'codex', model: 'gpt-5.3-codex', transport: 'subscription:chatgpt-plus', provider: 'openai', directAuth: true },
+      ],
+    },
+  },
+  modelProviders: {
+    opencode: { 'zai/glm-5.2': 'zai', 'deepseek/v4-flash': 'deepseek', 'qwen/qwen3.7-coder': 'alibaba', 'moonshot/kimi-k3': 'moonshot' },
+    'claude-code': { 'claude-opus-5': 'anthropic' },
+    codex: { 'gpt-5.3-codex': 'openai' },
+  },
+};
+
+function planWithTestRegistry(tickets) {
+  return planSeats({
+    tickets,
+    repoDir: REPO_ROOT,
+    adlcDir: join(REPO_ROOT, '.adlc'),
+    env: { [REGISTRY_ENV]: TEST_REGISTRY_PATH },
+    exists: (p) => p === TEST_REGISTRY_PATH,
+    readFile: (p) => {
+      if (p !== TEST_REGISTRY_PATH) throw new Error(`unexpected registry read: ${p}`);
+      return JSON.stringify(TEST_REGISTRY);
+    },
+  });
+}
+
 // Completed tickets are removed from the backlog, but fleet's own activeTickets
 // deliberately KEEPS edges pointing at them (its scheduler treats a completed
 // prerequisite as satisfied). computeFloat cannot: it indexes predecessors by
-// edge target and dereferences a missing one. This repo's real store carries
-// four such edges, so getting this wrong means enabling a registry crashes
-// planning on the project's own backlog before a single seat resolves.
-test('the repo\'s own ticket store routes without crashing (completed-target edges)', () => {
+// edge target and dereferences a missing one. Route both the live repository
+// store as-is (even when every ticket is completed) and a DAG layered onto a
+// real completed ticket from the store that mixes completed-target edges with a
+// live critical-path / slack dependency, asserting exact float and channel routing.
+test('the repo\'s own ticket store routes without crashing and preserves live DAG float alongside completed-target edges', () => {
   const all = loadPlan(join(REPO_ROOT, '.adlc', 'tickets.json'));
   const tickets = all.tickets ?? all;
 
-  // Precondition: the fixture is only meaningful while such edges exist.
-  const active = activeTickets(tickets);
+  const liveActive = activeTickets(tickets);
+  const liveRouted = planWithTestRegistry(tickets);
+  assert.equal(liveRouted.seats.size, liveActive.length);
+
+  const completedTarget = tickets.find((t) => t.completed === true);
+  assert.ok(completedTarget, 'precondition: repo store must contain at least one completed ticket');
+
+  const mixedDag = [
+    ...tickets,
+    {
+      id: '__QM_CRIT_A__',
+      title: 'critical prerequisite with live edge + completed-target edge',
+      category: 'feature',
+      duration: 100,
+      body: 'x',
+      edges: [{ to: '__QM_SINK_C__' }, { to: completedTarget.id }],
+      rails: ['pkg-a/rail.test.mjs'],
+      scope: ['pkg-a/impl.mjs'],
+    },
+    {
+      id: '__QM_SLACK_B__',
+      title: 'side-branch prerequisite whose float depends on live edge preservation',
+      category: 'feature',
+      duration: 1,
+      body: 'x',
+      edges: [{ to: '__QM_SINK_C__' }],
+      rails: ['pkg-b/rail.test.mjs'],
+      scope: ['pkg-b/impl.mjs'],
+    },
+    {
+      id: '__QM_SINK_C__',
+      title: 'critical sink with completed-target edge',
+      category: 'feature',
+      duration: 1,
+      body: 'x',
+      edges: [{ to: completedTarget.id }],
+      rails: ['pkg-c/rail.test.mjs'],
+      scope: ['pkg-c/impl.mjs'],
+    },
+  ];
+
+  const active = activeTickets(mixedDag);
   const activeIds = new Set(active.map((t) => t.id));
   const dangling = active.flatMap((t) => (t.edges ?? []).filter((e) => !activeIds.has(e.to)).map((e) => `${t.id}->${e.to}`));
-  assert.ok(dangling.length > 0, `precondition: the store must contain completed-target edges (found ${dangling.length})`);
+  assert.ok(dangling.length >= 2, `precondition: mixed DAG must carry completed-target edges (found ${dangling.length})`);
 
-  // The raw active list is exactly what used to be passed in — prove it still breaks.
+  // Un-normalized activeTickets retains completed-target edges and crashes computeFloat.
   assert.throws(() => computeFloat(active), TypeError, 'precondition: the un-normalized list really does crash computeFloat');
 
-  // planSeats normalizes internally, so routing the FULL store succeeds. It
-  // throws RegistryLoadError (no registry here), never a TypeError from CPM.
-  try {
-    planSeats({ tickets, repoDir: REPO_ROOT, env: { ADLC_QUARTERMASTER_REGISTRY: '/nonexistent/quartermaster.json' }, adlcDir: join(REPO_ROOT, '.adlc') });
-    assert.fail('expected a registry load failure');
-  } catch (e) {
-    assert.ok(!(e instanceof TypeError), `planning must not crash on the DAG: ${e.stack}`);
-    assert.match(e.message, /no registry at|registry/i);
-    assert.doesNotMatch(e.message, /edges to unknown tickets/);
-  }
+  // planSeats drops completed-target edges while keeping live edges intact:
+  // __QM_CRIT_A__ (dur 100) -> __QM_SINK_C__ (dur 1) dominates makespan (float 0),
+  // while __QM_SLACK_B__ (dur 1) -> __QM_SINK_C__ gets slack float 99 (non-frontier).
+  const routed = planWithTestRegistry(mixedDag);
+  assert.equal(routed.seats.size, active.length);
+  assert.equal(routed.seats.get('__QM_CRIT_A__')?.assignment.float, 0);
+  assert.equal(routed.seats.get('__QM_SINK_C__')?.assignment.float, 0);
+  assert.equal(routed.seats.get('__QM_SLACK_B__')?.assignment.float, 99);
+  assert.equal(routed.seats.get('__QM_CRIT_A__')?.route.channel, 'frontier');
+  assert.notEqual(routed.seats.get('__QM_SLACK_B__')?.route.channel, 'frontier');
 });
 
 test('an edge to a genuinely unknown ticket fails with a diagnosable error, not a TypeError', () => {
@@ -140,8 +221,8 @@ test('an edge to a genuinely unknown ticket fails with a diagnosable error, not 
     { id: 'A', category: 'feature', duration: 1, edges: [{ to: 'GHOST' }], rails: [], scope: [] },
   ];
   assert.throws(
-    () => planSeats({ tickets, repoDir: REPO_ROOT, env: { ADLC_QUARTERMASTER_REGISTRY: '/nonexistent/quartermaster.json' }, adlcDir: join(REPO_ROOT, '.adlc') }),
-    /no registry at|edges to unknown tickets/
+    () => planWithTestRegistry(tickets),
+    /edges to unknown tickets: A -> GHOST/
   );
 });
 

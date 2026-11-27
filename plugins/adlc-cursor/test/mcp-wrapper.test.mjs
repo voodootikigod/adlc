@@ -551,7 +551,8 @@ test("bundled Roots proxy forwards real adlc_gate and adlc_prosecute calls in th
       params: {},
     }) + "\n",
   );
-  await out.waitFor((stdout) => stdout.includes("roots/list"));
+  const realCliWait = { timeoutMs: 15_000 };
+  await out.waitFor((stdout) => stdout.includes("roots/list"), realCliWait);
   const rootsRequest = replies().find((message) => message.method === "roots/list");
   assert.ok(rootsRequest, `missing Roots request:\n${out.text()}`);
   child.stdin.write(
@@ -570,8 +571,9 @@ test("bundled Roots proxy forwards real adlc_gate and adlc_prosecute calls in th
       params: {},
     }) + "\n",
   );
-  await out.waitFor((stdout) =>
-    stdout.includes('"id":2') && stdout.includes("adlc_prosecute"),
+  await out.waitFor(
+    (stdout) => stdout.includes('"id":2') && stdout.includes("adlc_prosecute"),
+    realCliWait,
   );
   assert.deepEqual(
     replies()
@@ -606,8 +608,9 @@ test("bundled Roots proxy forwards real adlc_gate and adlc_prosecute calls in th
       },
     }) + "\n",
   );
-  await out.waitFor((stdout) =>
-    stdout.includes('"id":3') && stdout.includes('"id":4'),
+  await out.waitFor(
+    (stdout) => stdout.includes('"id":3') && stdout.includes('"id":4'),
+    realCliWait,
   );
 
   for (const id of [3, 4]) {

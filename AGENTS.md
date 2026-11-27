@@ -176,6 +176,37 @@ worktree's `.env.local`. Check first whether the gate verifies historical
 manifest entries or only the head attestation: entries signed under the old key
 may need re-signing, and finding that out after rotating is the expensive order.
 
+## Local Node 24 vs. CI Node 18 / 20 / 22: `timer.unref()` and `{ key, env }` hermeticity
+
+Two local-green / CI-red traps have already bitten here:
+
+- **Never `.unref()` a pending subprocess timeout timer when tests inject `EventEmitter` mocks.**
+  On Node 24, `node:test` keeps the worker event loop alive while an async test's
+  returned `Promise` is unsettled. On Node 18, 20, and 22 (the CI matrix and
+  `mutation-gate`), `node:test` holds no keepalive handle of its own: if the
+  callee calls `timer.unref()` and the test injects a pure-JS `EventEmitter` child
+  with no libuv handle, `beforeExit` fires immediately and cancels the test
+  (`Promise resolution is still pending but the event loop has already resolved`).
+  Keep pending timeout timers referenced and `clearTimeout(timer)` on both `close`
+  and `error`; verify bare event-loop behavior via `node --input-type=module -e`
+  outside `node:test`.
+- **Satisfy `validateKeyParam` in the outer caller and distinguish library runners from hook entrypoints.**
+  `@adlc/gate-manifest`'s `record` and `appendManifestEntry` pass `key` straight
+  to `validateKeyParam`, which rejects both `undefined` and `''` — callers must
+  honour `opts.key` first (even against a conflicting `opts.env`) and normalize
+  missing or empty (`''`) `ADLC_MANIFEST_KEY` environment values to `null`
+  (`typeof raw === 'string' && raw.length > 0 ? raw : null`) *before* calling a
+  manifest writer. Keep the two boundary classes distinct: **library runners**
+  (e.g. `premortem`'s `run`) only consult `opts.env?.ADLC_MANIFEST_KEY` when
+  `opts.env !== undefined` (never after `const env = opts.env ?? process.env`,
+  which leaks ambient shell keys when both `opts.key` and `opts.env` are omitted),
+  whereas **CLI bins and harness hook entrypoints** (e.g. `evaluateStop`)
+  intentionally default `env = process.env` at the process boundary. Both must
+  forward `env` to environment-aware callees via each callee's signature (`{ env }`
+  for `readActiveTicketRails` and `hasManifestEvidence`; positional `env` for
+  `detectProvider(env, provider)` and `complete(opts, env)`). Test hermeticity
+  under conflicting `process.env.ADLC_MANIFEST_KEY` and `process.env.ADLC_TICKET`.
+
 ## The ADLC gates apply to this repo too
 
 This repo is the toolkit, and it uses it: author a ticket (P0), check
