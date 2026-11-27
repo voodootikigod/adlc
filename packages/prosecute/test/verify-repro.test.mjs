@@ -91,7 +91,11 @@ test('verifyRepro: scrubs ADLC_MANIFEST_KEY and sensitive candidate env in temp 
   assert.equal(res.reproduced, true);
   assert.equal(res.exitCode, 0);
 
-  // Verify workspace symlinks inside node_modules/@scope/pkg AND node_modules/.bin cannot mutate live worktree packages
+  // Verify workspace symlinks inside node_modules/@scope/pkg, node_modules/.bin, AND external node_modules targets cannot be mutated
+  const externalPkgDir = mkdtempSync(join(tmpdir(), 'verify-repro-ext-pkg-'));
+  t.after(() => rmSync(externalPkgDir, { recursive: true, force: true }));
+  writeFileSync(join(externalPkgDir, 'ext.mjs'), 'export const extSafe = 1;\n');
+
   mkdirSync(join(fixtureDir, 'packages', 'pkg', 'bin'), { recursive: true });
   writeFileSync(join(fixtureDir, 'packages', 'pkg', 'index.mjs'), 'export const safe = 1;\n');
   writeFileSync(join(fixtureDir, 'packages', 'pkg', 'bin', 'cli.mjs'), '#!/usr/bin/env node\nexport const binSafe = 1;\n');
@@ -99,28 +103,60 @@ test('verifyRepro: scrubs ADLC_MANIFEST_KEY and sensitive candidate env in temp 
   mkdirSync(join(fixtureDir, 'node_modules', '.bin'), { recursive: true });
   symlinkSync(join(fixtureDir, 'packages', 'pkg'), join(fixtureDir, 'node_modules', '@demo', 'pkg'), 'dir');
   symlinkSync(join(fixtureDir, 'packages', 'pkg', 'bin', 'cli.mjs'), join(fixtureDir, 'node_modules', '.bin', 'demo-cli'), 'file');
+  symlinkSync(externalPkgDir, join(fixtureDir, 'node_modules', 'ext-pkg'), 'dir');
 
   const mutRes = verifyRepro({
-    cmd: 'node --input-type=module -e "import { writeFileSync } from \'node:fs\'; writeFileSync(\'node_modules/@demo/pkg/index.mjs\', \'MUTATED\'); writeFileSync(\'node_modules/.bin/demo-cli\', \'MUTATED_BIN\');"',
+    cmd: 'node --input-type=module -e "import { writeFileSync } from \'node:fs\'; writeFileSync(\'node_modules/@demo/pkg/index.mjs\', \'MUTATED\'); writeFileSync(\'node_modules/.bin/demo-cli\', \'MUTATED_BIN\'); try { writeFileSync(\'node_modules/ext-pkg/ext.mjs\', \'MUTATED_EXT\'); } catch {}"',
     root: fixtureDir,
   });
   assert.equal(mutRes.exitCode, 0, mutRes.stderr);
   assert.equal(readFileSync(join(fixtureDir, 'packages', 'pkg', 'index.mjs'), 'utf8'), 'export const safe = 1;\n');
   assert.equal(readFileSync(join(fixtureDir, 'packages', 'pkg', 'bin', 'cli.mjs'), 'utf8'), '#!/usr/bin/env node\nexport const binSafe = 1;\n');
+  assert.equal(readFileSync(join(externalPkgDir, 'ext.mjs'), 'utf8'), 'export const extSafe = 1;\n');
+
+  // Even under explicit unsafeNoSandbox=true (sandboxType=null), external node_modules are dereferenced copies so externalPkgDir stays untouched
+  const unsafeExtRes = verifyRepro({
+    cmd: 'node --input-type=module -e "import { writeFileSync } from \'node:fs\'; writeFileSync(\'node_modules/ext-pkg/ext.mjs\', \'MUTATED_EXT\');"',
+    root: fixtureDir,
+    sandboxType: null,
+    unsafeNoSandbox: true,
+  });
+  assert.equal(unsafeExtRes.exitCode, 0, unsafeExtRes.stderr);
+  assert.equal(readFileSync(join(externalPkgDir, 'ext.mjs'), 'utf8'), 'export const extSafe = 1;\n');
+
+  // Fails closed when OS sandbox is unavailable and unsafeNoSandbox is false
+  const noSbRes = verifyRepro({
+    cmd: 'node -e "process.exit(0)"',
+    root: fixtureDir,
+    sandboxType: null,
+    unsafeNoSandbox: false,
+  });
+  assert.equal(noSbRes.operationalError, true);
+  assert.equal(noSbRes.exitCode, 1);
+  assert.match(noSbRes.error, /No OS sandbox available/);
 });
 
-test('verifyRepro: treats signal termination (null exit status) as non-zero failure in both modes', () => {
+test('verifyRepro: treats signal termination as non-zero failure in both modes', () => {
   const sigDefault = verifyRepro({ cmd: 'node -e "process.kill(process.pid, \'SIGKILL\')"' });
   assert.equal(sigDefault.operationalError, false);
-  assert.equal(sigDefault.status, null);
+  assert.notEqual(sigDefault.status, 0);
   assert.equal(sigDefault.reproduced, false);
   assert.equal(sigDefault.exitCode, 2);
 
   const sigExpectFail = verifyRepro({ cmd: 'node -e "process.kill(process.pid, \'SIGKILL\')"', expectFail: true });
   assert.equal(sigExpectFail.operationalError, false);
-  assert.equal(sigExpectFail.status, null);
+  assert.notEqual(sigExpectFail.status, 0);
   assert.equal(sigExpectFail.reproduced, true);
   assert.equal(sigExpectFail.exitCode, 0);
+
+  const sigUnsandboxed = verifyRepro({
+    cmd: 'node -e "process.kill(process.pid, \'SIGKILL\')"',
+    sandboxType: null,
+    unsafeNoSandbox: true,
+  });
+  assert.equal(sigUnsandboxed.status, null);
+  assert.equal(sigUnsandboxed.reproduced, false);
+  assert.equal(sigUnsandboxed.exitCode, 2);
 });
 
 test('adlc-prosecute verify-repro CLI dispatch and JSON output', () => {

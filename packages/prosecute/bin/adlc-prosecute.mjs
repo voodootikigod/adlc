@@ -659,6 +659,7 @@ const { values, positionals } = parseArgs({
     cmd: { type: 'string' },
     'expect-fail': { type: 'boolean', default: false },
     'timeout-ms': { type: 'string' },
+    'unsafe-no-sandbox': { type: 'boolean', default: false },
   },
 });
 
@@ -766,6 +767,7 @@ if (positionals[0] === 'verify-repro') {
     cmd: values.cmd,
     expectFail: values['expect-fail'],
     timeoutMs,
+    unsafeNoSandbox: values['unsafe-no-sandbox'],
   });
   if (values.json) {
     printJson(repro);

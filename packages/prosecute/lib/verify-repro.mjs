@@ -1,12 +1,84 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, cpSync, symlinkSync, existsSync, mkdirSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import {
+  accessSync,
+  constants as fsConstants,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative, resolve, sep } from 'node:path';
-import { git, repoRoot, tokenizeCommand, sanitizeCandidateEnv } from '@adlc/core';
+import { delimiter, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import {
+  buildSandboxedArgs,
+  detectSandbox,
+  git,
+  repoRoot,
+  resolveSandboxBinary,
+  tokenizeCommand,
+} from '@adlc/core';
 
-const FORBIDDEN_COMMANDS = new Set(['sh', 'bash', 'zsh', 'eval']);
+const FORBIDDEN_COMMANDS = new Set(['sh', 'bash', 'zsh', 'dash', 'cmd', 'powershell', 'pwsh', 'eval']);
+const SAFE_ENV_KEYS = ['PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TZ', 'SYSTEMROOT', 'COMSPEC', 'PATHEXT'];
 
-function linkWorkspaceSafeNodeModules(root, tempWorkspace) {
+function buildMinimalReproEnv(baseEnv, isolatedHome) {
+  const env = {
+    HOME: isolatedHome,
+    USERPROFILE: isolatedHome,
+    TMPDIR: isolatedHome,
+    TMP: isolatedHome,
+    TEMP: isolatedHome,
+    NODE_ENV: 'test',
+    CI: '1',
+    NO_COLOR: '1',
+  };
+  for (const key of SAFE_ENV_KEYS) {
+    if (typeof baseEnv?.[key] === 'string' && baseEnv[key].length > 0) {
+      env[key] = baseEnv[key];
+    }
+  }
+  return env;
+}
+
+function resolveExecutable(cmd, workDir, pathEnv = process.env.PATH ?? '') {
+  if (typeof cmd !== 'string' || cmd.length === 0 || cmd.startsWith('-') || cmd.includes('\0')) {
+    return null;
+  }
+  const isExecutableFile = (candidate) => {
+    try {
+      const st = statSync(candidate);
+      if (!st.isFile()) return false;
+      if (process.platform !== 'win32') {
+        accessSync(candidate, fsConstants.X_OK);
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  if (cmd.includes('/') || cmd.includes('\\')) {
+    const target = isAbsolute(cmd) ? cmd : resolve(workDir, cmd);
+    return isExecutableFile(target) ? target : null;
+  }
+
+  const exts = process.platform === 'win32' ? ['', '.exe', '.cmd', '.bat', '.com'] : [''];
+  for (const dir of pathEnv.split(delimiter)) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      const candidate = join(dir, `${cmd}${ext}`);
+      if (isExecutableFile(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+function linkWorkspaceSafeNodeModules(root, tempWorkspace, { dereferenceExternal = false } = {}) {
   const rootNm = join(root, 'node_modules');
   const destNm = join(tempWorkspace, 'node_modules');
   if (!existsSync(rootNm) || existsSync(destNm)) return;
@@ -35,10 +107,18 @@ function linkWorkspaceSafeNodeModules(root, tempWorkspace) {
           !relToRoot.startsWith('..') &&
           !relToRoot.startsWith(`.${sep}`) &&
           relToRoot.split(sep)[0] !== 'node_modules';
-        const linkTarget = pointsInsideRepo ? join(tempWorkspace, relToRoot) : realTarget;
-        const targetIsDir = statSync(realTarget).isDirectory();
-        const linkType = targetIsDir ? (process.platform === 'win32' ? 'junction' : 'dir') : 'file';
-        symlinkSync(linkTarget, dstPath, linkType);
+        if (pointsInsideRepo) {
+          const linkTarget = join(tempWorkspace, relToRoot);
+          const targetIsDir = statSync(realTarget).isDirectory();
+          const linkType = targetIsDir ? (process.platform === 'win32' ? 'junction' : 'dir') : 'file';
+          symlinkSync(linkTarget, dstPath, linkType);
+        } else if (dereferenceExternal) {
+          cpSync(realTarget, dstPath, { recursive: true, dereference: true });
+        } else {
+          const targetIsDir = statSync(realTarget).isDirectory();
+          const linkType = targetIsDir ? (process.platform === 'win32' ? 'junction' : 'dir') : 'file';
+          symlinkSync(realTarget, dstPath, linkType);
+        }
       } catch {
         // ignore broken or unreadable node_modules entries
       }
@@ -53,28 +133,17 @@ function linkWorkspaceSafeNodeModules(root, tempWorkspace) {
 }
 
 /**
- * Verify a candidate reproduction command in a disposable sandboxed workspace.
- *
- * @param {object} options
- * @param {string} options.cmd - Command to execute
- * @param {boolean} [options.expectFail=false] - Whether a non-zero exit code represents reproduction
- * @param {number} [options.timeoutMs=30000] - Timeout in milliseconds
- * @param {string} [options.root] - Root directory to copy files from (default: git repoRoot())
- * @returns {{
- *   reproduced: boolean,
- *   exitCode: number,
- *   operationalError: boolean,
- *   status: number|null,
- *   error?: string,
- *   stdout: string,
- *   stderr: string
- * }}
+ * Verify a candidate reproduction command inside an OS-sandboxed disposable workspace
+ * (`bwrap --unshare-all --ro-bind / /` on Linux, `sandbox-exec` seatbelt on macOS).
+ * Fails closed when no OS sandbox is available unless `unsafeNoSandbox: true` is explicitly passed.
  */
 export function verifyRepro({
   cmd,
   expectFail = false,
   timeoutMs = 30000,
   root: explicitRoot,
+  sandboxType: explicitSandboxType,
+  unsafeNoSandbox = false,
 }) {
   if (typeof cmd !== 'string' || cmd.trim() === '') {
     return {
@@ -115,8 +184,7 @@ export function verifyRepro({
     };
   }
 
-  const binary = argv[0].toLowerCase();
-  const binaryBase = binary.split(/[\\/]/).pop();
+  const binaryBase = argv[0].toLowerCase().split(/[\\/]/).pop().replace(/\.(?:exe|cmd|bat|com)$/i, '');
   if (FORBIDDEN_COMMANDS.has(binaryBase)) {
     return {
       reproduced: false,
@@ -129,27 +197,58 @@ export function verifyRepro({
     };
   }
 
+  const sandboxType = explicitSandboxType !== undefined ? explicitSandboxType : detectSandbox();
+  if (!sandboxType && !unsafeNoSandbox) {
+    const msg =
+      'No OS sandbox available (bwrap on Linux, sandbox-exec on macOS). ' +
+      'Pass --unsafe-no-sandbox only inside an isolated VM or container.';
+    return {
+      reproduced: false,
+      exitCode: 1,
+      operationalError: true,
+      status: null,
+      error: msg,
+      stdout: '',
+      stderr: `error: ${msg}`,
+    };
+  }
+
+  let launcherPath = null;
+  if (sandboxType) {
+    launcherPath = resolveSandboxBinary(sandboxType);
+    if (!launcherPath) {
+      const msg = `No trusted root-owned sandbox binary found for ${sandboxType}`;
+      return {
+        reproduced: false,
+        exitCode: 1,
+        operationalError: true,
+        status: null,
+        error: msg,
+        stdout: '',
+        stderr: `error: ${msg}`,
+      };
+    }
+  }
+
   let root;
   try {
     root = explicitRoot ? resolve(explicitRoot) : repoRoot();
-  } catch (err) {
+  } catch {
     root = resolve(process.cwd());
   }
 
-  // Materialize disposable temp workspace
   const tempWorkspace = mkdtempSync(join(tmpdir(), 'adlc-prosecute-repro-'));
 
   try {
-    // Gather files from git if in git repository, else copy directory
     let filesToCopy = [];
     try {
       const trackedAndUntracked = git(
         ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],
-        { cwd: root }
+        { cwd: root },
       );
       filesToCopy = trackedAndUntracked.split('\0').filter(Boolean);
     } catch {
-      // If not a git repo or git fails, we do not copy git metadata
+      // Not a git repo: fall back to filtered directory copy below
     }
 
     const isSecretOrIgnored = (rel) => {
@@ -158,10 +257,7 @@ export function verifyRepro({
         return true;
       }
       const base = parts[parts.length - 1];
-      if (base.startsWith('.env')) {
-        return true;
-      }
-      return false;
+      return base.startsWith('.env');
     };
 
     if (filesToCopy.length > 0) {
@@ -172,11 +268,10 @@ export function verifyRepro({
         try {
           cpSync(src, dest, { recursive: true, dereference: false });
         } catch {
-          // ignore unreadable/vanished files
+          // ignore vanished/unreadable files
         }
       }
     } else {
-      // Fallback copy excluding .git, .worktrees, node_modules, .env*
       try {
         cpSync(root, tempWorkspace, {
           recursive: true,
@@ -188,19 +283,53 @@ export function verifyRepro({
           },
         });
       } catch {
-        // ignore
+        // ignore copy errors
       }
     }
 
-    // Link node_modules while re-pointing workspace package symlinks into tempWorkspace
-    linkWorkspaceSafeNodeModules(root, tempWorkspace);
+    linkWorkspaceSafeNodeModules(root, tempWorkspace, { dereferenceExternal: !sandboxType });
 
-    // Sanitize candidate environment
-    const childEnv = sanitizeCandidateEnv(process.env);
-    // Explicitly scrub ADLC_MANIFEST_KEY
-    delete childEnv.ADLC_MANIFEST_KEY;
+    const isolatedHome = join(tempWorkspace, '.adlc-repro-home');
+    mkdirSync(isolatedHome, { recursive: true });
+    const childEnv = buildMinimalReproEnv(process.env, isolatedHome);
 
-    const res = spawnSync(argv[0], argv.slice(1), {
+    if (!resolveExecutable(argv[0], tempWorkspace, childEnv.PATH)) {
+      const msg = `Executable not found: ${argv[0]}`;
+      return {
+        reproduced: false,
+        exitCode: 1,
+        operationalError: true,
+        status: null,
+        error: msg,
+        stdout: '',
+        stderr: `error: ${msg}`,
+      };
+    }
+
+    let spawnBin = argv[0];
+    let spawnArgs = argv.slice(1);
+    if (sandboxType) {
+      try {
+        [spawnBin, ...spawnArgs] = buildSandboxedArgs(sandboxType, tempWorkspace, argv, {
+          workDir: tempWorkspace,
+          cwd: tempWorkspace,
+          repoRoot: root,
+          launcherPath,
+        });
+      } catch (err) {
+        return {
+          reproduced: false,
+          exitCode: 1,
+          operationalError: true,
+          status: null,
+          error: err.message,
+          stdout: '',
+          stderr: `error: ${err.message}`,
+        };
+      }
+    }
+
+    const res = spawnSync(spawnBin, spawnArgs, {
       shell: false,
       cwd: tempWorkspace,
       env: childEnv,
@@ -237,26 +366,8 @@ export function verifyRepro({
 
     const status = res.status;
     const exitedZero = status === 0 && !res.signal;
-    let reproduced = false;
-    let exitCode = 2;
-
-    if (expectFail) {
-      if (!exitedZero) {
-        reproduced = true;
-        exitCode = 0;
-      } else {
-        reproduced = false;
-        exitCode = 2;
-      }
-    } else {
-      if (exitedZero) {
-        reproduced = true;
-        exitCode = 0;
-      } else {
-        reproduced = false;
-        exitCode = 2;
-      }
-    }
+    const reproduced = expectFail ? !exitedZero : exitedZero;
+    const exitCode = reproduced ? 0 : 2;
 
     return {
       reproduced,
@@ -264,6 +375,7 @@ export function verifyRepro({
       operationalError: false,
       status,
       signal: res.signal ?? null,
+      sandbox: sandboxType ?? 'none',
       stdout: res.stdout || '',
       stderr: res.stderr || '',
     };
