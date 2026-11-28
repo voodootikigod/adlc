@@ -3,7 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { runHook } from './helpers/run-hook.mjs';
 import {
   mkdirSync, writeFileSync, readFileSync, existsSync,
 } from 'node:fs';
@@ -199,7 +199,7 @@ test('AC3 concurrency: multi-process bumps lose no increments', (t) => {
     '}',
   ].join('\n'));
   for (const n of [8, 8, 8]) {
-    execFileSync(process.execPath, [script, String(n)], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    runHook([script, String(n)], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   }
   assert.equal(readDepth('conc', { env }), 24);
 });
@@ -207,7 +207,7 @@ test('AC3 concurrency: multi-process bumps lose no increments', (t) => {
 test('wire: real sessionStart script emits env + context', (t) => {
   const root = legacyRepo(t, { pointer: { id: 'T1' } });
   const state = tmp(t, 'adlc-state-');
-  const out = execFileSync(process.execPath, [SCRIPT], {
+  const out = runHook([SCRIPT], {
     cwd: join(HERE, '..'), // plugin cwd — must not win
     env: { ...process.env, ADLC_CURSOR_STATE_DIR: state, ADLC_P4_ENFORCEMENT: '' },
     input: JSON.stringify({ session_id: 'Swire', workspace_roots: [root] }),

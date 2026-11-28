@@ -7,7 +7,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
-import { spawn, spawnSync, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
+import { spawnHook, spawnHookAsync } from './helpers/run-hook.mjs';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -44,7 +45,7 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-const runBoard = (contextJson) => spawnSync(process.execPath, [script], {
+const runBoard = (contextJson) => spawnHook([script], {
   encoding: 'utf8',
   timeout: 15_000,
   input: 'q',
@@ -78,7 +79,7 @@ test('the ticket export is not re-spawned every frame when the store is unchange
   // Run the board across several 3s frames without quitting; the store never
   // changes (mtime stable, export returns null), so `adlc` must be spawned at
   // most once — NOT on every redraw.
-  const child = spawn(process.execPath, [script], {
+  const child = spawnHookAsync([script], {
     env: {
       ...process.env,
       PATH: `${dir}:${process.env.PATH}`,

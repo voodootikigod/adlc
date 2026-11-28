@@ -8,6 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, execFileSync } from 'node:child_process';
+import { spawnHook } from './helpers/run-hook.mjs';
 import { readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -114,7 +115,7 @@ test('AC1: npm pack --dry-run ships the runtime surface and NO test files', () =
 });
 
 test('AC1: bin/cli.mjs executable displays help output on --help', () => {
-  const res = spawnSync('node', [join(pkgDir, 'bin', 'cli.mjs'), '--help'], { encoding: 'utf8', timeout: 10_000 });
+  const res = spawnHook([join(pkgDir, 'bin', 'cli.mjs'), '--help'], { encoding: 'utf8', timeout: 10_000 });
   assert.equal(res.status, 0);
   assert.match(res.stdout, /ADLC Pi Extension Helper/);
   assert.match(res.stdout, /pi install -l npm:@adlc\/pi/);
@@ -126,7 +127,7 @@ test('AC1: bin/cli.mjs executable displays help output on --help', () => {
 });
 
 test('AC1: bin/cli.mjs runs install command and does not trigger help mode', () => {
-  const res = spawnSync('node', [join(pkgDir, 'bin', 'cli.mjs'), 'install'], { encoding: 'utf8', timeout: 10_000 });
+  const res = spawnHook([join(pkgDir, 'bin', 'cli.mjs'), 'install'], { encoding: 'utf8', timeout: 10_000 });
   assert.match(res.stdout, /Installing @adlc\/pi via: pi install/);
   assert.doesNotMatch(res.stdout, /ADLC Pi Extension Helper/);
 });
@@ -136,7 +137,7 @@ test('AC1: bin/cli.mjs runs install command and does not trigger help mode', () 
 test('AC3: pi-live-deny.mjs consults ADLC_PI_BIN before running pi', () => {
   const liveDeny = join(repoRoot, 'scripts', 'pi-live-deny.mjs');
   const bogus = join(tmpdir(), 'adlc-pi-nonexistent-binary-xyz');
-  const res = spawnSync('node', [liveDeny], {
+  const res = spawnHook([liveDeny], {
     cwd: repoRoot,
     env: { ...process.env, ADLC_PI_BIN: bogus },
     encoding: 'utf8',

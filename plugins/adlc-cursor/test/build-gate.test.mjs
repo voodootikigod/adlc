@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { runHook } from './helpers/run-hook.mjs';
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -235,7 +235,7 @@ test('AC2: the dispatcher imports @adlc/build-gate lib subpaths and has NO local
 test('wire format: the real dispatcher script denies under gate enforcement in a degraded session', (t) => {
   const fx = fixture(t, HIGH_RISK);
   seedCounter(fx, { count: DEFAULT_DEPTH_THRESHOLD + 5, updatedAt: Date.now(), sessionId: 'bg-sess' }, 'bg-sess');
-  const out = execFileSync(process.execPath, [DISPATCHER_SCRIPT], {
+  const out = runHook([DISPATCHER_SCRIPT], {
     cwd: fx.root,
     env: { ...process.env, ADLC_TICKET: 'T9', ADLC_BUILD_GATE_ENFORCEMENT: '1', ADLC_P4_ENFORCEMENT: '', ADLC_CURSOR_STATE_DIR: fx.stateDir },
     input: JSON.stringify({ tool_name: 'Write', tool_input: { file_path: 'src/free.js' }, workspace_roots: [fx.root], session_id: 'bg-sess' }),
@@ -245,7 +245,7 @@ test('wire format: the real dispatcher script denies under gate enforcement in a
 
 test('wire format: the real dispatcher script allows the same edit in a fresh session', (t) => {
   const fx = fixture(t, HIGH_RISK);
-  const out = execFileSync(process.execPath, [DISPATCHER_SCRIPT], {
+  const out = runHook([DISPATCHER_SCRIPT], {
     cwd: fx.root,
     env: { ...process.env, ADLC_TICKET: 'T9', ADLC_BUILD_GATE_ENFORCEMENT: '1', ADLC_P4_ENFORCEMENT: '', ADLC_CURSOR_STATE_DIR: fx.stateDir },
     input: JSON.stringify({ tool_name: 'Write', tool_input: { file_path: 'src/free.js' }, workspace_roots: [fx.root], session_id: 'bg-sess' }),

@@ -7,7 +7,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
-import { spawnSync, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
+import { spawnHook } from './helpers/run-hook.mjs';
 import { fileURLToPath } from 'node:url';
 
 const script = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'action.mjs');
@@ -45,7 +46,7 @@ function writeAdlcStub(gateJson, exitCode) {
 
 const paneCtx = () => JSON.stringify({ focused_pane_id: 'w1:p1', focused_pane_cwd: repo });
 
-const runAction = (env) => spawnSync(process.execPath, [script], {
+const runAction = (env) => spawnHook([script], {
   encoding: 'utf8',
   timeout: 15_000,
   env: {

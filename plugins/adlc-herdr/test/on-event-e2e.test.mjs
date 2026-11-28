@@ -8,7 +8,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
-import { spawnSync, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
+import { spawnHook } from './helpers/run-hook.mjs';
 import { fileURLToPath } from 'node:url';
 
 const script = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'on-event.mjs');
@@ -45,7 +46,7 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-const runEvent = (event, json, extraEnv = {}) => spawnSync(process.execPath, [script], {
+const runEvent = (event, json, extraEnv = {}) => spawnHook([script], {
   encoding: 'utf8',
   timeout: 15_000,
   env: {
@@ -161,7 +162,7 @@ test('with NO state dir the nudge still fires (can\'t dedupe → allow, not supp
     HERDR_PLUGIN_EVENT_JSON: JSON.stringify({ event: 'pane_agent_status_changed', data: { pane_id: 'w4:p2', agent_status: 'idle' } }),
   };
   delete env.HERDR_PLUGIN_STATE_DIR; // no dedupe store available
-  const res = spawnSync(process.execPath, [script], { encoding: 'utf8', timeout: 15_000, env });
+  const res = spawnHook([script], { encoding: 'utf8', timeout: 15_000, env });
   assert.equal(res.status, 0);
   assert.ok(calls().includes('notification show'), 'without a dedupe store, still nudge (allow, not suppress)');
 });

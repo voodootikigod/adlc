@@ -4,7 +4,7 @@
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { runHook, spawnHook } from './helpers/run-hook.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -140,7 +140,7 @@ test('pathless payload: flailCheck returns EXACTLY { flagged: false } and persis
 test('wire format: a pathless payload is SILENT (no stderr) and still emits the no-op {}', () => {
   const root = fixture({ tickets: RAILED });
   try {
-    const r = spawnSync(process.execPath, [AUDIT_SCRIPT], {
+    const r = spawnHook([AUDIT_SCRIPT], {
       cwd: root,
       env: { ...process.env },
       input: JSON.stringify({ tool_name: 'edit', workspace_roots: [root] }),
@@ -199,7 +199,7 @@ test('rail audit unchanged: rail touch observed, non-rail silent, never blocks',
 test('wire format: the audit script still emits the no-op {} verdict (cannot block)', () => {
   const root = fixture({ tickets: RAILED });
   try {
-    const out = execFileSync(process.execPath, [AUDIT_SCRIPT], {
+    const out = runHook([AUDIT_SCRIPT], {
       cwd: root,
       env: { ...process.env, ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' },
       input: JSON.stringify({ tool_name: 'edit', file_path: 'src/frozen.js', workspace_roots: [root] }),
@@ -216,7 +216,7 @@ test('wire format: churn advisory reaches stderr from the real script; verdict s
       { ts: now - 1000, path: 'src/churny.js' },
       { ts: now - 500, path: 'src/churny.js' },
     ]);
-    const r = spawnSync(process.execPath, [AUDIT_SCRIPT], {
+    const r = spawnHook([AUDIT_SCRIPT], {
       cwd: root,
       env: { ...process.env },
       input: JSON.stringify({ tool_name: 'edit', file_path: 'src/churny.js', workspace_roots: [root] }),

@@ -7,7 +7,7 @@
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { runHook } from './helpers/run-hook.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -174,7 +174,7 @@ test('(adversarial sweep) allow-side payloads are also verdict-identical', async
 test('wire format: the dispatcher script reads stdin JSON and writes a {permission} verdict', () => {
   const root = fixture({ tickets: RAILED });
   try {
-    const out = execFileSync(process.execPath, [DISPATCHER_SCRIPT], {
+    const out = runHook([DISPATCHER_SCRIPT], {
       cwd: root,
       env: { ...process.env, ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1', ADLC_BUILD_GATE_ENFORCEMENT: '' },
       input: JSON.stringify({ tool_name: 'Write', tool_input: { file_path: 'src/frozen.js' }, workspace_roots: [root] }),
@@ -186,7 +186,7 @@ test('wire format: the dispatcher script reads stdin JSON and writes a {permissi
 test('wire format: malformed stdin fails CLOSED under enforcement, OPEN otherwise (guard parity)', () => {
   const root = fixture({ tickets: RAILED });
   try {
-    const run = (envOver) => JSON.parse(execFileSync(process.execPath, [DISPATCHER_SCRIPT], {
+    const run = (envOver) => JSON.parse(runHook([DISPATCHER_SCRIPT], {
       cwd: root, env: { ...process.env, ...envOver }, input: '{ not json',
     }).toString());
     assert.equal(run({ ADLC_P4_ENFORCEMENT: '1', ADLC_TICKET: 'T1' }).permission, 'deny');

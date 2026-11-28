@@ -3,7 +3,7 @@
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { runHook } from './helpers/run-hook.mjs';
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -230,7 +230,7 @@ function runScaffoldCli(cliArgs, { extraEnv = {} } = {}) {
   const env = { ...process.env };
   delete env.ADLC_CURSOR_WIRE_UNPINNED; // isolate from the outer environment
   Object.assign(env, extraEnv);
-  const stdout = execFileSync(process.execPath, [SCAFFOLD_CLI, target, ...cliArgs], {
+  const stdout = runHook([SCAFFOLD_CLI, target, ...cliArgs], {
     cwd: spawnCwd, env, encoding: 'utf8',
   });
   return { target, spawnCwd, stdout };

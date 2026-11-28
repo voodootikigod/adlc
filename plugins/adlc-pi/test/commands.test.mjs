@@ -15,6 +15,7 @@ import { tmp } from '@adlc/core/test-kit';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { spawnHook } from './helpers/run-hook.mjs';
 import { createExtension } from '../lib/extension.mjs';
 import { verify } from '@adlc/gate-manifest/lib/verify.mjs';
 import { appendManifestEntry } from '@adlc/gate-manifest';
@@ -520,12 +521,12 @@ test('AC4: the recorded spec-approval satisfies the real runner p1 assertion (pr
   const specRel = '.adlc/specs/feature.md';
   writeFileSync(join(root, specRel), '# Spec\n\n## Acceptance Criteria\n- foo: `test -f feature.md`\n');
 
-  const specLintResult = spawnSync(process.execPath, [SPEC_LINT_BIN, specRel, '--record', '--ticket', 'T1', '--dir', '.adlc'], {
+  const specLintResult = spawnHook([SPEC_LINT_BIN, specRel, '--record', '--ticket', 'T1', '--dir', '.adlc'], {
     cwd: root, encoding: 'utf8',
   });
   assert.equal(specLintResult.status, 0, `spec-lint --record must pass: ${specLintResult.stdout}${specLintResult.stderr}`);
 
-  const premortemResult = spawnSync(process.execPath, [
+  const premortemResult = spawnHook([
     PREMORTEM_BIN, specRel, '--prompt-only', '--record-verdict', '-', '--ticket', 'T1',
   ], { cwd: root, encoding: 'utf8', input: 'No failure modes found.\n' });
   assert.equal(premortemResult.status, 0, `premortem --record-verdict must pass: ${premortemResult.stdout}${premortemResult.stderr}`);
@@ -537,7 +538,7 @@ test('AC4: the recorded spec-approval satisfies the real runner p1 assertion (pr
   // p1 is ticket-required (P1 D4 — an unscoped check let one ticket's
   // audits satisfy another's approval); invoke it the same way real
   // callers now must.
-  const result = spawnSync(process.execPath, [RUNNER_BIN, 'run', 'p1', '--dir', '.adlc', '--ticket', 'T1', '--json'], {
+  const result = spawnHook([RUNNER_BIN, 'run', 'p1', '--dir', '.adlc', '--ticket', 'T1', '--json'], {
     cwd: root, encoding: 'utf8',
   });
   assert.equal(result.status, 0, `real p1 assertion must accept Pi's recorded approval: status=${result.status} ${result.stdout}${result.stderr}`);

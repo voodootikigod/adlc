@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { spawnHook } from './helpers/run-hook.mjs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseManifest, validateManifest } from '../lib/manifest.mjs';
@@ -45,7 +46,7 @@ test('every declared node entrypoint exists and passes node --check', () => {
     if (!Array.isArray(entries.command) || entries.command[0] !== 'node') continue;
     const file = join(pluginRoot, entries.command[1]);
     assert.ok(existsSync(file), `[[${name}]] entrypoint missing: ${entries.command[1]}`);
-    const check = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
+    const check = spawnHook(['--check', file], { encoding: 'utf8' });
     assert.equal(check.status, 0, `[[${name}]] entrypoint fails node --check: ${check.stderr}`);
   }
 });
@@ -55,7 +56,7 @@ test('every bin/*.mjs passes node --check, declared in the manifest or not', () 
   const files = readdirSync(binDir).filter((f) => f.endsWith('.mjs'));
   assert.ok(files.length > 0, 'bin/ must not be empty');
   for (const file of files) {
-    const check = spawnSync(process.execPath, ['--check', join(binDir, file)], { encoding: 'utf8' });
+    const check = spawnHook(['--check', join(binDir, file)], { encoding: 'utf8' });
     assert.equal(check.status, 0, `bin/${file} fails node --check: ${check.stderr}`);
   }
 });

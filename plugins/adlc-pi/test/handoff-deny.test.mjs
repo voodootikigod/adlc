@@ -18,6 +18,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
+import { spawnHook } from './helpers/run-hook.mjs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -1320,8 +1321,7 @@ test('a non-mutating gated call spends the grant, and the text says so', (t) => 
 
   assert.equal(ask('edit', { path: 'src/a.mjs' }), 'deny');
   const cli = resolveRecoveryCliPath();
-  const grant = spawnSync(
-    process.execPath,
+  const grant = spawnHook(
     [cli, 'bypass', '--session', 'sess-B', '--unbound-reason', 'pi-handoff-operator-recovery',
       '--dir', join(root, '.adlc'), '--write'],
     { env: { ...process.env, ADLC_MANIFEST_KEY: key }, encoding: 'utf8' },
@@ -2110,8 +2110,7 @@ test('a protected SHELL call spends the grant; a structured one does not', (t) =
     const ask = (tool, input) =>
       checkHandoff({ toolName: tool, input, sessionId: 'sess-B', root, manifestKey: key }).decision;
 
-    const granted = spawnSync(
-      process.execPath,
+    const granted = spawnHook(
       [cli, 'bypass', '--session', 'sess-B', '--unbound-reason', 'pi-handoff-operator-recovery',
         '--dir', join(root, '.adlc'), '--write'],
       { env: { ...process.env, ADLC_MANIFEST_KEY: key }, encoding: 'utf8' },

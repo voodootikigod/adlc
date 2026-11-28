@@ -11,7 +11,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnHook } from './helpers/run-hook.mjs';
 import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -20,7 +20,7 @@ import { dirname, join } from 'node:path';
 const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'cli.mjs');
 
 test('running cli.mjs directly DISPATCHES the CLI (--help prints usage)', () => {
-  const r = spawnSync(process.execPath, [BIN, '--help'], { encoding: 'utf8' });
+  const r = spawnHook([BIN, '--help'], { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /usage: adlc-opencode init \[projectRoot\]/,
     'the entry-point guard dispatches when run directly');
@@ -36,7 +36,7 @@ test('running cli.mjs through a SYMLINK (like npm .bin) still dispatches the CLI
   const link = join(dir, 'adlc-opencode');
   symlinkSync(BIN, link);
   try {
-    const r = spawnSync(process.execPath, [link, '--help'], { encoding: 'utf8' });
+    const r = spawnHook([link, '--help'], { encoding: 'utf8' });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /usage: adlc-opencode init \[projectRoot\]/,
       'a symlinked entry must dispatch, not exit 0 silently');
@@ -50,7 +50,7 @@ test('running cli.mjs through a SYMLINK (like npm .bin) still dispatches the CLI
 // guard that answered true there would run the CLI (and, with the default
 // "init" command, attempt a real scaffold write) from a bare import.
 test('importing cli.mjs from a process with NO argv[1] (node -e) does NOT dispatch', () => {
-  const r = spawnSync(process.execPath,
+  const r = spawnHook(
     ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(BIN).href)})`],
     { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
@@ -60,7 +60,7 @@ test('importing cli.mjs from a process with NO argv[1] (node -e) does NOT dispat
 // `node -e <script> bogus` puts "bogus" at argv[1]; realpathSync on it throws.
 // That must read as not-the-entry — neither dispatch nor a crash.
 test('a NONEXISTENT argv[1] resolves to "not the entry" instead of dispatching or throwing', () => {
-  const r = spawnSync(process.execPath,
+  const r = spawnHook(
     ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(BIN).href)})`, 'definitely-not-a-file'],
     { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
@@ -72,7 +72,7 @@ test('a NONEXISTENT argv[1] resolves to "not the entry" instead of dispatching o
 // skipped by the guard — pinned via --help alongside it so the assertion is
 // about the GUARD firing, not about init's own side effects.
 test('running cli.mjs directly with an unknown command still dispatches (guard fires, cliMain reports the error)', () => {
-  const r = spawnSync(process.execPath, [BIN, 'not-a-command'], { encoding: 'utf8' });
+  const r = spawnHook([BIN, 'not-a-command'], { encoding: 'utf8' });
   assert.equal(r.status, 1, r.stdout);
   assert.match(r.stderr, /unknown command "not-a-command"/);
 });
@@ -89,7 +89,7 @@ test('running cli.mjs directly with an unknown command still dispatches (guard f
 test('running cli.mjs directly with NO CLI argument still dispatches (argv[1], not argv[2], is the entry check)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'opencode-cli-bare-'));
   try {
-    const r = spawnSync(process.execPath, [BIN], { encoding: 'utf8', cwd: dir });
+    const r = spawnHook([BIN], { encoding: 'utf8', cwd: dir });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /adlc-opencode init:/,
       'a bare invocation (argv[2] undefined) must still dispatch — the guard reads argv[1]');

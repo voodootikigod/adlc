@@ -1,7 +1,8 @@
 // mcp-wrapper.test.mjs — T65 AC7: host-env + Roots proxy (unit/subprocess).
 
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
+import { launchHook } from "./helpers/run-hook.mjs";
 import {
   cpSync,
   copyFileSync,
@@ -109,7 +110,7 @@ rl.on("line", (line) => {
 }
 
 function spawnWrapper(t, env, { wrapper = WRAPPER, cwd = join(HERE, "..") } = {}) {
-  const child = spawn(process.execPath, [wrapper], {
+  const child = launchHook([wrapper], {
     cwd,
     env: {
       ...process.env,
