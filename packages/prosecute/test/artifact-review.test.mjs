@@ -241,6 +241,15 @@ test('Ed25519 signing + trustedDir zero-secret verification never falls back to 
     }),
     false,
   );
+  // Empty or non-string explicit publicKey fails closed.
+  assert.equal(
+    hasArtifactApproval({ artifactPath: 'rails.json', kind: 'rails', ticket: 'T-RAILS', cwd: repo, key: null, publicKey: '' }),
+    false,
+  );
+  assert.equal(
+    hasArtifactApproval({ artifactPath: 'rails.json', kind: 'rails', ticket: 'T-RAILS', cwd: repo, key: null, publicKey: 123 }),
+    false,
+  );
 });
 
 test('CLI review-artifact records, checks, detects stale/revoked/unsigned, and supports Ed25519 --trusted-dir', (t) => {

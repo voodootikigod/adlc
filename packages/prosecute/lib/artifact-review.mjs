@@ -34,7 +34,8 @@ const READ_CHUNK_BYTES = 64 * 1024;
 
 function resolveTrustedPubKey({ publicKey, trustedDir } = {}) {
   if (publicKey !== undefined) {
-    return { ok: true, publicKey: typeof publicKey === 'string' && publicKey !== '' ? publicKey : null };
+    if (typeof publicKey !== 'string') return { ok: true, publicKey: null };
+    return { ok: true, publicKey: publicKey || null };
   }
   if (!trustedDir) {
     return { ok: true, publicKey: null };
