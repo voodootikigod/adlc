@@ -159,10 +159,11 @@ test('signed on-disk index-cache rejects forged/unsigned entries and verifies HM
   assert.equal(edPop.source, 'full-load');
 
   // Verify Ed25519 signed cache is accepted in a fresh process (cold memoryCache) using only admin.pub!
+  const indexModuleUrl = new URL('../index.mjs', import.meta.url).href;
   const probe = spawnSync(process.execPath, [
     '--input-type=module',
     '-e',
-    `import { readActiveRailIndex } from ${JSON.stringify(join(fileURLToPath(new URL('.', import.meta.url)), '..', 'index.mjs'))};
+    `import { readActiveRailIndex } from ${JSON.stringify(indexModuleUrl)};
      console.log(JSON.stringify(readActiveRailIndex(${JSON.stringify(root3)}, { env: {}, key: null })));`,
   ], { encoding: 'utf8', env: { ...process.env, ADLC_MANIFEST_KEY: '', ADLC_MANIFEST_PRIVATE_KEY: '' } });
   assert.equal(probe.status, 0, probe.stderr);
@@ -178,7 +179,7 @@ test('signed on-disk index-cache rejects forged/unsigned entries and verifies HM
   const tamperProbe = spawnSync(process.execPath, [
     '--input-type=module',
     '-e',
-    `import { readActiveRailIndex } from ${JSON.stringify(join(fileURLToPath(new URL('.', import.meta.url)), '..', 'index.mjs'))};
+    `import { readActiveRailIndex } from ${JSON.stringify(indexModuleUrl)};
      console.log(JSON.stringify(readActiveRailIndex(${JSON.stringify(root3)}, { env: {}, key: null })));`,
   ], { encoding: 'utf8', env: { ...process.env, ADLC_MANIFEST_KEY: '', ADLC_MANIFEST_PRIVATE_KEY: '' } });
   assert.equal(tamperProbe.status, 0, tamperProbe.stderr);
@@ -191,9 +192,13 @@ test('signed on-disk index-cache rejects forged/unsigned entries and verifies HM
   const outside = join(root2, 'fake-cache.json');
   writeFileSync(outside, readFileSync(join(root2, ACTIVE_RAIL_INDEX_FILE)));
   unlinkSync(join(root2, ACTIVE_RAIL_INDEX_FILE));
-  symlinkSync(outside, join(root2, ACTIVE_RAIL_INDEX_FILE));
-  const afterSymlink = readActiveRailIndex(root2, { env: {}, key: hmacKey });
-  assert.equal(afterSymlink.ok, true);
+  try {
+    symlinkSync(outside, join(root2, ACTIVE_RAIL_INDEX_FILE));
+    const afterSymlink = readActiveRailIndex(root2, { env: {}, key: hmacKey });
+    assert.equal(afterSymlink.ok, true);
+  } catch (err) {
+    if (err.code !== 'EPERM') throw err;
+  }
 
   // Read-only .adlc directory with writeCache: true -> tolerates EACCES
   if (process.platform !== 'win32' && typeof process.getuid === 'function' && process.getuid() !== 0) {
