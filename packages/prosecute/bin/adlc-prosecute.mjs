@@ -776,7 +776,7 @@ ADLC P5 review-evidence recorder.
                   --verdict approve|needs-attention [--model <m>] [--base <ref>]
                   [--dir .adlc] [--allow-unsigned] [--json]
       Record a signed, hash-chained artifact review verdict for a P1 spec
-      (gate: spec-approval) or P3 rail set (gate: rails-adequacy), bound to
+      (gate: artifact-spec-review) or P3 rail set (gate: artifact-rails-review), bound to
       artifact:<kind>:<baseSha>:<contentHash> (CRLF-normalized, fail-closed on
       symlinks/dirs/missing/>2 MiB). Refuses without a signing key unless
       --allow-unsigned is passed.
@@ -849,6 +849,7 @@ if (positionals[0] === 'review-artifact') {
       dir: values.dir,
       key,
       publicKey,
+      trustedDir: values['trusted-dir'],
     });
     if (values.json) {
       printJson({

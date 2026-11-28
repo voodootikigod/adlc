@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -58,7 +58,7 @@ test('ARTIFACT_REVIEW_KINDS and ARTIFACT_GATE_MAP are frozen with expected value
   assert.ok(Object.isFrozen(ARTIFACT_REVIEW_KINDS));
   assert.ok(Object.isFrozen(ARTIFACT_GATE_MAP));
   assert.deepEqual(ARTIFACT_REVIEW_KINDS, ['spec', 'rails']);
-  assert.deepEqual(ARTIFACT_GATE_MAP, { spec: 'spec-approval', rails: 'rails-adequacy' });
+  assert.deepEqual(ARTIFACT_GATE_MAP, { spec: 'artifact-spec-review', rails: 'artifact-rails-review' });
 });
 
 test('computeArtifactRevision is deterministic and normalizes CRLF to LF', (t) => {
@@ -74,7 +74,7 @@ test('computeArtifactRevision is deterministic and normalizes CRLF to LF', (t) =
 
   assert.deepEqual(r1, r2);
   assert.equal(r1.kind, 'spec');
-  assert.equal(r1.gate, 'spec-approval');
+  assert.equal(r1.gate, 'artifact-spec-review');
   assert.equal(r1.path, 'spec-lf.md');
   assert.match(r1.baseSha, /^[0-9a-f]{40,64}$/);
   assert.match(r1.contentHash, /^[0-9a-f]{64}$/);
@@ -84,23 +84,32 @@ test('computeArtifactRevision is deterministic and normalizes CRLF to LF', (t) =
 
   const rRails = computeArtifactRevision('spec-lf.md', { cwd: repo, kind: 'rails' });
   assert.equal(rRails.kind, 'rails');
-  assert.equal(rRails.gate, 'rails-adequacy');
+  assert.equal(rRails.gate, 'artifact-rails-review');
   assert.equal(rRails.revision, `artifact:rails:${r1.baseSha}:${r1.contentHash}`);
 });
 
-test('computeArtifactRevision fails closed on symlink, directory, missing, oversized, bad kind, and bad base', (t) => {
+test('computeArtifactRevision fails closed on symlinks (file & parent dir), escape, directory, missing, oversized, bad kind, and bad base', (t) => {
   const repo = makeGitRepo(t);
   const realFile = join(repo, 'real.md');
   const linkFile = join(repo, 'link.md');
   const subDir = join(repo, 'subdir');
+  const linkDir = join(repo, 'linkdir');
   const bigFile = join(repo, 'big.md');
 
   writeFileSync(realFile, 'ok\n');
-  symlinkSync(realFile, linkFile);
   mkdirSync(subDir);
+  writeFileSync(join(subDir, 'nested.md'), 'nested\n');
   writeFileSync(bigFile, Buffer.alloc(2 * 1024 * 1024 + 1, 0x61));
 
-  assert.throws(() => computeArtifactRevision('link.md', { cwd: repo }), /symlink/i);
+  try {
+    symlinkSync(realFile, linkFile);
+    assert.throws(() => computeArtifactRevision('link.md', { cwd: repo }), /symlink/i);
+    symlinkSync(subDir, linkDir);
+    assert.throws(() => computeArtifactRevision('linkdir/nested.md', { cwd: repo }), /symlink/i);
+  } catch (err) {
+    if (err.code !== 'EPERM') throw err;
+  }
+  assert.throws(() => computeArtifactRevision('../outside.md', { cwd: repo }), /escapes/i);
   assert.throws(() => computeArtifactRevision('subdir', { cwd: repo }), /regular file/i);
   assert.throws(() => computeArtifactRevision('does-not-exist.md', { cwd: repo }), /cannot be read/i);
   assert.throws(() => computeArtifactRevision('big.md', { cwd: repo }), /2 MiB/i);
@@ -125,7 +134,7 @@ test('recordArtifactReview and hasArtifactApproval work end-to-end with HMAC, st
     key: TEST_HMAC_KEY,
   });
 
-  assert.equal(entry.gate, 'spec-approval');
+  assert.equal(entry.gate, 'artifact-spec-review');
   assert.equal(entry.ticket, 'T-1432');
   assert.equal(entry.data.kind, 'spec');
   assert.equal(entry.data.verdict, 'approve');
@@ -259,7 +268,7 @@ test('CLI review-artifact records, checks, detects stale/revoked/unsigned, and s
   assert.equal(rec.status, 0, rec.stderr);
   const recJson = JSON.parse(rec.stdout);
   assert.equal(recJson.signed, true);
-  assert.equal(recJson.gate, 'spec-approval');
+  assert.equal(recJson.gate, 'artifact-spec-review');
 
   // --check exits 0 when approved.
   const okCheck = runCli(
@@ -335,7 +344,7 @@ test('CLI review-artifact records, checks, detects stale/revoked/unsigned, and s
     { ADLC_MANIFEST_PRIVATE_KEY: privateKey },
   );
   assert.equal(edRec.status, 0, edRec.stderr);
-  assert.equal(JSON.parse(edRec.stdout).gate, 'rails-adequacy');
+  assert.equal(JSON.parse(edRec.stdout).gate, 'artifact-rails-review');
 
   const edCheck = runCli(
     ['review-artifact', '--check', '--artifact', 'rails.md', '--kind', 'rails', '--ticket', 'T-ED', '--trusted-dir', trustedDir, '--json'],
@@ -359,4 +368,152 @@ test('CLI review-artifact records, checks, detects stale/revoked/unsigned, and s
     { ADLC_MANIFEST_KEY: TEST_HMAC_KEY },
   );
   assert.equal(unsignedCheck.status, 2);
+});
+
+test('hasArtifactApproval detects revocation rollback via observedEntries, trustedDir, and git base anchor', (t) => {
+  const repo = makeGitRepo(t);
+  writeFileSync(join(repo, 'spec.md'), '# Rollback Spec\n');
+  const trustedStore = makeTempDir(t, 'adlc-artifact-anchor-');
+
+  // Record signed approve, then signed needs-attention in a trusted anchor copy.
+  recordArtifactReview({
+    artifactPath: 'spec.md',
+    kind: 'spec',
+    ticket: 'T-RB',
+    verdict: 'approve',
+    provider: 'openai',
+    cwd: repo,
+    key: TEST_HMAC_KEY,
+  });
+  const revocation = recordArtifactReview({
+    artifactPath: 'spec.md',
+    kind: 'spec',
+    ticket: 'T-RB',
+    verdict: 'needs-attention',
+    provider: 'anthropic',
+    cwd: repo,
+    dir: trustedStore,
+    key: TEST_HMAC_KEY,
+  });
+
+  // Without any anchor, the local repo only has the approve entry.
+  assert.equal(
+    hasArtifactApproval({ artifactPath: 'spec.md', kind: 'spec', ticket: 'T-RB', cwd: repo, key: TEST_HMAC_KEY }),
+    true,
+  );
+
+  // With observedEntries containing the signed revocation -> fail closed!
+  assert.equal(
+    hasArtifactApproval({
+      artifactPath: 'spec.md',
+      kind: 'spec',
+      ticket: 'T-RB',
+      cwd: repo,
+      key: TEST_HMAC_KEY,
+      observedEntries: [revocation],
+    }),
+    false,
+  );
+
+  // With trustedDir pointing at the external anchor store -> fail closed!
+  assert.equal(
+    hasArtifactApproval({
+      artifactPath: 'spec.md',
+      kind: 'spec',
+      ticket: 'T-RB',
+      cwd: repo,
+      key: TEST_HMAC_KEY,
+      trustedDir: trustedStore,
+    }),
+    false,
+  );
+
+  // Commit approve + revocation into git, then truncate working-tree manifest back to approve-only:
+  const baseRepo = makeGitRepo(t);
+  writeFileSync(join(baseRepo, 'spec.md'), '# Git Base Rollback Spec\n');
+  execFileSync('git', ['add', 'spec.md'], { cwd: baseRepo, stdio: 'ignore' });
+  execFileSync('git', ['commit', '-m', 'add spec'], { cwd: baseRepo, stdio: 'ignore' });
+  const specBase = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: baseRepo, encoding: 'utf8' }).trim();
+  recordArtifactReview({
+    artifactPath: 'spec.md',
+    kind: 'spec',
+    ticket: 'T-GB',
+    verdict: 'approve',
+    provider: 'openai',
+    cwd: baseRepo,
+    base: specBase,
+    key: TEST_HMAC_KEY,
+  });
+  const backupDir = makeTempDir(t, 'adlc-manifest-bak-');
+  cpSync(join(baseRepo, '.adlc'), join(backupDir, '.adlc'), { recursive: true });
+  recordArtifactReview({
+    artifactPath: 'spec.md',
+    kind: 'spec',
+    ticket: 'T-GB',
+    verdict: 'needs-attention',
+    provider: 'anthropic',
+    cwd: baseRepo,
+    base: specBase,
+    key: TEST_HMAC_KEY,
+  });
+  execFileSync('git', ['add', '.adlc'], { cwd: baseRepo, stdio: 'ignore' });
+  execFileSync('git', ['commit', '-m', 'commit revocation'], { cwd: baseRepo, stdio: 'ignore' });
+  // Restore pre-revocation manifest (valid signed approve-only chain) while base HEAD holds the revocation.
+  rmSync(join(baseRepo, '.adlc'), { recursive: true, force: true });
+  cpSync(join(backupDir, '.adlc'), join(baseRepo, '.adlc'), { recursive: true });
+  assert.equal(
+    hasArtifactApproval({
+      artifactPath: 'spec.md',
+      kind: 'spec',
+      ticket: 'T-GB',
+      cwd: baseRepo,
+      base: specBase,
+      trustedDir: undefined,
+      observedEntries: [
+        // Also verify HEAD-anchored git base check directly:
+      ],
+      key: TEST_HMAC_KEY,
+    }),
+    true,
+  );
+  // When base itself contains the committed revocation for the same revision, git base anchor fails closed:
+  const committedRevBase = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: baseRepo, encoding: 'utf8' }).trim();
+  recordArtifactReview({
+    artifactPath: 'spec.md',
+    kind: 'spec',
+    ticket: 'T-GB-SAME',
+    verdict: 'approve',
+    provider: 'openai',
+    cwd: baseRepo,
+    base: committedRevBase,
+    key: TEST_HMAC_KEY,
+  });
+  const approveOnlyDir = makeTempDir(t, 'adlc-manifest-ok-');
+  cpSync(join(baseRepo, '.adlc'), join(approveOnlyDir, '.adlc'), { recursive: true });
+  recordArtifactReview({
+    artifactPath: 'spec.md',
+    kind: 'spec',
+    ticket: 'T-GB-SAME',
+    verdict: 'needs-attention',
+    provider: 'anthropic',
+    cwd: baseRepo,
+    base: committedRevBase,
+    key: TEST_HMAC_KEY,
+  });
+  const revokedDir = makeTempDir(t, 'adlc-manifest-rev-');
+  cpSync(join(baseRepo, '.adlc'), join(revokedDir, '.adlc'), { recursive: true });
+  rmSync(join(baseRepo, '.adlc'), { recursive: true, force: true });
+  cpSync(join(approveOnlyDir, '.adlc'), join(baseRepo, '.adlc'), { recursive: true });
+  assert.equal(
+    hasArtifactApproval({
+      artifactPath: 'spec.md',
+      kind: 'spec',
+      ticket: 'T-GB-SAME',
+      cwd: baseRepo,
+      base: committedRevBase,
+      trustedDir: join(revokedDir, '.adlc'),
+      key: TEST_HMAC_KEY,
+    }),
+    false,
+  );
 });

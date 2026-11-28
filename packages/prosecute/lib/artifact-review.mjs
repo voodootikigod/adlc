@@ -4,8 +4,17 @@
 //   artifact:<kind>:<baseSha>:<contentHash>
 // Any 1-byte edit to the reviewed artifact invalidates the approval immediately.
 
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs';
-import { relative, resolve } from 'node:path';
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readSync,
+  realpathSync,
+} from 'node:fs';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { ADLC_DIR, git, sha256 } from '@adlc/core';
 import { record } from '@adlc/gate-manifest/lib/record.mjs';
 import { readManifestForest } from '@adlc/gate-manifest/lib/forest.mjs';
@@ -15,12 +24,13 @@ import { validateKeyParam } from '@adlc/tickets/lib/key-contract.mjs';
 
 export const ARTIFACT_REVIEW_KINDS = Object.freeze(['spec', 'rails']);
 export const ARTIFACT_GATE_MAP = Object.freeze({
-  spec: 'spec-approval',
-  rails: 'rails-adequacy',
+  spec: 'artifact-spec-review',
+  rails: 'artifact-rails-review',
 });
 
 const VALID_VERDICTS = new Set(['approve', 'needs-attention']);
 const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024;
+const READ_CHUNK_BYTES = 64 * 1024;
 
 function resolveTrustedPubKey({ publicKey, trustedDir } = {}) {
   if (publicKey !== undefined) {
@@ -36,10 +46,110 @@ function resolveTrustedPubKey({ publicKey, trustedDir } = {}) {
   return { ok: true, publicKey: res.publicKey };
 }
 
+function assertNoSymlinkSegments(rootCwd, relPath, artifactPath) {
+  const parts = relPath.split(sep).filter(Boolean);
+  let cur = rootCwd;
+  for (const part of parts) {
+    cur = join(cur, part);
+    let lst;
+    try {
+      lst = lstatSync(cur);
+    } catch (err) {
+      throw new Error(`artifact cannot be read (${artifactPath}): ${err.message}`);
+    }
+    if (lst.isSymbolicLink()) {
+      throw new Error(`artifact path must not traverse symlinks: ${artifactPath}`);
+    }
+  }
+}
+
+function readRegularFileBounded(absPath, artifactPath) {
+  const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
+  let fd;
+  try {
+    fd = openSync(absPath, flags);
+  } catch (err) {
+    throw new Error(`artifact cannot be read (${artifactPath}): ${err.message}`);
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) {
+      throw new Error(`artifact must be a regular file: ${artifactPath}`);
+    }
+    if (st.size > MAX_ARTIFACT_BYTES) {
+      throw new Error(`artifact exceeds 2 MiB size limit (${st.size} bytes): ${artifactPath}`);
+    }
+    const chunks = [];
+    let total = 0;
+    const scratch = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+    for (;;) {
+      const n = readSync(fd, scratch, 0, scratch.length, null);
+      if (n === 0) break;
+      total += n;
+      if (total > MAX_ARTIFACT_BYTES) {
+        throw new Error(`artifact exceeds 2 MiB size limit (${total} bytes): ${artifactPath}`);
+      }
+      chunks.push(Buffer.from(scratch.subarray(0, n)));
+    }
+    const postStat = lstatSync(absPath);
+    if (postStat.isSymbolicLink() || postStat.dev !== st.dev || postStat.ino !== st.ino) {
+      throw new Error(`artifact changed during read: ${artifactPath}`);
+    }
+    return Buffer.concat(chunks, total);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function parseJsonlEntries(text) {
+  const out = [];
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed && typeof parsed === 'object') out.push(parsed);
+    } catch {
+      // Ignore malformed lines in historical git blobs; live manifest is verified separately.
+    }
+  }
+  return out;
+}
+
+function readGitBaseManifestEntries(rootCwd, ledgerDir, baseSha) {
+  const relDir = relative(rootCwd, ledgerDir);
+  if (!relDir || relDir.startsWith('..') || isAbsolute(relDir)) return [];
+  const posixDir = relDir.replaceAll('\\', '/');
+  let listed;
+  try {
+    listed = git(['ls-tree', '-r', '--name-only', baseSha, '--', posixDir], { cwd: rootCwd }).trim();
+  } catch {
+    return [];
+  }
+  if (!listed) return [];
+  const entries = [];
+  for (const file of listed.split('\n')) {
+    const trimmed = file.trim();
+    if (!trimmed.endsWith('.jsonl')) continue;
+    try {
+      const blob = git(['show', `${baseSha}:${trimmed}`], { cwd: rootCwd });
+      entries.push(...parseJsonlEntries(blob));
+    } catch {
+      // Unreadable historical blob; skip.
+    }
+  }
+  return entries;
+}
+
+function entryFingerprint(entry) {
+  return `${entry.gate ?? entry.type ?? ''}|${entry.ticket ?? ''}|${entry.data?.revision ?? ''}|${entry.data?.verdict ?? ''}|${entry.sig ?? ''}`;
+}
+
 /**
  * Compute the canonical revision identity for an artifact file on disk.
- * Fails closed on symlinks, directories, missing files, files > 2 MiB,
- * invalid kind, or unresolvable git base ref.
+ * Fails closed on symlinks (including parent directories), path escape outside
+ * cwd, directories, missing files, files > 2 MiB, invalid kind, or unresolvable
+ * git base ref.
  */
 export function computeArtifactRevision(artifactPath, { cwd = process.cwd(), base = 'HEAD', kind = 'spec' } = {}) {
   if (!ARTIFACT_REVIEW_KINDS.includes(kind)) {
@@ -52,43 +162,15 @@ export function computeArtifactRevision(artifactPath, { cwd = process.cwd(), bas
     throw new Error(`invalid base ref: "${base}"`);
   }
 
-  const rootCwd = resolve(cwd);
+  const rootCwd = realpathSync(resolve(cwd));
   const absPath = resolve(rootCwd, artifactPath);
-
-  let lst;
-  try {
-    lst = lstatSync(absPath);
-  } catch (err) {
-    throw new Error(`artifact cannot be read (${artifactPath}): ${err.message}`);
-  }
-  if (lst.isSymbolicLink()) {
-    throw new Error(`artifact must not be a symlink: ${artifactPath}`);
-  }
-  if (!lst.isFile()) {
-    throw new Error(`artifact must be a regular file: ${artifactPath}`);
-  }
-  if (lst.size > MAX_ARTIFACT_BYTES) {
-    throw new Error(`artifact exceeds 2 MiB size limit (${lst.size} bytes): ${artifactPath}`);
+  const relPath = relative(rootCwd, absPath);
+  if (relPath === '' || relPath === '..' || relPath.startsWith(`..${sep}`) || isAbsolute(relPath)) {
+    throw new Error(`artifact path escapes repository root: ${artifactPath}`);
   }
 
-  const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
-  const fd = openSync(absPath, flags);
-  let rawBuf;
-  try {
-    const st = fstatSync(fd);
-    if (!st.isFile()) {
-      throw new Error(`artifact must be a regular file: ${artifactPath}`);
-    }
-    if (st.size > MAX_ARTIFACT_BYTES) {
-      throw new Error(`artifact exceeds 2 MiB size limit (${st.size} bytes): ${artifactPath}`);
-    }
-    rawBuf = readFileSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-  if (rawBuf.byteLength > MAX_ARTIFACT_BYTES) {
-    throw new Error(`artifact exceeds 2 MiB size limit (${rawBuf.byteLength} bytes): ${artifactPath}`);
-  }
+  assertNoSymlinkSegments(rootCwd, relPath, artifactPath);
+  const rawBuf = readRegularFileBounded(absPath, artifactPath);
 
   const canonicalBytes = Buffer.from(rawBuf.toString('utf8').replaceAll('\r\n', '\n'), 'utf8');
   const contentHash = sha256(canonicalBytes);
@@ -103,12 +185,11 @@ export function computeArtifactRevision(artifactPath, { cwd = process.cwd(), bas
     throw new Error(`base ref "${base}" did not resolve to a commit SHA: "${baseSha}"`);
   }
 
-  const relPath = relative(rootCwd, absPath).replaceAll('\\', '/');
   const gate = ARTIFACT_GATE_MAP[kind];
   return {
     kind,
     gate,
-    path: relPath,
+    path: relPath.replaceAll('\\', '/'),
     contentHash,
     baseSha,
     revision: `artifact:${kind}:${baseSha}:${contentHash}`,
@@ -173,7 +254,8 @@ export function recordArtifactReview({
 /**
  * Recompute the live artifact revision from disk and verify the manifest forest
  * contains a signature-verified `approve` for the exact (gate, ticket, revision)
- * with no `needs-attention` revocation.
+ * with no `needs-attention` revocation and no truncation against trusted anchors
+ * (git base commit, `trustedDir` manifest if present, and `observedEntries`).
  *
  * Public keys are loaded ONLY from explicit `publicKey` or `trustedDir` — never
  * from the untrusted manifest `dir`.
@@ -188,6 +270,7 @@ export function hasArtifactApproval({
   key = null,
   publicKey = undefined,
   trustedDir = undefined,
+  observedEntries = undefined,
 } = {}) {
   key = validateKeyParam(key);
   if (!ARTIFACT_REVIEW_KINDS.includes(kind)) return false;
@@ -205,12 +288,37 @@ export function hasArtifactApproval({
     return false;
   }
 
-  const ledgerDir = resolve(cwd, dir);
+  const rootCwd = realpathSync(resolve(cwd));
+  const ledgerDir = resolve(rootCwd, dir);
   if (verify(ledgerDir, { requireSignatures: false, key, publicKey: effectivePub }).valid !== true) {
     return false;
   }
 
   const { entries } = readManifestForest(ledgerDir);
+  const presentSet = new Set(entries.map(entryFingerprint));
+
+  // Anti-rollback / truncation anchor: collect observed entries from git base,
+  // optional trustedDir manifest, and explicit observedEntries.
+  const anchorEntries = readGitBaseManifestEntries(rootCwd, ledgerDir, rev.baseSha);
+  if (trustedDir) {
+    const resolvedTrusted = resolve(rootCwd, trustedDir);
+    if (resolvedTrusted !== ledgerDir && existsSync(resolvedTrusted)) {
+      anchorEntries.push(...readManifestForest(resolvedTrusted).entries);
+    }
+  }
+  if (Array.isArray(observedEntries)) {
+    anchorEntries.push(...observedEntries);
+  }
+
+  for (const anchor of anchorEntries) {
+    if ((anchor?.gate ?? anchor?.type) !== rev.gate) continue;
+    if (anchor?.ticket !== ticket) continue;
+    if (anchor?.data?.revision !== rev.revision) continue;
+    if (!verifyEntrySig(key, anchor, { publicKey: effectivePub })) continue;
+    if (anchor.data.verdict === 'needs-attention') return false;
+    if (!presentSet.has(entryFingerprint(anchor))) return false;
+  }
+
   let approved = false;
   for (const entry of entries) {
     if ((entry.gate ?? entry.type) !== rev.gate) continue;
