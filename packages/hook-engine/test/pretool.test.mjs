@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -111,6 +111,18 @@ test('enclosingAdlcRoot and readActiveTicketRails load active ticket rails from 
   const { activeTicket, rails } = readActiveTicketRails(root);
   assert.equal(activeTicket.id, 'T-1');
   assert.deepEqual(rails.sort(), ['packages/core/test/**', 'test/auth.test.mjs']);
+  assert.equal(existsSync(join(root, '.adlc', '.active-rail-index.json')), false, 'readActiveTicketRails stays read-only and never writes the index cache');
+
+  // Directory store: readActiveTicketRails must ALSO stay read-only (never write .active-rail-index.json)
+  const dirRepo = mkdtempSync(join(tmpdir(), 'adlc-he-dirstore-'));
+  t.after(() => rmSync(dirRepo, { recursive: true, force: true }));
+  mkdirSync(join(dirRepo, '.git'), { recursive: true });
+  writeFileSync(join(dirRepo, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  mkdirSync(join(dirRepo, '.adlc', 'tickets'), { recursive: true });
+  writeFileSync(join(dirRepo, '.adlc', 'tickets', '.store.json'), JSON.stringify({ format: 'adlc-ticket-directory', version: 1 }));
+  const dirRes = readActiveTicketRails(dirRepo, { env: { ADLC_TICKET: '', ADLC_MANIFEST_KEY: 'pretool-ro-key' } });
+  assert.equal(dirRes.ok, true);
+  assert.equal(existsSync(join(dirRepo, '.adlc', '.active-rail-index.json')), false, 'directory-store readActiveTicketRails must not write .active-rail-index.json');
   // requireStore defaults to true: a plain git repo with no .adlc store returns null.
   assert.equal(enclosingAdlcRoot(gitOnly), null);
 });

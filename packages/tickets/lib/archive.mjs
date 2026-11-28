@@ -110,3 +110,112 @@ export function restoreTicket(activeStore, archivePath, id, { expectedSnapshotHa
     return { active: restored, ticket };
   } finally { releaseTicketLock(lock); }
 }
+
+function partitionCompletedTickets(active) {
+  const kept = new Set(active.tickets.filter((item) => item.completed !== true).map((item) => item.id));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const item of active.tickets) {
+      if (!kept.has(item.id)) continue;
+      for (const edge of item.edges ?? []) {
+        if (!kept.has(edge.to)) {
+          kept.add(edge.to);
+          changed = true;
+        }
+      }
+    }
+  }
+  const archivable = [];
+  const skippedIds = [];
+  for (const item of active.tickets) {
+    if (item.completed !== true) continue;
+    if (kept.has(item.id)) {
+      const referencedBy = active.tickets
+        .filter((other) => kept.has(other.id) && other.id !== item.id && (other.edges ?? []).some((edge) => edge.to === item.id))
+        .map((other) => other.id);
+      skippedIds.push({ id: item.id, reason: 'inbound-active-edge', referencedBy });
+    } else {
+      archivable.push(item);
+    }
+  }
+  return { archivable, skippedIds };
+}
+
+export function archiveCompletedTickets(activeStore, archivePath, { expectedSnapshotHash, reason = 'completed', sourceRevision = null, root = '.', authorized = false, write = false, faultInjector = null, key = null, allowUnsigned = false } = {}) {
+  key = validateKeyParam(key);
+  validateArchivePath(root, archivePath);
+  if (!write) {
+    const active = activeStore.load();
+    if (expectedSnapshotHash && active.hash !== expectedSnapshotHash) throw conflict('STALE_SNAPSHOT', 'active store changed before archive');
+    const { archivable, skippedIds } = partitionCompletedTickets(active);
+    return {
+      dryRun: true,
+      archivedIds: archivable.map((item) => item.id),
+      skippedIds,
+      remainingCount: active.tickets.length - archivable.length,
+      expectedSnapshotHash: active.hash,
+    };
+  }
+  if (!authorized) throw policy('AUTHORIZATION_REQUIRED', 'archiving requires explicit authorization');
+  const lock = acquireTicketLock(root, { command: 'ticket:archive-batch' });
+  try {
+    const active = activeStore.load();
+    if (expectedSnapshotHash && active.hash !== expectedSnapshotHash) throw conflict('STALE_SNAPSHOT', 'active store changed before archive');
+    const { archivable, skippedIds } = partitionCompletedTickets(active);
+    const archivedIds = archivable.map((item) => item.id);
+    if (archivable.length === 0) {
+      return {
+        dryRun: false,
+        applied: false,
+        archivedIds: [],
+        skippedIds,
+        remainingCount: active.tickets.length,
+        storeHash: active.hash,
+        active,
+      };
+    }
+    assertSignableTrustRootWrite(active.tickets, { key, allowUnsigned, root });
+    ensureArchive(archivePath);
+    const archivedAt = new Date().toISOString();
+    const auxiliaryOperations = [];
+    for (const ticket of archivable) {
+      const target = join(archivePath, ticketFilename(ticket.id));
+      if (existsSync(target)) throw conflict('ARCHIVE_COLLISION', `archive already contains ${ticket.id}`);
+      const archived = {
+        ...JSON.parse(JSON.stringify(ticket)),
+        _adlcArchive: { version: 1, archivedAt, reason, ticketHash: ticketHash(ticket), sourceStoreHash: active.hash, sourceRevision },
+      };
+      auxiliaryOperations.push({ action: 'write', path: target, content: prettyCanonicalJson(archived), mustBeAbsent: true });
+    }
+    const archivedIdSet = new Set(archivedIds);
+    const remaining = active.mutableTickets().filter((item) => !archivedIdSet.has(item.id));
+    const updated = applyDirectoryTransaction(activeStore, remaining, {
+      key,
+      allowUnsigned,
+      expectedSnapshotHash: active.hash,
+      operation: 'archive',
+      evidenceRequired: true,
+      ticketId: null,
+      root,
+      lock,
+      faultInjector,
+      auxiliaryOperations,
+      verify: () => {
+        const archivedSnapshot = new DirectoryTicketStore(archivePath, { archive: true }).load();
+        for (const id of archivedIds) {
+          if (!archivedSnapshot.get(id)) throw invalid('TRANSACTION_VERIFY_FAILED', `archive transaction did not materialize ${id}`);
+        }
+      },
+    });
+    return {
+      dryRun: false,
+      applied: true,
+      archivedIds,
+      skippedIds,
+      remainingCount: updated.tickets.length,
+      storeHash: updated.hash,
+      active: updated,
+    };
+  } finally { releaseTicketLock(lock); }
+}

@@ -8,6 +8,7 @@ import {
   TRANSACTION_DIRECTORY,
   TicketService,
   TicketStoreError,
+  archiveCompletedTickets,
   archiveTicket,
   categoryWarning,
   detectTicketStore,
@@ -153,7 +154,7 @@ async function main() {
     emit({ ticket, ticketHash: snapshot.ticketHashes[ticket.id], storeHash: snapshot.hash }, flags.json);
     return;
   }
-  const mutationCommands = new Set(['create', 'update', 'edit', 'discard', 'complete', 'archive', 'restore']);
+  const mutationCommands = new Set(['create', 'update', 'edit', 'discard', 'complete', 'archive', 'archive-completed', 'restore']);
   if (!mutationCommands.has(command)) throw new TicketStoreError('invalid', 'UNKNOWN_COMMAND', `unknown ticket command: ${command}`);
   store = await offerLegacyMigration(store, root, flags, { emit: (value) => emit(value, false), key, allowUnsigned });
   if (flags.write) warnIfUnsigned(snapshot.tickets);
@@ -205,7 +206,30 @@ async function main() {
     editDraftPath = session.draftPath;
   } else if (command === 'discard') plan = service.planDiscard(positionals[1]);
   else if (command === 'complete') plan = service.planComplete(positionals[1], { expect: flags.expect, authorized: Boolean(flags.authorize) });
-  else if (command === 'archive' || command === 'restore') {
+  else if (command === 'archive-completed') {
+    if (!(store instanceof DirectoryTicketStore)) throw new TicketStoreError('policy', 'DIRECTORY_STORE_REQUIRED', 'archive-completed requires a directory store');
+    const result = archiveCompletedTickets(store, join(root, '.adlc/ticket-archive'), {
+      expectedSnapshotHash: snapshot.hash,
+      reason: flags.reason,
+      sourceRevision: flags.revision,
+      root,
+      authorized: Boolean(flags.authorize),
+      write: Boolean(flags.write),
+      key,
+      allowUnsigned,
+    });
+    emit({
+      operation: 'archive',
+      batch: true,
+      dryRun: result.dryRun,
+      ...(result.dryRun ? {} : { applied: result.applied, storeHash: result.storeHash }),
+      archivedIds: result.archivedIds,
+      skippedIds: result.skippedIds,
+      remainingCount: result.remainingCount,
+      ...(result.expectedSnapshotHash ? { expectedSnapshotHash: result.expectedSnapshotHash } : {}),
+    }, flags.json);
+    return;
+  } else if (command === 'archive' || command === 'restore') {
     if (!(store instanceof DirectoryTicketStore)) throw new TicketStoreError('policy', 'DIRECTORY_STORE_REQUIRED', `${command} requires a directory store`);
     const options = { expectedSnapshotHash: snapshot.hash, reason: flags.reason, sourceRevision: flags.revision, root, authorized: Boolean(flags.authorize), key, allowUnsigned };
     if (!flags.write) { emit({ operation: command, ticketId: positionals[1], expectedSnapshotHash: snapshot.hash, evidenceRequired: true, dryRun: true }, flags.json); return; }

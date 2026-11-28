@@ -3546,6 +3546,22 @@ var init_pointer_write = __esm({
   }
 });
 
+// packages/tickets/lib/rail-index.mjs
+var MAX_INDEX_BYTES;
+var init_rail_index = __esm({
+  "packages/tickets/lib/rail-index.mjs"() {
+    init_define_ADLC_MCP_BUILD_METADATA();
+    init_canonical();
+    init_durability();
+    init_key_contract();
+    init_manifest_primitives();
+    init_pointer();
+    init_store();
+    init_directory();
+    MAX_INDEX_BYTES = 1024 * 1024;
+  }
+});
+
 // packages/tickets/lib/prompt.mjs
 import { createInterface } from "node:readline/promises";
 var init_prompt = __esm({
@@ -3598,6 +3614,7 @@ var init_tickets = __esm({
     init_provenance();
     init_pointer();
     init_pointer_write();
+    init_rail_index();
     init_prompt();
     init_evidence();
     init_manifest_segments();
