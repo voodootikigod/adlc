@@ -292,12 +292,15 @@ test('CLI review-artifact records, checks, detects stale/revoked/unsigned, and s
   assert.equal(baseRec.status, 0, baseRec.stderr);
   assert.equal(JSON.parse(baseRec.stdout).data.baseSha, initialSha);
 
-  // --help documents review-artifact CLI syntax & revision format.
+  // --help documents review-artifact CLI syntax, flags, and exit codes.
   const helpOut = runCli(['--help'], repo);
   assert.equal(helpOut.status, 0);
   assert.ok(helpOut.stdout.includes('review-artifact --artifact <file>'));
   assert.ok(helpOut.stdout.includes('[--model <m>]'));
   assert.ok(helpOut.stdout.includes('artifact:<kind>:<baseSha>:<contentHash>'));
+  assert.ok(helpOut.stdout.includes('review-artifact --check --artifact <file> [--kind spec|rails] --ticket <id>'));
+  assert.ok(helpOut.stdout.includes('[--base <ref>] [--dir .adlc] [--trusted-dir <dir>] [--json]'));
+  assert.ok(helpOut.stdout.includes('Exits 0 if approved, 2 if'));
 
   // --check without key exits 2 (cannot verify).
   const noKeyCheck = runCli(

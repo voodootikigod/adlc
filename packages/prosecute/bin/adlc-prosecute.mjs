@@ -778,7 +778,7 @@ ADLC P5 review-evidence recorder.
       Record a signed, hash-chained artifact review verdict for a P1 spec
       (gate: artifact-spec-review) or P3 rail set (gate: artifact-rails-review), bound to
       artifact:<kind>:<baseSha>:<contentHash> (CRLF-normalized, fail-closed on
-      symlinks/dirs/missing/>2 MiB). Refuses without a signing key unless
+      symlinks/dirs/missing/oversized). Refuses without a signing key unless
       --allow-unsigned is passed.
 
   review-artifact --check --artifact <file> [--kind spec|rails] --ticket <id>
