@@ -113,6 +113,8 @@ test('computeArtifactRevision fails closed on symlinks (file & parent dir), esca
   assert.throws(() => computeArtifactRevision('subdir', { cwd: repo }), /regular file/i);
   assert.throws(() => computeArtifactRevision('does-not-exist.md', { cwd: repo }), /cannot be read/i);
   assert.throws(() => computeArtifactRevision('big.md', { cwd: repo }), /2 MiB/i);
+  writeFileSync(join(repo, 'bad-utf8.md'), Buffer.from([0x80, 0x81]));
+  assert.throws(() => computeArtifactRevision('bad-utf8.md', { cwd: repo }), /valid UTF-8/i);
   assert.throws(() => computeArtifactRevision('real.md', { cwd: repo, kind: 'bogus' }), /kind/i);
   assert.throws(() => computeArtifactRevision('real.md', { cwd: repo, base: 'no-such-ref-xyz' }), /could not be resolved/i);
 });
@@ -528,4 +530,14 @@ test('hasArtifactApproval detects revocation rollback via observedEntries, trust
     }),
     false,
   );
+
+  // CLI --attestation-store catches rolled-back revocation (exit 2).
+  const storeFile = join(makeTempDir(t, 'adlc-att-store-'), 'observed.jsonl');
+  writeFileSync(storeFile, `${JSON.stringify(revocation)}\n`);
+  const cliStoreCheck = runCli(
+    ['review-artifact', '--check', '--artifact', 'spec.md', '--kind', 'spec', '--ticket', 'T-RB', '--attestation-store', storeFile],
+    repo,
+    { ADLC_MANIFEST_KEY: TEST_HMAC_KEY },
+  );
+  assert.equal(cliStoreCheck.status, 2);
 });

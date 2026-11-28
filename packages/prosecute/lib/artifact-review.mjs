@@ -31,6 +31,7 @@ export const ARTIFACT_GATE_MAP = Object.freeze({
 const VALID_VERDICTS = new Set(['approve', 'needs-attention']);
 const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024;
 const READ_CHUNK_BYTES = 64 * 1024;
+const UTF8_STRICT = new TextDecoder('utf-8', { fatal: true });
 
 function resolveTrustedPubKey({ publicKey, trustedDir } = {}) {
   if (publicKey !== undefined) {
@@ -64,7 +65,7 @@ function assertNoSymlinkSegments(rootCwd, relPath, artifactPath) {
   }
 }
 
-function readRegularFileBounded(absPath, artifactPath) {
+function readRegularFileBounded(rootCwd, relPath, absPath, artifactPath) {
   const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
   let fd;
   try {
@@ -92,9 +93,27 @@ function readRegularFileBounded(absPath, artifactPath) {
       }
       chunks.push(Buffer.from(scratch.subarray(0, n)));
     }
-    const postStat = lstatSync(absPath);
-    if (postStat.isSymbolicLink() || postStat.dev !== st.dev || postStat.ino !== st.ino) {
+    const postFd = fstatSync(fd);
+    if (
+      total !== st.size ||
+      postFd.size !== st.size ||
+      postFd.mtimeMs !== st.mtimeMs ||
+      postFd.ctimeMs !== st.ctimeMs
+    ) {
       throw new Error(`artifact changed during read: ${artifactPath}`);
+    }
+    assertNoSymlinkSegments(rootCwd, relPath, artifactPath);
+    const postPath = lstatSync(absPath);
+    if (
+      postPath.isSymbolicLink() ||
+      postPath.dev !== st.dev ||
+      postPath.ino !== st.ino ||
+      postPath.size !== st.size ||
+      postPath.mtimeMs !== st.mtimeMs ||
+      postPath.ctimeMs !== st.ctimeMs ||
+      realpathSync(absPath) !== absPath
+    ) {
+      throw new Error(`artifact path changed during read: ${artifactPath}`);
     }
     return Buffer.concat(chunks, total);
   } finally {
@@ -102,44 +121,45 @@ function readRegularFileBounded(absPath, artifactPath) {
   }
 }
 
-function parseJsonlEntries(text) {
+function parseJsonlEntriesStrict(text) {
   const out = [];
   for (const line of text.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (parsed && typeof parsed === 'object') out.push(parsed);
-    } catch {
-      // Ignore malformed lines in historical git blobs; live manifest is verified separately.
+    const parsed = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== 'object') {
+      throw new Error('manifest JSONL line is not an object');
     }
+    out.push(parsed);
   }
   return out;
 }
 
 function readGitBaseManifestEntries(rootCwd, ledgerDir, baseSha) {
   const relDir = relative(rootCwd, ledgerDir);
-  if (!relDir || relDir.startsWith('..') || isAbsolute(relDir)) return [];
+  if (!relDir || relDir.startsWith('..') || isAbsolute(relDir)) {
+    return { ok: true, entries: [] };
+  }
   const posixDir = relDir.replaceAll('\\', '/');
   let listed;
   try {
     listed = git(['ls-tree', '-r', '--name-only', baseSha, '--', posixDir], { cwd: rootCwd }).trim();
   } catch {
-    return [];
+    return { ok: false, entries: [] };
   }
-  if (!listed) return [];
+  if (!listed) return { ok: true, entries: [] };
   const entries = [];
   for (const file of listed.split('\n')) {
     const trimmed = file.trim();
     if (!trimmed.endsWith('.jsonl')) continue;
     try {
       const blob = git(['show', `${baseSha}:${trimmed}`], { cwd: rootCwd });
-      entries.push(...parseJsonlEntries(blob));
+      entries.push(...parseJsonlEntriesStrict(blob));
     } catch {
-      // Unreadable historical blob; skip.
+      return { ok: false, entries: [] };
     }
   }
-  return entries;
+  return { ok: true, entries };
 }
 
 function entryFingerprint(entry) {
@@ -149,10 +169,10 @@ function entryFingerprint(entry) {
 /**
  * Compute the canonical revision identity for an artifact file on disk.
  * Fails closed on symlinks (including parent directories), path escape outside
- * cwd, directories, missing files, files > 2 MiB, invalid kind, or unresolvable
- * git base ref.
+ * cwd, directories, missing files, files > 2 MiB, invalid UTF-8, concurrent
+ * modification, invalid kind, or unresolvable git base ref.
  */
-export function computeArtifactRevision(artifactPath, { cwd = process.cwd(), base = 'HEAD', kind = 'spec' } = {}) {
+export function computeArtifactRevision(artifactPath, { cwd = process.cwd(), base = 'main', kind = 'spec' } = {}) {
   if (!ARTIFACT_REVIEW_KINDS.includes(kind)) {
     throw new Error(`artifact review kind must be one of ${ARTIFACT_REVIEW_KINDS.join(', ')}, got "${kind}"`);
   }
@@ -171,9 +191,15 @@ export function computeArtifactRevision(artifactPath, { cwd = process.cwd(), bas
   }
 
   assertNoSymlinkSegments(rootCwd, relPath, artifactPath);
-  const rawBuf = readRegularFileBounded(absPath, artifactPath);
+  const rawBuf = readRegularFileBounded(rootCwd, relPath, absPath, artifactPath);
 
-  const canonicalBytes = Buffer.from(rawBuf.toString('utf8').replaceAll('\r\n', '\n'), 'utf8');
+  let decoded;
+  try {
+    decoded = UTF8_STRICT.decode(rawBuf);
+  } catch {
+    throw new Error(`artifact is not valid UTF-8: ${artifactPath}`);
+  }
+  const canonicalBytes = Buffer.from(decoded.replaceAll('\r\n', '\n'), 'utf8');
   const contentHash = sha256(canonicalBytes);
 
   let baseSha;
@@ -209,7 +235,7 @@ export function recordArtifactReview({
   model = null,
   findings = [],
   cwd = process.cwd(),
-  base = 'HEAD',
+  base = 'main',
   dir = ADLC_DIR,
   key = null,
 } = {}) {
@@ -253,10 +279,12 @@ export function recordArtifactReview({
 }
 
 /**
- * Recompute the live artifact revision from disk and verify the manifest forest
- * contains a signature-verified `approve` for the exact (gate, ticket, revision)
- * with no `needs-attention` revocation and no truncation against trusted anchors
- * (git base commit, `trustedDir` manifest if present, and `observedEntries`).
+ * Recompute the live artifact revision from disk (or use a caller-supplied
+ * `resolvedRevision` from `computeArtifactRevision` to avoid double-reads) and
+ * verify the manifest forest contains a signature-verified `approve` for the
+ * exact (gate, ticket, revision) with no `needs-attention` revocation and no
+ * truncation against trusted anchors (git base commit, `trustedDir` manifest if
+ * present, and `observedEntries` / `--attestation-store`).
  *
  * Public keys are loaded ONLY from explicit `publicKey` or `trustedDir` — never
  * from the untrusted manifest `dir`.
@@ -266,12 +294,13 @@ export function hasArtifactApproval({
   kind = 'spec',
   ticket,
   cwd = process.cwd(),
-  base = 'HEAD',
+  base = 'main',
   dir = ADLC_DIR,
   key = null,
   publicKey = undefined,
   trustedDir = undefined,
   observedEntries = undefined,
+  resolvedRevision = undefined,
 } = {}) {
   key = validateKeyParam(key);
   if (!ARTIFACT_REVIEW_KINDS.includes(kind)) return false;
@@ -282,10 +311,14 @@ export function hasArtifactApproval({
   const effectivePub = pub.publicKey;
   if (!key && !effectivePub) return false;
 
-  let rev;
-  try {
-    rev = computeArtifactRevision(artifactPath, { cwd, base, kind });
-  } catch {
+  let rev = resolvedRevision;
+  if (!rev) {
+    try {
+      rev = computeArtifactRevision(artifactPath, { cwd, base, kind });
+    } catch {
+      return false;
+    }
+  } else if (rev.kind !== kind || rev.gate !== ARTIFACT_GATE_MAP[kind]) {
     return false;
   }
 
@@ -298,9 +331,10 @@ export function hasArtifactApproval({
   const { entries } = readManifestForest(ledgerDir);
   const presentSet = new Set(entries.map(entryFingerprint));
 
-  // Anti-rollback / truncation anchor: collect observed entries from git base,
-  // optional trustedDir manifest, and explicit observedEntries.
-  const anchorEntries = readGitBaseManifestEntries(rootCwd, ledgerDir, rev.baseSha);
+  // Anti-rollback / truncation anchor: fail closed if base git tree cannot be read.
+  const baseAnchor = readGitBaseManifestEntries(rootCwd, ledgerDir, rev.baseSha);
+  if (!baseAnchor.ok) return false;
+  const anchorEntries = [...baseAnchor.entries];
   if (trustedDir) {
     const resolvedTrusted = resolve(rootCwd, trustedDir);
     if (resolvedTrusted !== ledgerDir && existsSync(resolvedTrusted)) {

@@ -682,7 +682,6 @@ const { values, positionals } = parseArgs({
   },
 });
 
-const artifactBase = values.base ?? 'HEAD';
 if (values.base === undefined) values.base = 'main';
 
 if (values.help) {
@@ -835,21 +834,31 @@ if (positionals[0] === 'review-artifact') {
   if (values.check) {
     let rev;
     try {
-      rev = computeArtifactRevision(values.artifact, { base: artifactBase, kind });
+      rev = computeArtifactRevision(values.artifact, { base: values.base, kind });
     } catch (err) {
       opError(`review-artifact --check: ${err.message}`);
     }
     const key = getKey();
     const publicKey = resolveTrustedPublicKey(values['trusted-dir']);
+    let observedEntries;
+    if (values['attestation-store']) {
+      try {
+        observedEntries = readObservedAttestations(values['attestation-store'], { key, publicKey });
+      } catch (err) {
+        opError(`review-artifact --check: attestation store unreadable (${err.message})`);
+      }
+    }
     const approved = hasArtifactApproval({
       artifactPath: values.artifact,
       kind,
       ticket: values.ticket,
-      base: artifactBase,
+      base: values.base,
       dir: values.dir,
       key,
       publicKey,
       trustedDir: values['trusted-dir'],
+      observedEntries,
+      resolvedRevision: rev,
     });
     if (values.json) {
       printJson({
@@ -889,7 +898,7 @@ if (positionals[0] === 'review-artifact') {
       verdict: values.verdict ?? 'approve',
       provider: values.provider,
       model: values.model ?? null,
-      base: artifactBase,
+      base: values.base,
       dir: values.dir,
       key,
     });
