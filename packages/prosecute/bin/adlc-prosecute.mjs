@@ -9,6 +9,7 @@ import { verifyRepro } from '../lib/verify-repro.mjs';
 import { classifyTrustRootTier } from '../lib/tier.mjs';
 import { usageWarnings } from '../lib/schema.mjs';
 import { recordCrossModelReview, carryForwardCrossModelReview, hasCrossModelApproveForRevision, evaluateCrossModelRevision, manifestChainTrustworthy, manifestChainBreakReason, CROSS_MODEL_GATE } from '../lib/cross-model.mjs';
+import { ARTIFACT_REVIEW_KINDS, computeArtifactRevision, recordArtifactReview, hasArtifactApproval } from '../lib/artifact-review.mjs';
 import { readObservedAttestations, mirrorObservedAttestations } from '../lib/attestation-store.mjs';
 import { ADMIN_PUB_FILENAME, getKey, readAdminPublicKey } from '@adlc/gate-manifest/lib/sign.mjs';
 import { loadManifestKeyFromEnvLocal } from '../lib/load-env-local.mjs';
@@ -637,7 +638,12 @@ const { values, positionals } = parseArgs({
     json: { type: 'boolean', default: false },
     help: { type: 'boolean', default: false },
     // Base ref used to compute the changed-file set for trust-root tiering.
-    base: { type: 'string', default: 'main' },
+    base: { type: 'string' },
+    // review-artifact subcommand options (ADR-0008, #1432).
+    artifact: { type: 'string' },
+    kind: { type: 'string' },
+    model: { type: 'string' },
+    check: { type: 'boolean', default: false },
     // record-cross-model attestation fields.
     provider: { type: 'string' },
     'author-provider': { type: 'string' },
@@ -675,6 +681,8 @@ const { values, positionals } = parseArgs({
     'unsafe-no-sandbox': { type: 'boolean', default: false },
   },
 });
+
+if (values.base === undefined) values.base = 'main';
 
 if (values.help) {
   console.log(`adlc-prosecute --input <passes.json> --ticket id [--target label] [--revision rev] [--base main] [--dir .adlc] [--json]
@@ -763,6 +771,22 @@ ADLC P5 review-evidence recorder.
       Use plain-prose --desc without quoted/backticked literals so it routes to a
       spec-gap template rather than a lint rule.
 
+  review-artifact --artifact <file> [--kind spec|rails] --ticket <id> --provider <p>
+                  --verdict approve|needs-attention [--model <m>] [--base <ref>]
+                  [--dir .adlc] [--allow-unsigned] [--json]
+      Record a signed, hash-chained artifact review verdict for a P1 spec
+      (gate: artifact-spec-review) or P3 rail set (gate: artifact-rails-review), bound to
+      artifact:<kind>:<baseSha>:<contentHash> (CRLF-normalized, fail-closed on
+      symlinks/dirs/missing/oversized). Refuses without a signing key unless
+      --allow-unsigned is passed.
+
+  review-artifact --check --artifact <file> [--kind spec|rails] --ticket <id>
+                  [--base <ref>] [--dir .adlc] [--trusted-dir <dir>] [--json]
+      Recompute the live artifact revision from disk and verify the manifest
+      forest contains a signature-verified approve for the exact (gate, ticket,
+      revision) with no needs-attention revocation. Exits 0 if approved, 2 if
+      missing/stale/revoked/unsigned.
+
 Exit codes:
   0  two consecutive dry passes recorded (or a finding/attestation recorded)
   1  operational error (e.g. a finding missing --file/--desc — fails closed)
@@ -796,6 +820,101 @@ if (positionals[0] === 'verify-repro') {
     }
   }
   process.exit(repro.exitCode);
+}
+
+// --- review-artifact subcommand (ADR-0008, #1432: P1 spec & P3 rail-set review) ---
+if (positionals[0] === 'review-artifact') {
+  const kind = values.kind ?? 'spec';
+  if (!ARTIFACT_REVIEW_KINDS.includes(kind)) {
+    opError(`review-artifact: --kind must be one of ${ARTIFACT_REVIEW_KINDS.join(', ')}, got "${kind}"`);
+  }
+  if (!values.artifact) opError('review-artifact requires --artifact <file>');
+  if (!values.ticket) opError('review-artifact requires --ticket <id>');
+
+  if (values.check) {
+    let rev;
+    try {
+      rev = computeArtifactRevision(values.artifact, { base: values.base, kind });
+    } catch (err) {
+      opError(`review-artifact --check: ${err.message}`);
+    }
+    const key = getKey();
+    const publicKey = resolveTrustedPublicKey(values['trusted-dir']);
+    let observedEntries;
+    if (values['attestation-store']) {
+      try {
+        observedEntries = readObservedAttestations(values['attestation-store'], { key, publicKey });
+      } catch (err) {
+        opError(`review-artifact --check: attestation store unreadable (${err.message})`);
+      }
+    }
+    const approved = hasArtifactApproval({
+      artifactPath: values.artifact,
+      kind,
+      ticket: values.ticket,
+      base: values.base,
+      dir: values.dir,
+      key,
+      publicKey,
+      trustedDir: values['trusted-dir'],
+      observedEntries,
+      resolvedRevision: rev,
+    });
+    if (values.json) {
+      printJson({
+        approved,
+        kind,
+        gate: rev.gate,
+        ticket: values.ticket,
+        path: rev.path,
+        revision: rev.revision,
+        contentHash: rev.contentHash,
+        baseSha: rev.baseSha,
+        keyAvailable: Boolean(key || publicKey),
+      });
+    } else if (approved) {
+      console.log(`review-artifact: approved ${kind} (${rev.gate}) for ${values.ticket} @ ${rev.revision}`);
+    } else {
+      console.error(`review-artifact: NO signature-verified approval for ${kind} (${rev.gate}) ticket ${values.ticket} @ ${rev.revision}`);
+    }
+    process.exit(approved ? 0 : 2);
+  }
+
+  loadManifestKeyFromEnvLocal();
+  if (!values.provider) opError('review-artifact requires --provider <p>');
+  const key = getKey();
+  if (!key && !values['allow-unsigned']) {
+    opError(
+      'review-artifact: ADLC_MANIFEST_KEY (or ADLC_MANIFEST_PRIVATE_KEY) is not set, so the entry would be written UNSIGNED and rejected by --check. ' +
+      'Set a signing key and re-run, or pass --allow-unsigned to write an unsigned entry deliberately.'
+    );
+  }
+  let entry;
+  try {
+    entry = recordArtifactReview({
+      artifactPath: values.artifact,
+      kind,
+      ticket: values.ticket,
+      verdict: values.verdict ?? 'approve',
+      provider: values.provider,
+      model: values.model ?? null,
+      base: values.base,
+      dir: values.dir,
+      key,
+    });
+  } catch (err) {
+    opError(`review-artifact: ${err.message}`);
+  }
+  const signed = typeof entry.sig === 'string' && entry.sig !== '';
+  if (values.json) {
+    printJson({ ...entry, signed });
+  } else if (signed) {
+    console.log(`recorded ${entry.gate} ${entry.data.verdict} for ${values.ticket} @ ${entry.data.revision} (${entry.data.provider})`);
+  }
+  if (!signed) {
+    console.error(`review-artifact: recorded UNSIGNED ${entry.gate} ${entry.data.verdict} for ${values.ticket} @ ${entry.data.revision}`);
+  }
+  process.exit(0);
 }
 
 // --- record-cross-model subcommand (register a cross-model attestation) ---
