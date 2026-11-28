@@ -82,6 +82,11 @@ test('computeArtifactRevision is deterministic and normalizes CRLF to LF', (t) =
   assert.equal(rCrlf.contentHash, r1.contentHash, 'CRLF and LF must hash identically');
   assert.equal(rCrlf.revision, r1.revision);
 
+  const specBom = join(repo, 'spec-bom.md');
+  writeFileSync(specBom, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('# Spec\nLine 1\nLine 2\n', 'utf8')]));
+  const rBom = computeArtifactRevision('spec-bom.md', { cwd: repo, kind: 'spec' });
+  assert.notEqual(rBom.contentHash, r1.contentHash, 'UTF-8 BOM must not collide with non-BOM content');
+
   const rRails = computeArtifactRevision('spec-lf.md', { cwd: repo, kind: 'rails' });
   assert.equal(rRails.kind, 'rails');
   assert.equal(rRails.gate, 'artifact-rails-review');

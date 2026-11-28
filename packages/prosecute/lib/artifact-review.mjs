@@ -31,7 +31,7 @@ export const ARTIFACT_GATE_MAP = Object.freeze({
 const VALID_VERDICTS = new Set(['approve', 'needs-attention']);
 const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024;
 const READ_CHUNK_BYTES = 64 * 1024;
-const UTF8_STRICT = new TextDecoder('utf-8', { fatal: true });
+const UTF8_STRICT = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
 function resolveTrustedPubKey({ publicKey, trustedDir } = {}) {
   if (publicKey !== undefined) {
